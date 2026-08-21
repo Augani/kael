@@ -39,6 +39,7 @@ pub struct ComboboxState<T: Clone + 'static> {
     pub search_text: String,
     pub is_open: bool,
     pub focused_index: Option<usize>,
+    pub scroll_handle: ScrollHandle,
 }
 
 impl<T: Clone + 'static> ComboboxState<T> {
@@ -48,6 +49,7 @@ impl<T: Clone + 'static> ComboboxState<T> {
             search_text: String::new(),
             is_open: false,
             focused_index: None,
+            scroll_handle: ScrollHandle::new(),
         }
     }
 
@@ -350,6 +352,7 @@ impl<T: Clone + PartialEq + 'static> Combobox<T> {
                 });
             }
         });
+        self.scroll_focused_into_view(cx);
     }
 
     /// Handle down arrow key
@@ -372,6 +375,35 @@ impl<T: Clone + PartialEq + 'static> Combobox<T> {
                 });
             }
         });
+        self.scroll_focused_into_view(cx);
+    }
+
+    /// Keep the focused item inside the visible rows of the dropdown
+    /// viewport. Row geometry mirrors the render budget: 28px rows with 4px
+    /// top padding; a negative y offset means the list is scrolled down.
+    fn scroll_focused_into_view(&self, cx: &Context<Self>) {
+        const ROW_HEIGHT: f32 = 28.0;
+        const TOP_PADDING: f32 = 4.0;
+
+        let state = self.state.read(cx);
+        let Some(position) = state.focused_index else {
+            return;
+        };
+        let viewport_height = f32::from(self.max_height);
+        let row_top = TOP_PADDING + position as f32 * ROW_HEIGHT;
+        let row_bottom = row_top + ROW_HEIGHT;
+        let scrolled = -f32::from(state.scroll_handle.offset().y);
+
+        let new_scrolled = if row_top < scrolled {
+            (row_top - TOP_PADDING).max(0.0)
+        } else if row_bottom > scrolled + viewport_height {
+            row_bottom - viewport_height
+        } else {
+            return;
+        };
+        state
+            .scroll_handle
+            .set_offset(point(px(0.0), px(-new_scrolled.max(0.0))));
     }
 
     /// Handle enter key (confirm selection)
@@ -541,7 +573,15 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                     }
                 }),
             )
-            .child(div().flex_1().min_w(px(0.0)).child(display_text))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .child(display_text),
+            )
             .child(
                 div()
                     .flex()
@@ -695,6 +735,7 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                                                     )
                                                     .max_h(self.max_height)
                                                     .overflow_y_scroll()
+                                                    .track_scroll(&self.state.read(cx).scroll_handle)
                                                     .py(px(4.0))
                                                     .when(filtered.is_empty(), |this| {
                                                         this.child(

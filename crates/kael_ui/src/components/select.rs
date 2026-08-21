@@ -382,9 +382,45 @@ impl<T: Clone + 'static> Select<T> {
                             .into_iter()
                             .find_map(|(index, option)| (!option.disabled).then_some(index))
                     });
+                self.scroll_highlighted_into_view();
             }
             cx.notify();
         }
+    }
+
+    /// Keep the highlighted option inside the visible rows of the dropdown
+    /// viewport. Row geometry mirrors the render budget: 28px rows with 4px
+    /// top padding, at most 12 visible rows; a negative y offset means the
+    /// menu is scrolled down.
+    fn scroll_highlighted_into_view(&mut self) {
+        const ROW_HEIGHT: f32 = 28.0;
+        const TOP_PADDING: f32 = 4.0;
+
+        let Some(highlighted) = self.highlighted_index else {
+            return;
+        };
+        let filtered = self.filtered_options();
+        let Some(position) = filtered.iter().position(|(index, _)| *index == highlighted) else {
+            return;
+        };
+
+        let visible_rows = filtered.len().min(12);
+        let viewport_height = (visible_rows as f32)
+            .mul_add(ROW_HEIGHT, 8.0)
+            .clamp(48.0, 300.0);
+        let row_top = TOP_PADDING + position as f32 * ROW_HEIGHT;
+        let row_bottom = row_top + ROW_HEIGHT;
+        let scrolled = -f32::from(self.scroll_handle.offset().y);
+
+        let new_scrolled = if row_top < scrolled {
+            (row_top - TOP_PADDING).max(0.0)
+        } else if row_bottom > scrolled + viewport_height {
+            row_bottom - viewport_height
+        } else {
+            return;
+        };
+        self.scroll_handle
+            .set_offset(point(px(0.0), px(-new_scrolled.max(0.0))));
     }
 
     fn close_dropdown(&mut self, cx: &mut Context<Self>) {
@@ -450,6 +486,7 @@ impl<T: Clone + 'static> Select<T> {
         };
 
         self.highlighted_index = Some(filtered[new_pos].0);
+        self.scroll_highlighted_into_view();
         cx.notify();
     }
 
@@ -479,6 +516,7 @@ impl<T: Clone + 'static> Select<T> {
         };
 
         self.highlighted_index = Some(filtered[new_pos].0);
+        self.scroll_highlighted_into_view();
         cx.notify();
     }
 
@@ -1431,6 +1469,88 @@ mod tests {
             window.draw(cx).clear();
             window.draw(cx).clear();
             assert!(select.read(cx).dropdown_bounds.size.width >= px(300.0));
+        });
+    }
+
+    #[kael::test]
+    fn arrow_key_navigation_scrolls_the_highlighted_option_into_view(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init_select(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let select = cx.new(|cx| {
+            Select::new(cx).options(
+                (0..80)
+                    .map(|index| SelectOption::new(index, format!("Font {index:02}")))
+                    .collect(),
+            )
+        });
+        let (_host, window) = cx.add_window_view({
+            let select = select.clone();
+            move |_, _| ScrollableSelectHost { select }
+        });
+        window.simulate_resize(size(px(500.0), px(500.0)));
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.focus(&select.read(cx).focus_handle(cx));
+        });
+        window.simulate_keystrokes("enter");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        window.update(|_, cx| {
+            assert_eq!(
+                select.read(cx).scroll_handle.offset().y,
+                px(0.0),
+                "opening on the first option must not scroll"
+            );
+        });
+
+        // Arrow past the 12th visible row: the viewport must follow the
+        // highlight instead of leaving it clipped below the fold.
+        for _ in 0..13 {
+            window.simulate_keystrokes("down");
+        }
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        window.update(|_, cx| {
+            let offset = f32::from(select.read(cx).scroll_handle.offset().y);
+            assert!(
+                offset < 0.0,
+                "arrowing past the visible rows must scroll the highlight into view, got {offset}"
+            );
+            let scrolled = -offset;
+            let highlighted_position = select
+                .read(cx)
+                .highlighted_index
+                .expect("a highlight must exist after arrowing")
+                as f32;
+            let row_top = 4.0 + highlighted_position * 28.0;
+            let row_bottom = row_top + 28.0;
+            let visible_rows = 12;
+            let viewport_height = (visible_rows as f32).mul_add(28.0, 8.0).clamp(48.0, 300.0);
+            assert!(
+                row_top >= scrolled - 0.5 && row_bottom <= scrolled + viewport_height + 0.5,
+                "highlighted row [{row_top},{row_bottom}] must be visible in [{scrolled},{}]",
+                scrolled + viewport_height
+            );
+        });
+
+        // Arrow back up to the first row: the viewport must return to the top.
+        for _ in 0..13 {
+            window.simulate_keystrokes("up");
+        }
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        window.update(|_, cx| {
+            assert_eq!(
+                select.read(cx).scroll_handle.offset().y,
+                px(0.0),
+                "arrowing back to the top must scroll the viewport back to the top"
+            );
         });
     }
 

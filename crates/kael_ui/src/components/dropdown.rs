@@ -130,6 +130,7 @@ pub struct DropdownState {
     highlighted_index: Option<usize>,
     focus_handle: FocusHandle,
     trigger_bounds: Bounds<Pixels>,
+    scroll_handle: ScrollHandle,
 }
 
 impl DropdownState {
@@ -139,7 +140,35 @@ impl DropdownState {
             highlighted_index: None,
             focus_handle: cx.focus_handle(),
             trigger_bounds: Bounds::default(),
+            scroll_handle: ScrollHandle::new(),
         }
+    }
+
+    /// Keep the highlighted item inside the visible rows of the menu
+    /// viewport. Row geometry mirrors the render budget: 28px rows with 4px
+    /// top padding and a 360px cap; a negative y offset means the menu is
+    /// scrolled down.
+    pub fn scroll_highlighted_into_view(&self) {
+        const ROW_HEIGHT: f32 = 28.0;
+        const TOP_PADDING: f32 = 4.0;
+        const MAX_HEIGHT: f32 = 360.0;
+
+        let Some(position) = self.highlighted_index else {
+            return;
+        };
+        let row_top = TOP_PADDING + position as f32 * ROW_HEIGHT;
+        let row_bottom = row_top + ROW_HEIGHT;
+        let scrolled = -f32::from(self.scroll_handle.offset().y);
+
+        let new_scrolled = if row_top < scrolled {
+            (row_top - TOP_PADDING).max(0.0)
+        } else if row_bottom > scrolled + MAX_HEIGHT {
+            row_bottom - MAX_HEIGHT
+        } else {
+            return;
+        };
+        self.scroll_handle
+            .set_offset(point(px(0.0), px(-new_scrolled.max(0.0))));
     }
 
     pub fn is_open(&self) -> bool {
@@ -344,6 +373,7 @@ impl RenderOnce for Dropdown {
                         state.update(cx, |s, cx| {
                             s.open = true;
                             s.highlighted_index = first_enabled;
+                            s.scroll_highlighted_into_view();
                             cx.notify();
                         });
                         true
@@ -361,6 +391,7 @@ impl RenderOnce for Dropdown {
                                     s.highlighted_index,
                                     key == "up",
                                 );
+                                s.scroll_highlighted_into_view();
                                 cx.notify();
                             });
                             true
@@ -458,6 +489,7 @@ impl RenderOnce for Dropdown {
                                 .gap(px(2.0))
                                 .max_h(px(360.0))
                                 .overflow_y_scroll()
+                                .track_scroll(&state.read(cx).scroll_handle)
                                 .children(items.iter().enumerate().map(|(item_index, item)| {
                                     if item.is_separator() {
                                         return div()
@@ -564,6 +596,9 @@ impl RenderOnce for Dropdown {
                                                 .child(
                                                     div()
                                                         .line_height(px(20.0))
+                                                        .overflow_hidden()
+                                                        .text_ellipsis()
+                                                        .whitespace_nowrap()
                                                         .text_color(text_color)
                                                         .child(item.label.clone()),
                                                 )
@@ -586,6 +621,7 @@ impl RenderOnce for Dropdown {
                                             d.child(
                                                 div()
                                                     .ml_auto()
+                                                    .flex_shrink_0()
                                                     .text_size(px(12.0))
                                                     .line_height(px(16.0))
                                                     .text_color(theme.tokens.muted_foreground)
@@ -609,7 +645,8 @@ impl RenderOnce for Dropdown {
 
 #[cfg(test)]
 mod tests {
-    use super::next_enabled_index;
+    use super::{DropdownState, next_enabled_index};
+    use kael::{AppContext as _, px};
 
     #[test]
     fn keyboard_navigation_skips_disabled_and_separator_indices() {
@@ -625,5 +662,35 @@ mod tests {
         assert_eq!(next_enabled_index(&enabled, Some(5), false), Some(2));
         assert_eq!(next_enabled_index(&enabled, Some(2), true), Some(5));
         assert_eq!(next_enabled_index(&[], None, false), None);
+    }
+
+    #[test]
+    fn scroll_highlighted_into_view_follows_keyboard_highlight() {
+        let mut cx = kael::TestAppContext::single();
+        let state = cx.update(|cx| cx.new(|cx| DropdownState::new(cx)));
+
+        // No highlight yet: no scroll state changes.
+        cx.update(|cx| state.read(cx).scroll_highlighted_into_view());
+        cx.update(|cx| {
+            assert_eq!(state.read(cx).scroll_handle.offset().y, px(0.0));
+        });
+
+        // Highlight below the 360px viewport (row 14 and later) scrolls down.
+        cx.update(|cx| {
+            state.update(cx, |state, _| {
+                state.highlighted_index = Some(14);
+            });
+            state.read(cx).scroll_highlighted_into_view();
+            assert_eq!(state.read(cx).scroll_handle.offset().y, px(-64.0));
+        });
+
+        // Returning to the top row scrolls back to the top.
+        cx.update(|cx| {
+            state.update(cx, |state, _| {
+                state.highlighted_index = Some(0);
+            });
+            state.read(cx).scroll_highlighted_into_view();
+            assert_eq!(state.read(cx).scroll_handle.offset().y, px(0.0));
+        });
     }
 }
