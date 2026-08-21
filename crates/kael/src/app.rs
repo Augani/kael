@@ -39329,6 +39329,43 @@ pub struct AnyDrag {
     pub cursor_style: Option<CursorStyle>,
 }
 
+/// The side of the anchor bounds a tooltip should be placed on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TooltipSide {
+    /// Above the anchor bounds.
+    Top,
+    /// Below the anchor bounds.
+    Bottom,
+    /// To the left of the anchor bounds.
+    Left,
+    /// To the right of the anchor bounds.
+    Right,
+}
+
+/// How a tooltip should be aligned along the side of its anchor bounds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TooltipAlign {
+    /// Aligned with the leading edge of the anchor bounds.
+    Start,
+    /// Centered on the anchor bounds.
+    Center,
+    /// Aligned with the trailing edge of the anchor bounds.
+    End,
+}
+
+/// Anchor-relative positioning for a tooltip: the trigger's window-space
+/// bounds plus the requested side and alignment. When present this replaces
+/// the default cursor-relative positioning.
+#[derive(Clone, Debug)]
+pub struct TooltipAnchor {
+    /// The window-space bounds of the element that owns the tooltip.
+    pub bounds: Bounds<Pixels>,
+    /// The side of the anchor bounds the tooltip should sit on.
+    pub side: TooltipSide,
+    /// How the tooltip is aligned along that side.
+    pub align: TooltipAlign,
+}
+
 /// Contains state associated with a tooltip. You'll only need this struct if you're implementing
 /// tooltip behavior on a custom element. Otherwise, use [Div::tooltip](crate::Interactivity::tooltip).
 #[derive(Clone)]
@@ -39338,6 +39375,10 @@ pub struct AnyTooltip {
 
     /// The absolute position of the mouse when the tooltip was deployed.
     pub mouse_position: Point<Pixels>,
+
+    /// When set, position the tooltip relative to these anchor bounds
+    /// instead of the cursor.
+    pub anchor: Option<TooltipAnchor>,
 
     /// Given the bounds of the tooltip, checks whether the tooltip should still be visible and
     /// updates its state accordingly. This is needed atop the hovered element's mouse move handler

@@ -31,9 +31,9 @@ use crate::{
     MouseUpEvent, Overflow, PanGesture, PanGestureEvent, PanState, ParentElement, PinchGesture,
     PinchGestureEvent, Pixels, Point, Render, Rgba, ScaledPixels, ScrollDelta, ScrollWheelEvent,
     SharedString, Size, Style, StyleRefinement, Styled, SwipeDirection, SwipeGesture,
-    SwipeGestureEvent, TapGesture, TapGestureEvent, Task, TooltipId, TouchPhase,
-    TransformationMatrix, Visibility, Window, WindowControlArea, point, px, scroll_trace_enabled,
-    size,
+    SwipeGestureEvent, TapGesture, TapGestureEvent, Task, TooltipAlign, TooltipAnchor, TooltipId,
+    TooltipSide, TouchPhase, TransformationMatrix, Visibility, Window, WindowControlArea, point,
+    px, scroll_trace_enabled, size,
 };
 use collections::HashMap;
 use refineable::Refineable;
@@ -1135,6 +1135,7 @@ impl Interactivity {
             build: tooltip.into_tooltip_renderer(),
             hoverable: false,
             focus_behavior: TooltipFocusBehavior::Never,
+            anchor: None,
             show_delay: TOOLTIP_SHOW_DELAY,
             hide_delay: Duration::ZERO,
             visibility_listener: None,
@@ -1161,6 +1162,7 @@ impl Interactivity {
             }),
             hoverable: false,
             focus_behavior: TooltipFocusBehavior::Never,
+            anchor: None,
             show_delay: TOOLTIP_SHOW_DELAY,
             hide_delay: Duration::ZERO,
             visibility_listener: None,
@@ -1191,6 +1193,7 @@ impl Interactivity {
             }),
             hoverable: false,
             focus_behavior: TooltipFocusBehavior::Never,
+            anchor: None,
             show_delay,
             hide_delay,
             visibility_listener: None,
@@ -1222,6 +1225,7 @@ impl Interactivity {
             }),
             hoverable: false,
             focus_behavior: TooltipFocusBehavior::Never,
+            anchor: None,
             show_delay,
             hide_delay,
             visibility_listener: Some(Rc::new(on_visibility_change)),
@@ -1252,6 +1256,7 @@ impl Interactivity {
             }),
             hoverable: true,
             focus_behavior: TooltipFocusBehavior::Never,
+            anchor: None,
             show_delay,
             hide_delay,
             visibility_listener: None,
@@ -1283,6 +1288,7 @@ impl Interactivity {
             }),
             hoverable: true,
             focus_behavior: TooltipFocusBehavior::Never,
+            anchor: None,
             show_delay,
             hide_delay,
             visibility_listener: Some(Rc::new(on_visibility_change)),
@@ -1316,6 +1322,7 @@ impl Interactivity {
             build: Rc::new(build_tooltip),
             hoverable: true,
             focus_behavior: TooltipFocusBehavior::Never,
+            anchor: None,
             show_delay: TOOLTIP_SHOW_DELAY,
             hide_delay: HOVERABLE_TOOLTIP_HIDE_DELAY,
             visibility_listener: None,
@@ -1331,6 +1338,20 @@ impl Interactivity {
         );
         if let Some(builder) = self.tooltip_builder.as_mut() {
             builder.focus_behavior = behavior;
+        }
+    }
+
+    /// Position the tooltip relative to this element's bounds on the given
+    /// side instead of the cursor. Call this after configuring tooltip
+    /// content on the same element. The tooltip flips to the opposite side
+    /// and clamps into the window when there is not enough room.
+    pub fn tooltip_anchor_placement(&mut self, side: TooltipSide, align: TooltipAlign) {
+        debug_assert!(
+            self.tooltip_builder.is_some(),
+            "tooltip_anchor_placement requires tooltip content"
+        );
+        if let Some(builder) = self.tooltip_builder.as_mut() {
+            builder.anchor = Some((side, align));
         }
     }
 
@@ -2272,6 +2293,18 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Position the tooltip relative to this element's bounds on the given
+    /// side instead of the cursor. Call this after configuring tooltip
+    /// content on the same element. The tooltip flips to the opposite side
+    /// and clamps into the window when there is not enough room.
+    fn tooltip_anchor_placement(mut self, side: TooltipSide, align: TooltipAlign) -> Self
+    where
+        Self: Sized,
+    {
+        self.interactivity().tooltip_anchor_placement(side, align);
+        self
+    }
+
     /// Use the given callback to construct a custom tooltip view when the mouse hovers over this element.
     fn tooltip_view(
         mut self,
@@ -2373,6 +2406,7 @@ pub(crate) struct TooltipBuilder {
     build: Rc<dyn Fn(&mut Window, &mut App) -> AnyView + 'static>,
     hoverable: bool,
     focus_behavior: TooltipFocusBehavior,
+    anchor: Option<(TooltipSide, TooltipAlign)>,
     show_delay: Duration,
     hide_delay: Duration,
     visibility_listener: Option<Rc<dyn Fn(bool, &mut Window, &mut App)>>,
@@ -3207,7 +3241,19 @@ impl Interactivity {
                         self.active = Some(clicked_state.element);
                     }
                     if let Some(active_tooltip) = element_state.active_tooltip.as_ref() {
-                        if self.tooltip_builder.is_some() {
+                        if let Some(builder) = self.tooltip_builder.as_ref() {
+                            if let Some((side, align)) = builder.anchor {
+                                let mut borrowed = active_tooltip.borrow_mut();
+                                if let Some(tooltip) =
+                                    borrowed.as_mut().and_then(ActiveTooltip::tooltip_mut)
+                                {
+                                    tooltip.anchor = Some(TooltipAnchor {
+                                        bounds,
+                                        side,
+                                        align,
+                                    });
+                                }
+                            }
                             self.tooltip_id = set_tooltip_on_window(active_tooltip, window);
                         } else {
                             // If there is no longer a tooltip builder, remove the active tooltip.
@@ -3225,21 +3271,17 @@ impl Interactivity {
                 }
 
                 window.with_text_style(style.text_style().cloned(), |window| {
-                    window.with_content_mask(
-                        style.overflow_mask(bounds, window.rem_size()),
-                        |window| {
-                            let hitbox = if self.should_insert_hitbox(&style, window, cx) {
-                                Some(window.insert_hitbox(bounds, self.hitbox_behavior))
-                            } else {
-                                None
-                            };
+                    window.with_content_mask(style.overflow_mask(bounds, window), |window| {
+                        let hitbox = if self.should_insert_hitbox(&style, window, cx) {
+                            Some(window.insert_hitbox(bounds, self.hitbox_behavior))
+                        } else {
+                            None
+                        };
 
-                            let scroll_offset =
-                                self.clamp_scroll_position(bounds, &style, window, cx);
-                            let result = f(&style, scroll_offset, hitbox, window, cx);
-                            (result, element_state)
-                        },
-                    )
+                        let scroll_offset = self.clamp_scroll_position(bounds, &style, window, cx);
+                        let result = f(&style, scroll_offset, hitbox, window, cx);
+                        (result, element_state)
+                    })
                 })
             },
         )
@@ -3295,8 +3337,7 @@ impl Interactivity {
                 scroll_to_bottom = mem::take(&mut scroll_handle_state.scroll_to_bottom);
             }
 
-            let rem_size = window.rem_size();
-            let padding = style.padding.to_pixels(bounds.size.into(), rem_size);
+            let padding = window.ui_definite_edges_in_pixels(style.padding, bounds.size);
             let padding_size = size(padding.left + padding.right, padding.top + padding.bottom);
             // The floating point values produced by Taffy and ours often vary
             // slightly after ~5 decimal places. This can lead to cases where after
@@ -3492,10 +3533,10 @@ impl Interactivity {
                         style.paint(bounds, window, cx, |window: &mut Window, cx: &mut App| {
                             window.with_text_style(style.text_style().cloned(), |window| {
                                 window.with_content_mask(
-                                    style.overflow_mask(bounds, window.rem_size()),
+                                    style.overflow_mask(bounds, window),
                                     |window| {
                                         window.with_rounded_clip(
-                                            style.rounded_overflow_clip(bounds, window.rem_size()),
+                                            style.rounded_overflow_clip(bounds, window),
                                             |window| {
                                                 window.with_tab_group(tab_group, |window| {
                                                     if let Some(hitbox) = hitbox {
@@ -4570,18 +4611,26 @@ impl Interactivity {
         auto_scrollbars: &AutoScrollbarHitboxes,
         window: &mut Window,
     ) {
-        let should_keep_fading = self.scroll_elastic_state.as_ref().is_some_and(|state| {
-            let state = state.borrow();
-            !state.animating && state.seconds_since_last_scroll() <= AUTO_SCROLLBAR_IDLE_SECONDS
-        });
-        if should_keep_fading {
-            window.request_animation_frame();
-        }
-
         let scroll_handle = match self.tracked_scroll_handle.as_ref() {
             Some(h) => h,
             None => return,
         };
+        let always_show = scroll_handle.0.borrow().always_show_scrollbars;
+        // Auto-hiding scrollbars need frames while their idle visibility window
+        // expires. Persistent scrollbars do not: polling that same window would
+        // notify and rebuild the owning view for 1.2 seconds after every wheel
+        // event even though their appearance never changes.
+        let should_keep_fading = self.scroll_elastic_state.as_ref().is_some_and(|state| {
+            let state = state.borrow();
+            auto_scrollbar_should_poll_for_fade(
+                always_show,
+                state.animating,
+                state.seconds_since_last_scroll(),
+            )
+        });
+        if should_keep_fading {
+            window.request_animation_frame();
+        }
 
         let max_offset = scroll_handle.max_offset();
         let show_y = axis_is_scrollable(style.overflow.y, max_offset.height);
@@ -4595,7 +4644,6 @@ impl Interactivity {
             .auto_scrollbar_state
             .get_or_insert_with(Rc::default)
             .clone();
-        let always_show = scroll_handle.0.borrow().always_show_scrollbars;
         let should_show_scrollbars = always_show
             || self.scroll_elastic_state.as_ref().is_none_or(|state| {
                 let state = state.borrow();
@@ -4654,12 +4702,26 @@ impl Interactivity {
         }
 
         if hovered && !should_show_scrollbars {
-            window.refresh();
+            window.refresh_preserving_caches();
         }
 
         if should_show_scrollbars || hovered || dragging {
             let thumb_bounds = auto_scrollbar_thumb_bounds(track_bounds, scroll_handle, vertical);
-            let thumb_color = crate::hsla(0., 0., 0.0, 0.5);
+            let (thumb_color, track_color) = {
+                let handle = scroll_handle.0.borrow();
+                (
+                    handle
+                        .scrollbar_thumb_color
+                        .unwrap_or_else(|| crate::hsla(0., 0., 0.0, 0.5)),
+                    handle.scrollbar_track_color,
+                )
+            };
+            if let Some(track_color) = track_color {
+                window.paint_quad(
+                    crate::fill(track_bounds, track_color)
+                        .corner_radii(AUTO_SCROLLBAR_THUMB_WIDTH / 2.0),
+                );
+            }
             window.paint_quad(
                 crate::fill(thumb_bounds, thumb_color)
                     .corner_radii(AUTO_SCROLLBAR_THUMB_WIDTH / 2.0),
@@ -4695,7 +4757,7 @@ impl Interactivity {
                 start_logical_offset: logical_offset,
                 start_position: event.position,
             });
-            window.refresh();
+            window.refresh_preserving_caches();
             cx.stop_propagation();
             window.prevent_default();
         });
@@ -4722,7 +4784,7 @@ impl Interactivity {
                 drag_state,
             );
             set_auto_scrollbar_logical_offset(&move_handle, vertical, logical_offset);
-            window.refresh();
+            window.refresh_preserving_caches();
             cx.stop_propagation();
         });
 
@@ -4738,7 +4800,7 @@ impl Interactivity {
                 .is_some_and(|drag_state| drag_state.vertical == vertical)
             {
                 up_state.drag_state = None;
-                window.refresh();
+                window.refresh_preserving_caches();
                 cx.stop_propagation();
             }
         });
@@ -4966,6 +5028,16 @@ pub struct ElementClickedState {
 impl ElementClickedState {
     fn is_clicked(&self) -> bool {
         self.group || self.element
+    }
+}
+
+impl ActiveTooltip {
+    pub(crate) fn tooltip_mut(&mut self) -> Option<&mut AnyTooltip> {
+        match self {
+            ActiveTooltip::WaitingForShow { .. } => None,
+            ActiveTooltip::Visible { tooltip, .. }
+            | ActiveTooltip::WaitingForHide { tooltip, .. } => Some(tooltip),
+        }
     }
 }
 
@@ -5457,6 +5529,7 @@ pub(crate) fn register_context_menu_mouse_handlers(
                 active_context_menu.borrow_mut().replace(AnyTooltip {
                     view: overlay.into(),
                     mouse_position: event.position,
+                    anchor: None,
                     check_visible_and_update: Rc::new(move |_, _, _| {
                         active_context_menu_for_visibility.borrow().is_some()
                     }),
@@ -5604,6 +5677,7 @@ fn schedule_tooltip_show(
                         tooltip: AnyTooltip {
                             view,
                             mouse_position: window.mouse_position(),
+                            anchor: None,
                             check_visible_and_update: Rc::new(move |tooltip_bounds, window, cx| {
                                 handle_tooltip_check_visible_and_update(
                                     &active_tooltip,
@@ -5967,6 +6041,14 @@ const AUTO_SCROLLBAR_THUMB_WIDTH: Pixels = px(7.0);
 const AUTO_SCROLLBAR_EDGE_MARGIN: Pixels = px(3.0);
 const AUTO_SCROLLBAR_END_MARGIN: Pixels = px(4.0);
 
+fn auto_scrollbar_should_poll_for_fade(
+    always_show: bool,
+    elastic_animating: bool,
+    seconds_since_last_scroll: f64,
+) -> bool {
+    !always_show && !elastic_animating && seconds_since_last_scroll <= AUTO_SCROLLBAR_IDLE_SECONDS
+}
+
 fn auto_scrollbar_track_bounds(
     bounds: Bounds<Pixels>,
     vertical: bool,
@@ -6164,6 +6246,8 @@ struct ScrollHandleState {
     overflow: Point<Overflow>,
     active_item: Option<ScrollActiveItem>,
     always_show_scrollbars: bool,
+    scrollbar_thumb_color: Option<Hsla>,
+    scrollbar_track_color: Option<Hsla>,
 }
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -6275,6 +6359,15 @@ impl ScrollHandle {
         self
     }
 
+    /// Override the neutral colors used to paint automatic scrollbar thumbs and tracks.
+    pub fn scrollbar_colors(self, thumb: Hsla, track: Hsla) -> Self {
+        let mut state = self.0.borrow_mut();
+        state.scrollbar_thumb_color = Some(thumb);
+        state.scrollbar_track_color = Some(track);
+        drop(state);
+        self
+    }
+
     /// Scroll the minimal amount to ensure the child is the first visible element.
     pub fn scroll_to_top_of_item(&self, ix: usize) {
         let mut state = self.0.borrow_mut();
@@ -6383,7 +6476,7 @@ impl ScrollHandle {
 mod test {
     use super::{
         ImplicitStyleAnimationState, ImplicitVisualStyle, TOOLTIP_SHOW_DELAY, TooltipFocusBehavior,
-        TransitionConfig,
+        TransitionConfig, auto_scrollbar_should_poll_for_fade,
     };
     use crate::scroll_elasticity::{
         add_scroll_elasticity, advance_scroll_elasticity, apply_scroll_delta_axis,
@@ -6392,9 +6485,10 @@ mod test {
     use crate::{
         AccessibilityAttributes, AccessibilityRole, AccessibilityState, AppContext, Context,
         FocusHandle, InteractiveElement, Interactivity, MouseButton, MouseDownEvent,
-        MouseMoveEvent, MouseUpEvent, PanState, ParentElement, PinchState, Render, Rgba,
-        ScrollDelta, ScrollHandle, ScrollWheelEvent, StatefulInteractiveElement, StyleRefinement,
-        Styled, SwipeDirection, TestAppContext, VisualContext, Window, div, point, px,
+        MouseMoveEvent, MouseUpEvent, PanState, ParentElement, PinchState, Render,
+        RequestFrameOptions, Rgba, ScrollDelta, ScrollHandle, ScrollWheelEvent,
+        StatefulInteractiveElement, StyleRefinement, Styled, SwipeDirection, TestAppContext,
+        VisualContext, Window, div, point, px,
     };
     use std::{
         cell::{Cell, RefCell},
@@ -6509,6 +6603,13 @@ mod test {
         }
 
         assert_eq!(overscroll, px(0.0));
+    }
+
+    #[test]
+    fn persistent_auto_scrollbars_do_not_poll_fade_frames() {
+        assert!(auto_scrollbar_should_poll_for_fade(false, false, 0.25));
+        assert!(!auto_scrollbar_should_poll_for_fade(true, false, 0.25));
+        assert!(!auto_scrollbar_should_poll_for_fade(false, true, 0.25));
     }
 
     #[kael::test]
@@ -6783,6 +6884,44 @@ mod test {
     }
 
     #[kael::test]
+    fn persistent_scrollbars_stop_frame_polling_after_the_scroll_frame(cx: &mut TestAppContext) {
+        let scroll_handle = ScrollHandle::new().always_show_scrollbars();
+
+        struct TestView(ScrollHandle);
+
+        impl Render for TestView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div()
+                    .w(px(100.))
+                    .h(px(100.))
+                    .id("persistent-scroll-frame-test")
+                    .overflow_y_scroll()
+                    .track_scroll(&self.0)
+                    .child(div().w(px(100.)).h(px(300.)))
+            }
+        }
+
+        let (_view, cx) = cx.add_window_view(|_, _| TestView(scroll_handle.clone()));
+        let test_window = cx.test_window(cx.window_handle());
+
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(50.), px(50.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-40.))),
+            ..Default::default()
+        });
+
+        assert_eq!(scroll_handle.offset().y, px(-40.));
+        assert!(test_window.0.lock().frame_polling_active);
+
+        test_window.run_request_frame(RequestFrameOptions::default());
+
+        assert!(
+            !test_window.0.lock().frame_polling_active,
+            "an always-visible scrollbar must not schedule idle fade frames"
+        );
+    }
+
+    #[kael::test]
     fn wheel_scroll_redraws_without_notifying_view(cx: &mut TestAppContext) {
         let scroll_handle = ScrollHandle::new();
 
@@ -6826,22 +6965,53 @@ mod test {
     #[kael::test]
     fn auto_scrollbar_drag_updates_scroll_offset(cx: &mut TestAppContext) {
         let scroll_handle = ScrollHandle::new();
+        let prepaints = Rc::new(Cell::new(0));
+        let paints = Rc::new(Cell::new(0));
 
-        struct TestView(ScrollHandle);
+        struct TestView {
+            scroll: ScrollHandle,
+            prepaints: Rc<Cell<usize>>,
+            paints: Rc<Cell<usize>>,
+        }
 
         impl Render for TestView {
             fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
                 div()
+                    .flex()
+                    .flex_col()
                     .w(px(100.))
-                    .h(px(100.))
-                    .id("auto-scrollbar-drag-test")
-                    .overflow_y_scroll()
-                    .track_scroll(&self.0)
-                    .child(div().w(px(100.)).h(px(300.)))
+                    .h(px(180.))
+                    .child(
+                        div()
+                            .w(px(100.))
+                            .h(px(100.))
+                            .id("auto-scrollbar-drag-test")
+                            .overflow_y_scroll()
+                            .track_scroll(&self.scroll)
+                            .child(div().w(px(100.)).h(px(300.))),
+                    )
+                    .child(
+                        crate::cached(CountingProbe {
+                            height: px(50.),
+                            prepaints: self.prepaints.clone(),
+                            paints: self.paints.clone(),
+                        })
+                        .id("auto-scrollbar-drag-probe"),
+                    )
             }
         }
 
-        let (_view, mut cx) = cx.add_window_view(|_, _| TestView(scroll_handle.clone()));
+        let (_view, mut cx) = cx.add_window_view(|_, _| TestView {
+            scroll: scroll_handle.clone(),
+            prepaints: prepaints.clone(),
+            paints: paints.clone(),
+        });
+
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        let baseline_prepaints = prepaints.get();
+        let baseline_paints = paints.get();
 
         cx.simulate_event(MouseMoveEvent {
             position: point(px(96.), px(10.)),
@@ -6868,8 +7038,21 @@ mod test {
             click_count: 1,
             ..Default::default()
         });
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+        });
 
         assert!(scroll_handle.offset().y < px(-80.));
+        assert_eq!(
+            prepaints.get(),
+            baseline_prepaints,
+            "dragging a scrollbar must preserve unrelated cached prepaint work"
+        );
+        assert_eq!(
+            paints.get(),
+            baseline_paints,
+            "dragging a scrollbar must preserve unrelated cached paint work"
+        );
     }
 
     #[kael::test]
@@ -7467,6 +7650,92 @@ mod test {
         window.run_until_parked();
         window.update(|window, cx| window.draw(cx).clear());
         assert_eq!(&*visibility_changes.borrow(), &[true, false]);
+    }
+
+    #[kael::test]
+    fn anchored_tooltip_honors_placement_below_the_trigger(cx: &mut TestAppContext) {
+        struct AnchoredTooltipHost;
+
+        impl Render for AnchoredTooltipHost {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div().size_full().child(
+                    div()
+                        .id("anchored-tooltip-target")
+                        .debug_selector(|| "anchored-tooltip-target".to_string())
+                        .ml(px(60.0))
+                        .mt(px(40.0))
+                        .w(px(120.0))
+                        .h(px(40.0))
+                        .tooltip_element_with_delays(Duration::ZERO, Duration::ZERO, || {
+                            div()
+                                .debug_selector(|| "anchored-tooltip".to_string())
+                                .child("Anchored tooltip")
+                        })
+                        .tooltip_anchor_placement(
+                            crate::TooltipSide::Bottom,
+                            crate::TooltipAlign::Start,
+                        ),
+                )
+            }
+        }
+
+        let (_view, mut window) = cx.add_window_view(|_, _| AnchoredTooltipHost);
+        let target_bounds = window.debug_bounds("anchored-tooltip-target").unwrap();
+        window.simulate_mouse_move(target_bounds.center(), None, crate::Modifiers::default());
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+
+        let tooltip_bounds = window
+            .debug_bounds("anchored-tooltip")
+            .expect("tooltip visible");
+        assert!(
+            tooltip_bounds.top() >= target_bounds.bottom(),
+            "Bottom placement must put the tooltip below the trigger: {tooltip_bounds:?} vs {target_bounds:?}"
+        );
+        assert!(
+            (tooltip_bounds.left() - target_bounds.left()).abs() <= px(1.0),
+            "Start alignment must line the tooltip up with the trigger's left edge: {tooltip_bounds:?} vs {target_bounds:?}"
+        );
+    }
+
+    #[kael::test]
+    fn anchored_tooltip_flips_side_when_the_window_has_no_room(cx: &mut TestAppContext) {
+        struct EdgeTooltipHost;
+
+        impl Render for EdgeTooltipHost {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div().size_full().flex().items_end().child(
+                    div()
+                        .id("edge-tooltip-target")
+                        .debug_selector(|| "edge-tooltip-target".to_string())
+                        .w(px(120.0))
+                        .h(px(40.0))
+                        .tooltip_element_with_delays(Duration::ZERO, Duration::ZERO, || {
+                            div()
+                                .debug_selector(|| "edge-tooltip".to_string())
+                                .child("Edge tooltip")
+                        })
+                        .tooltip_anchor_placement(
+                            crate::TooltipSide::Bottom,
+                            crate::TooltipAlign::Start,
+                        ),
+                )
+            }
+        }
+
+        let (_view, mut window) = cx.add_window_view(|_, _| EdgeTooltipHost);
+        let target_bounds = window.debug_bounds("edge-tooltip-target").unwrap();
+        window.simulate_mouse_move(target_bounds.center(), None, crate::Modifiers::default());
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+
+        let tooltip_bounds = window
+            .debug_bounds("edge-tooltip")
+            .expect("tooltip visible");
+        assert!(
+            tooltip_bounds.bottom() <= target_bounds.top() + px(1.0),
+            "a Bottom tooltip at the window floor must flip above the trigger: {tooltip_bounds:?} vs {target_bounds:?}"
+        );
     }
 
     #[kael::test]

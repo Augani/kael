@@ -1,26 +1,27 @@
 #[cfg(any(feature = "inspector", debug_assertions))]
 use crate::Inspector;
 use crate::{
-    Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
-    AsyncWindowContext, AvailableSpace, Background, BlendMode, BorderStyle, Bounds, BoxShadow,
-    Capslock, ColorFilter, Context, Corners, CursorStyle, Decorations, DevicePixels,
-    DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
-    EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId,
-    GlyphRasterMode, GpuSpecs, Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent,
-    KeyEvent, Keystroke, KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers,
-    ModifiersChangedEvent, MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent,
-    POLYCHROME_SPRITE_KIND_COLOR, POLYCHROME_SPRITE_KIND_CONTENT_BLURRED,
-    POLYCHROME_SPRITE_KIND_CONTENT_SHADOW, POLYCHROME_SPRITE_KIND_PREMULTIPLIED,
-    POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT, Path, Pixels, PlatformAtlas, PlatformDisplay,
-    PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, PowerMode,
-    PrintDialogMode, PrintJob, PrintRequest, ProgressBarState, PromptButton, PromptLevel, Quad,
-    Render, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge,
-    SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow,
-    SharedString, Size, StrikethroughStyle, Style, SubscriberSet, Subscription, SystemWindowTab,
-    SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextStyle, TextStyleRefinement,
-    TransformationMatrix, Underline, UnderlineStyle, UndoRedoManager, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations, WindowOptions,
-    WindowParams, WindowState, WindowTextSystem, point,
+    AbsoluteLength, Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App,
+    AppContext, Arena, Asset, AsyncWindowContext, AvailableSpace, Background, BlendMode,
+    BorderStyle, Bounds, BoxShadow, Capslock, ColorFilter, Context, Corners, CursorStyle,
+    Decorations, DefiniteLength, DevicePixels, DispatchActionListener, DispatchNodeId,
+    DispatchTree, DisplayId, Edges, Effect, Entity, EntityId, EventEmitter, FileDropEvent, FontId,
+    Global, GlobalElementId, GlyphId, GlyphRasterMode, GpuSpecs, Hsla, InputHandler, IsZero,
+    KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId,
+    LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite, MouseButton, MouseEvent,
+    MouseMoveEvent, MouseUpEvent, POLYCHROME_SPRITE_KIND_COLOR,
+    POLYCHROME_SPRITE_KIND_CONTENT_BLURRED, POLYCHROME_SPRITE_KIND_CONTENT_SHADOW,
+    POLYCHROME_SPRITE_KIND_PREMULTIPLIED, POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT, Path, Pixels,
+    PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
+    PolychromeSprite, PowerMode, PrintDialogMode, PrintJob, PrintRequest, ProgressBarState,
+    PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage, RenderImageParams,
+    RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X,
+    SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle,
+    Style, SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap,
+    TaffyLayoutEngine, Task, TextStyle, TextStyleRefinement, TooltipAlign, TooltipAnchor,
+    TooltipSide, TransformationMatrix, Underline, UnderlineStyle, UndoRedoManager,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations,
+    WindowOptions, WindowParams, WindowState, WindowTextSystem, point,
     prelude::*,
     px, rems, size, transparent_black,
     webview::{PlatformWebView, PlatformWebViewCommand},
@@ -72,6 +73,9 @@ const MAX_CHECKED_WINDOW_CONTENT_SIZE: f32 = 32768.0;
 const MAX_CHECKED_WINDOW_CLIENT_INSET: f32 = 512.0;
 const MIN_CHECKED_WINDOW_REM_SIZE: f32 = 4.0;
 const MAX_CHECKED_WINDOW_REM_SIZE: f32 = 128.0;
+const MIN_UI_ZOOM_FACTOR: f32 = 0.75;
+const MAX_UI_ZOOM_FACTOR: f32 = 2.0;
+const UI_ZOOM_STEP: f32 = 0.1;
 const MAX_CHECKED_AUTOSCROLL_BOUND_SIZE: f32 = 32768.0;
 
 /// Checked runtime content size for a native window.
@@ -3141,6 +3145,8 @@ pub(crate) struct PrepaintStateIndex {
     dispatch_tree_index: usize,
     accessed_element_states_index: usize,
     line_layout_index: LineLayoutIndex,
+    #[cfg(any(feature = "test-support", test))]
+    debug_bounds_keys: FxHashSet<String>,
 }
 
 #[derive(Clone, Default)]
@@ -3152,6 +3158,8 @@ pub(crate) struct PaintIndex {
     accessed_element_states_index: usize,
     tab_handle_index: usize,
     line_layout_index: LineLayoutIndex,
+    #[cfg(any(feature = "test-support", test))]
+    debug_bounds_keys: FxHashSet<String>,
 }
 
 impl Frame {
@@ -3275,6 +3283,7 @@ pub struct Window {
     sprite_atlas: Arc<dyn PlatformAtlas>,
     text_system: Arc<WindowTextSystem>,
     rem_size: Pixels,
+    ui_zoom_factor: f32,
     /// The stack of override values for the window's rem size.
     ///
     /// This is used by `with_rem_size` to allow rendering an element tree with
@@ -3724,6 +3733,7 @@ impl Window {
             sprite_atlas,
             text_system,
             rem_size: px(16.),
+            ui_zoom_factor: 1.0,
             rem_size_override_stack: SmallVec::new(),
             viewport_size: content_size,
             layout_engine: Some(TaffyLayoutEngine::new()),
@@ -4156,6 +4166,18 @@ impl Window {
             node.parent = self.accessibility_parent_stack.last().copied();
         }
         self.next_frame.accessibility_nodes.push(node);
+    }
+
+    pub(crate) fn accessibility_node_index(&self) -> usize {
+        self.next_frame.accessibility_nodes.len()
+    }
+
+    pub(crate) fn accessibility_nodes_since(&self, index: usize) -> Vec<crate::AccessibilityNode> {
+        self.next_frame.accessibility_nodes[index..].to_vec()
+    }
+
+    pub(crate) fn replay_accessibility_nodes(&mut self, nodes: &[crate::AccessibilityNode]) {
+        self.next_frame.accessibility_nodes.extend_from_slice(nodes);
     }
 
     /// Register an accessibility node, stamping its screen-space bounds from the
@@ -4956,16 +4978,112 @@ impl Window {
     /// The size of an em for the base font of the application. Adjusting this value allows the
     /// UI to scale, just like zooming a web page.
     pub fn rem_size(&self) -> Pixels {
+        self.base_rem_size() * self.ui_zoom_factor
+    }
+
+    fn base_rem_size(&self) -> Pixels {
         self.rem_size_override_stack
             .last()
             .copied()
             .unwrap_or(self.rem_size)
     }
 
+    /// Resolve an absolute UI length after applying the user-controlled interface zoom.
+    pub fn ui_length_in_pixels(&self, length: AbsoluteLength) -> Pixels {
+        length.to_pixels(self.base_rem_size()) * self.ui_zoom_factor
+    }
+
+    /// Resolve an absolute length in the layout coordinate system before interface zoom.
+    pub(crate) fn unscaled_ui_length_in_pixels(&self, length: AbsoluteLength) -> Pixels {
+        length.to_pixels(self.base_rem_size())
+    }
+
+    /// Resolve an absolute or font-relative UI length without scaling fractions twice.
+    pub fn ui_definite_length_in_pixels(
+        &self,
+        length: DefiniteLength,
+        base_size: Pixels,
+    ) -> Pixels {
+        match length {
+            DefiniteLength::Absolute(length) => self.ui_length_in_pixels(length),
+            DefiniteLength::Fraction(fraction) => base_size * fraction,
+        }
+    }
+
+    /// Resolve absolute edge lengths after applying interface zoom.
+    pub fn ui_edges_in_pixels(&self, edges: Edges<AbsoluteLength>) -> Edges<Pixels> {
+        edges.map(|length| self.ui_length_in_pixels(*length))
+    }
+
+    /// Resolve absolute corner lengths after applying interface zoom.
+    pub fn ui_corners_in_pixels(&self, corners: Corners<AbsoluteLength>) -> Corners<Pixels> {
+        corners.map(|length| self.ui_length_in_pixels(*length))
+    }
+
+    /// Resolve padding-like lengths while preserving parent-relative fractions.
+    pub fn ui_definite_edges_in_pixels(
+        &self,
+        edges: Edges<DefiniteLength>,
+        parent_size: Size<Pixels>,
+    ) -> Edges<Pixels> {
+        Edges {
+            top: self.ui_definite_length_in_pixels(edges.top, parent_size.height),
+            right: self.ui_definite_length_in_pixels(edges.right, parent_size.width),
+            bottom: self.ui_definite_length_in_pixels(edges.bottom, parent_size.height),
+            left: self.ui_definite_length_in_pixels(edges.left, parent_size.width),
+        }
+    }
+
+    fn ui_layout_scale_factor(&self) -> f32 {
+        self.scale_factor * self.ui_zoom_factor
+    }
+
     /// Sets the size of an em for the base font of the application. Adjusting this value allows the
     /// UI to scale, just like zooming a web page.
     pub fn set_rem_size(&mut self, rem_size: impl Into<Pixels>) {
-        self.rem_size = rem_size.into();
+        let rem_size = rem_size.into();
+        if self.rem_size == rem_size {
+            return;
+        }
+        self.rem_size = rem_size;
+        self.frame_skip.invalidate();
+        self.refresh();
+    }
+
+    /// Return the user-controlled interface zoom factor for this window.
+    pub fn ui_zoom_factor(&self) -> f32 {
+        self.ui_zoom_factor
+    }
+
+    /// Set the user-controlled interface zoom factor, clamped to a readable range.
+    pub fn set_ui_zoom_factor(&mut self, factor: f32) {
+        if !factor.is_finite() {
+            return;
+        }
+        let factor = factor.clamp(MIN_UI_ZOOM_FACTOR, MAX_UI_ZOOM_FACTOR);
+        if (self.ui_zoom_factor - factor).abs() < f32::EPSILON {
+            return;
+        }
+        self.ui_zoom_factor = factor;
+        self.frame_skip.invalidate();
+        self.refresh();
+    }
+
+    /// Increase the interface zoom by one standard step.
+    pub fn zoom_in(&mut self) {
+        let next = ((self.ui_zoom_factor + UI_ZOOM_STEP) * 10.0).round() / 10.0;
+        self.set_ui_zoom_factor(next);
+    }
+
+    /// Decrease the interface zoom by one standard step.
+    pub fn zoom_out(&mut self) {
+        let next = ((self.ui_zoom_factor - UI_ZOOM_STEP) * 10.0).round() / 10.0;
+        self.set_ui_zoom_factor(next);
+    }
+
+    /// Restore the interface zoom to the application-defined base size.
+    pub fn reset_zoom(&mut self) {
+        self.set_ui_zoom_factor(1.0);
     }
 
     /// Validate and set the base font em size for native window UI scaling.
@@ -5013,7 +5131,10 @@ impl Window {
 
     /// The line height associated with the current text style.
     pub fn line_height(&self) -> Pixels {
-        self.text_style().line_height_in_pixels(self.rem_size())
+        let style = self.text_style();
+        let font_size = self.ui_length_in_pixels(style.font_size);
+        self.ui_definite_length_in_pixels(style.line_height, font_size)
+            .round()
     }
 
     /// Call to prevent the default action of an event. Currently only used to prevent
@@ -5377,11 +5498,13 @@ impl Window {
             let mouse_position = tooltip_request.tooltip.mouse_position;
             let tooltip_size = element.layout_as_root(AvailableSpace::min_size(), self, cx);
 
-            let mut tooltip_bounds =
-                Bounds::new(mouse_position + point(px(1.), px(1.)), tooltip_size);
             let window_bounds = Bounds {
                 origin: Point::default(),
                 size: self.viewport_size(),
+            };
+            let mut tooltip_bounds = match tooltip_request.tooltip.anchor.as_ref() {
+                Some(anchor) => anchored_tooltip_bounds(anchor, tooltip_size, window_bounds),
+                None => Bounds::new(mouse_position + point(px(1.), px(1.)), tooltip_size),
             };
 
             if tooltip_bounds.right() > window_bounds.right() {
@@ -5502,10 +5625,26 @@ impl Window {
             dispatch_tree_index: self.next_frame.dispatch_tree.len(),
             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
             line_layout_index: self.text_system.layout_index(),
+            #[cfg(any(feature = "test-support", test))]
+            debug_bounds_keys: self.next_frame.debug_bounds.keys().cloned().collect(),
         }
     }
 
     pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>) {
+        #[cfg(any(feature = "test-support", test))]
+        self.next_frame.debug_bounds.extend(
+            range
+                .end
+                .debug_bounds_keys
+                .difference(&range.start.debug_bounds_keys)
+                .filter_map(|key| {
+                    self.rendered_frame
+                        .debug_bounds
+                        .get(key)
+                        .copied()
+                        .map(|bounds| (key.clone(), bounds))
+                }),
+        );
         self.next_frame.hitboxes.extend(
             self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
                 .iter()
@@ -5563,6 +5702,8 @@ impl Window {
             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
             tab_handle_index: self.next_frame.tab_stops.paint_index(),
             line_layout_index: self.text_system.layout_index(),
+            #[cfg(any(feature = "test-support", test))]
+            debug_bounds_keys: self.next_frame.debug_bounds.keys().cloned().collect(),
         }
     }
 
@@ -5575,6 +5716,20 @@ impl Window {
     }
 
     fn reuse_paint_impl(&mut self, range: Range<PaintIndex>, replay_scene: bool) {
+        #[cfg(any(feature = "test-support", test))]
+        self.next_frame.debug_bounds.extend(
+            range
+                .end
+                .debug_bounds_keys
+                .difference(&range.start.debug_bounds_keys)
+                .filter_map(|key| {
+                    self.rendered_frame
+                        .debug_bounds
+                        .get(key)
+                        .copied()
+                        .map(|bounds| (key.clone(), bounds))
+                }),
+        );
         self.next_frame.cursor_styles.extend(
             self.rendered_frame.cursor_styles
                 [range.start.cursor_styles_index..range.end.cursor_styles_index]
@@ -6341,11 +6496,14 @@ impl Window {
         let scale_factor = self.scale_factor();
         let content_mask = self.content_mask();
         let opacity = self.element_opacity();
+        let ui_zoom_factor = self.ui_zoom_factor();
         for shadow in shadows {
+            let offset = shadow.offset * ui_zoom_factor;
+            let spread_radius = shadow.spread_radius * ui_zoom_factor;
             let shadow_bounds = if shadow.inset {
-                bounds.contract(shadow.spread_radius)
+                bounds.contract(spread_radius)
             } else {
-                (bounds + shadow.offset).dilate(shadow.spread_radius)
+                (bounds + offset).dilate(spread_radius)
             };
 
             let scaled_bounds = shadow_bounds.scale_and_snap_conservative(scale_factor);
@@ -6358,7 +6516,7 @@ impl Window {
                 rounded_clip_bounds: self.rounded_clip.0,
                 rounded_clip_radii: self.rounded_clip.1,
                 color_filter: self.element_color_filter,
-                blur_radius: shadow.blur_radius.scale(scale_factor),
+                blur_radius: (shadow.blur_radius * ui_zoom_factor).scale(scale_factor),
                 bounds: scaled_bounds,
                 corner_radii: corner_radii.scale_and_snap(scale_factor),
                 content_mask: if shadow.inset {
@@ -7307,8 +7465,8 @@ impl Window {
 
         cx.layout_id_buffer.clear();
         cx.layout_id_buffer.extend(children);
-        let rem_size = self.rem_size();
-        let scale_factor = self.scale_factor();
+        let rem_size = self.base_rem_size();
+        let scale_factor = self.ui_layout_scale_factor();
         self.frame_layout_nodes = self.frame_layout_nodes.saturating_add(1);
 
         self.layout_engine_mut()
@@ -7333,8 +7491,8 @@ impl Window {
     ) -> LayoutId {
         self.invalidator.debug_assert_prepaint();
 
-        let rem_size = self.rem_size();
-        let scale_factor = self.scale_factor();
+        let rem_size = self.base_rem_size();
+        let scale_factor = self.ui_layout_scale_factor();
         self.frame_layout_nodes = self.frame_layout_nodes.saturating_add(1);
         self.layout_engine_mut()
             .request_measured_layout(style, rem_size, scale_factor, measure)
@@ -7994,6 +8152,31 @@ impl Window {
         let Some(event) = event.downcast_ref::<KeyDownEvent>() else {
             return;
         };
+
+        let modifiers = event.keystroke.modifiers;
+        let secondary_only = modifiers.secondary() && modifiers.number_of_modifiers() == 1;
+        let secondary_with_shift =
+            modifiers.secondary() && modifiers.shift && modifiers.number_of_modifiers() == 2;
+        let handled_zoom = match event.keystroke.key.as_str() {
+            "+" | "=" if secondary_only || secondary_with_shift => {
+                self.zoom_in();
+                true
+            }
+            "-" if secondary_only => {
+                self.zoom_out();
+                true
+            }
+            "0" if secondary_only => {
+                self.reset_zoom();
+                true
+            }
+            _ => false,
+        };
+        if handled_zoom {
+            self.default_prevented = true;
+            cx.propagate_event = false;
+            return;
+        }
 
         let next_focus = if event.keystroke.key == "tab"
             && event.keystroke.modifiers.number_of_modifiers() == 0
@@ -10652,5 +10835,92 @@ mod tests {
                 .validate()
                 .is_err()
         );
+    }
+}
+/// Position a tooltip relative to its anchor bounds, flipping to the
+/// opposite side when the window does not have room and clamping the final
+/// bounds into the window.
+fn anchored_tooltip_bounds(
+    anchor: &TooltipAnchor,
+    tooltip_size: Size<Pixels>,
+    window_bounds: Bounds<Pixels>,
+) -> Bounds<Pixels> {
+    const GAP: Pixels = px(4.);
+
+    let side = match anchor.side {
+        TooltipSide::Top
+            if anchor.bounds.top() - GAP - tooltip_size.height < window_bounds.top() =>
+        {
+            TooltipSide::Bottom
+        }
+        TooltipSide::Bottom
+            if anchor.bounds.bottom() + GAP + tooltip_size.height > window_bounds.bottom() =>
+        {
+            TooltipSide::Top
+        }
+        TooltipSide::Left
+            if anchor.bounds.left() - GAP - tooltip_size.width < window_bounds.left() =>
+        {
+            TooltipSide::Right
+        }
+        TooltipSide::Right
+            if anchor.bounds.right() + GAP + tooltip_size.width > window_bounds.right() =>
+        {
+            TooltipSide::Left
+        }
+        side => side,
+    };
+
+    let origin = match side {
+        TooltipSide::Top => point(
+            aligned_tooltip_x(anchor.align, anchor.bounds, tooltip_size),
+            anchor.bounds.top() - GAP - tooltip_size.height,
+        ),
+        TooltipSide::Bottom => point(
+            aligned_tooltip_x(anchor.align, anchor.bounds, tooltip_size),
+            anchor.bounds.bottom() + GAP,
+        ),
+        TooltipSide::Left => point(
+            anchor.bounds.left() - GAP - tooltip_size.width,
+            aligned_tooltip_y(anchor.align, anchor.bounds, tooltip_size),
+        ),
+        TooltipSide::Right => point(
+            anchor.bounds.right() + GAP,
+            aligned_tooltip_y(anchor.align, anchor.bounds, tooltip_size),
+        ),
+    };
+
+    let max_x = (window_bounds.right() - tooltip_size.width).max(window_bounds.left());
+    let max_y = (window_bounds.bottom() - tooltip_size.height).max(window_bounds.top());
+    Bounds::new(
+        point(
+            origin.x.clamp(window_bounds.left(), max_x),
+            origin.y.clamp(window_bounds.top(), max_y),
+        ),
+        tooltip_size,
+    )
+}
+
+fn aligned_tooltip_x(
+    align: TooltipAlign,
+    anchor_bounds: Bounds<Pixels>,
+    tooltip_size: Size<Pixels>,
+) -> Pixels {
+    match align {
+        TooltipAlign::Start => anchor_bounds.left(),
+        TooltipAlign::Center => anchor_bounds.center().x - tooltip_size.width / 2.,
+        TooltipAlign::End => anchor_bounds.right() - tooltip_size.width,
+    }
+}
+
+fn aligned_tooltip_y(
+    align: TooltipAlign,
+    anchor_bounds: Bounds<Pixels>,
+    tooltip_size: Size<Pixels>,
+) -> Pixels {
+    match align {
+        TooltipAlign::Start => anchor_bounds.top(),
+        TooltipAlign::Center => anchor_bounds.center().y - tooltip_size.height / 2.,
+        TooltipAlign::End => anchor_bounds.bottom() - tooltip_size.height,
     }
 }

@@ -374,6 +374,18 @@ impl RenderOnce for Tooltip {
             placement => placement,
         };
         let alignment = self.alignment;
+        let core_side = match placement {
+            TooltipPlacement::Top => TooltipSide::Top,
+            TooltipPlacement::Bottom => TooltipSide::Bottom,
+            TooltipPlacement::Left => TooltipSide::Left,
+            TooltipPlacement::Right => TooltipSide::Right,
+            _ => TooltipSide::Top,
+        };
+        let core_align = match alignment {
+            TooltipAlignment::Start => TooltipAlign::Start,
+            TooltipAlignment::Center => TooltipAlign::Center,
+            TooltipAlignment::End => TooltipAlign::End,
+        };
         let show_hover_indication = matches!(self.hover_indication, TooltipHoverIndication::Always);
         let show_delay = self.show_delay;
         let hide_delay = self.hide_delay;
@@ -387,6 +399,12 @@ impl RenderOnce for Tooltip {
             .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
             .read(cx)
             .clone();
+        let anchor_bounds = window.use_keyed_state(
+            ElementId::NamedChild(Box::new(self.id.clone()), "anchor-bounds".into()),
+            cx,
+            |_, _| None,
+        );
+        let measured_bounds = *anchor_bounds.read(cx);
         let accessibility = if self.focus_trigger == TooltipFocusTrigger::Never {
             AccessibilityAttributes::new(AccessibilityRole::Group)
         } else {
@@ -396,6 +414,9 @@ impl RenderOnce for Tooltip {
         div()
             .accessibility(accessibility)
             .relative()
+            // Hug the trigger so anchor-relative placement measures the
+            // trigger, not a stretched wrapper.
+            .self_start()
             .when(focus_behavior != TooltipFocusBehavior::Never, |this| {
                 this.track_focus(&focus_handle).tab_stop(false)
             })
@@ -410,57 +431,89 @@ impl RenderOnce for Tooltip {
                 )
             })
             .when(forced_open, |this| {
-                let content = content.clone();
+                // Measure the trigger wrapper so the bubble can be placed in
+                // window coordinates and clamped into the viewport instead of
+                // overflowing behind ancestor clipping.
                 this.child(
-                    div()
-                        .absolute()
-                        .when(placement == TooltipPlacement::Top, |this| {
-                            this.bottom_full().mb(px(4.0))
-                        })
-                        .when(placement == TooltipPlacement::Bottom, |this| {
-                            this.top_full().mt(px(4.0))
-                        })
-                        .when(placement == TooltipPlacement::Left, |this| {
-                            this.right_full().mr(px(4.0))
-                        })
-                        .when(placement == TooltipPlacement::Right, |this| {
-                            this.left_full().ml(px(4.0))
-                        })
-                        .when(
-                            matches!(placement, TooltipPlacement::Top | TooltipPlacement::Bottom)
-                                && alignment == TooltipAlignment::Start,
-                            |this| this.left_0(),
-                        )
-                        .when(
-                            matches!(placement, TooltipPlacement::Top | TooltipPlacement::Bottom)
-                                && alignment == TooltipAlignment::End,
-                            |this| this.right_0(),
-                        )
-                        .when(
-                            matches!(placement, TooltipPlacement::Top | TooltipPlacement::Bottom)
-                                && alignment == TooltipAlignment::Center,
-                            |this| this.left(relative(0.5)).ml(-(content_width * 0.5)),
-                        )
-                        .child(
-                            div()
-                                .w(content_width)
-                                .px(px(8.0))
-                                .py(px(4.0))
-                                .bg(theme.tokens.foreground)
-                                .text_color(theme.tokens.background)
-                                .rounded(theme.tokens.radius_lg)
-                                .text_size(px(14.0))
-                                .line_height(px(20.0))
-                                .font_family(theme.tokens.font_family.clone())
-                                .when(!content_wraps, |this| this.whitespace_nowrap())
-                                .when_some(max_width, |this, width| this.max_w(width))
-                                .map(|mut this| {
-                                    this.style().refine(&user_style);
-                                    this
-                                })
-                                .child(StyledText::new(content).accessibility_hidden(true)),
-                        ),
+                    canvas_with_prepaint(
+                        move |bounds, _, cx| {
+                            anchor_bounds.update(cx, |state, _| *state = Some(bounds));
+                        },
+                        |_, (), _, _| {},
+                    )
+                    .absolute()
+                    .inset_0(),
                 )
+                .when_some(measured_bounds, |this, bounds| {
+                    const GAP: Pixels = px(4.0);
+                    let estimated_height = if content_wraps { px(48.0) } else { px(28.0) };
+                    let (corner, position) = match placement {
+                        TooltipPlacement::Top => {
+                            let x = match alignment {
+                                TooltipAlignment::Start => bounds.left(),
+                                TooltipAlignment::Center => bounds.center().x - content_width * 0.5,
+                                TooltipAlignment::End => bounds.right() - content_width,
+                            };
+                            (Corner::BottomLeft, point(x, bounds.top() - GAP))
+                        }
+                        TooltipPlacement::Bottom => {
+                            let x = match alignment {
+                                TooltipAlignment::Start => bounds.left(),
+                                TooltipAlignment::Center => bounds.center().x - content_width * 0.5,
+                                TooltipAlignment::End => bounds.right() - content_width,
+                            };
+                            (Corner::TopLeft, point(x, bounds.bottom() + GAP))
+                        }
+                        TooltipPlacement::Left => {
+                            let y = match alignment {
+                                TooltipAlignment::Start => bounds.top(),
+                                TooltipAlignment::Center => {
+                                    bounds.center().y - estimated_height * 0.5
+                                }
+                                TooltipAlignment::End => bounds.bottom() - estimated_height,
+                            };
+                            (Corner::TopRight, point(bounds.left() - GAP, y))
+                        }
+                        _ => {
+                            let y = match alignment {
+                                TooltipAlignment::Start => bounds.top(),
+                                TooltipAlignment::Center => {
+                                    bounds.center().y - estimated_height * 0.5
+                                }
+                                TooltipAlignment::End => bounds.bottom() - estimated_height,
+                            };
+                            (Corner::TopLeft, point(bounds.right() + GAP, y))
+                        }
+                    };
+                    let content = content.clone();
+                    this.child(deferred(
+                        anchored()
+                            .anchor(corner)
+                            .snap_to_window()
+                            .position(position)
+                            .child(
+                                div()
+                                    .id("kael-ui-forced-tooltip-bubble")
+                                    .debug_selector(|| "kael-ui-forced-tooltip-bubble".to_string())
+                                    .w(content_width)
+                                    .px(px(8.0))
+                                    .py(px(4.0))
+                                    .bg(theme.tokens.foreground)
+                                    .text_color(theme.tokens.background)
+                                    .rounded(theme.tokens.radius_lg)
+                                    .text_size(px(14.0))
+                                    .line_height(px(20.0))
+                                    .font_family(theme.tokens.font_family.clone())
+                                    .when(!content_wraps, |this| this.whitespace_nowrap())
+                                    .when_some(max_width, |this, width| this.max_w(width))
+                                    .map(|mut this| {
+                                        this.style().refine(&user_style);
+                                        this
+                                    })
+                                    .child(StyledText::new(content).accessibility_hidden(true)),
+                            ),
+                    ))
+                })
             })
             .when(!self.disabled && !forced_open, move |this| {
                 let content = content.clone();
@@ -468,6 +521,8 @@ impl RenderOnce for Tooltip {
                 let fade = fade.clone();
                 let build_tooltip = move || {
                     div()
+                        .id("kael-ui-hover-tooltip-bubble")
+                        .debug_selector(|| "kael-ui-hover-tooltip-bubble".to_string())
                         .w(content_width)
                         .px(px(8.0))
                         .py(px(4.0))
@@ -496,9 +551,11 @@ impl RenderOnce for Tooltip {
                         build_tooltip,
                     )
                     .tooltip_focus_behavior(focus_behavior)
+                    .tooltip_anchor_placement(core_side, core_align)
                 } else {
                     this.tooltip_element_with_delays(show_delay, hide_delay, build_tooltip)
                         .tooltip_focus_behavior(focus_behavior)
+                        .tooltip_anchor_placement(core_side, core_align)
                 }
             })
     }
@@ -525,5 +582,102 @@ mod tests {
         let tooltip = Tooltip::new(" ").max_width(px(f32::NAN));
         assert_eq!(tooltip.content.as_ref(), "Tooltip");
         assert_eq!(tooltip.max_width, Some(px(300.0)));
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+    use kael::TestAppContext;
+
+    struct HoverTooltipHost;
+
+    impl Render for HoverTooltipHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().pl(px(60.0)).pt(px(40.0)).child(
+                Tooltip::new("Hover placement")
+                    .placement(TooltipPlacement::Bottom)
+                    .alignment(TooltipAlignment::Start)
+                    .show_delay(Duration::ZERO)
+                    .child(
+                        div()
+                            .id("hover-tooltip-trigger")
+                            .debug_selector(|| "hover-tooltip-trigger".to_string())
+                            .w(px(120.0))
+                            .h(px(40.0)),
+                    ),
+            )
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn hover_tooltip_honors_requested_placement() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let (_view, window) = cx.add_window_view(|_, _| HoverTooltipHost);
+
+        let trigger = window.debug_bounds("hover-tooltip-trigger").unwrap();
+        window.simulate_mouse_move(trigger.center(), None, Modifiers::default());
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+
+        let bubble = window
+            .debug_bounds("kael-ui-hover-tooltip-bubble")
+            .expect("hover tooltip must be visible");
+        assert!(
+            bubble.top() >= trigger.bottom(),
+            "Bottom placement must put the hover tooltip below its trigger: {bubble:?} vs {trigger:?}"
+        );
+        assert!(
+            (bubble.left() - trigger.left()).abs() <= px(1.0),
+            "Start alignment must match the trigger's left edge: {bubble:?} vs {trigger:?}"
+        );
+    }
+
+    struct ForcedEdgeTooltipHost;
+
+    impl Render for ForcedEdgeTooltipHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().flex().flex_col().justify_end().child(
+                Tooltip::new("Forced edge tooltip")
+                    .placement(TooltipPlacement::Bottom)
+                    .alignment(TooltipAlignment::Start)
+                    .default_open(true)
+                    .child(
+                        div()
+                            .id("forced-tooltip-trigger")
+                            .debug_selector(|| "forced-tooltip-trigger".to_string())
+                            .w(px(120.0))
+                            .h(px(40.0)),
+                    ),
+            )
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn forced_open_tooltip_stays_inside_the_viewport_at_the_window_floor() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let (_view, window) = cx.add_window_view(|_, _| ForcedEdgeTooltipHost);
+
+        window.update(|window, cx| window.draw(cx).clear());
+        window.update(|window, cx| window.draw(cx).clear());
+
+        let bubble = window
+            .debug_bounds("kael-ui-forced-tooltip-bubble")
+            .expect("forced-open tooltip must render after one measurement frame");
+        let viewport = window.update(|window, _| window.viewport_size());
+        assert!(
+            bubble.bottom() <= viewport.height + px(1.0),
+            "a forced-open tooltip at the window floor must clamp inside the viewport: {bubble:?}"
+        );
+        assert!(
+            bubble.top() >= px(0.0),
+            "a forced-open tooltip must not start above the window: {bubble:?}"
+        );
     }
 }
