@@ -156,7 +156,9 @@ impl Button {
 
         Self {
             id: id.clone(),
-            base: div().flex_shrink_0().id(id),
+            // Buttons may shrink in constrained rows; the label ellipsizes so
+            // long text cannot push siblings out of a narrow layout.
+            base: div().min_w_0().id(id),
             label,
             variant: ButtonVariant::Default,
             size: ButtonSize::Md,
@@ -526,6 +528,13 @@ impl RenderOnce for Button {
                         })
                         .child(
                             div()
+                                // Long labels must ellipsize instead of growing
+                                // the button past its container in narrow
+                                // layouts.
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
                                 .when(self.variant == ButtonVariant::Link, |this| this.underline())
                                 .child(label_text),
                         )

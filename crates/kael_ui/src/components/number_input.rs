@@ -661,6 +661,11 @@ impl RenderOnce for NumberInput {
                         let state = state.clone();
                         move |this| {
                             this.on_key_down(move |event, window, cx| {
+                                // Modified keystrokes belong to the
+                                // application, not the number field.
+                                if event.keystroke.modifiers != Modifiers::default() {
+                                    return;
+                                }
                                 let key = event.keystroke.key.as_str();
                                 let handled = match key {
                                     "up" | "down" => {

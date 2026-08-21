@@ -666,8 +666,8 @@ mod tests {
 
     #[test]
     fn scroll_highlighted_into_view_follows_keyboard_highlight() {
-        let mut cx = kael::TestAppContext::single();
-        let state = cx.update(|cx| cx.new(|cx| DropdownState::new(cx)));
+        let cx = kael::TestAppContext::single();
+        let state = cx.update(|cx| cx.new(DropdownState::new));
 
         // No highlight yet: no scroll state changes.
         cx.update(|cx| state.read(cx).scroll_highlighted_into_view());

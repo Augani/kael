@@ -263,9 +263,24 @@ impl EntityInputHandler for TextFieldState {
         }
 
         if let Some(sel_range) = new_selected_range_utf16 {
-            let selection = self.range_from_utf16(&sel_range);
-            self.cursor_position = selection.end;
-            self.selected_range = selection;
+            // The IME reports the new selection relative to the replacement
+            // text, so convert within `new_text` before offsetting.
+            let mut utf16_offset = 0usize;
+            let mut start: Option<usize> = None;
+            let mut end: Option<usize> = None;
+            for (idx, ch) in new_text.char_indices() {
+                if start.is_none() && utf16_offset >= sel_range.start {
+                    start = Some(idx);
+                }
+                if end.is_none() && utf16_offset >= sel_range.end {
+                    end = Some(idx);
+                }
+                utf16_offset += ch.len_utf16();
+            }
+            let start = start.unwrap_or(new_text.len());
+            let end = end.unwrap_or(new_text.len()).max(start);
+            self.cursor_position = range.start + end;
+            self.selected_range = range.start + start..range.start + end;
         } else {
             self.selected_range = self.cursor_position..self.cursor_position;
         }
@@ -408,6 +423,7 @@ impl RenderOnce for TextField {
         let state_for_home = self.state.clone();
         let state_for_end = self.state.clone();
         let state_for_select_all = self.state.clone();
+        let state_for_set_value = self.state.clone();
         let on_change_for_backspace = self.on_change.clone();
         let on_change_for_delete = self.on_change.clone();
         let text_content = self.state.read(cx).text().to_string();
@@ -452,6 +468,26 @@ impl RenderOnce for TextField {
             .key_context("TextField")
             .when(!disabled, |this| {
                 this.track_focus(&focus_handle.clone().tab_index(0).tab_stop(true))
+                    .on_accessibility_action(
+                        AccessibilityAction::SetValue,
+                        move |request, window, cx| {
+                            let value = match request.payload.as_ref() {
+                                Some(AccessibilityActionPayload::Value(value)) => {
+                                    Some(value.clone())
+                                }
+                                Some(AccessibilityActionPayload::NumericValue(value)) => {
+                                    Some(value.to_string())
+                                }
+                                None => None,
+                            };
+                            if let Some(value) = value {
+                                state_for_set_value.update(cx, |state, cx| {
+                                    state.set_text(value, cx);
+                                    state.notify_change(window, cx);
+                                });
+                            }
+                        },
+                    )
                     .on_action(move |_: &TextFieldBackspace, window, cx| {
                         let changed =
                             state_for_backspace.update(cx, |state, cx| state.delete_backward(cx));

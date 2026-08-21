@@ -1177,8 +1177,8 @@ impl EntityInputHandler for InputState {
         }
         self.selected_range = new_selected_range_utf16
             .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .map(|new_range| new_range.start + range.start..new_range.end + range.end)
+            .map(|range_utf16| utf16_range_to_utf8(&filtered_text, range_utf16))
+            .map(|relative| range.start + relative.start..range.start + relative.end)
             .unwrap_or_else(|| {
                 range.start + filtered_text.len()..range.start + filtered_text.len()
             });
@@ -1216,10 +1216,35 @@ impl EntityInputHandler for InputState {
         let line_point = self.last_bounds?.localize(&point)?;
         let last_layout = self.last_layout.as_ref()?;
 
-        assert_eq!(last_layout.text, self.content);
-        let utf8_index = last_layout.index_for_x(point.x - line_point.x)?;
+        // The retained layout may reflect the placeholder or a masked value;
+        // those cannot answer hit-test queries for the real content.
+        if last_layout.text != self.content {
+            return None;
+        }
+        let utf8_index = last_layout.index_for_x(line_point.x)?;
         Some(self.offset_to_utf16(utf8_index))
     }
+}
+
+/// Convert a UTF-16 range that is relative to `text` into a UTF-8 byte range
+/// that is also relative to `text`. IME composition callbacks report the new
+/// selection relative to the replacement text, not the whole field content.
+fn utf16_range_to_utf8(text: &str, range_utf16: &Range<usize>) -> Range<usize> {
+    let mut utf16_offset = 0usize;
+    let mut start: Option<usize> = None;
+    let mut end: Option<usize> = None;
+    for (idx, ch) in text.char_indices() {
+        if start.is_none() && utf16_offset >= range_utf16.start {
+            start = Some(idx);
+        }
+        if end.is_none() && utf16_offset >= range_utf16.end {
+            end = Some(idx);
+        }
+        utf16_offset += ch.len_utf16();
+    }
+    let start = start.unwrap_or(text.len());
+    let end = end.unwrap_or(text.len()).max(start);
+    start..end
 }
 
 /// Custom element for rendering the input text with cursor and selection.

@@ -286,7 +286,10 @@ impl Render for SearchInput {
             .child(
                 div()
                     .id(("search-input", entity_id))
-                    .key_context("SearchInput")
+                    // InputState key bindings are registered under the
+                    // "Input" context; a bespoke context here would leave
+                    // backspace/arrows/etc. dead while the field is focused.
+                    .key_context("Input")
                     .accessibility(accessibility)
                     .when(!input_disabled, |this| {
                         this.track_focus(&focus_handle.tab_index(0).tab_stop(true))

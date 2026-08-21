@@ -274,11 +274,26 @@ impl RenderOnce for Toggle {
 
         let row = self
             .base
-            .accessibility(
-                AccessibilityAttributes::switch(accessibility_label, checked)
+            .accessibility({
+                let attributes = AccessibilityAttributes::switch(accessibility_label, checked)
                     .disabled(!is_interactive)
-                    .focused(is_focused),
-            )
+                    .focused(is_focused);
+                let attributes = match self.description.as_ref() {
+                    Some(description) => attributes.description(description.to_string()),
+                    None => attributes,
+                };
+                match self.status.as_ref() {
+                    Some((_, status_message)) => attributes.description(format!(
+                        "{}{}",
+                        self.description
+                            .as_deref()
+                            .map(|d| format!("{} ", d.as_ref()))
+                            .unwrap_or_default(),
+                        status_message
+                    )),
+                    None => attributes,
+                }
+            })
             .when(is_interactive, |this| {
                 this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
             })
@@ -404,6 +419,7 @@ impl RenderOnce for Toggle {
                             let new_checked = !checked;
                             (on_click_for_key)(&new_checked, window, cx);
                             cx.stop_propagation();
+                            window.prevent_default();
                         }
                     })
                 })
@@ -510,4 +526,90 @@ fn toggle_thumb(
                 this.left(current_x).into_any_element()
             }
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    struct ToggleHost {
+        toggles: Rc<Cell<usize>>,
+    }
+
+    impl Render for ToggleHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let toggles = self.toggles.clone();
+            div()
+                .id("toggle-host")
+                .child(
+                    Toggle::new("enabled-toggle")
+                        .label("Notifications")
+                        .description("Send email updates")
+                        .status(FieldStatusType::Error, "Connection lost")
+                        .checked(false)
+                        .on_click(move |_, _, _| {
+                            toggles.set(toggles.get() + 1);
+                        }),
+                )
+                .child(
+                    Toggle::new("disabled-toggle")
+                        .label("Locked")
+                        .disabled(true),
+                )
+                .into_any_element()
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn toggle_keyboard_activation_and_states_are_truthful() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let toggles = Rc::new(Cell::new(0));
+        let (_host, window) = cx.add_window_view({
+            let toggles = toggles.clone();
+            move |_, _| ToggleHost { toggles }
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+
+        window.simulate_keystrokes("tab");
+        assert_switch_states(window);
+        window.simulate_keystrokes("space");
+        assert_eq!(toggles.get(), 1, "Space must activate the toggle once");
+        window.simulate_keystrokes("space");
+        assert_eq!(toggles.get(), 2, "Space must keep activating");
+        window.simulate_keystrokes("tab");
+        assert_eq!(toggles.get(), 2, "the disabled toggle must not activate");
+    }
+
+    fn assert_switch_states(window: &mut kael::VisualTestContext) {
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            let switches: Vec<_> = tree
+                .nodes
+                .values()
+                .filter(|node| node.role == AccessibilityRole::Switch)
+                .collect();
+            assert_eq!(switches.len(), 2, "both toggles expose switch semantics");
+            let focused = switches
+                .iter()
+                .filter(|n| n.states.contains(AccessibilityState::FOCUSED))
+                .count();
+            assert_eq!(focused, 1, "exactly one toggle focused after Tab");
+            let disabled = switches
+                .iter()
+                .filter(|n| n.states.contains(AccessibilityState::DISABLED))
+                .count();
+            assert_eq!(disabled, 1, "the disabled toggle exposes DISABLED");
+            let described = switches.iter().any(|n| {
+                n.description
+                    .as_deref()
+                    .is_some_and(|d| d.contains("Connection lost"))
+            });
+            assert!(described, "status must be exposed to assistive tech");
+        });
+    }
 }
