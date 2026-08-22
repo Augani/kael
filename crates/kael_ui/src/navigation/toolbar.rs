@@ -469,6 +469,11 @@ impl RenderOnce for Toolbar {
             .when(self.orientation == ToolbarOrientation::Vertical, |this| {
                 this.flex_col()
             })
+            // In narrow layouts the row must stay reachable: scroll instead of
+            // pushing trailing items out of the window.
+            .when(self.orientation == ToolbarOrientation::Horizontal, |this| {
+                this.overflow_x_scroll()
+            })
             .when(dividers.contains(&SectionDivider::Top), |this| {
                 this.border_t_1().border_color(border)
             })
