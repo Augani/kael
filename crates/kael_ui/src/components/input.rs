@@ -147,6 +147,7 @@ pub struct Input {
     // Callbacks
     on_change: Option<Rc<dyn Fn(SharedString, &mut App)>>,
     on_enter: Option<Rc<dyn Fn(SharedString, &mut App)>>,
+    on_submit: Option<Rc<dyn Fn(SharedString, &mut Window, &mut App)>>,
     on_focus: Option<Rc<dyn Fn(SharedString, &mut App)>>,
     on_blur: Option<Rc<dyn Fn(SharedString, &mut App)>>,
     on_validate: Option<Rc<dyn Fn(Result<(), ValidationError>, &mut App)>>,
@@ -194,6 +195,7 @@ impl Input {
             // Callbacks
             on_change: None,
             on_enter: None,
+            on_submit: None,
             on_focus: None,
             on_blur: None,
             on_validate: None,
@@ -401,6 +403,16 @@ impl Input {
         F: Fn(SharedString, &mut App) + 'static,
     {
         self.on_enter(callback)
+    }
+
+    /// Set callback when Enter is pressed that also receives the window,
+    /// for handlers that must refresh the UI or move focus on submit.
+    pub fn on_submit<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(SharedString, &mut Window, &mut App) + 'static,
+    {
+        self.on_submit = Some(Rc::new(callback));
+        self
     }
 
     /// Set callback when input gains focus
@@ -707,6 +719,7 @@ impl RenderOnce for Input {
             state.helper_text = self.helper_text.clone();
             state.on_change_callback = self.on_change.clone();
             state.on_enter_callback = self.on_enter.clone();
+            state.on_submit_callback = self.on_submit.clone();
             state.on_focus_callback = self.on_focus.clone();
             state.on_blur_callback = self.on_blur.clone();
             state.on_validate_callback = self.on_validate.clone();

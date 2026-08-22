@@ -180,6 +180,9 @@ pub struct InputState {
     cursor_position_override: Option<usize>,
     pub(crate) on_change_callback: Option<Rc<dyn Fn(SharedString, &mut App)>>,
     pub(crate) on_enter_callback: Option<Rc<dyn Fn(SharedString, &mut App)>>,
+    /// Submit callback that also receives the window, for handlers that need
+    /// to refresh or manipulate focus after a submit.
+    pub(crate) on_submit_callback: Option<Rc<dyn Fn(SharedString, &mut Window, &mut App)>>,
     pub(crate) on_focus_callback: Option<Rc<dyn Fn(SharedString, &mut App)>>,
     pub(crate) on_blur_callback: Option<Rc<dyn Fn(SharedString, &mut App)>>,
     pub(crate) on_validate_callback: Option<Rc<dyn Fn(Result<(), ValidationError>, &mut App)>>,
@@ -224,6 +227,7 @@ impl InputState {
             cursor_position_override: None,
             on_change_callback: None,
             on_enter_callback: None,
+            on_submit_callback: None,
             on_focus_callback: None,
             on_blur_callback: None,
             on_validate_callback: None,
@@ -520,7 +524,13 @@ impl InputState {
                 .chars()
                 .filter(|c| c.is_ascii_digit() || *c == ' ')
                 .collect(),
-            _ => input.to_string(),
+            // Single-line inputs must never accept line breaks: newline
+            // keystrokes arrive here through the IME insert path and would
+            // otherwise poison the shaped line.
+            _ => input
+                .chars()
+                .filter(|c| !matches!(c, '\n' | '\r'))
+                .collect(),
         }
     }
 
@@ -892,7 +902,16 @@ impl InputState {
         }
     }
 
-    pub fn enter(&mut self, _: &Enter, _: &mut Window, cx: &mut Context<Self>) {
+    pub fn enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(callback) = self.on_submit_callback.clone() {
+            let value = self.content.clone();
+            let window = window.window_handle();
+            cx.defer(move |cx| {
+                let _ = cx.update_window(window, |_, window, cx| {
+                    callback(value, window, cx);
+                });
+            });
+        }
         self.emit_input_event(InputEvent::Enter, cx);
     }
 

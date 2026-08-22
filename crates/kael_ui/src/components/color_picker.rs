@@ -1,5 +1,6 @@
 //! ColorPicker component - Full-featured color selection with HSL/RGB/HEX modes.
 
+use crate::components::input::{Input, InputState};
 use crate::components::slider::{Slider, SliderSize, SliderState};
 use crate::components::text::{Text, TextVariant};
 use crate::overlays::popover::{Popover, PopoverContent};
@@ -15,6 +16,73 @@ pub enum ColorMode {
     HSL,
     RGB,
     HEX,
+}
+
+/// Parse a typed hex color (`#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA`,
+/// case-insensitive, `#` optional) into an [`Hsla`]. Returns `None` for any
+/// other input; callers must not commit invalid values.
+pub fn parse_hex_color(input: &str) -> Option<Hsla> {
+    let hex = input.trim().strip_prefix('#').unwrap_or(input.trim());
+    if hex.is_empty() || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let channel = |slice: &str| -> Option<u16> { u16::from_str_radix(slice, 16).ok() };
+    let mut channels = [0u8; 4];
+    match hex.len() {
+        3 | 4 => {
+            for (index, out) in hex.as_bytes().chunks(1).enumerate() {
+                let digit = char::from(out[0]).to_digit(16)?;
+                // #RGB expands by doubling each nibble (CSS semantics).
+                channels[index] = (digit * 17) as u8;
+            }
+            if hex.len() == 3 {
+                channels[3] = 255;
+            }
+        }
+        6 | 8 => {
+            for (index, pair) in hex.as_bytes().chunks(2).enumerate() {
+                let pair = std::str::from_utf8(pair).ok()?;
+                channels[index] = channel(pair)? as u8;
+            }
+            if hex.len() == 6 {
+                channels[3] = 255;
+            }
+        }
+        _ => return None,
+    }
+    Some(rgb_bytes_to_hsla(
+        channels[0],
+        channels[1],
+        channels[2],
+        channels[3],
+    ))
+}
+
+fn rgb_bytes_to_hsla(r: u8, g: u8, b: u8, a: u8) -> Hsla {
+    let r = f32::from(r) / 255.0;
+    let g = f32::from(g) / 255.0;
+    let b = f32::from(b) / 255.0;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+    let l = (max + min) / 2.0;
+    let s = if delta < f32::EPSILON {
+        0.0
+    } else if l > 0.5 {
+        delta / (2.0 - max - min)
+    } else {
+        delta / (max + min)
+    };
+    let h = if delta < f32::EPSILON {
+        0.0
+    } else if (max - r).abs() < f32::EPSILON {
+        ((g - b) / delta + if g < b { 6.0 } else { 0.0 }) / 6.0
+    } else if (max - g).abs() < f32::EPSILON {
+        ((b - r) / delta + 2.0) / 6.0
+    } else {
+        ((r - g) / delta + 4.0) / 6.0
+    };
+    hsla(h, s, l, f32::from(a) / 255.0)
 }
 
 /// State for managing color picker interactions
@@ -381,7 +449,7 @@ impl RenderOnce for ColorPicker {
             return preview_button.into_any_element();
         }
 
-        Popover::new(picker_id)
+        Popover::new(picker_id.clone())
             .disabled(disabled)
             .on_open_change(move |open, _, cx| {
                 open_state_for_popover.update(cx, |state, cx| {
@@ -391,6 +459,7 @@ impl RenderOnce for ColorPicker {
             })
             .trigger(preview_button)
             .content(move |window, cx| {
+                let picker_id_for_content = picker_id.clone();
                 let swatches_for_content = swatches.clone();
                 let on_change_for_content = on_change.clone();
                 let state_for_content = state.clone();
@@ -400,7 +469,7 @@ impl RenderOnce for ColorPicker {
                 let alpha_slider_for_content = alpha_slider.clone();
 
                 cx.new(|cx| {
-                    PopoverContent::new(window, cx, move |_window, cx| {
+                    PopoverContent::new(window, cx, move |window, cx| {
                         let _theme = use_theme();
 
                         // Read state fresh on every render so mode changes work
@@ -410,6 +479,31 @@ impl RenderOnce for ColorPicker {
 
                         let swatches_clone = swatches_for_content.clone();
                         let on_change_clone = on_change_for_content.clone();
+                        let on_change_for_hex = on_change_for_content.clone();
+                        // Created during render (not at popover-open time) so
+                        // keyed element state is available; kept stable across
+                        // frames by key.
+                        let hex_input = window
+                            .use_keyed_state(
+                                ElementId::NamedChild(
+                                    Box::new(picker_id_for_content.clone()),
+                                    "hex-input".into(),
+                                ),
+                                cx,
+                                |_, cx| cx.new(InputState::new),
+                            )
+                            .read(cx)
+                            .clone();
+                        // Keep the field in sync with the current color
+                        // unless the user is typing in it.
+                        if !hex_input.read(cx).focus_handle(cx).is_focused(window) {
+                            let current_hex = ColorPicker::hsla_to_hex(
+                                state_for_content.read(cx).selected_color(),
+                            );
+                            hex_input.update(cx, |input, cx| {
+                                input.set_value(current_hex, window, cx);
+                            });
+                        }
 
                         div()
                             .flex()
@@ -418,10 +512,18 @@ impl RenderOnce for ColorPicker {
                             .w(px(280.0))
                             .child(render_color_preview(current_color))
                             .child(render_mode_selector(
+                                window,
+                                cx,
                                 current_mode,
                                 state_for_content.clone(),
                             ))
-                            .child(render_color_value(current_color, current_mode))
+                            .child(render_color_value(
+                                current_color,
+                                current_mode,
+                                hex_input,
+                                state_for_content.clone(),
+                                on_change_for_hex,
+                            ))
                             .child(render_color_controls(
                                 show_alpha,
                                 hue_slider_for_content.clone(),
@@ -479,10 +581,36 @@ fn render_color_preview(color: Hsla) -> impl IntoElement {
 }
 
 fn render_mode_selector(
+    window: &mut Window,
+    cx: &mut App,
     current_mode: ColorMode,
     state: Entity<ColorPickerState>,
 ) -> impl IntoElement {
     let theme = use_theme();
+    let modes = [
+        ("HSL", ColorMode::HSL),
+        ("RGB", ColorMode::RGB),
+        ("HEX", ColorMode::HEX),
+    ];
+
+    let group_key =
+        ElementId::Name(format!("color-picker-modes-{}", state.entity_id().as_u64()).into());
+    let handles: Vec<FocusHandle> = modes
+        .iter()
+        .map(|(label, _)| {
+            window
+                .use_keyed_state(
+                    ElementId::NamedChild(
+                        Box::new(group_key.clone()),
+                        (*label).to_ascii_lowercase().into(),
+                    ),
+                    cx,
+                    |_, cx| cx.focus_handle(),
+                )
+                .read(cx)
+                .clone()
+        })
+        .collect();
 
     div()
         .accessibility(AccessibilityAttributes::new(AccessibilityRole::Group).label("Color format"))
@@ -491,31 +619,27 @@ fn render_mode_selector(
         .p(px(2.0))
         .bg(theme.tokens.muted.opacity(0.35))
         .rounded(theme.tokens.radius_md)
-        .child(render_mode_button(
-            "HSL",
-            ColorMode::HSL,
-            current_mode,
-            state.clone(),
-        ))
-        .child(render_mode_button(
-            "RGB",
-            ColorMode::RGB,
-            current_mode,
-            state.clone(),
-        ))
-        .child(render_mode_button(
-            "HEX",
-            ColorMode::HEX,
-            current_mode,
-            state,
-        ))
+        .children(modes.iter().enumerate().map(|(index, (label, mode))| {
+            render_mode_button(
+                label,
+                *mode,
+                current_mode,
+                handles[index].is_focused(window),
+                state.clone(),
+                handles.clone(),
+                index,
+            )
+        }))
 }
 
 fn render_mode_button(
     label: &'static str,
     mode: ColorMode,
     current_mode: ColorMode,
+    is_focused: bool,
     state: Entity<ColorPickerState>,
+    handles: Vec<FocusHandle>,
+    index: usize,
 ) -> impl IntoElement {
     let theme = use_theme();
     let is_active = mode == current_mode;
@@ -527,53 +651,115 @@ fn render_mode_button(
         )
         .into(),
     );
-    button(id)
-        .role(AccessibilityRole::RadioButton)
-        .label(label)
-        .checked(is_active)
-        .on_click(move |_, window, cx| {
-            state.update(cx, |state, cx| {
-                state.set_mode(mode);
-                cx.notify();
-            });
-            window.refresh();
+    let mut accessibility_state = AccessibilityState::NONE;
+    if is_active {
+        accessibility_state |= AccessibilityState::CHECKED;
+    }
+    if is_focused {
+        accessibility_state |= AccessibilityState::FOCUSED;
+    }
+    let tracked = handles[index]
+        .clone()
+        .tab_index(if is_active { 0 } else { -1 })
+        .tab_stop(is_active);
+
+    div()
+        .id(id)
+        .accessibility(
+            AccessibilityAttributes::new(AccessibilityRole::RadioButton)
+                .label(label)
+                .states(accessibility_state)
+                .actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]),
+        )
+        .track_focus(&tracked)
+        .flex_1()
+        .h(px(28.0))
+        .px(px(10.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(theme.tokens.radius_sm)
+        .text_size(px(12.0))
+        .cursor(CursorStyle::PointingHand)
+        .when(is_active, |this| {
+            this.bg(theme.tokens.primary)
+                .text_color(theme.tokens.primary_foreground)
         })
-        .render_with(move |button_state, _, _| {
-            div()
-                .flex_1()
-                .h(px(28.0))
-                .px(px(10.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(theme.tokens.radius_sm)
-                .text_size(px(12.0))
-                .text_align(TextAlign::Center)
-                .when(is_active, |this| {
-                    this.bg(theme.tokens.primary)
-                        .text_color(theme.tokens.primary_foreground)
-                })
-                .when(!is_active, |this| {
-                    this.text_color(theme.tokens.foreground).hover(|style| {
-                        style.bg(crate::astryx::overlay_hover(
-                            theme.tokens.background.l < 0.5,
-                        ))
-                    })
-                })
-                .when(button_state.focused, |this| {
-                    this.shadow(smallvec::smallvec![crate::astryx::focus_ring_outer(
-                        theme.tokens.ring,
-                    )])
-                })
-                .child(label)
-                .into_any_element()
+        .when(!is_active, |this| {
+            this.text_color(theme.tokens.foreground).hover(|style| {
+                style.bg(crate::astryx::overlay_hover(
+                    theme.tokens.background.l < 0.5,
+                ))
+            })
         })
+        .focus_visible(|style| {
+            style.shadow(smallvec::smallvec![crate::astryx::focus_ring_outer(
+                theme.tokens.ring,
+            )])
+        })
+        .on_mouse_down(MouseButton::Left, {
+            let handles = handles.clone();
+            move |_, window, _| {
+                window.focus(&handles[index]);
+            }
+        })
+        .on_click({
+            let handles = handles.clone();
+            let state = state.clone();
+            move |_, window, cx| {
+                window.focus(&handles[index]);
+                state.update(cx, |state, cx| {
+                    state.set_mode(mode);
+                    cx.notify();
+                });
+                window.refresh();
+            }
+        })
+        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            let key = event.keystroke.key.as_str();
+            let target = match key {
+                "left" | "up" => Some((index + handles.len() - 1) % handles.len()),
+                "right" | "down" => Some((index + 1) % handles.len()),
+                "home" => Some(0),
+                "end" => Some(handles.len() - 1),
+                _ => None,
+            };
+            if let Some(target) = target {
+                window.focus(&handles[target]);
+                state.update(cx, |state, cx| {
+                    state.set_mode(modes_for_index(target));
+                    cx.notify();
+                });
+                window.refresh();
+                cx.stop_propagation();
+                window.prevent_default();
+            } else if matches!(key, "enter" | "space") {
+                state.update(cx, |state, cx| {
+                    state.set_mode(mode);
+                    cx.notify();
+                });
+                window.refresh();
+                cx.stop_propagation();
+                window.prevent_default();
+            }
+        })
+        .child(label)
 }
 
-fn render_color_value(color: Hsla, mode: ColorMode) -> impl IntoElement {
+fn modes_for_index(index: usize) -> ColorMode {
+    [ColorMode::HSL, ColorMode::RGB, ColorMode::HEX][index]
+}
+
+fn render_color_value(
+    color: Hsla,
+    mode: ColorMode,
+    hex_input: Entity<InputState>,
+    state: Entity<ColorPickerState>,
+    on_change: Option<Rc<dyn Fn(Hsla, &mut Window, &mut App)>>,
+) -> impl IntoElement {
     let theme = use_theme();
 
-    let value = match mode {
+    let formatted = match mode {
         ColorMode::HSL => {
             if color.a < 0.999 {
                 format!(
@@ -588,7 +774,7 @@ fn render_color_value(color: Hsla, mode: ColorMode) -> impl IntoElement {
                     "hsl({:.0}, {:.0}%, {:.0}%)",
                     color.h * 360.0,
                     color.s * 100.0,
-                    color.l * 100.0
+                    color.l * 100.0,
                 )
             }
         }
@@ -603,20 +789,55 @@ fn render_color_value(color: Hsla, mode: ColorMode) -> impl IntoElement {
         ColorMode::HEX => ColorPicker::hsla_to_hex(color),
     };
 
+    let state_for_submit = state.clone();
+    let on_change_for_submit = on_change.clone();
+
     div()
         .flex()
-        .items_center()
-        .justify_between()
-        .p(px(8.0))
-        .bg(theme.tokens.muted.opacity(0.35))
-        .rounded(theme.tokens.radius_sm)
-        .border_1()
-        .border_color(theme.tokens.border.opacity(0.6))
+        .flex_col()
+        .gap(px(4.0))
         .child(
-            Text::new(value)
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    Text::new("HEX")
+                        .variant(TextVariant::Custom)
+                        .size(px(12.0))
+                        .color(theme.tokens.muted_foreground),
+                )
+                .child(
+                    Input::new(&hex_input)
+                        .placeholder("#RRGGBB or #RRGGBBAA")
+                        .aria_label("Hex color value")
+                        .custom_validator(|value| {
+                            if value.trim().is_empty() || parse_hex_color(value).is_some() {
+                                Ok(())
+                            } else {
+                                Err("Enter a hex color like #RRGGBB".to_string())
+                            }
+                        })
+                        .on_submit(move |value, window, cx| {
+                            let Some(parsed) = parse_hex_color(&value) else {
+                                return;
+                            };
+                            state_for_submit.update(cx, |state, cx| {
+                                state.set_color(parsed);
+                                cx.notify();
+                            });
+                            if let Some(handler) = on_change_for_submit.as_ref() {
+                                handler(parsed, window, cx);
+                            }
+                            window.refresh();
+                        }),
+                ),
+        )
+        .child(
+            Text::new(formatted)
                 .variant(TextVariant::Custom)
-                .size(px(13.0))
-                .color(theme.tokens.foreground),
+                .size(px(12.0))
+                .color(theme.tokens.muted_foreground),
         )
 }
 
@@ -938,7 +1159,7 @@ fn default_swatches() -> Vec<Hsla> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ColorPicker, ColorPickerState, MAX_RECENT_COLORS};
+    use super::{ColorPicker, ColorPickerState, MAX_RECENT_COLORS, parse_hex_color};
     use kael::hsla;
 
     #[test]
@@ -971,5 +1192,168 @@ mod tests {
         state.add_to_recent(newest);
         assert_eq!(state.recent_colors()[0], newest);
         assert_eq!(state.recent_colors().len(), MAX_RECENT_COLORS);
+    }
+
+    #[test]
+    fn hex_parsing_accepts_css_shapes_and_rejects_garbage() {
+        let red = parse_hex_color("#F00").unwrap();
+        assert!((red.h - 0.0).abs() < 1e-3 && red.s > 0.999 && (red.l - 0.5).abs() < 1e-3);
+        assert_eq!(parse_hex_color("#ff0000").unwrap().a, 1.0);
+        let half = parse_hex_color("#ff000080").unwrap();
+        assert!((half.a - 128.0 / 255.0).abs() < 1e-3);
+        // Case-insensitive and hash-optional.
+        assert!(parse_hex_color("AbCdEf").is_some());
+        // Invalid inputs must fail closed.
+        assert!(parse_hex_color("#12345").is_none());
+        assert!(parse_hex_color("#GG0000").is_none());
+        assert!(parse_hex_color("green").is_none());
+        assert!(parse_hex_color("").is_none());
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+    use kael::TestAppContext;
+    use std::cell::Cell;
+
+    struct ColorPickerHost {
+        state: Entity<ColorPickerState>,
+        changes: Rc<Cell<usize>>,
+    }
+
+    impl Render for ColorPickerHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let changes = self.changes.clone();
+            ColorPicker::new("host-color-picker", self.state.clone())
+                .on_change(move |_, _, _| changes.set(changes.get() + 1))
+        }
+    }
+
+    fn open_picker(
+        cx: &mut TestAppContext,
+        changes: Rc<Cell<usize>>,
+    ) -> (Entity<ColorPickerState>, &mut kael::VisualTestContext) {
+        cx.update(|cx| {
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let state = cx.new(|_| ColorPickerState::new(hsla(0.0, 1.0, 0.5, 1.0)));
+        let (_host, window) = cx.add_window_view({
+            let state = state.clone();
+            move |_, _| ColorPickerHost { state, changes }
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        // Tab to the trigger and open the popover.
+        window.simulate_keystrokes("tab");
+        window.update(|window, cx| window.draw(cx).clear());
+        window.simulate_keystrokes("enter");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+        });
+        (state, window)
+    }
+
+    #[::core::prelude::v1::test]
+    fn mode_selector_arrows_move_selection_and_focus_together() {
+        let changes = Rc::new(Cell::new(0));
+        let changes_for_open = changes.clone();
+        let mut cx = TestAppContext::single();
+        let (state, window) = open_picker(&mut cx, changes_for_open);
+
+        // Tab into the popover: the active format radio is the tab stop.
+        window.simulate_keystrokes("tab");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            let focused_radio = tree.nodes.values().any(|node| {
+                node.role == AccessibilityRole::RadioButton
+                    && node.states.contains(AccessibilityState::FOCUSED)
+                    && node.label.as_deref() == Some("HSL")
+            });
+            assert!(
+                focused_radio,
+                "the active HSL radio must own keyboard focus"
+            );
+        });
+
+        window.simulate_keystrokes("right");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(state.read(cx).mode(), super::ColorMode::RGB);
+            let tree = window.accessibility_tree();
+            let rgb = tree
+                .nodes
+                .values()
+                .find(|node| {
+                    node.role == AccessibilityRole::RadioButton
+                        && node.label.as_deref() == Some("RGB")
+                })
+                .expect("RGB radio");
+            assert!(rgb.states.contains(AccessibilityState::CHECKED));
+            assert!(rgb.states.contains(AccessibilityState::FOCUSED));
+        });
+
+        window.simulate_keystrokes("left");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(state.read(cx).mode(), super::ColorMode::HSL);
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn typed_hex_commits_only_valid_colors() {
+        let changes = Rc::new(Cell::new(0));
+        let changes_for_open = changes.clone();
+        let mut cx = TestAppContext::single();
+        let (state, window) = open_picker(&mut cx, changes_for_open);
+
+        // Tab past the format radios into the hex input.
+        window.simulate_keystrokes("tab");
+        window.simulate_keystrokes("tab");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            let hex_focused = tree.nodes.values().any(|node| {
+                node.role == AccessibilityRole::TextInput
+                    && node.label.as_deref() == Some("Hex color value")
+                    && node.states.contains(AccessibilityState::FOCUSED)
+            });
+            assert!(hex_focused, "the hex input must receive keyboard focus");
+        });
+
+        // Replace the field and submit a valid green.
+        // Key bindings for inputs inside popover overlays do not resolve yet
+        // (recorded as an R1 remainder), so drive SelectAll/Enter through
+        // their actions; the typing itself uses the real insert path.
+        window.dispatch_action(crate::components::input::SelectAll);
+        window.simulate_input("00FF00");
+        window.dispatch_action(crate::components::input::Enter);
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        window.update(|_, cx| {
+            let color = state.read(cx).selected_color();
+            assert!(
+                (color.h - 1.0 / 3.0).abs() < 0.002,
+                "green hue expected, got {}",
+                color.h
+            );
+        });
+        assert_eq!(changes.get(), 1, "a valid submit must fire on_change once");
+
+        // Invalid text must not commit.
+        let before = window.update(|_, cx| state.read(cx).selected_color());
+        window.dispatch_action(crate::components::input::SelectAll);
+        window.simulate_input("nope");
+        window.dispatch_action(crate::components::input::Enter);
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        window.update(|_, cx| {
+            let after = state.read(cx).selected_color();
+            assert_eq!(after, before, "invalid hex must not change the color");
+        });
+        assert_eq!(changes.get(), 1, "invalid submit must not fire on_change");
     }
 }
