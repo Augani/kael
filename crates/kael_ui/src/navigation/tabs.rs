@@ -294,6 +294,7 @@ impl<T: Clone + PartialEq + 'static> Tabs<T> {
         theme: &crate::theme::Theme,
         on_change: Option<Arc<dyn Fn(&usize, &mut Window, &mut App) + Send + Sync + 'static>>,
         on_close: Option<Arc<dyn Fn(&T, &mut Window, &mut App) + Send + Sync + 'static>>,
+        tab_focus_handles: Vec<FocusHandle>,
     ) -> impl IntoElement + use<T> {
         let can_select = !tab.disabled && on_change.is_some();
         let mut state = AccessibilityState::NONE;
@@ -515,14 +516,24 @@ impl<T: Clone + PartialEq + 'static> Tabs<T> {
             )
         });
 
+        let tracked_focus = tab_focus_handles
+            .get(index)
+            .map(|handle| {
+                handle
+                    .clone()
+                    .tab_index(if is_active { 0 } else { -1 })
+                    .tab_stop(is_active)
+            })
+            .expect("every tab must have a focus handle");
         with_close.when(can_select, |this| {
             let on_click = on_change.clone().unwrap();
             let on_key = on_click.clone();
-            this.focusable()
-                .tab_index(if is_active { 0 } else { -1 })
-                .tab_stop(is_active)
+            let handles_for_click = tab_focus_handles.clone();
+            let handles_for_keys = tab_focus_handles.clone();
+            this.track_focus(&tracked_focus)
                 .focus_visible(|style| style.bg(theme.tokens.muted))
                 .on_click(move |_, window, cx| {
+                    window.focus(&handles_for_click[index]);
                     on_click(&index, window, cx);
                 })
                 .on_key_down(move |event, window, cx| {
@@ -535,6 +546,11 @@ impl<T: Clone + PartialEq + 'static> Tabs<T> {
                         _ => None,
                     };
                     if let Some(target) = target {
+                        // Selection and focus move together so the roving
+                        // tab stop never diverges from keyboard focus.
+                        if let Some(handle) = handles_for_keys.get(target) {
+                            window.focus(handle);
+                        }
                         on_key(&target, window, cx);
                         cx.stop_propagation();
                         window.prevent_default();
@@ -601,7 +617,7 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for Tabs<T> {
                     callback(index, window, cx);
                 }
             });
-        let theme = Theme::of(cx);
+        let theme = Theme::of(cx).clone();
 
         let mut tab_list = div()
             .id(ElementId::NamedChild(
@@ -623,6 +639,22 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for Tabs<T> {
                     .rounded(theme.tokens.radius_md)
             });
 
+        let tab_focus_handles: Vec<FocusHandle> = (0..self.tabs.len())
+            .map(|index| {
+                window
+                    .use_keyed_state(
+                        ElementId::NamedChild(
+                            Box::new(tabs_id.clone()),
+                            format!("tab-{index}-focus").into(),
+                        ),
+                        cx,
+                        |_, cx| cx.focus_handle(),
+                    )
+                    .read(cx)
+                    .clone()
+            })
+            .collect();
+
         for (index, tab) in self.tabs.iter().enumerate() {
             let is_active = Some(index) == selected_index;
             let previous_index = adjacent_enabled_index(&enabled_indices, index, false);
@@ -639,9 +671,10 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for Tabs<T> {
                 next_index,
                 first_index,
                 last_index,
-                theme,
+                &theme,
                 Some(internal_on_change.clone()),
                 self.on_close.clone(),
+                tab_focus_handles.clone(),
             ));
         }
 
@@ -703,6 +736,7 @@ pub fn init_tabs(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::adjacent_enabled_index;
+    use super::*;
 
     #[::core::prelude::v1::test]
     fn keyboard_navigation_wraps_across_enabled_tabs() {
@@ -711,5 +745,74 @@ mod tests {
         assert_eq!(adjacent_enabled_index(&enabled, 4, true), 0);
         assert_eq!(adjacent_enabled_index(&enabled, 0, false), 4);
         assert_eq!(adjacent_enabled_index(&[], 3, true), 3);
+    }
+
+    #[::core::prelude::v1::test]
+    fn arrow_navigation_moves_selection_and_focus_together() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        struct TabsHost {
+            selected: usize,
+        }
+        impl Render for TabsHost {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let host = cx.entity();
+                Tabs::<usize>::new()
+                    .tabs(vec![
+                        TabItem::new(0usize, "First"),
+                        TabItem::new(1usize, "Second"),
+                        TabItem::new(2usize, "Third"),
+                    ])
+                    .selected_index(self.selected)
+                    .on_change(move |index, _, cx| {
+                        host.update(cx, |host: &mut TabsHost, _| host.selected = *index);
+                    })
+            }
+        }
+        let (host, window) = cx.add_window_view(|_, _| TabsHost { selected: 0 });
+        window.update(|window, cx| window.draw(cx).clear());
+
+        let tab_states = |window: &mut Window, cx: &mut App| {
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            tree.nodes
+                .values()
+                .filter(|node| node.role == AccessibilityRole::Tab)
+                .map(|node| {
+                    (
+                        node.label.clone(),
+                        node.states.contains(AccessibilityState::SELECTED),
+                        node.states.contains(AccessibilityState::FOCUSED),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // Focus the active tab directly through the keyboard path.
+        window.simulate_keystrokes("tab");
+        window.simulate_keystrokes("arrowright");
+        let states = window.update(tab_states);
+        let second = states
+            .iter()
+            .find(|(label, _, _)| label.as_deref() == Some("Second"))
+            .expect("second tab present");
+        assert!(
+            second.1 && second.2,
+            "selection and focus must move together: {states:?}"
+        );
+
+        window.simulate_keystrokes("arrowright");
+        let states = window.update(tab_states);
+        let third = states
+            .iter()
+            .find(|(label, _, _)| label.as_deref() == Some("Third"))
+            .expect("third tab present");
+        assert!(
+            third.1 && third.2,
+            "second arrow must move both to the third tab: {states:?}"
+        );
+        assert_eq!(host.read_with(&cx, |h, _| h.selected), 2);
     }
 }
