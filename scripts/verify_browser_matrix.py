@@ -487,6 +487,7 @@ def verify_browser_smoke(
             f"{label} hardware gate used software renderer {root.get('data-kael-gpu-device')}",
         )
     performance_samples = int(root.get("data-kael-virtual-performance-samples", "0"))
+    warmup_samples = int(root.get("data-kael-virtual-performance-warmup-samples", "0"))
     scroll_p50_ms = float(root.get("data-kael-virtual-scroll-p50-ms", "inf"))
     scroll_p95_ms = float(root.get("data-kael-virtual-scroll-p95-ms", "inf"))
     scroll_p99_ms = float(root.get("data-kael-virtual-scroll-p99-ms", "inf"))
@@ -496,6 +497,7 @@ def verify_browser_smoke(
     long_tasks = int(root.get("data-kael-virtual-long-tasks", "999999"))
     peak_mounted = int(root.get("data-kael-virtual-peak-mounted-rows", "999999"))
     require(performance_samples >= 16, f"{label} collected {performance_samples} latency samples")
+    require(warmup_samples == 8, f"{label} used {warmup_samples} warm-up samples")
     p95_budget = 1_000 if software_renderer else 80
     p99_budget = 2_000 if software_renderer else 160
     long_task_budget = 24 if software_renderer else 3

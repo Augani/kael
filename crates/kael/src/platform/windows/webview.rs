@@ -106,44 +106,34 @@ pub(crate) fn sync_webviews(window: &Rc<WindowsWindowInner>, webviews: &[Platfor
         let webview_id = webview.instance_id.clone();
         active_ids.insert(webview_id.clone());
 
-        let scale_factor = {
+        let (removed_host, scale_factor) = {
             let mut state = window.state.borrow_mut();
             let needs_recreate = state
                 .webviews
                 .get(&webview_id)
                 .is_some_and(|host| host.needs_recreate(webview));
-            if needs_recreate {
-                state.webviews.remove(&webview_id);
-            }
+            let removed_host = needs_recreate
+                .then(|| state.webviews.remove(&webview_id))
+                .flatten();
 
             let scale_factor = state.scale_factor;
             if let Some(host) = state.webviews.get_mut(&webview_id) {
                 host.update_desired(webview.clone(), scale_factor);
-                None
-            } else if state.creating_webviews.contains(&webview_id) {
-                None
+                (removed_host, None)
             } else {
-                state.creating_webviews.insert(webview_id.clone());
-                Some(scale_factor)
+                let should_spawn = !state.pending_webviews.contains_key(&webview_id);
+                state
+                    .pending_webviews
+                    .insert(webview_id.clone(), webview.clone());
+                (removed_host, should_spawn.then_some(scale_factor))
             }
         };
+        // Dropping a WebView controller can dispatch native messages too.
+        // Release it only after the platform-state borrow has ended.
+        drop(removed_host);
 
         if let Some(scale_factor) = scale_factor {
-            // WebView2 creates its controller synchronously and pumps Win32
-            // messages while it waits. Never hold the platform state borrow
-            // across that nested event loop: cursor, visibility, and paint
-            // messages must remain free to inspect the parent window.
-            let result = WindowsWebViewHost::new(window, webview.clone(), scale_factor);
-            let mut state = window.state.borrow_mut();
-            state.creating_webviews.remove(&webview_id);
-            match result {
-                Ok(host) => {
-                    state.webviews.insert(webview_id, host);
-                }
-                Err(error) => {
-                    log::error!("failed to create Windows WebView {}: {error:#}", webview.id);
-                }
-            }
+            spawn_webview_creation(window.clone(), webview_id, webview.clone(), scale_factor);
         }
     }
 
@@ -155,10 +145,65 @@ pub(crate) fn sync_webviews(window: &Rc<WindowsWindowInner>, webviews: &[Platfor
         .filter(|webview_id| !active_ids.contains(*webview_id))
         .cloned()
         .collect::<Vec<_>>();
-    let mut state = window.state.borrow_mut();
     for webview_id in stale_ids {
-        state.webviews.remove(&webview_id);
+        // As above, destroy native controllers without holding the state.
+        let stale_host = window.state.borrow_mut().webviews.remove(&webview_id);
+        drop(stale_host);
     }
+    window
+        .state
+        .borrow_mut()
+        .pending_webviews
+        .retain(|webview_id, _| active_ids.contains(webview_id));
+}
+
+fn spawn_webview_creation(
+    window: Rc<WindowsWindowInner>,
+    webview_id: SharedString,
+    desired: PlatformWebView,
+    scale_factor: f32,
+) {
+    let executor = window.executor.clone();
+    executor
+        .spawn(async move {
+            // WebView2 creates its controller synchronously and pumps Win32
+            // messages while it waits. Run it after the current frame so those
+            // messages can update the App and inspect the platform state.
+            let result = WindowsWebViewHost::new(&window, desired, scale_factor);
+            let (latest, latest_scale_factor) = {
+                let mut state = window.state.borrow_mut();
+                (
+                    state.pending_webviews.remove(&webview_id),
+                    state.scale_factor,
+                )
+            };
+            let Some(latest) = latest else {
+                return;
+            };
+
+            match result {
+                Ok(mut host) if !host.needs_recreate(&latest) => {
+                    host.update_desired(latest, latest_scale_factor);
+                    window.state.borrow_mut().webviews.insert(webview_id, host);
+                }
+                Ok(host) => {
+                    // Creation-only settings changed while WebView2 was
+                    // starting. Drop this controller and schedule the latest
+                    // configuration rather than exposing stale behavior.
+                    drop(host);
+                    window
+                        .state
+                        .borrow_mut()
+                        .pending_webviews
+                        .insert(webview_id.clone(), latest.clone());
+                    spawn_webview_creation(window, webview_id, latest, latest_scale_factor);
+                }
+                Err(error) => {
+                    log::error!("failed to create Windows WebView {}: {error:#}", latest.id);
+                }
+            }
+        })
+        .detach();
 }
 
 pub(crate) fn dispatch_webview_command(

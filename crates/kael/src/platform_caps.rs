@@ -21085,7 +21085,7 @@ mod tests {
                 "{feature:?} should be present in capability reports"
             );
         }
-        assert!(report.is_supported(PlatformFeature::PrecisionPointerInput));
+        assert!(report.is_available(PlatformFeature::PrecisionPointerInput));
     }
 
     #[test]

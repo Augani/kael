@@ -115,7 +115,7 @@ pub struct WindowsWindowState {
     #[cfg(feature = "webview")]
     pub(crate) webviews: HashMap<SharedString, WindowsWebViewHost>,
     #[cfg(feature = "webview")]
-    pub(crate) creating_webviews: std::collections::HashSet<SharedString>,
+    pub(crate) pending_webviews: HashMap<SharedString, PlatformWebView>,
 }
 
 pub(crate) struct WindowsWindowInner {
@@ -216,7 +216,7 @@ impl WindowsWindowState {
             #[cfg(feature = "webview")]
             webviews: HashMap::default(),
             #[cfg(feature = "webview")]
-            creating_webviews: std::collections::HashSet::default(),
+            pending_webviews: HashMap::default(),
         })
     }
 
@@ -1343,15 +1343,27 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn show(&self) {
-        unsafe {
-            let _ = ShowWindow(self.0.hwnd, SW_SHOW);
-        }
+        let this = self.0.clone();
+        self.0
+            .executor
+            .spawn(async move {
+                unsafe {
+                    let _ = ShowWindow(this.hwnd, SW_SHOW);
+                }
+            })
+            .detach();
     }
 
     fn hide(&self) {
-        unsafe {
-            let _ = ShowWindow(self.0.hwnd, SW_HIDE);
-        }
+        let this = self.0.clone();
+        self.0
+            .executor
+            .spawn(async move {
+                unsafe {
+                    let _ = ShowWindow(this.hwnd, SW_HIDE);
+                }
+            })
+            .detach();
     }
 
     fn is_visible(&self) -> bool {

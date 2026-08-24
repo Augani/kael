@@ -439,21 +439,6 @@
         await new Promise((resolve) => requestAnimationFrame(resolve));
         await new Promise((resolve) => requestAnimationFrame(resolve));
 
-        const longTasks = [];
-        let observer;
-        if (typeof PerformanceObserver !== "undefined") {
-          try {
-            observer = new PerformanceObserver((list) => {
-              for (const entry of list.getEntries()) {
-                longTasks.push(entry.duration);
-              }
-            });
-            observer.observe({ type: "longtask", buffered: false });
-          } catch {
-            observer = undefined;
-          }
-        }
-
         const bounds = grid.getBoundingClientRect();
         const clientX = Math.max(1, Math.min(innerWidth - 2, bounds.left + bounds.width * 0.5));
         const clientY = Math.max(
@@ -470,12 +455,7 @@
           }),
         );
 
-        const responseSamples = [];
-        const materializeSamples = [];
-        const damageRatios = [];
-        const damageModes = { region: 0, full: 0, none: 0, unknown: 0 };
-        let peakMountedRows = 0;
-        for (let sample = 0; sample < 24; sample += 1) {
+        async function scrollAndWaitForVirtualRange() {
           const priorStart = Number(root.dataset.kaelVirtualRangeStart ?? -1);
           const started = performance.now();
           canvas.dispatchEvent(
@@ -493,8 +473,46 @@
             await new Promise((resolve) => requestAnimationFrame(resolve));
             nextStart = Number(root.dataset.kaelVirtualRangeStart ?? -1);
           }
-          if (nextStart !== priorStart && nextStart >= 0) {
-            responseSamples.push(performance.now() - started);
+          return {
+            changed: nextStart !== priorStart && nextStart >= 0,
+            elapsed: performance.now() - started,
+          };
+        }
+
+        // Measure steady-state interaction, not one-time Wasm/JavaScript JIT
+        // compilation of the input, layout, and regional-render paths. These
+        // warm-up scrolls still exercise the same million-row virtual table.
+        const warmupSamples = 8;
+        for (let sample = 0; sample < warmupSamples; sample += 1) {
+          await scrollAndWaitForVirtualRange();
+        }
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+
+        const longTasks = [];
+        let observer;
+        if (typeof PerformanceObserver !== "undefined") {
+          try {
+            observer = new PerformanceObserver((list) => {
+              for (const entry of list.getEntries()) {
+                longTasks.push(entry.duration);
+              }
+            });
+            observer.observe({ type: "longtask", buffered: false });
+          } catch {
+            observer = undefined;
+          }
+        }
+
+        const responseSamples = [];
+        const materializeSamples = [];
+        const damageRatios = [];
+        const damageModes = { region: 0, full: 0, none: 0, unknown: 0 };
+        let peakMountedRows = 0;
+        for (let sample = 0; sample < 24; sample += 1) {
+          const response = await scrollAndWaitForVirtualRange();
+          if (response.changed) {
+            responseSamples.push(response.elapsed);
             const materialize = Number(root.dataset.kaelVirtualMaterializeUs ?? NaN);
             if (Number.isFinite(materialize)) {
               materializeSamples.push(materialize);
@@ -595,6 +613,7 @@
           kaelVirtualPerformanceP95BudgetMs: String(p95Budget),
           kaelVirtualPerformanceP99BudgetMs: String(p99Budget),
           kaelVirtualPerformanceLongTaskBudget: String(longTaskBudget),
+          kaelVirtualPerformanceWarmupSamples: String(warmupSamples),
           kaelVirtualPerformanceSamples: String(responseSamples.length),
           kaelVirtualScrollP50Ms: p50.toFixed(3),
           kaelVirtualScrollP95Ms: p95.toFixed(3),

@@ -119,6 +119,23 @@ try {
         throw "generated native binary was not built at $generatedBinary"
     }
 
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class KaelNativeWindowProbe {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Rect { public int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int capacity);
+    [DllImport("user32.dll")]
+    public static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindowVisible(IntPtr hwnd);
+}
+"@
+
     $stdout = Join-Path $evidence "generated-app.stdout.log"
     $stderr = Join-Path $evidence "generated-app.stderr.log"
     $generatedProcess = Start-Process -FilePath $generatedBinary -PassThru `
@@ -134,8 +151,16 @@ try {
         }
         if ($generatedProcess.MainWindowHandle -ne [IntPtr]::Zero) {
             $windowHandle = $generatedProcess.MainWindowHandle
-            $windowTitle = $generatedProcess.MainWindowTitle
-            break
+            # Process.MainWindowTitle can retain the executable path on older
+            # Server 2022 images after MainWindowHandle is already populated.
+            # Read the actual HWND text and wait for the framework title.
+            $titleBuffer = New-Object System.Text.StringBuilder 512
+            [void][KaelNativeWindowProbe]::GetWindowText(
+                $windowHandle, $titleBuffer, $titleBuffer.Capacity)
+            $windowTitle = $titleBuffer.ToString()
+            if ($windowTitle -eq "kael-generated-parity") {
+                break
+            }
         }
     }
     if ($windowHandle -eq [IntPtr]::Zero) {
@@ -145,19 +170,6 @@ try {
         throw "generated native window had unexpected title '$windowTitle'"
     }
 
-    Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public static class KaelNativeWindowProbe {
-    [StructLayout(LayoutKind.Sequential)]
-    public struct Rect { public int Left, Top, Right, Bottom; }
-    [DllImport("user32.dll")]
-    public static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool IsWindowVisible(IntPtr hwnd);
-}
-"@
     $rect = New-Object KaelNativeWindowProbe+Rect
     if (-not [KaelNativeWindowProbe]::IsWindowVisible($windowHandle)) {
         throw "generated Win32 window exists but is not visible"
