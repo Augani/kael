@@ -43,6 +43,24 @@ use crate::webview::{PlatformWebView, PlatformWebViewCommand};
 
 const MAX_NATIVE_TEXT_BYTES: usize = 16 * 1024 * 1024;
 
+fn task_dialog_indirect(config: &TASKDIALOGCONFIG, button: &mut i32) -> Result<()> {
+    type TaskDialogIndirectFn = unsafe extern "system" fn(
+        *const TASKDIALOGCONFIG,
+        *mut i32,
+        *mut i32,
+        *mut BOOL,
+    ) -> HRESULT;
+
+    crate::with_dll_library(s!("comctl32.dll"), |common_controls| {
+        let entry = unsafe { GetProcAddress(common_controls, s!("TaskDialogIndirect")) }
+            .context("TaskDialogIndirect is unavailable in the active Common Controls version")?;
+        let task_dialog: TaskDialogIndirectFn = unsafe { std::mem::transmute(entry) };
+        unsafe { task_dialog(config, button, std::ptr::null_mut(), std::ptr::null_mut()) }
+            .ok()
+            .context("unable to create task dialog")
+    })
+}
+
 /// Raw-input registration and cursor clipping are process-global Win32
 /// resources. Only the HWND stored here may mutate or release them.
 static WINDOWS_POINTER_LOCK_OWNER: AtomicIsize = AtomicIsize::new(0);
@@ -991,8 +1009,7 @@ impl PlatformWindow for WindowsWindow {
 
                     config.pfCallback = None;
                     let mut res = std::mem::zeroed();
-                    let result = TaskDialogIndirect(&config, Some(&mut res), None, None)
-                        .context("unable to create task dialog");
+                    let result = task_dialog_indirect(&config, &mut res);
                     let fallback = cancel_index.unwrap_or_default();
                     let clicked = result
                         .log_err()

@@ -42,3 +42,6 @@ $imports = Get-Content -Raw $LogPath
 if ($imports -match "(?m)^\s+[0-9A-F]+\s+DXGIGetDebugInterface1\s*$") {
     throw "DXGIGetDebugInterface1 must be resolved dynamically, not imported at process load"
 }
+if ($imports -match "(?m)^\s+[0-9A-F]+\s+TaskDialogIndirect\s*$") {
+    throw "TaskDialogIndirect must be resolved dynamically, not imported at process load"
+}

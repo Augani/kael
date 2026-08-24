@@ -16,9 +16,12 @@ mode="${1:-default}"
 
 case "$mode" in
   default)
-    # Lint and test every crate, target, optional battery, template, and the
-    # repository-only Astryx showcase. This is the workspace-wide quality gate.
-    run cargo clippy --workspace --all-targets --all-features -- -D warnings
+    # Deny every warning on the valid native default graph. The artificial
+    # all-features graph also enables GTK4 WebView and the alternate Blade
+    # backends simultaneously; lint every optional path there while exempting
+    # only the dead code created by that mutually exclusive combination.
+    run cargo clippy --workspace --all-targets -- -D warnings
+    run cargo clippy --workspace --all-targets --all-features -- -D warnings -A dead-code
     run cargo test --workspace --all-targets --all-features
     run cargo check -p kael_http_client --no-default-features
     run cargo check -p kael --lib --features "platform-foundation"
@@ -33,14 +36,14 @@ case "$mode" in
     run cargo run -p xtask -- dry-run
     ;;
   linux-x11)
-    run cargo check -p kael --lib --no-default-features --features "font-kit x11"
+    run cargo clippy -p kael --lib --no-default-features --features "font-kit x11" -- -D warnings
     run cargo check -p kael --lib --no-default-features --features "font-kit x11 platform-foundation"
     run cargo check -p kael --lib --no-default-features --features "font-kit x11 platform-foundation document pdf office notifications-full share"
     run cargo check -p kael --bench framework --no-default-features --features "font-kit x11"
     run cargo clippy -p kael --lib --no-default-features --features "webview-legacy-gtk3" -- -D warnings
     ;;
   linux-wayland)
-    run cargo check -p kael --lib --no-default-features --features "font-kit wayland"
+    run cargo clippy -p kael --lib --no-default-features --features "font-kit wayland" -- -D warnings
     run cargo check -p kael --lib --no-default-features --features "font-kit wayland platform-foundation"
     run cargo check -p kael --lib --no-default-features --features "font-kit wayland platform-foundation document pdf office notifications-full share"
     run cargo check -p kael --bench framework --no-default-features --features "font-kit wayland"
