@@ -14,6 +14,23 @@ python3 -u -m http.server "${http_port}" --bind 127.0.0.1 --directory "${output_
 http_pid=$!
 browser_profile=""
 browser_pid=""
+remove_browser_profile() {
+  local profile="$1"
+  if [[ "${profile}" != /tmp/kael-audio-smoke.* ]]; then
+    return 0
+  fi
+  for _ in {1..10}; do
+    rm -rf -- "${profile}" 2>/dev/null || true
+    if [[ ! -e "${profile}" ]]; then
+      return 0
+    fi
+    # Chrome can briefly keep writing profile databases after its launcher has
+    # exited. Cleanup is best-effort and must not turn a passed audio probe red.
+    sleep 0.2
+  done
+  echo "warning: browser audio smoke profile is still being released: ${profile}" >&2
+  return 0
+}
 cleanup() {
   if [[ -n "${browser_pid}" ]]; then
     kill "${browser_pid}" 2>/dev/null || true
@@ -21,9 +38,7 @@ cleanup() {
   fi
   kill "${http_pid}" 2>/dev/null || true
   wait "${http_pid}" 2>/dev/null || true
-  if [[ "${browser_profile}" == /tmp/kael-audio-smoke.* ]]; then
-    rm -rf "${browser_profile}"
-  fi
+  remove_browser_profile "${browser_profile}"
 }
 trap cleanup EXIT
 
@@ -108,10 +123,8 @@ for run_attempt in 1 2; do
   kill "${browser_pid}" 2>/dev/null || true
   wait "${browser_pid}" 2>/dev/null || true
   browser_pid=""
-  if [[ "${browser_profile}" == /tmp/kael-audio-smoke.* ]]; then
-    rm -rf "${browser_profile}"
-    browser_profile=""
-  fi
+  remove_browser_profile "${browser_profile}"
+  browser_profile=""
   if [[ "${run_attempt}" == 1 ]]; then
     echo "${probe_failure}; retrying once after browser audio teardown" >&2
     sleep 2
