@@ -256,7 +256,7 @@ impl WindowsWebViewHost {
         let rendered_html = desired.html.clone();
         let mut host = Self {
             background_color: desired.background_color,
-            opacity: -1.0,
+            opacity: desired.opacity,
             live,
             live_permission_handler,
             live_top_level_origin,
@@ -766,8 +766,12 @@ fn configure_webview_builder<'a>(
         bridge_script(desired.storage_key.as_ref(), &ipc_nonce),
         true,
     );
-    builder = builder
-        .with_initialization_script_for_main_only(webview_opacity_script(desired.opacity), true);
+    if desired.opacity.clamp(0.0, 1.0) < 1.0 {
+        builder = builder.with_initialization_script_for_main_only(
+            webview_opacity_script(desired.opacity),
+            true,
+        );
+    }
     for css in &desired.injected_css {
         builder = builder.with_initialization_script_for_main_only(
             main_frame_script(&css_script(css.as_ref())),

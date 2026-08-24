@@ -348,7 +348,6 @@ impl Render for WebViewSmoke {
                         }
                     })
                     .native_permission_policy(|_| kael::WebViewPermissionDecision::Deny)
-                    .opacity(0.96)
                     .size_full(),
             )
     }
