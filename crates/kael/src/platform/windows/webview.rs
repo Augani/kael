@@ -3,7 +3,7 @@ use super::super::webview_common::{
     create_web_context, css_script, decode_bridge_message, ipc_source_matches_top_level,
     main_frame_script, serialized_origin, to_wry_rect, warn_rejected_ipc_once, webview_command_id,
 };
-use super::{WindowsWindow, WindowsWindowInner};
+use super::WindowsWindowInner;
 use crate::{
     AsyncWindowContext, Bounds, Pixels, SharedString, WebViewCookie, WebViewDownloadCompleted,
     WebViewDownloadPolicy, WebViewNewWindowPolicy,
@@ -18,9 +18,11 @@ use crate::{
 };
 use anyhow::{Context as _, Result};
 use parking_lot::RwLock;
+use raw_window_handle as rwh;
 use std::{
     cell::RefCell,
     collections::HashSet,
+    num::NonZeroIsize,
     rc::Rc,
     sync::{Arc, atomic::AtomicBool},
 };
@@ -45,6 +47,31 @@ use wry::{
     DragDropEvent as WryDragDropEvent, NewWindowResponse, PageLoadEvent, WebContext, WebView,
     WebViewBuilder, WebViewExtWindows,
 };
+
+/// A borrowed parent HWND for Wry's child-WebView construction.
+///
+/// `WindowsWindow` is the owning platform-window handle and its `Drop`
+/// implementation destroys the HWND. Wrapping an `Rc<WindowsWindowInner>` in
+/// a temporary `WindowsWindow` here would therefore close the application as
+/// soon as `build_as_child` returned. This adapter exposes only the raw handle
+/// and cannot acquire ownership of the parent window.
+struct WindowsWebViewParent<'a>(&'a WindowsWindowInner);
+
+impl rwh::HasWindowHandle for WindowsWebViewParent<'_> {
+    fn window_handle(&self) -> std::result::Result<rwh::WindowHandle<'_>, rwh::HandleError> {
+        let raw = rwh::Win32WindowHandle::new(unsafe {
+            NonZeroIsize::new_unchecked(self.0.hwnd.0 as isize)
+        })
+        .into();
+        Ok(unsafe { rwh::WindowHandle::borrow_raw(raw) })
+    }
+}
+
+impl rwh::HasDisplayHandle for WindowsWebViewParent<'_> {
+    fn display_handle(&self) -> std::result::Result<rwh::DisplayHandle<'_>, rwh::HandleError> {
+        Ok(unsafe { rwh::DisplayHandle::borrow_raw(rwh::WindowsDisplayHandle::new().into()) })
+    }
+}
 
 pub(crate) struct WindowsWebViewHost {
     desired: PlatformWebView,
@@ -246,7 +273,7 @@ impl WindowsWebViewHost {
         let builder = configure_wry_custom_protocols(builder, &desired, &protocol_registration);
 
         let webview = builder
-            .build_as_child(&WindowsWindow(window.clone()))
+            .build_as_child(&WindowsWebViewParent(window.as_ref()))
             .context("building Windows child webview")?;
         webview.set_visible(desired.visible).log_err();
         let permission_registration =
