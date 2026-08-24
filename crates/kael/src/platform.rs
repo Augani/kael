@@ -25,7 +25,8 @@ mod mac;
 #[cfg(any(
     all(
         any(target_os = "linux", target_os = "freebsd"),
-        any(feature = "x11", feature = "wayland")
+        any(feature = "x11", feature = "wayland"),
+        not(feature = "webview-wayland-gtk4")
     ),
     all(target_os = "macos", feature = "macos-blade")
 ))]

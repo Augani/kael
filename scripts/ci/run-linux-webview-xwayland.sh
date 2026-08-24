@@ -27,8 +27,16 @@ mkdir -p "${artifact_dir}" "${runtime_dir}"
 chmod 700 "${runtime_dir}"
 # Minimal/headless images do not always create this conventional X socket
 # directory. Xwayland requires it even though Weston chooses the display number.
-mkdir -p /tmp/.X11-unix
-chmod 1777 /tmp/.X11-unix
+# When the directory already exists it is normally root-owned, so do not try to
+# chmod it as the unprivileged runner user.
+if [[ ! -d /tmp/.X11-unix ]]; then
+  mkdir /tmp/.X11-unix
+  chmod 1777 /tmp/.X11-unix
+fi
+if [[ ! -w /tmp/.X11-unix ]]; then
+  echo "WESTON_XWAYLAND_FAIL: /tmp/.X11-unix is not writable" >&2
+  exit 1
+fi
 
 if ! command -v weston >/dev/null 2>&1; then
   echo "WESTON_XWAYLAND_FAIL: weston is not installed" >&2

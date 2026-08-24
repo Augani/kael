@@ -1,7 +1,9 @@
 use anyhow::{Context as _, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(target_os = "macos")]
+use std::process::Stdio;
 
 use crate::DistConfig;
 

@@ -35,11 +35,11 @@ pub(crate) mod print;
 #[cfg(feature = "linux-platform")]
 mod text_system;
 mod tray;
-#[cfg(feature = "wayland")]
+#[cfg(all(feature = "wayland", not(feature = "webview-wayland-gtk4")))]
 mod wayland;
 #[cfg(all(any(), feature = "linux-platform"))]
 mod webview;
-#[cfg(feature = "x11")]
+#[cfg(all(feature = "x11", not(feature = "webview-wayland-gtk4")))]
 mod x11;
 
 #[cfg(feature = "linux-platform")]
@@ -57,9 +57,9 @@ pub(crate) use keyboard::*;
 pub(crate) use platform::*;
 #[cfg(feature = "linux-platform")]
 pub(crate) use text_system::*;
-#[cfg(feature = "wayland")]
+#[cfg(all(feature = "wayland", not(feature = "webview-wayland-gtk4")))]
 pub(crate) use wayland::*;
-#[cfg(feature = "x11")]
+#[cfg(all(feature = "x11", not(feature = "webview-wayland-gtk4")))]
 pub(crate) use x11::*;
 #[cfg(feature = "linux-platform")]
 pub(crate) use xdg_desktop_portal::XdgDesktopPortalCaptureBackend;

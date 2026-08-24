@@ -113,11 +113,39 @@ fn force_warp_from_env() -> Result<bool> {
 fn check_debug_layer_available() -> bool {
     #[cfg(debug_assertions)]
     {
-        use windows::Win32::Graphics::Dxgi::{DXGIGetDebugInterface1, IDXGIInfoQueue};
+        use std::ffi::c_void;
+        use windows::{
+            Win32::{Graphics::Dxgi::IDXGIInfoQueue, System::LibraryLoader::GetProcAddress},
+            core::{HRESULT, Interface, s},
+        };
 
-        unsafe { DXGIGetDebugInterface1::<IDXGIInfoQueue>(0) }
-            .log_err()
-            .is_some()
+        // DXGIGetDebugInterface1 is a development-time aid and the export is
+        // not present on every otherwise-supported Windows installation. A
+        // static import prevents Windows from reaching `main` at all when it
+        // is absent, even though Kael can render normally without the debug
+        // layer. Resolve the optional probe at runtime instead.
+        crate::with_dll_library(s!("dxgi.dll"), |dxgi| unsafe {
+            let address = GetProcAddress(dxgi, s!("DXGIGetDebugInterface1"))
+                .ok_or_else(|| anyhow::anyhow!("DXGIGetDebugInterface1 is unavailable"))?;
+            type GetDebugInterface = unsafe extern "system" fn(
+                u32,
+                *const windows::core::GUID,
+                *mut *mut c_void,
+            ) -> HRESULT;
+            let get_debug_interface: GetDebugInterface = std::mem::transmute(address);
+            let mut info_queue = std::ptr::null_mut();
+            let result = get_debug_interface(0, &IDXGIInfoQueue::IID, &mut info_queue);
+            if result.is_err() {
+                anyhow::bail!("DXGI debug interface is unavailable: {result:?}");
+            }
+            if info_queue.is_null() {
+                anyhow::bail!("DXGI debug probe succeeded without returning an interface");
+            }
+            drop(IDXGIInfoQueue::from_raw(info_queue));
+            Ok(())
+        })
+        .log_err()
+        .is_some()
     }
     #[cfg(not(debug_assertions))]
     {
