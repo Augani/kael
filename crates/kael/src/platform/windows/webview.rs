@@ -40,14 +40,6 @@ use webview2_com::{
     },
     PermissionRequestedEventHandler, take_pwstr,
 };
-use windows::Win32::{
-    Foundation::{COLORREF, HWND},
-    Graphics::Gdi::{RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RedrawWindow},
-    UI::WindowsAndMessaging::{
-        GWL_EXSTYLE, GetWindowLongW, LWA_ALPHA, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_NOZORDER, SetLayeredWindowAttributes, SetWindowLongW, SetWindowPos, WS_EX_LAYERED,
-    },
-};
 use windows_core_webview2::Interface as _;
 use wry::{
     DragDropEvent as WryDragDropEvent, NewWindowResponse, PageLoadEvent, WebContext, WebView,
@@ -333,17 +325,21 @@ impl WindowsWebViewHost {
         }
 
         if self.background_color != self.desired.background_color {
-            let color = self
-                .desired
-                .background_color
-                .map(rgba_to_webview_color)
-                .unwrap_or((255, 255, 255, 255));
+            let color = webview_controller_background_color(
+                self.desired.background_color,
+                self.desired.opacity,
+            );
             self.webview.set_background_color(color).log_err();
             self.background_color = self.desired.background_color;
         }
 
         if self.opacity != self.desired.opacity {
-            apply_webview_opacity(&self.webview, self.desired.opacity).log_err();
+            apply_webview_opacity(
+                &self.webview,
+                self.desired.opacity,
+                self.desired.background_color,
+            )
+            .log_err();
             self.opacity = self.desired.opacity;
         }
     }
@@ -475,6 +471,19 @@ impl WindowsWebViewHost {
             }
         }
         Ok(())
+    }
+}
+
+fn webview_controller_background_color(
+    background_color: Option<crate::Rgba>,
+    opacity: f32,
+) -> wry::RGBA {
+    if opacity.clamp(0.0, 1.0) < 1.0 {
+        (0, 0, 0, 0)
+    } else {
+        background_color
+            .map(rgba_to_webview_color)
+            .unwrap_or((255, 255, 255, 255))
     }
 }
 
@@ -663,7 +672,9 @@ fn configure_webview_builder<'a>(
     }
 
     builder = builder.with_bounds(to_wry_rect(bounds));
-    if let Some(color) = desired.background_color {
+    let transparent = desired.opacity.clamp(0.0, 1.0) < 1.0;
+    builder = builder.with_transparent(transparent);
+    if !transparent && let Some(color) = desired.background_color {
         builder = builder.with_background_color(rgba_to_webview_color(color));
     }
 
@@ -774,6 +785,8 @@ fn configure_webview_builder<'a>(
         bridge_script(desired.storage_key.as_ref(), &ipc_nonce),
         true,
     );
+    builder = builder
+        .with_initialization_script_for_main_only(webview_opacity_script(desired.opacity), true);
     for css in &desired.injected_css {
         builder = builder.with_initialization_script_for_main_only(
             main_frame_script(&css_script(css.as_ref())),
@@ -862,44 +875,58 @@ fn configure_webview_builder<'a>(
     builder
 }
 
-fn apply_webview_opacity(webview: &WebView, opacity: f32) -> Result<()> {
-    let wry_hwnd = webview.hwnd();
-    let hwnd = HWND(wry_hwnd.0);
-    let alpha = (opacity.clamp(0.0, 1.0) * u8::MAX as f32).round() as u8;
-
-    unsafe {
-        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
-        if alpha == u8::MAX {
-            if ex_style & WS_EX_LAYERED.0 as i32 != 0 {
-                let _ = SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style & !(WS_EX_LAYERED.0 as i32));
-                let _ = RedrawWindow(
-                    Some(hwnd),
-                    None,
-                    None,
-                    RDW_ERASE | RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN,
-                );
-            }
-            return Ok(());
-        }
-        if ex_style & WS_EX_LAYERED.0 as i32 == 0 {
-            let _ = SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED.0 as i32);
-            anyhow::ensure!(
-                GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED.0 as i32 != 0,
-                "Windows rejected WS_EX_LAYERED for the WebView child window"
-            );
-            SetWindowPos(
-                hwnd,
-                None,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
-            )?;
-        }
-        SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA)?;
-    }
+fn apply_webview_opacity(
+    webview: &WebView,
+    opacity: f32,
+    background_color: Option<crate::Rgba>,
+) -> Result<()> {
+    webview.set_background_color(webview_controller_background_color(
+        background_color,
+        opacity,
+    ))?;
+    webview.evaluate_script(&webview_opacity_script(opacity))?;
     Ok(())
+}
+
+fn webview_opacity_script(opacity: f32) -> String {
+    let opacity = opacity.clamp(0.0, 1.0);
+    format!(
+        r#"(() => {{
+  const opacity = {opacity:.6};
+  const key = Symbol.for("kael.nativeWebViewOpacity");
+  const apply = () => {{
+    const root = document.documentElement;
+    if (!root) return;
+    const previous = globalThis[key];
+    if (previous?.animation) previous.animation.cancel();
+    if (previous?.fallback) {{
+      root.style.setProperty(
+        "opacity",
+        previous.originalValue,
+        previous.originalPriority,
+      );
+    }}
+    if (opacity >= 1) {{
+      globalThis[key] = undefined;
+      return;
+    }}
+    if (typeof root.animate === "function") {{
+      const animation = root.animate(
+        [{{ opacity }}, {{ opacity }}],
+        {{ duration: 1, fill: "both" }},
+      );
+      globalThis[key] = {{ animation }};
+    }} else {{
+      const originalValue = root.style.getPropertyValue("opacity");
+      const originalPriority = root.style.getPropertyPriority("opacity");
+      root.style.setProperty("opacity", String(opacity), "important");
+      globalThis[key] = {{ fallback: true, originalValue, originalPriority }};
+    }}
+  }};
+  if (document.documentElement) apply();
+  else addEventListener("DOMContentLoaded", apply, {{ once: true }});
+}})();"#
+    )
 }
 
 fn dispatch_drag_drop_event(
