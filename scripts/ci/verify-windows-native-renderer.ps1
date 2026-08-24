@@ -43,8 +43,18 @@ try {
     Invoke-LoggedCommand `
         -LogPath (Join-Path $evidence "native-renderer.log") `
         -Command "cargo" `
-        "run", "-p", "kael", "--example", "native_renderer_smoke", `
+        "build", "-p", "kael", "--example", "native_renderer_smoke", `
         "--no-default-features", "--features", "font-kit,runtime_shaders"
+    $rendererBinary = Join-Path $target "debug\examples\native_renderer_smoke.exe"
+    if (-not (Test-Path $rendererBinary)) {
+        throw "Native renderer smoke executable was not built at $rendererBinary"
+    }
+    & (Join-Path $PSScriptRoot "capture-windows-pe-imports.ps1") `
+        -Executable $rendererBinary `
+        -LogPath (Join-Path $evidence "native-renderer-imports.log")
+    Invoke-LoggedCommand `
+        -LogPath (Join-Path $evidence "native-renderer.log") `
+        -Command $rendererBinary
     $rendererLog = Get-Content -Raw (Join-Path $evidence "native-renderer.log")
     if (-not $rendererLog.Contains("NATIVE_RENDERER_SMOKE_GPU: backend=direct3d11")) {
         throw "native renderer log did not identify Direct3D 11"

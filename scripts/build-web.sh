@@ -63,7 +63,7 @@ if [[ "${profile}" == "release" ]]; then
     echo "Install it with: npm install --global binaryen@132.0.0" >&2
     exit 1
   fi
-  actual_wasm_opt="$(wasm-opt --version | awk '{print $NF}')"
+  actual_wasm_opt="$(wasm-opt --version | sed -E 's/^wasm-opt version ([0-9]+).*/\1/')"
   if [[ "${actual_wasm_opt}" != "${required_wasm_opt}" ]]; then
     echo "wasm-opt ${required_wasm_opt} is required (found ${actual_wasm_opt})" >&2
     echo "Install it with: npm install --global binaryen@132.0.0" >&2

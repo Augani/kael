@@ -320,9 +320,15 @@ jobs:
           if-no-files-found: warn
 
   windows-native-renderer-runtime:
-    name: Windows Direct3D 11 Renderer Runtime / Generated App
-    runs-on: windows-latest
+    name: Windows Direct3D 11 Renderer Runtime / Generated App (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-2022
+          - windows-2025-vs2026
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -342,7 +348,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: windows-native-renderer-evidence
+          name: windows-native-renderer-evidence-${{ matrix.os }}
           path: target/native-renderer-smoke/windows
           if-no-files-found: warn
 
@@ -358,8 +364,7 @@ jobs:
         run: |
           bash scripts/ci/install-linux-deps.sh
           sudo apt-get install --yes --no-install-recommends \
-            at-spi2-core libgtk-4-dev libwebkitgtk-6.0-dev \
-            mesa-vulkan-drivers weston xwayland
+            at-spi2-core mesa-vulkan-drivers weston xwayland
 
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
@@ -375,6 +380,11 @@ jobs:
       - name: Execute embedded WebView in a real Wayland desktop session
         shell: bash
         timeout-minutes: 20
+        # GitHub-hosted Ubuntu blocks the user namespaces required by
+        # bubblewrap. This affects only the isolated runtime proof; Kael keeps
+        # WebKitGTK's sandbox enabled by default for applications.
+        env:
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1'
         run: |
           bash scripts/ci/run-linux-webview-wayland-gtk4.sh
           bash scripts/ci/run-linux-webview-xwayland.sh
@@ -656,9 +666,15 @@ jobs:
           if-no-files-found: error
 
   windows-runtime-and-msi:
-    name: Windows WebView Runtime / MSI
-    runs-on: windows-latest
+    name: Windows WebView Runtime / MSI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-2022
+          - windows-2025-vs2026
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -700,7 +716,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: windows-release-evidence
+          name: windows-release-evidence-${{ matrix.os }}
           path: |
             target/release-artifacts/Kael.msi
             target/windows-msi-verification
@@ -792,6 +808,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux dependencies
+        run: bash scripts/ci/install-linux-deps.sh
 
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24

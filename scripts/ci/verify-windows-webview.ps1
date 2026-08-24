@@ -7,9 +7,23 @@ Remove-Item Env:KAEL_HEADLESS -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
 $logFile = Join-Path $LogDirectory "webview2.log"
 
-& cargo run -p kael --example webview_smoke `
+$workspace = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$target = Join-Path $workspace "target"
+$env:CARGO_TARGET_DIR = $target
+& cargo build -p kael --example webview_smoke `
     --no-default-features --features webview,runtime_shaders 2>&1 |
     Tee-Object -FilePath $logFile
+if ($LASTEXITCODE -ne 0) {
+    throw "Windows WebView2 smoke build failed with exit code $LASTEXITCODE"
+}
+$webviewBinary = Join-Path $target "debug\examples\webview_smoke.exe"
+if (-not (Test-Path $webviewBinary)) {
+    throw "Windows WebView2 smoke executable was not built at $webviewBinary"
+}
+& (Join-Path $PSScriptRoot "capture-windows-pe-imports.ps1") `
+    -Executable $webviewBinary `
+    -LogPath (Join-Path $LogDirectory "webview2-imports.log")
+& $webviewBinary 2>&1 | Tee-Object -FilePath $logFile -Append
 if ($LASTEXITCODE -ne 0) {
     throw "Windows WebView2 smoke failed with exit code $LASTEXITCODE"
 }

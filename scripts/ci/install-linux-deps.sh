@@ -31,12 +31,14 @@ packages=(
   libfreetype6-dev
   libgl1-mesa-dev
   libgles2-mesa-dev
+  libgtk-4-dev
   libpipewire-0.3-dev
   libswresample-dev
   libswscale-dev
   libudev-dev
   libvulkan-dev
   libwayland-dev
+  libwebkitgtk-6.0-dev
   libx11-dev
   libx11-xcb-dev
   libxcb-composite0-dev

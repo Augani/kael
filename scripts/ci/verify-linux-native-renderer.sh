@@ -101,9 +101,18 @@ fi
 export KAEL_NATIVE_RENDERER_SMOKE_PNG="${evidence_dir}/native-renderer.png"
 (
   cd "${workspace_dir}"
-  timeout --preserve-status 45s cargo run -p kael \
+  cargo build -p kael \
     --example native_renderer_smoke \
     --no-default-features --features font-kit,x11,runtime_shaders
+
+  native_renderer_smoke="${target_dir}/debug/examples/native_renderer_smoke"
+  if [[ ! -x "${native_renderer_smoke}" ]]; then
+    echo "Native renderer smoke executable was not built at ${native_renderer_smoke}" >&2
+    exit 1
+  fi
+
+  # Keep cold compilation under the job timeout; bound only the launched app.
+  timeout --preserve-status 45s "${native_renderer_smoke}"
 ) 2>&1 | tee "${evidence_dir}/native-renderer.log"
 
 grep -Fq "NATIVE_RENDERER_SMOKE_GPU: backend=blade-vulkan" \
