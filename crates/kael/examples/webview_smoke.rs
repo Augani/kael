@@ -45,7 +45,9 @@ use std::{
 
 const WEBVIEW_ID: &str = "webview-smoke";
 const SMOKE_HTML: &str = r#"<!doctype html><meta charset="utf-8"><title>Kael WebView smoke</title>
-<script src="kael-smoke://assets/data.js"></script><script>
+<!-- Keep subresources same-origin and relative. WebView2 exposes Wry custom
+     protocols through an HTTP-origin compatibility URL on Windows. -->
+<script src="/data.js"></script><script>
 addEventListener('message', event => {
   if (event.data && event.data.kind === 'host-ping') {
     window.gpui.postMessage({ pong: event.data.value });
