@@ -475,7 +475,12 @@ impl WindowsWebViewHost {
                 callback(
                     self.webview
                         .url()
-                        .map(SharedString::from)
+                        .map(|url| {
+                            normalize_windows_webview_url(
+                                &url,
+                                &self.desired.custom_protocol_schemes,
+                            )
+                        })
                         .map_err(|error| error.to_string().into()),
                 );
             }
@@ -495,6 +500,27 @@ impl WindowsWebViewHost {
         }
         Ok(())
     }
+}
+
+/// Restores the public custom-protocol URL hidden by Wry's WebView2 workaround.
+///
+/// WebView2 cannot navigate directly to arbitrary schemes on every supported
+/// Windows version, so Wry maps `app://assets/page` to
+/// `http://app.assets/page` internally. That implementation detail must not
+/// leak through Kael's cross-platform `read_webview_url` API.
+fn normalize_windows_webview_url(
+    url: &str,
+    custom_protocol_schemes: &[SharedString],
+) -> SharedString {
+    for scheme in custom_protocol_schemes {
+        for transport in ["http", "https"] {
+            let workaround_prefix = format!("{transport}://{scheme}.");
+            if let Some(remainder) = url.strip_prefix(&workaround_prefix) {
+                return format!("{scheme}://{remainder}").into();
+            }
+        }
+    }
+    url.to_string().into()
 }
 
 fn set_webview_cookie(webview: &WebView, cookie: WebViewCookie) -> Result<(), SharedString> {
