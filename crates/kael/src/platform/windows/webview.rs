@@ -325,21 +325,17 @@ impl WindowsWebViewHost {
         }
 
         if self.background_color != self.desired.background_color {
-            let color = webview_controller_background_color(
-                self.desired.background_color,
-                self.desired.opacity,
-            );
+            let color = self
+                .desired
+                .background_color
+                .map(rgba_to_webview_color)
+                .unwrap_or((255, 255, 255, 255));
             self.webview.set_background_color(color).log_err();
             self.background_color = self.desired.background_color;
         }
 
         if self.opacity != self.desired.opacity {
-            apply_webview_opacity(
-                &self.webview,
-                self.desired.opacity,
-                self.desired.background_color,
-            )
-            .log_err();
+            apply_webview_opacity(&self.webview, self.desired.opacity).log_err();
             self.opacity = self.desired.opacity;
         }
     }
@@ -471,19 +467,6 @@ impl WindowsWebViewHost {
             }
         }
         Ok(())
-    }
-}
-
-fn webview_controller_background_color(
-    background_color: Option<crate::Rgba>,
-    opacity: f32,
-) -> wry::RGBA {
-    if opacity.clamp(0.0, 1.0) < 1.0 {
-        (0, 0, 0, 0)
-    } else {
-        background_color
-            .map(rgba_to_webview_color)
-            .unwrap_or((255, 255, 255, 255))
     }
 }
 
@@ -672,9 +655,7 @@ fn configure_webview_builder<'a>(
     }
 
     builder = builder.with_bounds(to_wry_rect(bounds));
-    let transparent = desired.opacity.clamp(0.0, 1.0) < 1.0;
-    builder = builder.with_transparent(transparent);
-    if !transparent && let Some(color) = desired.background_color {
+    if let Some(color) = desired.background_color {
         builder = builder.with_background_color(rgba_to_webview_color(color));
     }
 
@@ -875,15 +856,10 @@ fn configure_webview_builder<'a>(
     builder
 }
 
-fn apply_webview_opacity(
-    webview: &WebView,
-    opacity: f32,
-    background_color: Option<crate::Rgba>,
-) -> Result<()> {
-    webview.set_background_color(webview_controller_background_color(
-        background_color,
-        opacity,
-    ))?;
+fn apply_webview_opacity(webview: &WebView, opacity: f32) -> Result<()> {
+    // WebView2's HWND controller cannot be made layered or transparent without
+    // breaking navigation on every maintained Windows release. Compositing the
+    // document inside the controller preserves page lifecycle, input, and IPC.
     webview.evaluate_script(&webview_opacity_script(opacity))?;
     Ok(())
 }
