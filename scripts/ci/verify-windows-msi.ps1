@@ -115,12 +115,42 @@ if ($installerExit -notin @(0, 3010)) {
 }
 
 $expectedExecutableName = "$ExpectedName.exe"
-$executables = @(Get-ChildItem -LiteralPath $extracted -Filter $expectedExecutableName -File -Recurse)
+# On newer Windows Server images the msiexec client can return after handing
+# the administrative install to the Windows Installer service, just before the
+# embedded cabinet has finished extracting. Wait for the promised payload
+# rather than racing that service handoff.
+$extractionDeadline = [DateTime]::UtcNow.AddSeconds(30)
+$sourceHash = (Get-FileHash -LiteralPath $sourceExecutablePath -Algorithm SHA256).Hash
+$extractedHash = $null
+do {
+    $executables = @(
+        Get-ChildItem -LiteralPath $extracted -Filter $expectedExecutableName -File -Recurse
+    )
+    if ($executables.Count -gt 1) {
+        break
+    }
+    if ($executables.Count -eq 1 -and $executables[0].Length -eq $sourceExecutableMetadata.Length) {
+        try {
+            $extractedHash = (Get-FileHash -LiteralPath $executables[0].FullName -Algorithm SHA256).Hash
+            if ($extractedHash -eq $sourceHash) {
+                break
+            }
+        } catch {
+            # The installer service may still hold the new payload exclusively.
+            $extractedHash = $null
+        }
+    }
+    if ([DateTime]::UtcNow -ge $extractionDeadline) {
+        break
+    }
+    Start-Sleep -Milliseconds 200
+} while ($true)
 if ($executables.Count -ne 1) {
     throw "expected exactly one extracted $expectedExecutableName, found $($executables.Count)"
 }
-$sourceHash = (Get-FileHash -LiteralPath $sourceExecutablePath -Algorithm SHA256).Hash
-$extractedHash = (Get-FileHash -LiteralPath $executables[0].FullName -Algorithm SHA256).Hash
+if ($null -eq $extractedHash) {
+    $extractedHash = (Get-FileHash -LiteralPath $executables[0].FullName -Algorithm SHA256).Hash
+}
 if ($extractedHash -ne $sourceHash) {
     throw "extracted executable does not match the release executable (source=$sourceHash extracted=$extractedHash)"
 }
