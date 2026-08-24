@@ -15,8 +15,8 @@ use this crate's module and type documentation while implementing a view.
 
 ```toml
 [dependencies]
-kael = "0.3"
-kael_ui = "0.3"
+kael = "0.4"
+kael_ui = "0.4"
 ```
 
 ```rust,ignore
@@ -77,6 +77,9 @@ kael_ui::set_icon_base_path("assets/icons");
 
 | Feature | Default | Purpose |
 | --- | --- | --- |
+| `native` | yes | Desktop font and window backends |
+| `browser` | no | Lean WebAssembly/WebGL2 component surface |
+| `editor` | yes | Rope and tree-sitter editor core |
 | `http` | yes | Reqwest transport for remote images and HTTP-backed assets |
 | `markdown` | no | Markdown rendering |
 | `html-render` | no | Native HTML document rendering |
@@ -97,5 +100,56 @@ cargo run -p kael_ui --example astryx_showcase \
 Astryx and its assets are repository-only and are not part of the crate package.
 Crate consumers receive the library and its required font assets, not the
 example application or its media.
+
+## Suite-scale release workload
+
+For a spreadsheet surface, use `VirtualSheetGrid` instead of constructing one
+column definition or one row entity per logical coordinate. It supports the
+Excel-scale 1,000,000 × 16,384 address space with two-axis virtual mounting,
+generation-scoped tile requests, frozen panes, an LRU tile cache, sparse edits,
+IME-backed cell editing, and bounded TSV/HTML clipboard interchange:
+
+```rust,ignore
+let model = model.clone();
+let sheet = cx.new(|cx| {
+    VirtualSheetGrid::new(1_000_000, 16_384, cx)
+        .expect("document dimensions are validated")
+        .with_frozen_panes(1, 2)
+        .expect("frozen panes are bounded")
+        .on_fetch_tile(move |request, entity, _window, cx| {
+            let values = model.load_row_major(&request.rows, &request.columns);
+            cx.defer(move |cx| {
+                entity.update(cx, |sheet, cx| {
+                    if sheet.provide_tile(request, values).is_ok() {
+                        cx.notify();
+                    }
+                });
+            });
+        })
+        .on_commit_edit(|edit, _window, _cx| {
+            // Persist edit.position and edit.value in the application model.
+        })
+});
+```
+
+Tile responses must exactly match a live request and its generation. Cache,
+pending-request, tile-cell, tile-byte, cell-byte, edit, undo, and clipboard
+limits are public constants or builders so an application can budget them
+explicitly. Clipboard export returns an error for unloaded cells instead of
+silently exporting incomplete data.
+
+The repository also keeps a same-source desktop/WebAssembly workload for the
+framework paths used by document, spreadsheet, presentation, and whiteboard
+applications:
+
+```bash
+cargo run -p kael_ui --example suite_scale_smoke
+bash scripts/verify-browser-suite-smoke.sh
+```
+
+It verifies a real million-row × 16,384-column virtual sheet grid and compressed selection,
+virtual document pages and slide thumbnails, and 100,000 retained whiteboard
+shapes with spatial culling, tiled damage, bounded tile payloads, rich pointer
+input, and a fixed frame clock.
 
 Licensed under Apache-2.0.

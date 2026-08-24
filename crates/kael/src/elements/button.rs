@@ -59,6 +59,8 @@ pub struct Button {
     checked: Option<bool>,
     selected: Option<bool>,
     pressed: Option<bool>,
+    full_width: bool,
+    default_focus_style: bool,
     on_click: Option<ClickListener>,
     custom_renderer: Option<ButtonCustomRenderer>,
 }
@@ -74,6 +76,8 @@ impl Button {
             checked: None,
             selected: None,
             pressed: None,
+            full_width: false,
+            default_focus_style: true,
             on_click: None,
             custom_renderer: None,
         }
@@ -121,6 +125,18 @@ impl Button {
         self
     }
 
+    /// Stretch the semantic button root across the available horizontal space.
+    pub fn full_width(mut self) -> Self {
+        self.full_width = true;
+        self
+    }
+
+    /// Let the caller-owned renderer provide the visible keyboard focus treatment.
+    pub fn custom_focus_style(mut self) -> Self {
+        self.default_focus_style = false;
+        self
+    }
+
     /// Register a callback invoked when the button is clicked by mouse or keyboard.
     pub fn on_click(
         mut self,
@@ -151,6 +167,8 @@ impl RenderOnce for Button {
             checked,
             selected,
             pressed,
+            full_width,
+            default_focus_style,
             on_click,
             custom_renderer,
         } = self;
@@ -198,8 +216,15 @@ impl RenderOnce for Button {
             .focusable()
             .tab_stop(!disabled)
             .cursor_pointer()
-            .accessibility(accessibility)
-            .focus_visible(|style: crate::StyleRefinement| style.bg(crate::rgba(0x1d4ed810)));
+            .accessibility(accessibility);
+
+        if full_width {
+            root = root.w_full().flex().items_stretch();
+        }
+        if default_focus_style {
+            root = root
+                .focus_visible(|style: crate::StyleRefinement| style.bg(crate::rgba(0x1d4ed810)));
+        }
 
         if !disabled {
             if let Some(listener) = on_click {

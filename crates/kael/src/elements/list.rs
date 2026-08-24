@@ -104,7 +104,7 @@ struct StateInner {
     overdraw: Pixels,
     scroll_elasticity: Pixels,
     scroll_elasticity_animating: bool,
-    scroll_elasticity_last_advance: Option<std::time::Instant>,
+    scroll_elasticity_last_advance: Option<web_time::Instant>,
     reset: bool,
     #[allow(clippy::type_complexity)]
     scroll_handler: Option<Box<dyn FnMut(&ListScrollEvent, &mut Window, &mut App)>>,
@@ -845,6 +845,7 @@ impl StateInner {
         available_height: Pixels,
         padding: &Edges<Pixels>,
         render_item: &mut impl FnMut(usize, &mut Window, &mut App) -> AnyElement,
+        release_item: &mut Option<&mut ReleaseItemFn>,
         window: &mut Window,
         cx: &mut App,
     ) -> LayoutItemsResponse {
@@ -892,6 +893,8 @@ impl StateInner {
                     if item.contains_focused(window, cx) {
                         rendered_focused_item = true;
                     }
+                } else if let Some(release_item) = release_item.as_deref_mut() {
+                    release_item(item_index, element);
                 }
             }
 
@@ -968,7 +971,11 @@ impl StateInner {
                     *size
                 } else {
                     let mut element = render_item(cursor.start().0, window, cx);
-                    element.layout_as_root(available_item_space, window, cx)
+                    let size = element.layout_as_root(available_item_space, window, cx);
+                    if let Some(release_item) = release_item.as_deref_mut() {
+                        release_item(cursor.start().0, element);
+                    }
+                    size
                 };
 
                 leading_overdraw += size.height;
@@ -1029,6 +1036,7 @@ impl StateInner {
         elastic_offset: Pixels,
         autoscroll: bool,
         render_item: &mut impl FnMut(usize, &mut Window, &mut App) -> AnyElement,
+        release_item: &mut Option<&mut ReleaseItemFn>,
         window: &mut Window,
         cx: &mut App,
     ) -> Result<LayoutItemsResponse, ListOffset> {
@@ -1038,6 +1046,7 @@ impl StateInner {
                 bounds.size.height,
                 &padding,
                 render_item,
+                release_item,
                 window,
                 cx,
             );
@@ -1080,7 +1089,11 @@ impl StateInner {
                                     let mut item = render_item(cursor.start().0, window, cx);
                                     let item_available_size =
                                         size(bounds.size.width.into(), AvailableSpace::MinContent);
-                                    item.layout_as_root(item_available_size, window, cx)
+                                    let size = item.layout_as_root(item_available_size, window, cx);
+                                    if let Some(release_item) = release_item.as_deref_mut() {
+                                        release_item(cursor.start().0, item);
+                                    }
+                                    size
                                 });
                                 height -= size.height;
                             }
@@ -1099,7 +1112,13 @@ impl StateInner {
                     item_origin.y += item.size.height;
                 }
             } else {
-                layout_response.item_layouts.clear();
+                if let Some(release_item) = release_item.as_deref_mut() {
+                    for item in layout_response.item_layouts.drain(..) {
+                        release_item(item.index, item.element);
+                    }
+                } else {
+                    layout_response.item_layouts.clear();
+                }
             }
 
             Ok(layout_response)
@@ -1197,8 +1216,14 @@ impl Element for List {
                 window.with_text_style(style.text_style().cloned(), |window| {
                     let state = &mut *self.state.0.borrow_mut();
                     let render_item = &mut self.render_item;
-                    let mut render_item =
-                        |ix, window: &mut Window, cx: &mut App| render_item(ix, None, window, cx);
+                    let take_recycled_item = &mut self.take_recycled_item;
+                    let mut render_item = |ix, window: &mut Window, cx: &mut App| {
+                        let recycled = take_recycled_item
+                            .as_mut()
+                            .and_then(|take_recycled_item| take_recycled_item(ix));
+                        render_item(ix, recycled, window, cx)
+                    };
+                    let mut release_item = self.release_item.as_deref_mut();
 
                     let available_height = if let Some(last_bounds) = state.last_layout_bounds {
                         last_bounds.size.height
@@ -1212,15 +1237,22 @@ impl Element for List {
                         window.rem_size(),
                     );
 
-                    let layout_response = state.layout_items(
+                    let mut layout_response = state.layout_items(
                         None,
                         available_height,
                         &padding,
                         &mut render_item,
+                        &mut release_item,
                         window,
                         cx,
                     );
                     let max_element_width = layout_response.max_item_width;
+
+                    if let Some(release_item) = release_item {
+                        for item in layout_response.item_layouts.drain(..) {
+                            release_item(item.index, item.element);
+                        }
+                    }
 
                     let summary = state.items.summary();
                     let total_height = summary.height;
@@ -1289,9 +1321,7 @@ impl Element for List {
             state.items = new_items;
         }
 
-        let padding = style
-            .padding
-            .to_pixels(bounds.size.into(), window.rem_size());
+        let padding = window.ui_definite_edges_in_pixels(style.padding, bounds.size);
         let scroll_max = (state.items.summary().height + padding.top + padding.bottom
             - bounds.size.height)
             .max(px(0.));
@@ -1309,12 +1339,14 @@ impl Element for List {
                 .and_then(|take_recycled_item| take_recycled_item(ix));
             render_item(ix, recycled, window, cx)
         };
+        let mut release_item = self.release_item.as_deref_mut();
         let layout = match state.prepaint_items(
             bounds,
             padding,
             elastic_offset,
             true,
             &mut render_item,
+            &mut release_item,
             window,
             cx,
         ) {
@@ -1328,6 +1360,7 @@ impl Element for List {
                         elastic_offset,
                         false,
                         &mut render_item,
+                        &mut release_item,
                         window,
                         cx,
                     )

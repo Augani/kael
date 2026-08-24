@@ -1,3 +1,5 @@
+#[cfg(any(feature = "wayland", feature = "x11"))]
+use std::time::Duration;
 use std::{
     fs,
     io::{BufRead as _, BufReader},
@@ -6,7 +8,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 
 use super::dbus_util::parse_dbus_uint32;
@@ -184,6 +185,7 @@ pub fn release_blocker(handle: PowerSaveHandle) {
 
 /// Query system idle time via `org.freedesktop.ScreenSaver.GetSessionIdleTime` D-Bus call.
 /// This works on both X11 and Wayland when a screensaver D-Bus service is available.
+#[cfg(any(feature = "wayland", feature = "x11"))]
 pub fn system_idle_time_dbus() -> Option<Duration> {
     let output = std::process::Command::new("dbus-send")
         .args([

@@ -76,9 +76,10 @@ switch ($Mode) {
         Invoke-Step cargo check --package kael --lib --features 'platform-foundation'
         Invoke-Step cargo check --package kael --lib --features 'document'
         Invoke-Step cargo check --package kael --lib --features 'pdf'
+        Invoke-Step cargo check --package kael --lib --features 'office'
         Invoke-Step cargo check --package kael --lib --features 'notifications-full'
         Invoke-Step cargo check --package kael --lib --features 'share'
-        Invoke-Step cargo check --package kael --lib --features 'platform-foundation document pdf notifications-full share'
+        Invoke-Step cargo check --package kael --lib --features 'platform-foundation document pdf office notifications-full share'
         Invoke-Step cargo check --package kael --bench framework
         Invoke-Step cargo run --package xtask '--' dry-run
     }

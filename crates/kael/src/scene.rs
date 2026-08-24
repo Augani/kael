@@ -104,8 +104,8 @@ pub enum FrameDamage {
     None,
     /// Only this rectangle changed — re-rasterize just this region.
     Region(Bounds<ScaledPixels>),
-    /// The whole frame changed, or its structure changed such that a tight region
-    /// cannot be computed cheaply — re-rasterize everything.
+    /// The whole frame changed, or contains externally-updated content that cannot
+    /// be localized safely — re-rasterize everything.
     Full,
 }
 
@@ -128,6 +128,15 @@ impl FnvHash {
         self.mix(color.a.to_bits() as u64);
     }
 
+    fn mix_f32(&mut self, value: f32) {
+        self.mix(value.to_bits() as u64);
+    }
+
+    fn mix_point(&mut self, point: &Point<ScaledPixels>) {
+        self.mix_f32(point.x.0);
+        self.mix_f32(point.y.0);
+    }
+
     fn mix_bounds(&mut self, bounds: &Bounds<ScaledPixels>) {
         self.mix(bounds.origin.x.0.to_bits() as u64);
         self.mix(bounds.origin.y.0.to_bits() as u64);
@@ -144,6 +153,58 @@ impl FnvHash {
         self.mix(transform.translation[1].to_bits() as u64);
     }
 
+    fn mix_content_mask(&mut self, mask: &ContentMask<ScaledPixels>) {
+        self.mix_bounds(&mask.bounds);
+    }
+
+    fn mix_corners(&mut self, corners: &Corners<ScaledPixels>) {
+        self.mix_f32(corners.top_left.0);
+        self.mix_f32(corners.top_right.0);
+        self.mix_f32(corners.bottom_right.0);
+        self.mix_f32(corners.bottom_left.0);
+    }
+
+    fn mix_edges(&mut self, edges: &Edges<ScaledPixels>) {
+        self.mix_f32(edges.top.0);
+        self.mix_f32(edges.right.0);
+        self.mix_f32(edges.bottom.0);
+        self.mix_f32(edges.left.0);
+    }
+
+    fn mix_background(&mut self, background: &Background) {
+        self.mix(background.tag as u64);
+        self.mix(background.color_space as u64);
+        self.mix_hsla(&background.solid);
+        self.mix_f32(background.gradient_angle_or_pattern_height);
+        self.mix(background.stop_count as u64);
+        self.mix_f32(background.center[0]);
+        self.mix_f32(background.center[1]);
+        self.mix_f32(background.radius[0]);
+        self.mix_f32(background.radius[1]);
+        for stop in &background.colors {
+            self.mix_hsla(&stop.color);
+            self.mix_f32(stop.percentage);
+        }
+    }
+
+    fn mix_color_filter(&mut self, filter: &ColorFilter) {
+        self.mix_f32(filter.grayscale);
+        self.mix_f32(filter.saturate);
+        self.mix_f32(filter.brightness);
+        self.mix_f32(filter.contrast);
+    }
+
+    fn mix_tile(&mut self, tile: &AtlasTile) {
+        self.mix(tile.texture_id.index as u64);
+        self.mix(tile.texture_id.kind as u64);
+        self.mix(tile.tile_id.0 as u64);
+        self.mix(tile.padding as u64);
+        self.mix(tile.bounds.origin.x.0 as u64);
+        self.mix(tile.bounds.origin.y.0 as u64);
+        self.mix(tile.bounds.size.width.0 as u64);
+        self.mix(tile.bounds.size.height.0 as u64);
+    }
+
     fn finish(&self) -> u64 {
         self.0
     }
@@ -151,59 +212,205 @@ impl FnvHash {
 
 fn quad_fingerprint(quad: &Quad) -> u64 {
     let mut hash = FnvHash::new();
+    hash.mix(quad.order as u64);
+    hash.mix(quad.border_style as u64);
     hash.mix_bounds(&quad.bounds);
-    hash.mix_hsla(&quad.background.solid);
-    hash.mix_hsla(&quad.border_color.solid);
+    hash.mix_content_mask(&quad.content_mask);
+    hash.mix_background(&quad.background);
+    hash.mix_background(&quad.border_color);
+    hash.mix_corners(&quad.corner_radii);
+    hash.mix_edges(&quad.border_widths);
+    hash.mix(quad.continuous_corners as u64);
     hash.mix(quad.blend_mode as u64);
     hash.mix_transform(&quad.transform);
+    hash.mix_bounds(&quad.rounded_clip_bounds);
+    hash.mix_corners(&quad.rounded_clip_radii);
+    hash.mix_color_filter(&quad.color_filter);
     hash.finish()
 }
 
 fn shadow_fingerprint(shadow: &Shadow) -> u64 {
     let mut hash = FnvHash::new();
+    hash.mix(shadow.order as u64);
     hash.mix_bounds(&shadow.bounds);
+    hash.mix_corners(&shadow.corner_radii);
+    hash.mix_content_mask(&shadow.content_mask);
     hash.mix_hsla(&shadow.color);
-    hash.mix(shadow.blur_radius.0.to_bits() as u64);
+    hash.mix_f32(shadow.blur_radius.0);
+    hash.mix(shadow.inset as u64);
+    hash.mix_bounds(&shadow.rounded_clip_bounds);
+    hash.mix_corners(&shadow.rounded_clip_radii);
+    hash.mix_color_filter(&shadow.color_filter);
     hash.finish()
 }
 
 fn blur_rect_fingerprint(blur: &BlurRect) -> u64 {
     let mut hash = FnvHash::new();
+    hash.mix(blur.order as u64);
     hash.mix_bounds(&blur.bounds);
+    hash.mix_content_mask(&blur.content_mask);
+    hash.mix_corners(&blur.corner_radii);
     hash.mix_hsla(&blur.tint);
-    hash.mix(blur.blur_radius.0.to_bits() as u64);
+    hash.mix_f32(blur.blur_radius.0);
+    hash.mix_f32(blur.saturation);
+    hash.mix_bounds(&blur.rounded_clip_bounds);
+    hash.mix_corners(&blur.rounded_clip_radii);
     hash.finish()
 }
 
 fn path_fingerprint(path: &Path<ScaledPixels>) -> u64 {
     let mut hash = FnvHash::new();
+    hash.mix(path.order as u64);
     hash.mix_bounds(&path.bounds);
-    hash.mix_hsla(&path.color.solid);
+    hash.mix_content_mask(&path.content_mask);
+    hash.mix_background(&path.color);
+    hash.mix(path.vertices.len() as u64);
+    for vertex in &path.vertices {
+        hash.mix_point(&vertex.xy_position);
+        hash.mix_f32(vertex.st_position.x);
+        hash.mix_f32(vertex.st_position.y);
+        hash.mix_content_mask(&vertex.content_mask);
+    }
     hash.finish()
 }
 
 fn underline_fingerprint(underline: &Underline) -> u64 {
     let mut hash = FnvHash::new();
+    hash.mix(underline.order as u64);
     hash.mix_bounds(&underline.bounds);
+    hash.mix_content_mask(&underline.content_mask);
     hash.mix_hsla(&underline.color);
+    hash.mix_f32(underline.thickness.0);
+    hash.mix(underline.wavy as u64);
+    hash.mix_bounds(&underline.rounded_clip_bounds);
+    hash.mix_corners(&underline.rounded_clip_radii);
+    hash.mix_color_filter(&underline.color_filter);
     hash.finish()
 }
 
 fn monochrome_fingerprint(sprite: &MonochromeSprite) -> u64 {
     let mut hash = FnvHash::new();
+    hash.mix(sprite.order as u64);
     hash.mix_bounds(&sprite.bounds);
+    hash.mix_content_mask(&sprite.content_mask);
     hash.mix_hsla(&sprite.color);
+    hash.mix_tile(&sprite.tile);
     hash.mix_transform(&sprite.transformation);
+    hash.mix_bounds(&sprite.rounded_clip_bounds);
+    hash.mix_corners(&sprite.rounded_clip_radii);
+    hash.mix_color_filter(&sprite.color_filter);
     hash.finish()
 }
 
 fn polychrome_fingerprint(sprite: &PolychromeSprite) -> u64 {
     let mut hash = FnvHash::new();
+    hash.mix(sprite.order as u64);
     hash.mix_bounds(&sprite.bounds);
+    hash.mix_content_mask(&sprite.content_mask);
+    hash.mix_corners(&sprite.corner_radii);
+    hash.mix_tile(&sprite.tile);
+    hash.mix(sprite.sprite_kind as u64);
     hash.mix_hsla(&sprite.color);
-    hash.mix(sprite.opacity.to_bits() as u64);
+    hash.mix_f32(sprite.opacity);
     hash.mix(sprite.grayscale as u64);
+    hash.mix_bounds(&sprite.rounded_clip_bounds);
+    hash.mix_corners(&sprite.rounded_clip_radii);
+    hash.mix_color_filter(&sprite.color_filter);
+    hash.mix_transform(&sprite.transformation);
+    hash.mix_f32(sprite.blur_radius);
     hash.finish()
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn finite_damage_bounds(bounds: Bounds<ScaledPixels>) -> Option<Bounds<ScaledPixels>> {
+    [
+        bounds.origin.x.0,
+        bounds.origin.y.0,
+        bounds.size.width.0,
+        bounds.size.height.0,
+    ]
+    .into_iter()
+    .all(f32::is_finite)
+    .then_some(bounds)
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn transformed_damage_bounds(
+    bounds: Bounds<ScaledPixels>,
+    transform: TransformationMatrix,
+) -> Option<Bounds<ScaledPixels>> {
+    let left = bounds.origin.x.0;
+    let top = bounds.origin.y.0;
+    let right = left + bounds.size.width.0;
+    let bottom = top + bounds.size.height.0;
+    let corners = [[left, top], [right, top], [left, bottom], [right, bottom]];
+    let transformed = corners.map(|[x, y]| {
+        [
+            transform.rotation_scale[0][0] * x
+                + transform.rotation_scale[0][1] * y
+                + transform.translation[0],
+            transform.rotation_scale[1][0] * x
+                + transform.rotation_scale[1][1] * y
+                + transform.translation[1],
+        ]
+    });
+    if transformed
+        .iter()
+        .flatten()
+        .any(|coordinate| !coordinate.is_finite())
+    {
+        return None;
+    }
+    let min_x = transformed
+        .iter()
+        .map(|corner| corner[0])
+        .fold(f32::INFINITY, f32::min);
+    let max_x = transformed
+        .iter()
+        .map(|corner| corner[0])
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_y = transformed
+        .iter()
+        .map(|corner| corner[1])
+        .fold(f32::INFINITY, f32::min);
+    let max_y = transformed
+        .iter()
+        .map(|corner| corner[1])
+        .fold(f32::NEG_INFINITY, f32::max);
+    finite_damage_bounds(Bounds {
+        origin: point(ScaledPixels(min_x), ScaledPixels(min_y)),
+        size: Size {
+            width: ScaledPixels(max_x - min_x),
+            height: ScaledPixels(max_y - min_y),
+        },
+    })
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn blurred_damage_bounds(
+    bounds: Bounds<ScaledPixels>,
+    blur_radius: f32,
+) -> Option<Bounds<ScaledPixels>> {
+    if !blur_radius.is_finite() {
+        return None;
+    }
+    finite_damage_bounds(bounds.dilate(ScaledPixels((blur_radius.max(0.0) * 3.0).ceil())))
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn quad_damage_bounds(quad: &Quad) -> Option<Bounds<ScaledPixels>> {
+    transformed_damage_bounds(quad.bounds, quad.transform)
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn monochrome_damage_bounds(sprite: &MonochromeSprite) -> Option<Bounds<ScaledPixels>> {
+    transformed_damage_bounds(sprite.bounds, sprite.transformation)
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn polychrome_damage_bounds(sprite: &PolychromeSprite) -> Option<Bounds<ScaledPixels>> {
+    let bounds = blurred_damage_bounds(sprite.bounds, sprite.blur_radius)?;
+    transformed_damage_bounds(bounds, sprite.transformation)
 }
 
 impl Scene {
@@ -273,81 +480,176 @@ impl Scene {
     /// Primitives are compared by content fingerprint at matching indices (the order in
     /// which kael emits primitives is stable frame-to-frame for unchanged content). When a
     /// primitive differs, both its previous and current bounds are unioned into the damage
-    /// region, so the area to erase *and* the area to repaint are both covered. If the
-    /// primitive counts differ, or either scene has a live external surface, the structure
-    /// changed in a way that cannot be localized cheaply, so the whole frame is reported.
+    /// region, so the area to erase *and* the area to repaint are both covered. Added and
+    /// removed primitives contribute their own bounds, allowing routine whiteboard edits to
+    /// remain localized. A live external surface is the only unconditional full-frame case,
+    /// because its pixels may change without a corresponding primitive change.
     ///
     /// The result is conservative: it never reports a region smaller than the true changed
     /// area, so re-rasterizing exactly [`FrameDamage::Region`] (with the prior frame loaded
     /// underneath) is always visually identical to a full repaint.
     ///
-    /// Verified by the GPU golden harness (`render_damage_to_bytes`); awaiting a live
-    /// present-loop consumer, hence currently exercised only under test.
-    #[allow(dead_code)]
+    /// Verified by the GPU golden harness (`render_damage_to_bytes`) and consumed by
+    /// retained platform renderers that preserve the previous framebuffer.
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn damage_since(&self, prev: &Scene) -> FrameDamage {
         if self.has_live_surfaces() || prev.has_live_surfaces() {
             return FrameDamage::Full;
         }
-        if self.quads.len() != prev.quads.len()
-            || self.shadows.len() != prev.shadows.len()
-            || self.blur_rects.len() != prev.blur_rects.len()
-            || self.paths.len() != prev.paths.len()
-            || self.underlines.len() != prev.underlines.len()
-            || self.monochrome_sprites.len() != prev.monochrome_sprites.len()
-            || self.polychrome_sprites.len() != prev.polychrome_sprites.len()
-        {
-            return FrameDamage::Full;
-        }
 
         let mut damage: Option<Bounds<ScaledPixels>> = None;
-        let mut grow = |current: &Bounds<ScaledPixels>, previous: &Bounds<ScaledPixels>| {
-            for region in [current, previous] {
-                damage = Some(match damage {
-                    Some(existing) => existing.union(region),
-                    None => *region,
-                });
-            }
+        let mut invalid_damage = false;
+        let mut grow = |region: Option<Bounds<ScaledPixels>>| {
+            let Some(region) = region else {
+                invalid_damage = true;
+                return;
+            };
+            damage = Some(match damage {
+                Some(existing) => existing.union(&region),
+                None => region,
+            });
         };
 
         for (current, previous) in self.quads.iter().zip(&prev.quads) {
             if quad_fingerprint(current) != quad_fingerprint(previous) {
-                grow(&current.bounds, &previous.bounds);
+                grow(quad_damage_bounds(current));
+                grow(quad_damage_bounds(previous));
             }
+        }
+        for current in self.quads.iter().skip(prev.quads.len()) {
+            grow(quad_damage_bounds(current));
+        }
+        for previous in prev.quads.iter().skip(self.quads.len()) {
+            grow(quad_damage_bounds(previous));
         }
         for (current, previous) in self.shadows.iter().zip(&prev.shadows) {
             if shadow_fingerprint(current) != shadow_fingerprint(previous) {
-                grow(&current.bounds, &previous.bounds);
+                grow(blurred_damage_bounds(current.bounds, current.blur_radius.0));
+                grow(blurred_damage_bounds(
+                    previous.bounds,
+                    previous.blur_radius.0,
+                ));
             }
+        }
+        for current in self.shadows.iter().skip(prev.shadows.len()) {
+            grow(blurred_damage_bounds(current.bounds, current.blur_radius.0));
+        }
+        for previous in prev.shadows.iter().skip(self.shadows.len()) {
+            grow(blurred_damage_bounds(
+                previous.bounds,
+                previous.blur_radius.0,
+            ));
         }
         for (current, previous) in self.blur_rects.iter().zip(&prev.blur_rects) {
             if blur_rect_fingerprint(current) != blur_rect_fingerprint(previous) {
-                grow(&current.bounds, &previous.bounds);
+                grow(blurred_damage_bounds(current.bounds, current.blur_radius.0));
+                grow(blurred_damage_bounds(
+                    previous.bounds,
+                    previous.blur_radius.0,
+                ));
             }
+        }
+        for current in self.blur_rects.iter().skip(prev.blur_rects.len()) {
+            grow(blurred_damage_bounds(current.bounds, current.blur_radius.0));
+        }
+        for previous in prev.blur_rects.iter().skip(self.blur_rects.len()) {
+            grow(blurred_damage_bounds(
+                previous.bounds,
+                previous.blur_radius.0,
+            ));
         }
         for (current, previous) in self.paths.iter().zip(&prev.paths) {
             if path_fingerprint(current) != path_fingerprint(previous) {
-                grow(&current.bounds, &previous.bounds);
+                grow(finite_damage_bounds(current.bounds));
+                grow(finite_damage_bounds(previous.bounds));
             }
+        }
+        for current in self.paths.iter().skip(prev.paths.len()) {
+            grow(finite_damage_bounds(current.bounds));
+        }
+        for previous in prev.paths.iter().skip(self.paths.len()) {
+            grow(finite_damage_bounds(previous.bounds));
         }
         for (current, previous) in self.underlines.iter().zip(&prev.underlines) {
             if underline_fingerprint(current) != underline_fingerprint(previous) {
-                grow(&current.bounds, &previous.bounds);
+                grow(finite_damage_bounds(current.bounds));
+                grow(finite_damage_bounds(previous.bounds));
             }
+        }
+        for current in self.underlines.iter().skip(prev.underlines.len()) {
+            grow(finite_damage_bounds(current.bounds));
+        }
+        for previous in prev.underlines.iter().skip(self.underlines.len()) {
+            grow(finite_damage_bounds(previous.bounds));
         }
         for (current, previous) in self.monochrome_sprites.iter().zip(&prev.monochrome_sprites) {
             if monochrome_fingerprint(current) != monochrome_fingerprint(previous) {
-                grow(&current.bounds, &previous.bounds);
+                grow(monochrome_damage_bounds(current));
+                grow(monochrome_damage_bounds(previous));
             }
+        }
+        for current in self
+            .monochrome_sprites
+            .iter()
+            .skip(prev.monochrome_sprites.len())
+        {
+            grow(monochrome_damage_bounds(current));
+        }
+        for previous in prev
+            .monochrome_sprites
+            .iter()
+            .skip(self.monochrome_sprites.len())
+        {
+            grow(monochrome_damage_bounds(previous));
         }
         for (current, previous) in self.polychrome_sprites.iter().zip(&prev.polychrome_sprites) {
             if polychrome_fingerprint(current) != polychrome_fingerprint(previous) {
-                grow(&current.bounds, &previous.bounds);
+                grow(polychrome_damage_bounds(current));
+                grow(polychrome_damage_bounds(previous));
             }
         }
+        for current in self
+            .polychrome_sprites
+            .iter()
+            .skip(prev.polychrome_sprites.len())
+        {
+            grow(polychrome_damage_bounds(current));
+        }
+        for previous in prev
+            .polychrome_sprites
+            .iter()
+            .skip(self.polychrome_sprites.len())
+        {
+            grow(polychrome_damage_bounds(previous));
+        }
 
+        if invalid_damage {
+            return FrameDamage::Full;
+        }
         match damage {
             Some(region) => FrameDamage::Region(region),
             None => FrameDamage::None,
+        }
+    }
+
+    /// Clone only the visual primitive streams needed for the next frame's
+    /// conservative damage comparison. Layout indices, layer stacks, and paint
+    /// operation replay state are deliberately omitted.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn clone_for_damage(&self) -> Self {
+        Self {
+            paint_operations: Vec::new(),
+            primitive_bounds: BoundsTree::default(),
+            layer_stack: Vec::new(),
+            shadows: self.shadows.clone(),
+            blur_rects: self.blur_rects.clone(),
+            quads: self.quads.clone(),
+            paths: self.paths.clone(),
+            underlines: self.underlines.clone(),
+            monochrome_sprites: self.monochrome_sprites.clone(),
+            polychrome_sprites: self.polychrome_sprites.clone(),
+            surfaces: self.surfaces.clone(),
+            cached_surface_snapshots: Vec::new(),
         }
     }
 
@@ -516,6 +818,17 @@ impl Scene {
         self.cached_surface_snapshots.push(snapshot);
     }
 
+    #[cfg_attr(
+        any(
+            target_arch = "wasm32",
+            all(
+                any(target_os = "linux", target_os = "freebsd"),
+                feature = "webview-wayland-gtk4",
+                not(any(feature = "wayland", feature = "x11"))
+            )
+        ),
+        allow(dead_code)
+    )]
     pub(crate) fn snapshot_subscene(&self, paint_operations: Range<usize>) -> Scene {
         let mut scene = Scene::default();
         scene.replay(paint_operations, self);
@@ -957,6 +1270,17 @@ impl From<BlurRect> for Primitive {
 }
 
 impl BlurRect {
+    #[cfg_attr(
+        any(
+            target_arch = "wasm32",
+            all(
+                any(target_os = "linux", target_os = "freebsd"),
+                feature = "webview-wayland-gtk4",
+                not(any(feature = "wayland", feature = "x11"))
+            )
+        ),
+        allow(dead_code)
+    )]
     pub(crate) fn capture_bounds(&self, viewport_size: Size<DevicePixels>) -> Bounds<ScaledPixels> {
         let margin = ScaledPixels((self.blur_radius.0 * 3.0).ceil());
         let viewport_bounds = Bounds {
@@ -1234,6 +1558,17 @@ pub(crate) struct PaintSurface {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    any(
+        target_arch = "wasm32",
+        all(
+            any(target_os = "linux", target_os = "freebsd"),
+            feature = "webview-wayland-gtk4",
+            not(any(feature = "wayland", feature = "x11"))
+        )
+    ),
+    allow(dead_code)
+)]
 pub(crate) struct CachedSurfaceSnapshot {
     pub paint_operations: Range<usize>,
     pub source_bounds: Bounds<DevicePixels>,
@@ -1310,6 +1645,37 @@ impl Path<Pixels> {
         }
     }
 
+    pub(crate) fn try_reserve_triangles(
+        &mut self,
+        additional: usize,
+    ) -> Result<(), std::collections::TryReserveError> {
+        let vertices = additional.saturating_mul(3);
+        self.vertices.try_reserve_exact(vertices)
+    }
+
+    pub(crate) fn render_vertex_count(&self) -> usize {
+        self.vertices.len()
+    }
+
+    pub(crate) fn render_vertices_are_bounded(&self, maximum_coordinate: f32) -> bool {
+        self.vertices.iter().all(|vertex| {
+            let values = [
+                vertex.xy_position.x.0,
+                vertex.xy_position.y.0,
+                vertex.st_position.x,
+                vertex.st_position.y,
+            ];
+            values
+                .into_iter()
+                .all(|value| value.is_finite() && value.abs() <= maximum_coordinate)
+        })
+    }
+
+    pub(crate) fn into_render_only(mut self) -> Self {
+        self.source_path = None;
+        self
+    }
+
     /// Scale this path by the given factor.
     pub fn scale(&self, factor: f32) -> Path<ScaledPixels> {
         Path {
@@ -1357,23 +1723,26 @@ impl Path<Pixels> {
     }
 
     pub(crate) fn transformed(&self, transform: TransformationMatrix) -> Self {
+        self.clone().into_transformed(transform)
+    }
+
+    pub(crate) fn into_transformed(mut self, transform: TransformationMatrix) -> Self {
         if transform == TransformationMatrix::unit() {
-            return self.clone();
+            return self;
         }
 
-        let mut transformed = self.clone();
         let mut bounds = Bounds::default();
-        for vertex in &mut transformed.vertices {
+        for vertex in &mut self.vertices {
             vertex.xy_position = transform.apply(vertex.xy_position);
             bounds = bounds.union(&Bounds {
                 origin: vertex.xy_position,
                 size: Default::default(),
             });
         }
-        transformed.start = transform.apply(self.start);
-        transformed.current = transform.apply(self.current);
-        transformed.bounds = bounds;
-        transformed
+        self.start = transform.apply(self.start);
+        self.current = transform.apply(self.current);
+        self.bounds = bounds;
+        self
     }
 
     /// Move the start, current point to the given point.
@@ -1670,6 +2039,7 @@ impl PathVertex<Pixels> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AtlasTextureKind, TileId, px, size};
 
     #[test]
     fn path_contains_hit_tests_filled_region() {
@@ -2116,6 +2486,147 @@ mod tests {
         );
     }
 
+    fn assert_fingerprint_changes<T: Clone>(
+        value: &T,
+        fingerprint: fn(&T) -> u64,
+        mutate: impl FnOnce(&mut T),
+    ) {
+        let original = fingerprint(value);
+        let mut changed = value.clone();
+        mutate(&mut changed);
+        assert_ne!(original, fingerprint(&changed));
+    }
+
+    #[test]
+    fn quad_fingerprint_covers_clips_geometry_and_gradients() {
+        let quad = Quad {
+            bounds: rect(0.0, 0.0, 20.0, 20.0),
+            content_mask: ContentMask {
+                bounds: rect(0.0, 0.0, 20.0, 20.0),
+            },
+            ..Default::default()
+        };
+
+        assert_fingerprint_changes(&quad, quad_fingerprint, |quad| quad.order = 9);
+        assert_fingerprint_changes(&quad, quad_fingerprint, |quad| {
+            quad.content_mask.bounds.size.width = ScaledPixels(10.0)
+        });
+        assert_fingerprint_changes(&quad, quad_fingerprint, |quad| {
+            quad.border_widths.left = ScaledPixels(2.0)
+        });
+        assert_fingerprint_changes(&quad, quad_fingerprint, |quad| {
+            quad.corner_radii.top_left = ScaledPixels(4.0)
+        });
+        assert_fingerprint_changes(&quad, quad_fingerprint, |quad| {
+            quad.background = crate::linear_gradient(
+                45.0,
+                crate::linear_color_stop(crate::red(), 0.0),
+                crate::linear_color_stop(crate::blue(), 1.0),
+            )
+        });
+        assert_fingerprint_changes(&quad, quad_fingerprint, |quad| {
+            quad.rounded_clip_radii.bottom_right = ScaledPixels(3.0)
+        });
+        assert_fingerprint_changes(&quad, quad_fingerprint, |quad| {
+            quad.color_filter.brightness = 0.75
+        });
+    }
+
+    #[test]
+    fn path_fingerprint_covers_vertices_and_masks() {
+        let mut path = Path::new(point(px(0.0), px(0.0)));
+        path.push_triangle(
+            (
+                point(px(0.0), px(0.0)),
+                point(px(20.0), px(0.0)),
+                point(px(0.0), px(20.0)),
+            ),
+            (point(0.0, 0.0), point(1.0, 0.0), point(0.0, 1.0)),
+        );
+        let path = path.scale(1.0);
+
+        assert_fingerprint_changes(&path, path_fingerprint, |path| path.order = 3);
+        assert_fingerprint_changes(&path, path_fingerprint, |path| {
+            path.content_mask.bounds = rect(0.0, 0.0, 10.0, 10.0)
+        });
+        assert_fingerprint_changes(&path, path_fingerprint, |path| {
+            path.vertices[0].xy_position.x = ScaledPixels(1.0)
+        });
+        assert_fingerprint_changes(&path, path_fingerprint, |path| {
+            path.vertices[0].st_position.y = 0.5
+        });
+    }
+
+    fn checksum_test_tile(kind: AtlasTextureKind) -> AtlasTile {
+        AtlasTile {
+            texture_id: AtlasTextureId { index: 1, kind },
+            tile_id: TileId(2),
+            padding: 0,
+            bounds: Bounds {
+                origin: point(DevicePixels(0), DevicePixels(0)),
+                size: size(DevicePixels(16), DevicePixels(16)),
+            },
+        }
+    }
+
+    #[test]
+    fn sprite_fingerprints_cover_atlas_and_rendering_state() {
+        let monochrome = MonochromeSprite {
+            order: 1,
+            pad: 0,
+            bounds: rect(0.0, 0.0, 16.0, 16.0),
+            content_mask: ContentMask {
+                bounds: rect(0.0, 0.0, 16.0, 16.0),
+            },
+            color: crate::white(),
+            tile: checksum_test_tile(AtlasTextureKind::Monochrome),
+            transformation: TransformationMatrix::unit(),
+            rounded_clip_bounds: Bounds::default(),
+            rounded_clip_radii: Corners::default(),
+            color_filter: ColorFilter::identity(),
+        };
+        assert_fingerprint_changes(&monochrome, monochrome_fingerprint, |sprite| {
+            sprite.tile.tile_id = TileId(7)
+        });
+        assert_fingerprint_changes(&monochrome, monochrome_fingerprint, |sprite| {
+            sprite.rounded_clip_bounds = rect(1.0, 1.0, 8.0, 8.0)
+        });
+
+        let polychrome = PolychromeSprite {
+            order: 1,
+            pad: 0,
+            grayscale: false,
+            opacity: 1.0,
+            bounds: rect(0.0, 0.0, 16.0, 16.0),
+            content_mask: ContentMask {
+                bounds: rect(0.0, 0.0, 16.0, 16.0),
+            },
+            corner_radii: Corners::default(),
+            tile: checksum_test_tile(AtlasTextureKind::Polychrome),
+            sprite_kind: POLYCHROME_SPRITE_KIND_COLOR,
+            color: crate::white(),
+            pad3: 0,
+            rounded_clip_bounds: Bounds::default(),
+            rounded_clip_radii: Corners::default(),
+            color_filter: ColorFilter::identity(),
+            transformation: TransformationMatrix::unit(),
+            blur_radius: 0.0,
+            pad2: 0,
+        };
+        assert_fingerprint_changes(&polychrome, polychrome_fingerprint, |sprite| {
+            sprite.tile.texture_id.index = 4
+        });
+        assert_fingerprint_changes(&polychrome, polychrome_fingerprint, |sprite| {
+            sprite.sprite_kind = POLYCHROME_SPRITE_KIND_PREMULTIPLIED
+        });
+        assert_fingerprint_changes(&polychrome, polychrome_fingerprint, |sprite| {
+            sprite.blur_radius = 2.0
+        });
+        assert_fingerprint_changes(&polychrome, polychrome_fingerprint, |sprite| {
+            sprite.transformation.translation[0] = 3.0
+        });
+    }
+
     #[test]
     fn frame_skip_respects_enable_and_change() {
         let mut skip = FrameSkip::new();
@@ -2252,14 +2763,68 @@ mod tests {
     }
 
     #[test]
-    fn damage_since_falls_back_to_full_on_structural_change() {
+    fn damage_since_uses_transformed_quad_bounds() {
+        let red = crate::hsla(0.0, 1.0, 0.5, 1.0);
+        let bounds = rect(10.0, 10.0, 20.0, 20.0);
+        let before = quad_scene(&[(bounds, red)]);
+        let mut after = quad_scene(&[(bounds, red)]);
+        after.quads[0].transform.translation = [100.0, 0.0];
+        assert_eq!(
+            after.damage_since(&before),
+            FrameDamage::Region(rect(10.0, 10.0, 120.0, 20.0))
+        );
+    }
+
+    #[test]
+    fn damage_since_includes_shadow_blur_extent() {
+        fn shadow_scene(color: crate::Hsla) -> Scene {
+            let bounds = rect(20.0, 20.0, 40.0, 30.0);
+            let mut scene = Scene::default();
+            scene.insert_primitive(Shadow {
+                order: 0,
+                blur_radius: ScaledPixels(4.0),
+                bounds,
+                corner_radii: Corners::default(),
+                content_mask: ContentMask {
+                    bounds: rect(0.0, 0.0, 1_000.0, 1_000.0),
+                },
+                color,
+                inset: 0,
+                pad: 0,
+                rounded_clip_bounds: Bounds::default(),
+                rounded_clip_radii: Corners::default(),
+                color_filter: ColorFilter::identity(),
+            });
+            scene.finish();
+            scene
+        }
+
+        let before = shadow_scene(crate::hsla(0.0, 0.0, 0.0, 0.4));
+        let after = shadow_scene(crate::hsla(0.0, 0.0, 0.0, 0.8));
+        assert_eq!(
+            after.damage_since(&before),
+            FrameDamage::Region(rect(8.0, 8.0, 64.0, 54.0))
+        );
+    }
+
+    #[test]
+    fn damage_since_fails_closed_for_non_finite_transform() {
+        let red = crate::hsla(0.0, 1.0, 0.5, 1.0);
+        let bounds = rect(10.0, 10.0, 20.0, 20.0);
+        let before = quad_scene(&[(bounds, red)]);
+        let mut after = quad_scene(&[(bounds, red)]);
+        after.quads[0].transform.translation[0] = f32::NAN;
+        assert_eq!(after.damage_since(&before), FrameDamage::Full);
+    }
+
+    #[test]
+    fn damage_since_localizes_added_and_removed_primitives() {
         let red = crate::hsla(0.0, 1.0, 0.5, 1.0);
         let green = crate::hsla(0.33, 1.0, 0.5, 1.0);
+        let added = rect(60.0, 60.0, 20.0, 20.0);
         let before = quad_scene(&[(rect(0.0, 0.0, 50.0, 50.0), red)]);
-        let after = quad_scene(&[
-            (rect(0.0, 0.0, 50.0, 50.0), red),
-            (rect(60.0, 60.0, 20.0, 20.0), green),
-        ]);
-        assert_eq!(after.damage_since(&before), FrameDamage::Full);
+        let after = quad_scene(&[(rect(0.0, 0.0, 50.0, 50.0), red), (added, green)]);
+        assert_eq!(after.damage_since(&before), FrameDamage::Region(added));
+        assert_eq!(before.damage_since(&after), FrameDamage::Region(added));
     }
 }

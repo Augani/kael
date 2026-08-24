@@ -3,6 +3,8 @@
 use kael::{prelude::FluentBuilder as _, *};
 use std::time::Duration;
 
+use crate::animations::DisplayFrameClock;
+
 const MAX_PARTICLES: usize = 10_000;
 
 #[derive(Clone)]
@@ -51,6 +53,7 @@ pub struct ParticleEmitterState {
     config: ParticleEmitterConfig,
     accumulator: f32,
     running: bool,
+    frame_clock: DisplayFrameClock,
 }
 
 impl ParticleEmitterState {
@@ -60,6 +63,7 @@ impl ParticleEmitterState {
             config: ParticleEmitterConfig::default(),
             accumulator: 0.0,
             running: false,
+            frame_clock: DisplayFrameClock::default(),
         }
     }
 
@@ -71,6 +75,7 @@ impl ParticleEmitterState {
             config,
             accumulator: 0.0,
             running: false,
+            frame_clock: DisplayFrameClock::default(),
         }
     }
 
@@ -92,12 +97,13 @@ impl ParticleEmitterState {
             return;
         }
         self.running = true;
-        self.schedule_tick(cx);
+        self.frame_clock.restart();
         cx.notify();
     }
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         self.running = false;
+        self.frame_clock.stop();
         cx.notify();
     }
 
@@ -166,39 +172,38 @@ impl ParticleEmitterState {
     pub fn particles(&self) -> &[Particle] {
         &self.particles
     }
+}
 
-    fn schedule_tick(&self, cx: &mut Context<Self>) {
-        if !self.running {
-            return;
-        }
+fn schedule_emitter_frame(state: &Entity<ParticleEmitterState>, window: &Window, cx: &mut App) {
+    let generation = state.update(cx, |state, _| {
+        state.running.then(|| state.frame_clock.try_arm()).flatten()
+    });
+    let Some(generation) = generation else {
+        return;
+    };
 
-        cx.spawn(async |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(16))
-                .await;
-
-            _ = this.update(cx, |state, cx| {
-                if !state.running || cx.reduce_motion() {
-                    state.running = false;
-                    state.particles.clear();
-                    cx.notify();
-                    return;
-                }
-
-                let dt = 1.0 / 60.0;
-                state.accumulator += state.config.spawn_rate * dt;
-
-                let to_spawn = state.accumulator as usize;
-                state.accumulator -= to_spawn as f32;
-                state.emit(to_spawn);
-                state.update(dt);
-
-                state.schedule_tick(cx);
+    let state = state.downgrade();
+    window.on_next_frame(move |window, cx| {
+        _ = state.update(cx, |state, cx| {
+            let Some(dt) = state.frame_clock.sample(generation) else {
+                return;
+            };
+            if !state.running || !window.animations_enabled() {
+                state.running = false;
+                state.particles.clear();
+                state.frame_clock.stop();
                 cx.notify();
-            });
-        })
-        .detach();
-    }
+                return;
+            }
+
+            state.accumulator += state.config.spawn_rate * dt;
+            let to_spawn = state.accumulator as usize;
+            state.accumulator -= to_spawn as f32;
+            state.emit(to_spawn);
+            state.update(dt);
+            cx.notify();
+        });
+    });
 }
 
 impl Render for ParticleEmitterState {
@@ -316,8 +321,9 @@ impl Styled for ParticleEmitter {
 }
 
 impl RenderOnce for ParticleEmitter {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let user_style = self.style;
+        schedule_emitter_frame(&self.state, window, cx);
         let state = self.state.read(cx);
         let paint_data = EmitterPaintData {
             particles: state.particles().to_vec(),

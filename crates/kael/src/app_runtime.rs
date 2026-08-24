@@ -262,6 +262,7 @@ fn ensure_settings_value_size(value: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(target_arch = "wasm32", allow(clippy::drop_non_drop))]
 fn write_settings_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path
         .parent()

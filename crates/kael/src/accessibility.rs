@@ -73,6 +73,18 @@ pub enum AccessibilityRole {
     List,
     /// A single item within a list.
     ListItem,
+    /// A semantic data table.
+    Table,
+    /// An interactive two-dimensional data grid.
+    Grid,
+    /// A row within a table or grid.
+    Row,
+    /// A data cell within a table or grid.
+    Cell,
+    /// A column header within a table or grid.
+    ColumnHeader,
+    /// A row header within a table or grid.
+    RowHeader,
     /// A scroll bar control.
     ScrollBar,
     /// An image or icon.
@@ -130,6 +142,12 @@ impl AccessibilityRole {
             Self::Group => "group",
             Self::List => "list",
             Self::ListItem => "list-item",
+            Self::Table => "table",
+            Self::Grid => "grid",
+            Self::Row => "row",
+            Self::Cell => "cell",
+            Self::ColumnHeader => "column-header",
+            Self::RowHeader => "row-header",
             Self::ScrollBar => "scroll-bar",
             Self::Image => "image",
             Self::Link => "link",
@@ -179,6 +197,9 @@ impl AccessibilityRole {
                 | AccessibilityRole::Window
                 | AccessibilityRole::Group
                 | AccessibilityRole::List
+                | AccessibilityRole::Table
+                | AccessibilityRole::Grid
+                | AccessibilityRole::Row
                 | AccessibilityRole::Menu
                 | AccessibilityRole::MenuItem
                 | AccessibilityRole::TabPanel
@@ -201,6 +222,12 @@ impl AccessibilityRole {
             Self::Group | Self::Pane => Role::Group,
             Self::List => Role::List,
             Self::ListItem => Role::ListItem,
+            Self::Table => Role::Table,
+            Self::Grid => Role::Grid,
+            Self::Row => Role::Row,
+            Self::Cell => Role::Cell,
+            Self::ColumnHeader => Role::ColumnHeader,
+            Self::RowHeader => Role::RowHeader,
             Self::ScrollBar => Role::ScrollBar,
             Self::Image => Role::Image,
             Self::Link => Role::Link,
@@ -221,6 +248,36 @@ impl AccessibilityRole {
             Self::ComboBox => Role::ComboBox,
             Self::Switch => Role::Switch,
             Self::Unknown => Role::Unknown,
+        }
+    }
+}
+
+/// Sort order exposed by a table or grid column header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AccessibilitySortDirection {
+    /// Values are ordered from low to high or A to Z.
+    Ascending,
+    /// Values are ordered from high to low or Z to A.
+    Descending,
+    /// Values use an application-defined ordering.
+    Other,
+}
+
+impl AccessibilitySortDirection {
+    fn to_accesskit(self) -> accesskit::SortDirection {
+        match self {
+            Self::Ascending => accesskit::SortDirection::Ascending,
+            Self::Descending => accesskit::SortDirection::Descending,
+            Self::Other => accesskit::SortDirection::Other,
+        }
+    }
+
+    /// Stable value used by browser ARIA and diagnostics.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Ascending => "ascending",
+            Self::Descending => "descending",
+            Self::Other => "other",
         }
     }
 }
@@ -848,6 +905,20 @@ pub struct AccessibilityNode {
     pub placeholder: Option<String>,
     /// Hierarchical level for semantic headings and tree-like items.
     pub level: Option<usize>,
+    /// Logical number of rows in a table or grid, including virtualized rows.
+    pub row_count: Option<usize>,
+    /// Logical number of columns in a table or grid, including virtualized columns.
+    pub column_count: Option<usize>,
+    /// One-based logical row index for a row or cell.
+    pub row_index: Option<usize>,
+    /// One-based logical column index for a cell or header.
+    pub column_index: Option<usize>,
+    /// Number of logical rows occupied by a cell.
+    pub row_span: Option<usize>,
+    /// Number of logical columns occupied by a cell.
+    pub column_span: Option<usize>,
+    /// Sort order for a column header.
+    pub sort_direction: Option<AccessibilitySortDirection>,
     /// Screen-space bounds, once produced by layout.
     pub bounds: Option<AccessibilityRect>,
     /// Actions that can be invoked on this element.
@@ -870,6 +941,13 @@ impl AccessibilityNode {
             value: None,
             placeholder: None,
             level: None,
+            row_count: None,
+            column_count: None,
+            row_index: None,
+            column_index: None,
+            row_span: None,
+            column_span: None,
+            sort_direction: None,
             bounds: None,
             actions: Vec::new(),
             children: Vec::new(),
@@ -901,6 +979,7 @@ impl AccessibilityNode {
         }
         apply_value(&mut node, self);
         apply_states(&mut node, self.states);
+        apply_collection_metadata(&mut node, self);
         for action in &self.actions {
             node.add_action(action.to_accesskit());
         }
@@ -935,6 +1014,48 @@ impl AccessibilityNode {
     /// Set a semantic hierarchy level.
     pub fn with_level(mut self, level: usize) -> Self {
         self.level = Some(level);
+        self
+    }
+
+    /// Set the logical row count, including virtualized rows.
+    pub fn with_row_count(mut self, count: usize) -> Self {
+        self.row_count = Some(count);
+        self
+    }
+
+    /// Set the logical column count, including virtualized columns.
+    pub fn with_column_count(mut self, count: usize) -> Self {
+        self.column_count = Some(count);
+        self
+    }
+
+    /// Set a one-based logical row index.
+    pub fn with_row_index(mut self, index: usize) -> Self {
+        self.row_index = Some(index);
+        self
+    }
+
+    /// Set a one-based logical column index.
+    pub fn with_column_index(mut self, index: usize) -> Self {
+        self.column_index = Some(index);
+        self
+    }
+
+    /// Set the number of logical rows occupied by a cell.
+    pub fn with_row_span(mut self, span: usize) -> Self {
+        self.row_span = Some(span);
+        self
+    }
+
+    /// Set the number of logical columns occupied by a cell.
+    pub fn with_column_span(mut self, span: usize) -> Self {
+        self.column_span = Some(span);
+        self
+    }
+
+    /// Set the sort order exposed by a column header.
+    pub fn with_sort_direction(mut self, direction: AccessibilitySortDirection) -> Self {
+        self.sort_direction = Some(direction);
         self
     }
 
@@ -1286,11 +1407,15 @@ impl AccessibilityTree {
             if let Some(placeholder) = &node.placeholder {
                 ak_node.set_placeholder(placeholder.as_str());
             }
+            if let Some(level) = node.level {
+                ak_node.set_level(level);
+            }
             if let Some(bounds) = &node.bounds {
                 ak_node.set_bounds(bounds.to_accesskit());
             }
             apply_value(&mut ak_node, node);
             apply_states(&mut ak_node, node.states);
+            apply_collection_metadata(&mut ak_node, node);
             for action in &node.actions {
                 ak_node.add_action(action.to_accesskit());
             }
@@ -2018,7 +2143,7 @@ fn audit_accessibility_node(
                 "interactive accessibility node needs a label, description, or placeholder",
             ));
         }
-        if node.actions.is_empty() {
+        if node.actions.is_empty() && !node.states.contains(AccessibilityState::DISABLED) {
             issues.push(accessibility_audit_issue(
                 AccessibilityAuditSeverity::Error,
                 AccessibilityAuditIssueKind::MissingInteractiveAction,
@@ -2161,6 +2286,30 @@ fn apply_states(node: &mut accesskit::Node, states: AccessibilityState) {
     }
 }
 
+fn apply_collection_metadata(node: &mut accesskit::Node, source: &AccessibilityNode) {
+    if let Some(count) = source.row_count {
+        node.set_row_count(count);
+    }
+    if let Some(count) = source.column_count {
+        node.set_column_count(count);
+    }
+    if let Some(index) = source.row_index {
+        node.set_row_index(index);
+    }
+    if let Some(index) = source.column_index {
+        node.set_column_index(index);
+    }
+    if let Some(span) = source.row_span {
+        node.set_row_span(span);
+    }
+    if let Some(span) = source.column_span {
+        node.set_column_span(span);
+    }
+    if let Some(direction) = source.sort_direction {
+        node.set_sort_direction(direction.to_accesskit());
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Element attributes (builder API)
 // ---------------------------------------------------------------------------
@@ -2183,6 +2332,20 @@ pub struct AccessibilityAttributes {
     pub placeholder: Option<String>,
     /// Hierarchical level for semantic headings and tree-like items.
     pub level: Option<usize>,
+    /// Logical number of rows in a table or grid, including virtualized rows.
+    pub row_count: Option<usize>,
+    /// Logical number of columns in a table or grid, including virtualized columns.
+    pub column_count: Option<usize>,
+    /// One-based logical row index for a row or cell.
+    pub row_index: Option<usize>,
+    /// One-based logical column index for a cell or header.
+    pub column_index: Option<usize>,
+    /// Number of logical rows occupied by a cell.
+    pub row_span: Option<usize>,
+    /// Number of logical columns occupied by a cell.
+    pub column_span: Option<usize>,
+    /// Sort order for a column header.
+    pub sort_direction: Option<AccessibilitySortDirection>,
     /// State flags.
     pub states: AccessibilityState,
     /// Actions available on this element.
@@ -2330,6 +2493,48 @@ impl AccessibilityAttributes {
         self.level(level.clamp(1, 6))
     }
 
+    /// Set the logical row count, including rows not currently mounted.
+    pub fn row_count(mut self, count: usize) -> Self {
+        self.row_count = Some(count);
+        self
+    }
+
+    /// Set the logical column count, including columns not currently mounted.
+    pub fn column_count(mut self, count: usize) -> Self {
+        self.column_count = Some(count);
+        self
+    }
+
+    /// Set a one-based logical row index.
+    pub fn row_index(mut self, index: usize) -> Self {
+        self.row_index = Some(index);
+        self
+    }
+
+    /// Set a one-based logical column index.
+    pub fn column_index(mut self, index: usize) -> Self {
+        self.column_index = Some(index);
+        self
+    }
+
+    /// Set the number of logical rows occupied by a cell.
+    pub fn row_span(mut self, span: usize) -> Self {
+        self.row_span = Some(span);
+        self
+    }
+
+    /// Set the number of logical columns occupied by a cell.
+    pub fn column_span(mut self, span: usize) -> Self {
+        self.column_span = Some(span);
+        self
+    }
+
+    /// Set the sort order exposed by a column header.
+    pub fn sort_direction(mut self, direction: AccessibilitySortDirection) -> Self {
+        self.sort_direction = Some(direction);
+        self
+    }
+
     /// Set the state flags.
     pub fn states(mut self, states: AccessibilityState) -> Self {
         self.states = states;
@@ -2465,6 +2670,23 @@ impl AccessibilityAttributes {
             );
         }
 
+        anyhow::ensure!(
+            self.row_index.is_none_or(|index| index > 0),
+            "accessibility row index must be one-based"
+        );
+        anyhow::ensure!(
+            self.column_index.is_none_or(|index| index > 0),
+            "accessibility column index must be one-based"
+        );
+        anyhow::ensure!(
+            self.row_span.is_none_or(|span| span > 0),
+            "accessibility row span must be positive"
+        );
+        anyhow::ensure!(
+            self.column_span.is_none_or(|span| span > 0),
+            "accessibility column span must be positive"
+        );
+
         if let Some(AccessibilityValue::Range {
             current,
             min,
@@ -2526,6 +2748,13 @@ impl AccessibilityAttributes {
             value: self.value.clone(),
             placeholder: self.placeholder.clone(),
             level: self.level,
+            row_count: self.row_count,
+            column_count: self.column_count,
+            row_index: self.row_index,
+            column_index: self.column_index,
+            row_span: self.row_span,
+            column_span: self.column_span,
+            sort_direction: self.sort_direction,
             bounds: None,
             actions: self.actions.clone(),
             children: Vec::new(),
@@ -3081,6 +3310,22 @@ mod tests {
     }
 
     #[test]
+    fn accessibility_audit_accepts_named_disabled_controls_without_actions() {
+        let root = AccessibilityNode::new(AccessibilityRole::Window);
+        let mut tree = AccessibilityTree::new(root);
+        let disabled = AccessibilityNode::new(AccessibilityRole::Button)
+            .with_label("Unavailable action")
+            .with_states(AccessibilityState::DISABLED);
+        let disabled_id = disabled.id;
+        tree.insert(disabled);
+        tree.set_parent(disabled_id, tree.root);
+
+        let report = tree.audit_report();
+        assert!(report.is_ready(), "{}", report.to_text());
+        assert_eq!(report.error_count(), 0);
+    }
+
+    #[test]
     fn test_focus_propagation_in_tree() {
         let root = AccessibilityNode::new(AccessibilityRole::Window);
         let mut tree = AccessibilityTree::new(root);
@@ -3170,6 +3415,45 @@ mod accesskit_spike_tests {
             AccessibilityRole::Unknown.to_accesskit(),
             accesskit::Role::Unknown
         );
+        assert_eq!(
+            AccessibilityRole::Grid.to_accesskit(),
+            accesskit::Role::Grid
+        );
+        assert_eq!(
+            AccessibilityRole::ColumnHeader.to_accesskit(),
+            accesskit::Role::ColumnHeader
+        );
+    }
+
+    #[test]
+    fn virtual_grid_metadata_reaches_accesskit() {
+        let grid = AccessibilityNode::new(AccessibilityRole::Grid)
+            .with_row_count(1_000_001)
+            .with_column_count(16_384);
+        let accesskit_grid = grid.to_accesskit_node();
+        assert_eq!(accesskit_grid.row_count(), Some(1_000_001));
+        assert_eq!(accesskit_grid.column_count(), Some(16_384));
+
+        let header = AccessibilityNode::new(AccessibilityRole::ColumnHeader)
+            .with_column_index(7)
+            .with_sort_direction(AccessibilitySortDirection::Descending);
+        let accesskit_header = header.to_accesskit_node();
+        assert_eq!(accesskit_header.column_index(), Some(7));
+        assert_eq!(
+            accesskit_header.sort_direction(),
+            Some(accesskit::SortDirection::Descending)
+        );
+
+        let cell = AccessibilityNode::new(AccessibilityRole::Cell)
+            .with_row_index(999_999)
+            .with_column_index(16_384)
+            .with_row_span(2)
+            .with_column_span(3);
+        let accesskit_cell = cell.to_accesskit_node();
+        assert_eq!(accesskit_cell.row_index(), Some(999_999));
+        assert_eq!(accesskit_cell.column_index(), Some(16_384));
+        assert_eq!(accesskit_cell.row_span(), Some(2));
+        assert_eq!(accesskit_cell.column_span(), Some(3));
     }
 
     #[test]

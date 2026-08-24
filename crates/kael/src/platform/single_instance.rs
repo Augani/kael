@@ -161,6 +161,17 @@ impl SingleInstance {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+impl SingleInstance {
+    fn platform_try_acquire(app_id: &str) -> Result<Option<Self>> {
+        Ok(Some(Self {
+            app_id: app_id.to_string(),
+        }))
+    }
+
+    fn platform_on_activate(&self, _callback: Box<dyn Fn() + Send + 'static>) {}
+}
+
 /// Send an activation message to an already-running instance of the application.
 ///
 /// This is typically called after `SingleInstance::acquire` returns `Err(AlreadyRunning)`
@@ -484,6 +495,11 @@ impl SingleInstance {
 #[cfg(target_os = "windows")]
 fn platform_send_activate(_app_id: &str) -> Result<()> {
     Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn platform_send_activate(_app_id: &str) -> Result<()> {
+    anyhow::bail!("single-instance activation is not supported in browser builds")
 }
 
 #[cfg(test)]

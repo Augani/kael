@@ -70,11 +70,15 @@ pub(crate) fn support() -> crate::PlatformShareSupport {
         social: false,
         print: true,
         receiver_registration: false,
+        system_picker: false,
+        memory_files: true,
+        requires_user_activation: false,
     }
 }
 
 unsafe fn share_objects(sheet: &ShareSheet) -> Result<*mut AnyObject> {
     let objects: *mut AnyObject = unsafe { msg_send![lookup_class(c"NSMutableArray"), array] };
+    let memory_attachments = sheet.memory_file_paths()?;
 
     for item in sheet.items() {
         if let Some(text) = item.text.as_deref().filter(|text| !text.is_empty()) {
@@ -106,19 +110,28 @@ unsafe fn share_objects(sheet: &ShareSheet) -> Result<*mut AnyObject> {
         }
 
         for file in &item.files {
-            let path = file.to_str().ok_or_else(|| {
-                anyhow!("share file path is not valid Unicode: {}", file.display())
-            })?;
-            let path = ns_string(path);
-            let file_url: *mut AnyObject =
-                unsafe { msg_send![lookup_class(c"NSURL"), fileURLWithPath: &*path] };
-            if !file_url.is_null() {
-                let _: () = unsafe { msg_send![objects, addObject: file_url] };
-            }
+            unsafe { append_file_url(objects, file)? };
         }
     }
 
+    for file in &memory_attachments {
+        unsafe { append_file_url(objects, file)? };
+    }
+
     Ok(objects)
+}
+
+unsafe fn append_file_url(objects: *mut AnyObject, file: &std::path::Path) -> Result<()> {
+    let path = file
+        .to_str()
+        .ok_or_else(|| anyhow!("share file path is not valid Unicode: {}", file.display()))?;
+    let path = ns_string(path);
+    let file_url: *mut AnyObject =
+        unsafe { msg_send![lookup_class(c"NSURL"), fileURLWithPath: &*path] };
+    if !file_url.is_null() {
+        let _: () = unsafe { msg_send![objects, addObject: file_url] };
+    }
+    Ok(())
 }
 
 fn ns_string(value: &str) -> Retained<NSString> {

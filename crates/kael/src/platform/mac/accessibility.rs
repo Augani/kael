@@ -35,6 +35,11 @@ pub fn role_to_ns_accessibility(role: AccessibilityRole) -> &'static str {
         AccessibilityRole::Group => "NSAccessibilityGroupRole",
         AccessibilityRole::List => "NSAccessibilityListRole",
         AccessibilityRole::ListItem => "NSAccessibilityStaticTextRole",
+        AccessibilityRole::Table | AccessibilityRole::Grid => "NSAccessibilityTableRole",
+        AccessibilityRole::Row => "NSAccessibilityRowRole",
+        AccessibilityRole::Cell
+        | AccessibilityRole::ColumnHeader
+        | AccessibilityRole::RowHeader => "NSAccessibilityCellRole",
         AccessibilityRole::ScrollBar => "NSAccessibilityScrollBarRole",
         AccessibilityRole::Image => "NSAccessibilityImageRole",
         AccessibilityRole::Link => "NSAccessibilityLinkRole",

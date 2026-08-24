@@ -70,8 +70,37 @@ pub struct UniformList {
 
 /// Frame state used by the [UniformList].
 pub struct UniformListFrameState {
+    measured_item_size: Size<Pixels>,
     items: SmallVec<[AnyElement; 32]>,
+    item_indices: SmallVec<[usize; 32]>,
     decorations: SmallVec<[AnyElement; 2]>,
+}
+
+fn has_usable_item_height(height: Pixels) -> bool {
+    height.to_f64().is_finite() && height > Pixels::ZERO
+}
+
+fn sanitize_measured_item_size(mut item_size: Size<Pixels>) -> Size<Pixels> {
+    if !has_usable_item_height(item_size.height) {
+        item_size.height = Pixels::ZERO;
+    }
+    if !item_size.width.to_f64().is_finite() || item_size.width < Pixels::ZERO {
+        item_size.width = Pixels::ZERO;
+    }
+    item_size
+}
+
+fn uniform_content_height(item_height: Pixels, item_count: usize) -> Pixels {
+    if !has_usable_item_height(item_height) {
+        return Pixels::ZERO;
+    }
+
+    let height = item_height * item_count;
+    if height.to_f64().is_finite() {
+        height
+    } else {
+        Pixels::MAX
+    }
 }
 
 /// A handle for controlling the scroll position of a uniform list.
@@ -345,7 +374,7 @@ impl Element for UniformList {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let max_items = self.item_count;
-        let item_size = self.measure_item(None, window, cx);
+        let item_size = sanitize_measured_item_size(self.measure_item(None, window, cx));
         let layout_id = self.interactivity.request_layout(
             global_id,
             inspector_id,
@@ -357,7 +386,8 @@ impl Element for UniformList {
                         window.request_measured_layout(
                             style,
                             move |known_dimensions, available_space, _window, _cx| {
-                                let desired_height = item_size.height * max_items;
+                                let desired_height =
+                                    uniform_content_height(item_size.height, max_items);
                                 let width = known_dimensions.width.unwrap_or(match available_space
                                     .width
                                 {
@@ -387,7 +417,9 @@ impl Element for UniformList {
         (
             layout_id,
             UniformListFrameState {
+                measured_item_size: item_size,
                 items: SmallVec::new(),
+                item_indices: SmallVec::new(),
                 decorations: SmallVec::new(),
             },
         )
@@ -405,10 +437,8 @@ impl Element for UniformList {
         let style = self
             .interactivity
             .compute_style(global_id, None, window, cx);
-        let border = style.border_widths.to_pixels(window.rem_size());
-        let padding = style
-            .padding
-            .to_pixels(bounds.size.into(), window.rem_size());
+        let border = window.ui_edges_in_pixels(style.border_widths);
+        let padding = window.ui_definite_edges_in_pixels(style.padding, bounds.size);
 
         let padded_bounds = Bounds::from_corners(
             bounds.origin + point(border.left + padding.left, border.top + padding.top),
@@ -421,7 +451,10 @@ impl Element for UniformList {
             ListHorizontalSizingBehavior::Unconstrained
         );
 
-        let longest_item_size = self.measure_item(None, window, cx);
+        // `request_layout` already measured this exact row for the current element frame.
+        // Re-rendering and reshaping it here made every scroll frame pay twice for the widest
+        // item, which is especially expensive for long diff and workflow-log lines.
+        let longest_item_size = frame_state.measured_item_size;
         let content_width = if can_scroll_horizontally {
             padded_bounds.size.width.max(longest_item_size.width)
         } else {
@@ -429,7 +462,9 @@ impl Element for UniformList {
         };
         let content_size = Size {
             width: content_width,
-            height: longest_item_size.height * self.item_count + padding.top + padding.bottom,
+            height: uniform_content_height(longest_item_size.height, self.item_count)
+                + padding.top
+                + padding.bottom,
         };
 
         let shared_scroll_offset = self.interactivity.scroll_offset.clone().unwrap();
@@ -451,10 +486,8 @@ impl Element for UniformList {
             window,
             cx,
             |style, mut scroll_offset, hitbox, window, cx| {
-                let border = style.border_widths.to_pixels(window.rem_size());
-                let padding = style
-                    .padding
-                    .to_pixels(bounds.size.into(), window.rem_size());
+                let border = window.ui_edges_in_pixels(style.border_widths);
+                let padding = window.ui_definite_edges_in_pixels(style.padding, bounds.size);
 
                 let padded_bounds = Bounds::from_corners(
                     bounds.origin + point(border.left + padding.left, border.top),
@@ -472,9 +505,10 @@ impl Element for UniformList {
                 let elastic_offset = scroll_offset - original_scroll_offset;
                 let mut logical_scroll_offset = original_scroll_offset;
 
-                if self.item_count > 0 {
-                    let content_height =
-                        item_height * self.item_count + padding.top + padding.bottom;
+                if self.item_count > 0 && has_usable_item_height(item_height) {
+                    let content_height = uniform_content_height(item_height, self.item_count)
+                        + padding.top
+                        + padding.bottom;
                     let is_scrolled_vertically = !logical_scroll_offset.y.is_zero();
                     let min_vertical_scroll_offset = padded_bounds.size.height - content_height;
                     if is_scrolled_vertically
@@ -558,26 +592,38 @@ impl Element for UniformList {
 
                     let first_visible_element_ix =
                         (-(scroll_offset.y + padding.top) / item_height).floor() as usize;
+                    let first_visible_element_ix = first_visible_element_ix.min(self.item_count);
                     let last_visible_element_ix = ((-scroll_offset.y + padded_bounds.size.height)
                         / item_height)
                         .ceil() as usize;
+                    let last_visible_element_ix = last_visible_element_ix
+                        .max(first_visible_element_ix)
+                        .min(self.item_count);
 
-                    let visible_range = first_visible_element_ix
-                        ..cmp::min(last_visible_element_ix, self.item_count);
+                    let visible_range = first_visible_element_ix..last_visible_element_ix;
 
-                    let items = if y_flipped {
+                    let (items, absolute_indices) = if y_flipped {
                         let flipped_range = self.item_count.saturating_sub(visible_range.end)
                             ..self.item_count.saturating_sub(visible_range.start);
-                        let mut items = (self.render_items)(flipped_range, window, cx);
+                        let mut items = (self.render_items)(flipped_range.clone(), window, cx);
                         items.reverse();
-                        items
+                        let absolute_indices =
+                            flipped_range.rev().collect::<SmallVec<[usize; 32]>>();
+                        (items, absolute_indices)
                     } else {
-                        (self.render_items)(visible_range.clone(), window, cx)
+                        let items = (self.render_items)(visible_range.clone(), window, cx);
+                        let absolute_indices =
+                            visible_range.clone().collect::<SmallVec<[usize; 32]>>();
+                        (items, absolute_indices)
                     };
 
                     let content_mask = ContentMask { bounds };
                     window.with_content_mask(Some(content_mask), |window| {
-                        for (mut item, ix) in items.into_iter().zip(visible_range.clone()) {
+                        for ((mut item, ix), absolute_ix) in items
+                            .into_iter()
+                            .zip(visible_range.clone())
+                            .zip(absolute_indices)
+                        {
                             let item_origin = padded_bounds.origin
                                 + point(
                                     if can_scroll_horizontally {
@@ -599,6 +645,7 @@ impl Element for UniformList {
                             item.layout_as_root(available_space, window, cx);
                             item.prepaint_at(item_origin, window, cx);
                             frame_state.items.push(item);
+                            frame_state.item_indices.push(absolute_ix);
                         }
 
                         let bounds = Bounds::new(
@@ -663,10 +710,15 @@ impl Element for UniformList {
                 window.register_accessibility_node_at(list_node, bounds);
 
                 window.with_accessibility_parent(list_id, |window| {
-                    for (ix, item) in request_layout.items.iter_mut().enumerate() {
+                    for (absolute_ix, item) in request_layout
+                        .item_indices
+                        .iter()
+                        .copied()
+                        .zip(request_layout.items.iter_mut())
+                    {
                         let mut item_node =
                             crate::AccessibilityNode::new(crate::AccessibilityRole::ListItem)
-                                .with_label(format!("Item {}", ix));
+                                .with_label(format!("Item {}", absolute_ix));
                         item_node.id = window.next_anonymous_accessibility_id();
                         let item_id = item_node.id;
                         window.register_accessibility_node(item_node);
@@ -885,8 +937,15 @@ impl InteractiveElement for UniformList {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScrollStrategy, UniformListScrollHandle, uniform_list};
-    use crate::{ListHorizontalSizingBehavior, ListSizingBehavior, ParentElement, div};
+    use super::{
+        ScrollStrategy, UniformListScrollHandle, has_usable_item_height,
+        sanitize_measured_item_size, uniform_content_height, uniform_list,
+    };
+    use crate::{
+        AccessibilityRole, Context, IntoElement, ListHorizontalSizingBehavior, ListSizingBehavior,
+        ParentElement, Render, Styled, TestAppContext, Window, div, px, size,
+    };
+    use std::{cell::RefCell, ops::Range, rc::Rc};
 
     #[test]
     fn uniform_list_summary_is_content_safe() {
@@ -938,5 +997,89 @@ mod tests {
         assert!(summary.contains("deferred_strategy=center"));
         assert!(summary.contains("deferred_offset_items=3"));
         assert!(!summary.contains("private row value"));
+    }
+
+    #[test]
+    fn invalid_uniform_row_heights_are_sanitized() {
+        for height in [px(0.), px(-1.), px(f32::NAN), px(f32::INFINITY)] {
+            assert!(!has_usable_item_height(height));
+            assert_eq!(uniform_content_height(height, 100), px(0.));
+            assert_eq!(
+                sanitize_measured_item_size(size(px(40.), height)).height,
+                px(0.)
+            );
+        }
+
+        assert!(has_usable_item_height(px(12.)));
+        assert_eq!(uniform_content_height(px(12.), 10), px(120.));
+    }
+
+    #[kael::test]
+    fn zero_height_uniform_list_does_not_request_a_visible_range(cx: &mut TestAppContext) {
+        let rendered_ranges = Rc::new(RefCell::new(Vec::<Range<usize>>::new()));
+
+        struct ZeroHeightView(Rc<RefCell<Vec<Range<usize>>>>);
+        impl Render for ZeroHeightView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let rendered_ranges = self.0.clone();
+                uniform_list("zero-height-list", 100, move |range, _, _| {
+                    rendered_ranges.borrow_mut().push(range.clone());
+                    range.map(|_| div().h(px(0.))).collect::<Vec<_>>()
+                })
+                .w(px(100.))
+                .h(px(40.))
+            }
+        }
+
+        let (_view, window) = cx.add_window_view(|_, _| ZeroHeightView(rendered_ranges.clone()));
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let rendered_ranges = rendered_ranges.borrow();
+            assert!(!rendered_ranges.is_empty());
+            assert!(
+                rendered_ranges.iter().all(|range| range == &(0..1)),
+                "only the measurement row should be requested"
+            );
+            assert!(
+                window
+                    .accessibility_tree()
+                    .nodes
+                    .values()
+                    .all(|node| node.role != AccessibilityRole::ListItem)
+            );
+        });
+    }
+
+    #[kael::test]
+    fn accessibility_labels_use_absolute_scrolled_indices(cx: &mut TestAppContext) {
+        let scroll = UniformListScrollHandle::new();
+        scroll.scroll_to_item_strict(50, ScrollStrategy::Top);
+
+        struct ScrolledListView(UniformListScrollHandle);
+        impl Render for ScrolledListView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                uniform_list("absolute-accessibility-indices", 100, |range, _, _| {
+                    range.map(|_| div().h(px(10.)).w_full()).collect::<Vec<_>>()
+                })
+                .track_scroll(self.0.clone())
+                .w(px(100.))
+                .h(px(30.))
+            }
+        }
+
+        let (_view, window) = cx.add_window_view(|_, _| ScrolledListView(scroll));
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let labels = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .filter(|node| node.role == AccessibilityRole::ListItem)
+                .filter_map(|node| node.label.as_deref())
+                .collect::<Vec<_>>();
+
+            assert!(labels.contains(&"Item 50"));
+            assert!(!labels.contains(&"Item 0"));
+        });
     }
 }

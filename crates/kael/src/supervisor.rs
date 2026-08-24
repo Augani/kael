@@ -13,8 +13,9 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
+use web_time::Instant;
 
 use anyhow::{Context as _, Result, anyhow};
 

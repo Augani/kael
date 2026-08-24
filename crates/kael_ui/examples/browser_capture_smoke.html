@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="data:,">
+    <title>Kael browser capture smoke</title>
+  </head>
+  <body>
+    <p>Kael browser display-capture smoke</p>
+    <script type="module">
+      const canvas = document.createElement("canvas");
+      canvas.width = 96;
+      canvas.height = 54;
+      canvas.style.position = "fixed";
+      canvas.style.left = "-200px";
+      document.body.append(canvas);
+      const context = canvas.getContext("2d", { alpha: false });
+      let tick = 0;
+      const paint = () => {
+        context.fillStyle = tick++ % 2 ? "#37d67a" : "#315efb";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = "#ffffff";
+        context.fillRect(tick % 70, 8, 20, 20);
+      };
+      paint();
+      setInterval(paint, 16);
+      const stream = canvas.captureStream(30);
+      const mediaDevices = navigator.mediaDevices ?? {};
+      Object.defineProperty(mediaDevices, "getDisplayMedia", {
+        configurable: true,
+        value: async () => {
+          if (globalThis.__kaelRejectNextCapture) {
+            globalThis.__kaelRejectNextCapture = false;
+            throw new DOMException("mock picker denied", "NotAllowedError");
+          }
+          return stream.clone();
+        },
+      });
+      if (!navigator.mediaDevices) {
+        Object.defineProperty(navigator, "mediaDevices", {
+          configurable: true,
+          value: mediaDevices,
+        });
+      }
+
+      import init from "./browser_capture_smoke.js";
+      init().catch(() => {
+        window.location.search = "?__kael_capture_failed__=1&bootstrap=failed";
+      });
+    </script>
+  </body>
+</html>

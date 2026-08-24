@@ -1,20 +1,21 @@
 use crate::{
-    App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, LayoutId,
-    NavigationPolicy, Pixels, Point, Rgba, SharedString, Style, StyleRefinement, Styled,
-    TransformationMatrix, WebViewDownloadCompleted, WebViewDownloadPolicy, WebViewNewWindowPolicy,
-    Window,
+    App, Bounds, BrowserWebViewPolicy, Element, ElementId, GlobalElementId, InspectorElementId,
+    IntoElement, LayoutId, NavigationPolicy, Pixels, Point, Rgba, SharedString, Style,
+    StyleRefinement, Styled, TransformationMatrix, WebViewDownloadCompleted, WebViewDownloadPolicy,
+    WebViewNewWindowPolicy, Window,
     webview::{
         PlatformWebView, WebViewCookie, WebViewDocumentTitleChangedHandler,
         WebViewDownloadCompletedHandler, WebViewDownloadStartedHandler, WebViewDragDropEvent,
         WebViewDragDropHandler, WebViewDragDropPolicy, WebViewMessageHandler,
-        WebViewNavigationHandler, WebViewNewWindowHandler, WebViewPageLoadEvent,
-        WebViewPageLoadHandler, WebViewPermissionDecision, WebViewPermissionHandler,
-        WebViewPermissionKind, webview_instance_id,
+        WebViewNativePermissionRequest, WebViewNavigationHandler, WebViewNewWindowHandler,
+        WebViewPageLoadEvent, WebViewPageLoadHandler, WebViewPermissionDecision,
+        WebViewPermissionHandler, WebViewPermissionKind, webview_instance_id,
     },
 };
 use anyhow::Result;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+#[cfg(not(target_arch = "wasm32"))]
 use http_client::Url;
 use refineable::Refineable;
 use serde::{Deserialize, Serialize};
@@ -65,15 +66,24 @@ pub fn webview_file_with_options(
 
 /// Build a `file://` URL for a local WebView document.
 pub fn webview_file_url(path: impl AsRef<Path>) -> Result<SharedString> {
-    let path = path.as_ref();
-    let path = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-    Url::from_file_path(&path)
-        .map(|url| url.to_string().into())
-        .map_err(|_| anyhow::anyhow!("could not convert path to file URL: {}", path.display()))
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        anyhow::bail!("local file WebViews are not supported in browser builds");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let path = path.as_ref();
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(path)
+        };
+        Url::from_file_path(&path)
+            .map(|url| url.to_string().into())
+            .map_err(|_| anyhow::anyhow!("could not convert path to file URL: {}", path.display()))
+    }
 }
 
 /// Creates a WebView element from an inline HTML document.
@@ -448,7 +458,10 @@ impl WebViewDomImageCaptureOptions {
 ///
 /// This reports whether Kael successfully asked the hosted document to trigger
 /// a browser download. The actual download is still governed by browser policy,
-/// origin rules, response headers, and [`WebViewOptions::on_download_started`].
+/// origin rules and response headers. Native hosts additionally apply
+/// [`WebViewOptions::on_download_started`]; browser iframe builds require
+/// `BrowserWebViewPolicy::downloads` (also set by
+/// [`WebViewOptions::allow_downloads`]).
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WebViewDownloadTriggerResult {
     /// Whether the browser download anchor was created and clicked.
@@ -6552,6 +6565,7 @@ pub struct WebViewOptions {
     media_autoplay: Option<bool>,
     focused: Option<bool>,
     clipboard_access: bool,
+    browser_policy: BrowserWebViewPolicy,
     on_message: Option<WebViewMessageHandler>,
     on_navigate: Option<WebViewNavigationHandler>,
     on_new_window: Option<WebViewNewWindowHandler>,
@@ -6644,6 +6658,13 @@ impl WebViewOptions {
     /// Enable or disable JavaScript clipboard access where the backend supports it.
     pub fn clipboard_access_enabled(mut self, enabled: bool) -> Self {
         self.clipboard_access = enabled;
+        self
+    }
+
+    /// Configure the iframe security boundary used when this WebView is built
+    /// as part of a Kael browser application.
+    pub fn browser_iframe_policy(mut self, policy: BrowserWebViewPolicy) -> Self {
+        self.browser_policy = policy;
         self
     }
 
@@ -7125,9 +7146,36 @@ impl WebViewOptions {
     /// thread-safe because WebView2 may invoke it outside Kael's render stack.
     /// WKWebView currently exposes camera and microphone capture here; Windows
     /// and Linux expose the permission categories supported by their engines.
+    /// The compatibility form receives only the permission kind. Prefer
+    /// [`Self::native_permission_request_policy`] when an origin or user gesture
+    /// is part of the security decision.
     pub fn native_permission_policy(
         mut self,
         handler: impl Fn(WebViewPermissionKind) -> WebViewPermissionDecision + Send + Sync + 'static,
+    ) -> Self {
+        self.permission_handler = Some(std::sync::Arc::new(move |request| {
+            if request.frame == crate::WebViewPermissionFrame::Subframe {
+                WebViewPermissionDecision::Deny
+            } else {
+                handler(request.kind)
+            }
+        }));
+        self
+    }
+
+    /// Set an origin- and frame-aware native browser-engine permission policy.
+    ///
+    /// macOS supplies the requesting security origin and main/subframe state.
+    /// WebView2 supplies the requesting origin and user-gesture state, while
+    /// WebKitGTK currently supplies a top-level origin approximation. Inspect
+    /// [`WebViewNativePermissionRequest::has_exact_origin`] and `frame` before
+    /// granting sensitive capabilities to content that can embed frames.
+    pub fn native_permission_request_policy(
+        mut self,
+        handler: impl Fn(WebViewNativePermissionRequest) -> WebViewPermissionDecision
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
         self.permission_handler = Some(std::sync::Arc::new(handler));
         self
@@ -7422,6 +7470,11 @@ impl WebViewOptions {
     }
 
     /// Register a handler that can allow, deny, or redirect downloads.
+    ///
+    /// This is a native WebView policy callback. Browser iframe parents cannot
+    /// synchronously choose a destination or reliably observe completion; use
+    /// [`Self::allow_downloads`] or [`Self::deny_downloads`] to configure the
+    /// sandbox permission there.
     pub fn on_download_started(
         mut self,
         handler: impl Fn(SharedString, Option<PathBuf>, &mut Window, &mut App) -> WebViewDownloadPolicy
@@ -7440,13 +7493,15 @@ impl WebViewOptions {
         self
     }
 
-    /// Deny all WebView downloads.
-    pub fn deny_downloads(self) -> Self {
+    /// Deny native WebView downloads and remove browser iframe download permission.
+    pub fn deny_downloads(mut self) -> Self {
+        self.browser_policy.downloads = false;
         self.on_download_started(|_, _, _, _| WebViewDownloadPolicy::Deny)
     }
 
-    /// Allow WebView downloads to use the backend's default destination.
-    pub fn allow_downloads(self) -> Self {
+    /// Allow WebView downloads to use the backend/browser default destination.
+    pub fn allow_downloads(mut self) -> Self {
+        self.browser_policy.downloads = true;
         self.on_download_started(|_, _, _, _| WebViewDownloadPolicy::Allow)
     }
 
@@ -7474,6 +7529,11 @@ impl WebViewOptions {
     /// embedded browser from handling the event, or
     /// [`WebViewDragDropPolicy::AllowBrowserDefault`] to preserve browser
     /// behavior such as dropping files onto `<input type="file">`.
+    ///
+    /// On Windows, registering this handler replaces WebView2's drag/drop
+    /// controller and disables the page's HTML Drag and Drop APIs. WebView2
+    /// cannot honor `AllowBrowserDefault` after interception is enabled. Leave
+    /// this handler unset when the hosted page needs native HTML drag/drop.
     pub fn on_drag_drop(
         mut self,
         handler: impl Fn(WebViewDragDropEvent, &mut Window, &mut App) -> WebViewDragDropPolicy + 'static,
@@ -7678,6 +7738,12 @@ impl WebView {
     /// Enables or disables JavaScript clipboard access where the backend supports it.
     pub fn clipboard_access_enabled(mut self, enabled: bool) -> Self {
         self.options = self.options.clipboard_access_enabled(enabled);
+        self
+    }
+
+    /// Configures this WebView's iframe boundary in Kael browser builds.
+    pub fn browser_iframe_policy(mut self, policy: BrowserWebViewPolicy) -> Self {
+        self.options = self.options.browser_iframe_policy(policy);
         self
     }
 
@@ -7945,6 +8011,18 @@ impl WebView {
         self
     }
 
+    /// Sets an origin- and frame-aware native browser-engine permission policy.
+    pub fn native_permission_request_policy(
+        mut self,
+        handler: impl Fn(WebViewNativePermissionRequest) -> WebViewPermissionDecision
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.options = self.options.native_permission_request_policy(handler);
+        self
+    }
+
     /// Injects the standard bridge plus Web Storage event forwarding.
     pub fn storage_bridge(mut self, kind: impl AsRef<str>) -> Self {
         self.options = self.options.storage_bridge(kind);
@@ -8109,7 +8187,10 @@ impl WebView {
         self
     }
 
-    /// Registers a handler that can allow, deny, or redirect downloads.
+    /// Registers a native handler that can allow, deny, or redirect downloads.
+    ///
+    /// Browser iframe builds cannot synchronously choose a destination; use
+    /// [`Self::allow_downloads`] or [`Self::deny_downloads`] for their sandbox.
     pub fn on_download_started(
         mut self,
         handler: impl Fn(SharedString, Option<PathBuf>, &mut Window, &mut App) -> WebViewDownloadPolicy
@@ -8128,13 +8209,13 @@ impl WebView {
         self
     }
 
-    /// Denies all WebView downloads.
+    /// Denies native downloads and removes sandboxed iframe download permission.
     pub fn deny_downloads(mut self) -> Self {
         self.options = self.options.deny_downloads();
         self
     }
 
-    /// Allows WebView downloads to use the backend's default destination.
+    /// Allows WebView downloads to use the backend/browser default destination.
     pub fn allow_downloads(mut self) -> Self {
         self.options = self.options.allow_downloads();
         self
@@ -8159,6 +8240,9 @@ impl WebView {
     }
 
     /// Registers a handler for file drag/drop events inside the WebView.
+    ///
+    /// On Windows this opts into native interception, which replaces HTML
+    /// drag/drop; `AllowBrowserDefault` cannot restore it for that host.
     pub fn on_drag_drop(
         mut self,
         handler: impl Fn(WebViewDragDropEvent, &mut Window, &mut App) -> WebViewDragDropPolicy + 'static,
@@ -8278,6 +8362,14 @@ impl Element for WebView {
             media_autoplay: self.options.media_autoplay,
             focused: self.options.focused,
             clipboard_access: self.options.clipboard_access,
+            #[cfg(not(target_arch = "wasm32"))]
+            custom_protocol_schemes: cx
+                .custom_protocol_schemes()
+                .into_iter()
+                .map(SharedString::from)
+                .collect(),
+            #[cfg(target_arch = "wasm32")]
+            browser_policy: self.options.browser_policy.clone(),
             async_window: window.to_async(cx),
             message_handler,
             navigation_handler: self.options.on_navigate.clone(),
@@ -8380,12 +8472,13 @@ mod tests {
         WebViewFindEvent, WebViewFindOptions, WebViewFindResult, WebViewFormEvent,
         WebViewKeyboardEvent, WebViewLifecycleEvent, WebViewLocationEvent, WebViewMediaCommand,
         WebViewMediaElementOptions, WebViewMediaElementState, WebViewMediaEvent,
-        WebViewMediaFrameCaptureOptions, WebViewMediaTextTrackOptions, WebViewNetworkEvent,
-        WebViewNewWindowPolicy, WebViewOptions, WebViewPageLoadEvent, WebViewPermissionDecision,
-        WebViewPermissionKind, WebViewPermissionRequest, WebViewPointerEvent, WebViewResourceEvent,
-        WebViewScrollEvent, WebViewSelectionEvent, WebViewStopFindAction, WebViewStorageArea,
-        WebViewStorageEvent, WebViewStorageMutationResult, WebViewStorageSnapshot,
-        native_webview_bounds, parse_webview_bool_result, parse_webview_document_snapshot_result,
+        WebViewMediaFrameCaptureOptions, WebViewMediaTextTrackOptions,
+        WebViewNativePermissionRequest, WebViewNetworkEvent, WebViewNewWindowPolicy,
+        WebViewOptions, WebViewPageLoadEvent, WebViewPermissionDecision, WebViewPermissionKind,
+        WebViewPermissionRequest, WebViewPointerEvent, WebViewResourceEvent, WebViewScrollEvent,
+        WebViewSelectionEvent, WebViewStopFindAction, WebViewStorageArea, WebViewStorageEvent,
+        WebViewStorageMutationResult, WebViewStorageSnapshot, native_webview_bounds,
+        parse_webview_bool_result, parse_webview_document_snapshot_result,
         parse_webview_download_trigger_result, parse_webview_element_snapshot_result,
         parse_webview_find_result, parse_webview_media_state_result,
         parse_webview_optional_scroll_event_result, parse_webview_optional_string_result,
@@ -11000,17 +11093,58 @@ mod tests {
             .permission_handler
             .expect("native permission policy");
         assert_eq!(
-            handler(WebViewPermissionKind::Microphone),
+            handler(WebViewNativePermissionRequest::kind_only(
+                WebViewPermissionKind::Microphone,
+            )),
             WebViewPermissionDecision::Allow
         );
         assert_eq!(
-            handler(WebViewPermissionKind::Camera),
+            handler(WebViewNativePermissionRequest::kind_only(
+                WebViewPermissionKind::Camera,
+            )),
             WebViewPermissionDecision::Deny
         );
 
         let element = webview("call", "https://example.com")
             .native_permission_policy(|_| WebViewPermissionDecision::Default);
         assert!(element.options.permission_handler.is_some());
+    }
+
+    #[test]
+    fn webview_options_can_require_exact_native_permission_context() {
+        let options =
+            WebViewOptions::embedded_widget().native_permission_request_policy(|request| {
+                if request.kind == WebViewPermissionKind::Camera
+                    && request.has_exact_origin()
+                    && request.is_main_frame()
+                    && request.origin.as_ref().map(|origin| origin.as_ref())
+                        == Some("https://camera.example")
+                {
+                    WebViewPermissionDecision::Allow
+                } else {
+                    WebViewPermissionDecision::Deny
+                }
+            });
+        let handler = options
+            .permission_handler
+            .expect("detailed native permission policy");
+
+        assert_eq!(
+            handler(WebViewNativePermissionRequest::with_requesting_origin(
+                WebViewPermissionKind::Camera,
+                Some("https://camera.example".into()),
+                crate::WebViewPermissionFrame::Main,
+                Some(true),
+            )),
+            WebViewPermissionDecision::Allow
+        );
+        assert_eq!(
+            handler(WebViewNativePermissionRequest::with_top_level_origin(
+                WebViewPermissionKind::Camera,
+                Some("https://camera.example".into()),
+            )),
+            WebViewPermissionDecision::Deny
+        );
     }
 
     #[test]
@@ -11800,9 +11934,11 @@ mod tests {
     fn webview_options_can_control_downloads() {
         let denied = WebViewOptions::embedded_widget().deny_downloads();
         assert!(denied.on_download_started.is_some());
+        assert!(!denied.browser_policy.downloads);
 
         let allowed = webview("downloads", "https://example.com").allow_downloads();
         assert!(allowed.options.on_download_started.is_some());
+        assert!(allowed.options.browser_policy.downloads);
 
         let custom_destination = std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))

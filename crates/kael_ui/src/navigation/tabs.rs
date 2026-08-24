@@ -491,16 +491,18 @@ impl<T: Clone + PartialEq + 'static> Tabs<T> {
                     })
                     .when(!can_close, |this| this.opacity(0.5))
                     .when_some(on_close.clone().filter(|_| can_close), |this, on_close| {
-                        let on_key = on_close.clone();
                         let tab_id_for_click = tab.id.clone();
-                        let tab_id_for_key = tab.id.clone();
                         this.on_click(move |_, window, cx| {
                             on_close(&tab_id_for_click, window, cx);
                             cx.stop_propagation();
                         })
                         .on_key_down(move |event, window, cx| {
-                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                on_key(&tab_id_for_key, window, cx);
+                            if !event.keystroke.modifiers.modified()
+                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                            {
+                                // Div synthesizes the accessible click on
+                                // key-up; consume key-down without invoking
+                                // the callback a second time.
                                 cx.stop_propagation();
                                 window.prevent_default();
                             }
@@ -537,10 +539,22 @@ impl<T: Clone + PartialEq + 'static> Tabs<T> {
                     on_click(&index, window, cx);
                 })
                 .on_key_down(move |event, window, cx| {
+                    if event.keystroke.modifiers.modified() {
+                        return;
+                    }
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        // Activation is synthesized by Div on key-up. Keep
+                        // Space from scrolling an ancestor in the meantime.
+                        cx.stop_propagation();
+                        window.prevent_default();
+                        return;
+                    }
                     let target = match event.keystroke.key.as_str() {
-                        "enter" | "space" => Some(index),
-                        "arrowleft" => Some(previous_index),
-                        "arrowright" => Some(next_index),
+                        // Native Kael backends report the canonical names
+                        // `left`/`right`; keep the DOM aliases for synthetic
+                        // integrations that already emit them.
+                        "left" | "arrowleft" => Some(previous_index),
+                        "right" | "arrowright" => Some(next_index),
                         "home" => Some(first_index),
                         "end" => Some(last_index),
                         _ => None,
@@ -790,9 +804,15 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        // Focus the active tab directly through the keyboard path.
+        // Focus the active tab directly through the keyboard path. Modified
+        // arrows belong to the application and must not change tabs.
         window.simulate_keystrokes("tab");
-        window.simulate_keystrokes("arrowright");
+        window.simulate_keystrokes("cmd-right");
+        assert_eq!(window.update(|_, cx| host.read(cx).selected), 0);
+
+        // Native platform events use `right`, rather than the DOM spelling
+        // `arrowright`.
+        window.simulate_keystrokes("right");
         let states = window.update(tab_states);
         let second = states
             .iter()
@@ -803,7 +823,7 @@ mod tests {
             "selection and focus must move together: {states:?}"
         );
 
-        window.simulate_keystrokes("arrowright");
+        window.simulate_keystrokes("right");
         let states = window.update(tab_states);
         let third = states
             .iter()
@@ -814,5 +834,72 @@ mod tests {
             "second arrow must move both to the third tab: {states:?}"
         );
         assert_eq!(host.read_with(&cx, |h, _| h.selected), 2);
+    }
+
+    #[::core::prelude::v1::test]
+    fn keyboard_activation_and_close_fire_once_across_key_down_and_up() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let changes = Arc::new(AtomicUsize::new(0));
+        let closes = Arc::new(AtomicUsize::new(0));
+        struct ActivationHost {
+            changes: Arc<AtomicUsize>,
+            closes: Arc<AtomicUsize>,
+        }
+        impl Render for ActivationHost {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let changes = self.changes.clone();
+                let closes = self.closes.clone();
+                Tabs::<usize>::new()
+                    .tabs(vec![TabItem::new(0usize, "First").closeable(true)])
+                    .panels(vec![TabPanel::new(|| div().child("First panel"))])
+                    .selected_index(0)
+                    .on_change(move |_, _, _| {
+                        changes.fetch_add(1, Ordering::Relaxed);
+                    })
+                    .on_close(move |_, _, _| {
+                        closes.fetch_add(1, Ordering::Relaxed);
+                    })
+            }
+        }
+        let (_host, window) = cx.add_window_view({
+            let changes = changes.clone();
+            let closes = closes.clone();
+            move |_, _| ActivationHost { changes, closes }
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+
+        window.simulate_keystrokes("tab enter");
+        window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").expect("valid keystroke"),
+        });
+        assert_eq!(
+            changes.load(Ordering::Relaxed),
+            1,
+            "Enter must select a tab exactly once"
+        );
+
+        changes.store(0, Ordering::Relaxed);
+        window.simulate_keystrokes("tab space");
+        window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("space").expect("valid keystroke"),
+        });
+        assert_eq!(
+            closes.load(Ordering::Relaxed),
+            1,
+            "Space must close a tab exactly once"
+        );
+        assert_eq!(
+            changes.load(Ordering::Relaxed),
+            0,
+            "closing must not activate the parent tab"
+        );
     }
 }

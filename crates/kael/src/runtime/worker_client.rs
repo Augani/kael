@@ -4,7 +4,8 @@ use anyhow::{Context as _, Result, anyhow};
 
 use crate::ipc_transport::{Transport, TypedTransport};
 use crate::process_model::{
-    BootstrapMessage, IpcMessage, WorkerError, WorkerProgress, WorkerRequest, WorkerResponse,
+    BootstrapMessage, IpcMessage, WORKER_PROTOCOL_VERSION, WorkerError, WorkerProgress,
+    WorkerRequest, WorkerResponse,
 };
 
 /// Client that runs inside a worker process and communicates with the host.
@@ -16,22 +17,33 @@ pub struct WorkerClient {
 impl WorkerClient {
     /// Connect to the host using the socket path or pipe name from the environment.
     pub fn connect_from_env() -> Result<Self> {
-        #[cfg(not(target_os = "windows"))]
-        {
-            let socket_path =
-                std::env::var("KAEL_WORKER_SOCKET").context("KAEL_WORKER_SOCKET not set")?;
-            Self::connect(&socket_path)
+        let path = worker_endpoint_from_env()?;
+        Self::connect(&path)
+    }
+
+    /// Connect from the platform worker endpoint with an explicit capability
+    /// allowlist shared with browser worker source.
+    pub fn connect_with_capabilities<I, S>(capabilities: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let allowed_capabilities: Vec<String> = capabilities.into_iter().map(Into::into).collect();
+        BootstrapMessage::Handshake {
+            version: WORKER_PROTOCOL_VERSION,
+            capabilities: allowed_capabilities.clone(),
         }
-        #[cfg(target_os = "windows")]
-        {
-            let pipe_name =
-                std::env::var("KAEL_WORKER_PIPE").context("KAEL_WORKER_PIPE not set")?;
-            Self::connect(&pipe_name)
-        }
+        .validate()?;
+        let path = worker_endpoint_from_env()?;
+        Self::connect_checked(&path, Some(&allowed_capabilities))
     }
 
     /// Connect to the host at the given path.
     pub fn connect(path: &str) -> Result<Self> {
+        Self::connect_checked(path, None)
+    }
+
+    fn connect_checked(path: &str, allowed_capabilities: Option<&[String]>) -> Result<Self> {
         #[cfg(not(target_os = "windows"))]
         let raw_transport = {
             let t = crate::ipc_transport::UnixDomainSocketTransport::connect(path)
@@ -68,9 +80,17 @@ impl WorkerClient {
                 };
                 handshake.validate()?;
                 anyhow::ensure!(
-                    version == 1,
+                    version == WORKER_PROTOCOL_VERSION,
                     "unsupported worker bootstrap protocol version"
                 );
+                if let Some(allowed_capabilities) = allowed_capabilities {
+                    anyhow::ensure!(
+                        capabilities
+                            .iter()
+                            .all(|capability| allowed_capabilities.contains(capability)),
+                        "worker host requested a capability this worker did not allow"
+                    );
+                }
                 bootstrap.send_response(
                     1,
                     Ok(BootstrapMessage::HandshakeAck {
@@ -166,5 +186,16 @@ impl WorkerClient {
             .map_err(|_| anyhow!("worker transport lock is poisoned"))?;
         transport.send_response(id, response)?;
         Ok(())
+    }
+}
+
+fn worker_endpoint_from_env() -> Result<String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::var("KAEL_WORKER_SOCKET").context("KAEL_WORKER_SOCKET not set")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var("KAEL_WORKER_PIPE").context("KAEL_WORKER_PIPE not set")
     }
 }

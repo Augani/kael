@@ -325,6 +325,7 @@ pub fn capture_crash_report(info: &std::panic::PanicHookInfo<'_>) -> CrashReport
 }
 
 /// Write a crash report JSON file to the given directory.
+#[cfg_attr(target_arch = "wasm32", allow(clippy::drop_non_drop))]
 pub fn write_crash_report(dir: &Path, report: &CrashReport) -> Result<PathBuf> {
     fs::create_dir_all(dir).with_context(|| {
         format!(

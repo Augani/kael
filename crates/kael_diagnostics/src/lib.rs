@@ -8,6 +8,11 @@ pub mod crash;
 /// Metrics and tracing services.
 pub mod metrics;
 /// Native (non-panic) crash capture via OS-level signal/exception handlers.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod native;
+/// Browser-safe native-crash compatibility surface.
+#[cfg(target_arch = "wasm32")]
+#[path = "native_web.rs"]
 pub mod native;
 /// Platform backends for diagnostics services.
 pub mod platform;

@@ -4,15 +4,17 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::Arc,
+    time::Duration,
 };
 #[cfg(any(feature = "wayland", feature = "x11"))]
+use std::{ffi::OsString, sync::Mutex};
+#[cfg(feature = "linux-platform")]
+use std::{fs::File, os::fd::AsFd};
+#[cfg(feature = "wayland")]
 use std::{
-    ffi::OsString,
-    fs::File,
     io::Read as _,
-    os::fd::{AsFd, FromRawFd, IntoRawFd},
-    time::Duration,
+    os::fd::{FromRawFd, IntoRawFd},
 };
 
 use anyhow::{Context as _, anyhow};
@@ -24,6 +26,7 @@ use util::ResultExt as _;
 #[cfg(any(feature = "wayland", feature = "x11"))]
 use xkbcommon::xkb::{self, Keycode, Keysym, State};
 
+#[cfg(any(feature = "wayland", feature = "x11"))]
 use crate::platform::tab_manager::{TabManagerState, WindowTabManager};
 use crate::{
     Action, AnyWindowHandle, AttentionType, BackgroundExecutor, BiometricStatus, Bounds,
@@ -45,7 +48,7 @@ pub(crate) const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(400);
 pub(crate) const DOUBLE_CLICK_DISTANCE: Pixels = px(5.0);
 pub(crate) const KEYRING_LABEL: &str = "kael-github-account";
 
-#[cfg(any(feature = "wayland", feature = "x11"))]
+#[cfg(feature = "wayland")]
 const MAX_EXTERNAL_FD_BYTES: u64 = 256 * 1024 * 1024;
 
 pub trait LinuxClient {
@@ -80,6 +83,35 @@ pub trait LinuxClient {
     fn window_stack(&self) -> Option<Vec<AnyWindowHandle>>;
     fn run(&self);
 
+    #[cfg_attr(
+        not(any(feature = "wayland", feature = "x11")),
+        allow(unused_variables)
+    )]
+    fn show_context_menu(
+        &self,
+        position: Point<Pixels>,
+        items: Vec<TrayMenuItem>,
+        callback: Box<dyn FnMut(SharedString)>,
+    ) {
+        if items.is_empty() {
+            return;
+        }
+        match self.compositor_name() {
+            #[cfg(feature = "x11")]
+            "X11" => super::context_menu::show_x11_context_menu(position, items, callback),
+            _ => {
+                #[cfg(feature = "wayland")]
+                super::context_menu::show_wayland_context_menu(position, items, callback);
+                #[cfg(not(feature = "wayland"))]
+                log::warn!("Context menus require X11 or Wayland feature to be enabled");
+            }
+        }
+    }
+
+    fn quit(&self) {
+        self.with_common(|common| common.signal.stop());
+    }
+
     fn focused_window_info(&self) -> Option<FocusedWindowInfo> {
         None
     }
@@ -106,7 +138,7 @@ pub trait LinuxClient {
 
     fn cancel_user_attention(&self, _handle: Option<AnyWindowHandle>) {}
 
-    #[cfg(any(feature = "wayland", feature = "x11"))]
+    #[cfg(feature = "linux-platform")]
     fn window_identifier(
         &self,
     ) -> impl Future<Output = Option<ashpd::WindowIdentifier>> + Send + 'static {
@@ -162,6 +194,7 @@ pub(crate) struct LinuxCommon {
     pub(crate) network_tx: calloop::channel::Sender<NetworkStatus>,
     pub(crate) system_power_monitor: Option<super::power::SystemPowerMonitorHandle>,
     pub(crate) system_power_tx: calloop::channel::Sender<SystemPowerEvent>,
+    #[cfg(any(feature = "wayland", feature = "x11"))]
     pub(crate) tab_manager_state: Arc<Mutex<TabManagerState>>,
 }
 
@@ -178,9 +211,9 @@ impl LinuxCommon {
         let (network_tx, network_rx) = calloop::channel::channel::<NetworkStatus>();
         let (system_power_tx, system_power_rx) = calloop::channel::channel::<SystemPowerEvent>();
 
-        #[cfg(any(feature = "wayland", feature = "x11"))]
+        #[cfg(feature = "linux-platform")]
         let text_system = Arc::new(crate::CosmicTextSystem::new());
-        #[cfg(not(any(feature = "wayland", feature = "x11")))]
+        #[cfg(not(feature = "linux-platform"))]
         let text_system = Arc::new(crate::NoopTextSystem::new());
 
         let callbacks = PlatformHandlers::default();
@@ -207,6 +240,7 @@ impl LinuxCommon {
             network_tx,
             system_power_monitor: None,
             system_power_tx,
+            #[cfg(any(feature = "wayland", feature = "x11"))]
             tab_manager_state: WindowTabManager::shared_state(),
         };
 
@@ -277,7 +311,7 @@ impl<P: LinuxClient + 'static> Platform for P {
     }
 
     fn quit(&self) {
-        self.with_common(|common| common.signal.stop());
+        LinuxClient::quit(self);
     }
 
     fn compositor_name(&self) -> &'static str {
@@ -400,13 +434,13 @@ impl<P: LinuxClient + 'static> Platform for P {
     ) -> oneshot::Receiver<Result<Option<Vec<PathBuf>>>> {
         let (done_tx, done_rx) = oneshot::channel();
 
-        #[cfg(not(any(feature = "wayland", feature = "x11")))]
+        #[cfg(not(feature = "linux-platform"))]
         let _ = (done_tx.send(Ok(None)), options);
 
-        #[cfg(any(feature = "wayland", feature = "x11"))]
+        #[cfg(feature = "linux-platform")]
         let identifier = self.window_identifier();
 
-        #[cfg(any(feature = "wayland", feature = "x11"))]
+        #[cfg(feature = "linux-platform")]
         self.foreground_executor()
             .spawn(async move {
                 let title = if options.directories {
@@ -472,13 +506,13 @@ impl<P: LinuxClient + 'static> Platform for P {
     ) -> oneshot::Receiver<Result<Option<PathBuf>>> {
         let (done_tx, done_rx) = oneshot::channel();
 
-        #[cfg(not(any(feature = "wayland", feature = "x11")))]
+        #[cfg(not(feature = "linux-platform"))]
         let _ = (done_tx.send(Ok(None)), directory, suggested_name);
 
-        #[cfg(any(feature = "wayland", feature = "x11"))]
+        #[cfg(feature = "linux-platform")]
         let identifier = self.window_identifier();
 
-        #[cfg(any(feature = "wayland", feature = "x11"))]
+        #[cfg(feature = "linux-platform")]
         self.foreground_executor()
             .spawn({
                 let directory = directory.to_owned();
@@ -1037,23 +1071,7 @@ impl<P: LinuxClient + 'static> Platform for P {
         items: Vec<TrayMenuItem>,
         callback: Box<dyn FnMut(SharedString)>,
     ) {
-        if items.is_empty() {
-            return;
-        }
-
-        let compositor = self.compositor_name();
-        match compositor {
-            #[cfg(feature = "x11")]
-            "X11" => {
-                super::context_menu::show_x11_context_menu(position, items, callback);
-            }
-            _ => {
-                #[cfg(feature = "wayland")]
-                super::context_menu::show_wayland_context_menu(position, items, callback);
-                #[cfg(not(feature = "wayland"))]
-                log::warn!("Context menus require X11 or Wayland feature to be enabled");
-            }
-        }
+        LinuxClient::show_context_menu(self, position, items, callback);
     }
 
     fn show_dialog(&self, options: DialogOptions) -> oneshot::Receiver<usize> {
@@ -1112,7 +1130,7 @@ pub(crate) fn keysym_to_media_key(keysym: xkbcommon::xkb::Keysym) -> Option<Medi
     }
 }
 
-#[cfg(any(feature = "wayland", feature = "x11"))]
+#[cfg(feature = "linux-platform")]
 pub(super) fn open_uri_internal(
     executor: BackgroundExecutor,
     uri: &str,
@@ -1150,7 +1168,7 @@ pub(super) fn open_uri_internal(
     }
 }
 
-#[cfg(any(feature = "x11", feature = "wayland"))]
+#[cfg(feature = "linux-platform")]
 pub(super) fn reveal_path_internal(
     executor: BackgroundExecutor,
     path: PathBuf,
@@ -1205,7 +1223,7 @@ pub(super) fn get_xkb_compose_state(cx: &xkb::Context) -> Option<xkb::compose::S
     state
 }
 
-#[cfg(any(feature = "wayland", feature = "x11"))]
+#[cfg(feature = "wayland")]
 pub(super) unsafe fn read_fd(fd: filedescriptor::FileDescriptor) -> Result<Vec<u8>> {
     let mut file = unsafe { File::from_raw_fd(fd.into_raw_fd()) };
     let mut buffer = Vec::new();

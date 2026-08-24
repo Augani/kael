@@ -12,9 +12,18 @@ pub mod offline;
 pub mod presence;
 /// Retry policy with exponential backoff.
 pub mod retry;
+/// Bounded WebSocket transport for native and browser applications.
+pub mod websocket;
 
 pub use auth::{AuthToken, SecureTokenStore, TokenStore};
 pub use client::{ApiRequest, ApiResponse, HttpMethod};
 pub use offline::{EnqueueOutcome, OfflineQueue, QueuedRequest};
 pub use presence::{Presence, PresenceStatus, PresenceTracker};
 pub use retry::RetryPolicy;
+pub use websocket::{
+    AllowAllWebSocketHosts, DenyAllWebSocketHosts, WebSocketClient, WebSocketClose,
+    WebSocketCloseError, WebSocketCloseMetadata, WebSocketConfig, WebSocketConfigBuilder,
+    WebSocketConnectError, WebSocketErrorKind, WebSocketErrorMetadata, WebSocketEvent,
+    WebSocketEventKind, WebSocketHostPolicy, WebSocketMessage, WebSocketOpenMetadata,
+    WebSocketReconnectMetadata, WebSocketReconnectPolicy, WebSocketSendError, WebSocketState,
+};

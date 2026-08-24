@@ -75,6 +75,11 @@ pub trait PathExt {
                 })
                 .with_context(|| format!("Invalid WTF-8 sequence: {bytes:?}"))
         }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let path = std::str::from_utf8(bytes).context("path is not valid UTF-8")?;
+            Ok(Self::from(Path::new(path)))
+        }
     }
 
     /// Converts a local path to one that can be used inside of WSL.

@@ -10,6 +10,8 @@ const MAX_IDENTIFIER_BYTES: usize = 200;
 mod linux;
 #[cfg(target_os = "macos")]
 mod mac;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+mod web;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -17,6 +19,8 @@ mod windows;
 use linux as imp;
 #[cfg(target_os = "macos")]
 use mac as imp;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+use web as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
@@ -70,6 +74,13 @@ pub fn database_path(app_id: &str, name: &str) -> Result<PathBuf> {
 }
 
 fn create_dir_all(path: &Path) -> Result<()> {
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    {
+        let _ = path;
+        return Ok(());
+    }
+
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     std::fs::create_dir_all(path).map_err(|source| Error::io(path.to_path_buf(), source))
 }
 
@@ -101,6 +112,10 @@ fn validate_identifier(identifier: &str) -> Result<()> {
     } else {
         Err(Error::InvalidStorageIdentifier(identifier.to_string()))
     }
+}
+
+pub(crate) fn validate_storage_identifier(identifier: &str) -> Result<()> {
+    validate_identifier(identifier)
 }
 
 fn is_windows_reserved_identifier(identifier: &str) -> bool {

@@ -24,6 +24,7 @@ pub(crate) struct WindowsDisplay {
     scale_factor: f32,
     bounds: Bounds<Pixels>,
     physical_bounds: Bounds<DevicePixels>,
+    refresh_rate: Option<f32>,
     uuid: Uuid,
 }
 
@@ -50,6 +51,7 @@ impl WindowsDisplay {
         let monitor_size = info.monitorInfo.rcMonitor;
         let uuid = generate_uuid(&info.szDevice);
         let scale_factor = get_scale_factor_for_monitor(handle).log_err()?;
+        let refresh_rate = get_refresh_rate_for_device(&info.szDevice);
         let physical_size = size(
             (monitor_size.right - monitor_size.left).into(),
             (monitor_size.bottom - monitor_size.top).into(),
@@ -71,6 +73,7 @@ impl WindowsDisplay {
                 origin: point(monitor_size.left.into(), monitor_size.top.into()),
                 size: physical_size,
             },
+            refresh_rate,
             uuid,
         })
     }
@@ -142,10 +145,7 @@ impl PlatformDisplay for WindowsDisplay {
     }
 
     fn refresh_rate(&self) -> Option<f32> {
-        // DWM composition timing reflects the refresh rate of the display driving
-        // composition; on multi-monitor setups it tracks the active composition clock
-        // rather than a specific monitor.
-        super::vsync::get_display_refresh_rate_hz()
+        self.refresh_rate
     }
 
     fn scale_factor(&self) -> f32 {
@@ -209,4 +209,23 @@ fn get_scale_factor_for_monitor(monitor: HMONITOR) -> Result<f32> {
     unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) }?;
     assert_eq!(dpi_x, dpi_y);
     Ok(dpi_x as f32 / USER_DEFAULT_SCREEN_DPI as f32)
+}
+
+fn get_refresh_rate_for_device(device_name: &[u16]) -> Option<f32> {
+    let mut mode = DEVMODEW {
+        dmSize: std::mem::size_of::<DEVMODEW>() as u16,
+        ..Default::default()
+    };
+    let found = unsafe {
+        EnumDisplaySettingsW(
+            PCWSTR(device_name.as_ptr()),
+            ENUM_CURRENT_SETTINGS,
+            &mut mode,
+        )
+    };
+    if !found.as_bool() || !(2..=1_000).contains(&mode.dmDisplayFrequency) {
+        None
+    } else {
+        Some(mode.dmDisplayFrequency as f32)
+    }
 }

@@ -1,10 +1,10 @@
 # Kael
 
-Kael is a native, GPU-accelerated application framework for Rust, built to help
-ambitious desktop software do more with less: less idle work, less memory
-pressure, fewer runtime layers, and one coherent Rust codebase. It targets
-long-lived products such as editors, agent workspaces, communication apps,
-dashboards, media tools, and creative software on macOS, Windows, and Linux.
+Kael is a GPU-accelerated application framework for Rust, built to help
+ambitious software do more with less: less idle work, less memory pressure,
+fewer runtime layers, and one coherent Rust codebase. The same retained UI and
+Scene renderer target native macOS, Windows, and Linux applications or a
+WebAssembly/WebGL2 canvas in the browser.
 
 Kael is not defined by another application stack. It is a complete foundation
 for responsive PC applications: retained rendering, application state, native
@@ -29,9 +29,10 @@ without depending on `kael_ui`.
 
 ## Current status
 
-Kael 0.3 is a pre-1.0 production candidate. The workspace is pinned to Rust
+Kael 0.4 is a pre-1.0 production candidate. The workspace is pinned to Rust
 1.97.1, uses Rust 2024 throughout, denies lint warnings in CI, audits its locked
-dependencies, and checks macOS, Windows, Linux X11, and Linux Wayland.
+dependencies, and checks macOS, Windows, Linux X11, Linux Wayland, and the
+`wasm32-unknown-unknown` browser target.
 
 The public API can still change before 1.0. Applications should pin a compatible
 minor release and use `CapabilityReport::current()` when a workflow depends on a
@@ -58,7 +59,7 @@ Use only the framework primitives:
 
 ```toml
 [dependencies]
-kael = "0.3"
+kael = "0.4"
 ```
 
 WebView and the bundled Reqwest transport are opt-in. Primitive-only native
@@ -67,12 +68,12 @@ implementation batteries the product uses:
 
 ```toml
 [dependencies]
-kael = { version = "0.3", features = ["webview"] }
+kael = { version = "0.4", features = ["webview"] }
 ```
 
 ```toml
 [dependencies]
-kael = { version = "0.3", features = ["http-client"] }
+kael = { version = "0.4", features = ["http-client"] }
 ```
 
 Specialized batteries stay explicit as well: use `auto-update` for signed
@@ -84,8 +85,8 @@ Or add the ready-made component system:
 
 ```toml
 [dependencies]
-kael = "0.3"
-kael_ui = "0.3"
+kael = "0.4"
+kael_ui = "0.4"
 ```
 
 `kael_ui` depends on `kael`; `kael` never depends on `kael_ui`.
@@ -100,6 +101,16 @@ kael new my_app
 cd my_app
 cargo run
 ```
+
+Run that same `main.rs` in a browser (the packager is a one-time install):
+
+```bash
+cargo install wasm-bindgen-cli --version 0.2.122 --locked
+npm install --global binaryen@132.0.0
+kael web serve
+```
+
+`kael web build` creates an optimized static deployment in `dist/web`.
 
 The generated entry point is intentionally small:
 
@@ -139,8 +150,8 @@ impl Render for HelloView {
 
 The core includes:
 
-- retained GPU rendering with Metal on macOS, DirectX 11 on Windows, and Vulkan
-  through Blade on Linux;
+- retained GPU rendering with Metal on macOS, DirectX 11 on Windows, Vulkan
+  through Blade on Linux, and a dedicated WebGL2 Scene renderer in browsers;
 - flex and grid layout, rich text, SVG, images, gradients, canvas paths, effects,
   transforms, and render-on-demand animation;
 - entity-based state, actions and keybindings, focus, drag and drop, virtual and
@@ -165,8 +176,8 @@ Optional support crates keep product concerns out of the core dependency graph:
 | `kael_storage`, `kael_cache`, `kael_secrets` | Persistence, caching, and native credential storage |
 | `kael_net`, `kael_http_client` | Connectivity, authentication, sync, and HTTP |
 | `kael_diagnostics` | Bounded logs, metrics, crash capture, and reports |
-| `kael_document`, `kael_pdf`, `kael_share` | Document lifecycle, PDF services, and sharing |
-| `kael_notifications`, `kael_release` | Notifications and signed update/release workflows |
+| `kael_document`, `kael_office`, `kael_pdf`, `kael_share` | Document lifecycle, portable Office/PDF bytes, native sharing, and browser Web Share |
+| `kael_notifications`, `kael_release` | Native/browser notifications and signed update/release workflows |
 | `kael_audio`, `kael-media`, `kael_media_engines` | Audio, playback, and opt-in media engines |
 | `kael_render_graph`, `kael_gpu_budget` | Render scheduling and GPU memory budgets |
 
@@ -201,7 +212,18 @@ cargo run -p workspace-app
 | --- | --- | --- | --- |
 | macOS | AppKit | Metal | Primary native backend; Blade is also checked |
 | Windows | Win32 | DirectX 11 | WebView2 is used for optional WebView surfaces |
-| Linux | X11 and Wayland | Vulkan / Blade | Some integrations require desktop portals, D-Bus, GTK3, or WebKitGTK |
+| Linux | X11, XWayland, and native Wayland | Vulkan / Blade without WebViews; GTK4/GSK for the portable WebView host | The public `webview` feature uses GTK4 + WebKitGTK 6 on X11, XWayland, and Wayland |
+| Browser | HTML canvas with in-page retained window surfaces | Dedicated WebGL2 Scene renderer | Same application/window API, bounded suite-scale virtualization, ARIA/IME bridges, and sandboxed iframe WebView islands; detached OS windows remain unavailable |
+
+For a portable WebView build, enable `webview` and install GTK4 plus WebKitGTK
+6.0 on Linux. GTK owns the top-level surface and composes Kael's retained GSK
+scene with WebKit siblings in one window on both X11 and Wayland. The
+`webview-gtk4` and `webview-wayland-gtk4` names remain Linux-specific aliases;
+the deprecated pre-release `webview-legacy-gtk3` spelling now redirects to the
+same maintained host and cannot enable GTK3. Set `KAEL_LINUX_BACKEND=x11` or
+`wayland` to make the runtime choice explicit. See
+[Linux WebView hosting](docs/src/linux-webviews.md) for packages, feature flags,
+runtime contracts, and acceptance gates.
 
 Renderer support does not imply that every desktop service exists on every OS
 or desktop environment. Check capabilities at runtime for hard requirements.

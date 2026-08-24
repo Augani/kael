@@ -18,7 +18,7 @@ pub use annotation::{
     Annotation, AnnotationId, PageAnnotation, PdfColor, PdfPoint, PdfRect, StampKind,
 };
 pub use anyhow::Result;
-pub use document::{OutlineItem, PdfDocument, PdfMetadata};
+pub use document::{OutlineItem, PdfDocument, PdfMetadata, PdfPlatformError};
 pub use page::{PdfLink, PdfLinkDestination, PdfPage, PdfPageSize};
 pub use renderer::PagePreview;
 pub use text::TextMatch;

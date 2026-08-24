@@ -1,0 +1,7 @@
+[workspace]
+members = ["kael-generated-parity"]
+resolver = "2"
+
+[patch.crates-io]
+kael = { path = "../../crates/kael" }
+kael_ui = { path = "../../crates/kael_ui" }

@@ -1,4 +1,4 @@
-use std::time::Instant;
+use web_time::Instant;
 
 use kael::px;
 use kael::scroll_elasticity::{add_scroll_elasticity, advance_scroll_elasticity};

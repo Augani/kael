@@ -69,7 +69,14 @@ impl PdfPage {
     pub async fn schematic_preview(&self, scale: f32) -> Result<PagePreview> {
         let document = self.document.clone();
         let page_index = self.page_index;
-        smol::unblock(move || document.schematic_preview(page_index, scale)).await
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        {
+            smol::unblock(move || document.schematic_preview(page_index, scale)).await
+        }
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        {
+            document.schematic_preview(page_index, scale)
+        }
     }
 
     /// Returns the extracted text for the page.

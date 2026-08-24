@@ -30,7 +30,7 @@ impl<V: Render> Element for Entity<V> {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let render_started_at = std::time::Instant::now();
+        let render_started_at = web_time::Instant::now();
         let mut element = self.update(cx, |view, cx| view.render(window, cx).into_any_element());
         window.record_view_render_duration(render_started_at.elapsed());
         let layout_id = window.with_rendered_view(self.entity_id(), |window| {
@@ -163,7 +163,7 @@ impl Element for AnyView {
                     (layout_id, None)
                 }
                 _ => {
-                    let render_started_at = std::time::Instant::now();
+                    let render_started_at = web_time::Instant::now();
                     let mut element = (self.render)(self, window, cx);
                     window.record_view_render_duration(render_started_at.elapsed());
                     let layout_id = element.request_layout(window, cx);
@@ -216,7 +216,7 @@ impl Element for AnyView {
                     let refreshing = mem::replace(&mut window.refreshing, true);
                     let prepaint_start = window.prepaint_index();
                     let (mut element, accessed_entities) = cx.detect_accessed_entities(|cx| {
-                        let render_started_at = std::time::Instant::now();
+                        let render_started_at = web_time::Instant::now();
                         let mut element = (self.render)(self, window, cx);
                         window.record_view_render_duration(render_started_at.elapsed());
                         element.layout_as_root(bounds.size.into(), window, cx);
@@ -260,12 +260,17 @@ impl Element for AnyView {
                         let mut element_state = element_state.unwrap();
 
                         let paint_start = window.paint_index();
+                        let rendered_fresh = element.is_some();
 
                         if let Some(element) = element {
+                            let accessibility_start = window.accessibility_node_index();
                             let refreshing = mem::replace(&mut window.refreshing, true);
                             element.paint(window, cx);
                             window.refreshing = refreshing;
+                            element_state.accessibility_nodes =
+                                window.accessibility_nodes_since(accessibility_start);
                         } else {
+                            window.replay_accessibility_nodes(&element_state.accessibility_nodes);
                             if let Some(surface) = element_state.surface.as_ref() {
                                 window.reuse_paint_without_scene(element_state.paint_range.clone());
                                 window.paint_cached_surface(surface);
@@ -278,7 +283,7 @@ impl Element for AnyView {
                         let paint_scene_range = paint_start.scene_index..paint_end.scene_index;
                         element_state.paint_range = paint_start..paint_end;
 
-                        if element.is_some() {
+                        if rendered_fresh {
                             element_state.prepare_surface(
                                 global_id.unwrap(),
                                 bounds,

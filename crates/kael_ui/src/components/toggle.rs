@@ -409,15 +409,17 @@ impl RenderOnce for Toggle {
             )
             .when(is_interactive, |this| {
                 this.when_some(self.on_click.clone(), |this, on_click| {
-                    let on_click_for_key = on_click.clone();
                     this.on_click(move |_, window, cx| {
                         let new_checked = !checked;
                         (on_click)(&new_checked, window, cx);
                     })
                     .on_key_down(move |event, window, cx| {
-                        if event.keystroke.key == "space" || event.keystroke.key == "enter" {
-                            let new_checked = !checked;
-                            (on_click_for_key)(&new_checked, window, cx);
+                        if !event.keystroke.modifiers.modified()
+                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                        {
+                            // Keyboard clicks are emitted by Div on key-up.
+                            // Consuming key-down avoids page scrolling without
+                            // toggling twice.
                             cx.stop_propagation();
                             window.prevent_default();
                         }
@@ -577,9 +579,15 @@ mod tests {
         window.simulate_keystrokes("tab");
         assert_switch_states(window);
         window.simulate_keystrokes("space");
+        window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("space").expect("valid keystroke"),
+        });
         assert_eq!(toggles.get(), 1, "Space must activate the toggle once");
-        window.simulate_keystrokes("space");
-        assert_eq!(toggles.get(), 2, "Space must keep activating");
+        window.simulate_keystrokes("enter");
+        window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").expect("valid keystroke"),
+        });
+        assert_eq!(toggles.get(), 2, "Enter must activate the toggle once");
         window.simulate_keystrokes("tab");
         assert_eq!(toggles.get(), 2, "the disabled toggle must not activate");
     }

@@ -9,6 +9,7 @@ pub mod archive;
 /// Cross-platform process command helpers.
 pub mod command;
 /// Asynchronous filesystem helpers.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod fs;
 /// Markdown text utilities.
 pub mod markdown;
@@ -407,7 +408,7 @@ pub fn set_pre_exec_to_start_new_session(
 ) -> &mut std::process::Command {
     // safety: code in pre_exec should be signal safe.
     // https://man7.org/linux/man-pages/man7/signal-safety.7.html
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(unix)]
     unsafe {
         use std::os::unix::process::CommandExt;
         command.pre_exec(|| {

@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "{{rust_version}}"
 
-[dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kael = { version = "{{kael_version}}", features = ["runtime_shaders"] }
 kael_ui = "{{kael_version}}"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+kael = { version = "{{kael_version}}", default-features = false, features = ["browser"] }
+kael_ui = { version = "{{kael_version}}", default-features = false, features = ["browser"] }

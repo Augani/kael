@@ -4,6 +4,8 @@
 mod linux;
 #[cfg(target_os = "macos")]
 mod mac;
+#[cfg(target_arch = "wasm32")]
+mod web;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -11,6 +13,8 @@ mod windows;
 use linux as imp;
 #[cfg(target_os = "macos")]
 use mac as imp;
+#[cfg(target_arch = "wasm32")]
+use web as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 

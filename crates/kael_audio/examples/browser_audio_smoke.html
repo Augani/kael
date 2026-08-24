@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="data:,">
+    <title>Kael browser audio smoke</title>
+  </head>
+  <body>
+    <p>Kael browser audio smoke</p>
+    <script type="module">
+      import init from "./browser_audio_smoke.js";
+      const result = new URLSearchParams(window.location.search);
+      if (!result.has("__kael_audio_pass__") && !result.has("__kael_audio_failed__")) {
+        init().catch(() => {
+          document.documentElement.setAttribute("data-kael-audio-ready", "failed");
+          window.location.search = "?__kael_audio_failed__=1&bootstrap=failed";
+        });
+      }
+    </script>
+  </body>
+</html>

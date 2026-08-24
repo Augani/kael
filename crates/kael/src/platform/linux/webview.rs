@@ -1,20 +1,23 @@
 use super::super::webview_common::{
-    bridge_script, create_web_context, css_script, permission_kind_from_wry,
-    permission_response_to_wry, to_wry_rect, webview_command_id,
+    WryCustomProtocolRegistration, bridge_script, configure_wry_custom_protocols,
+    create_web_context, css_script, decode_bridge_message, ipc_source_matches_top_level,
+    main_frame_script, permission_kind_from_wry, permission_response_to_wry, serialized_origin,
+    to_wry_rect, warn_rejected_ipc_once, webview_command_id,
 };
 #[cfg(feature = "wayland")]
 use super::wayland::WaylandWindowStatePtr;
 #[cfg(feature = "x11")]
 use super::x11::X11WindowStatePtr;
 use crate::{
-    AsyncWindowContext, Bounds, Pixels, Point, SharedString, WebViewCookie,
-    WebViewDownloadCompleted, WebViewDownloadPolicy, WebViewNewWindowPolicy,
+    AsyncWindowContext, Bounds, Pixels, SharedString, WebViewCookie, WebViewDownloadCompleted,
+    WebViewDownloadPolicy, WebViewNewWindowPolicy,
     webview::{
-        NavigationPolicy, PlatformWebView, PlatformWebViewCommand,
-        WebViewDocumentTitleChangedHandler, WebViewDownloadCompletedHandler,
-        WebViewDownloadStartedHandler, WebViewDragDropEvent, WebViewDragDropHandler,
-        WebViewDragDropPolicy, WebViewNavigationHandler, WebViewNewWindowHandler,
-        WebViewPageLoadEvent, WebViewPageLoadHandler, rgba_to_webview_color,
+        NavigationPolicy, PlatformWebView, PlatformWebViewCommand, WebViewCookieCallback,
+        WebViewCookieMutationCallback, WebViewDocumentTitleChangedHandler,
+        WebViewDownloadCompletedHandler, WebViewDownloadStartedHandler, WebViewDragDropEvent,
+        WebViewDragDropHandler, WebViewDragDropPolicy, WebViewNavigationHandler,
+        WebViewNewWindowHandler, WebViewPageLoadEvent, WebViewPageLoadHandler,
+        rgba_to_webview_color,
     },
 };
 use anyhow::{Context as _, Result};
@@ -22,44 +25,33 @@ use gtk::prelude::*;
 use parking_lot::RwLock;
 #[cfg(feature = "x11")]
 use raw_window_handle as rwh;
-use std::{cell::RefCell, collections::HashSet, rc::Rc, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::HashSet,
+    rc::Rc,
+    sync::{Arc, atomic::AtomicBool},
+};
 use util::ResultExt;
-#[cfg(feature = "wayland")]
-use wry::WebViewBuilderExtUnix;
+use webkit2gtk::{CookieManagerExt, WebViewExt, WebsiteDataManagerExt};
 use wry::{
     DragDropEvent as WryDragDropEvent, NewWindowResponse, PageLoadEvent, WebContext, WebView,
     WebViewBuilder, WebViewExtUnix,
 };
+use wry_legacy as wry;
 
 pub(crate) struct LinuxWebViewHost {
     desired: PlatformWebView,
     webview: WebView,
+    _protocol_registration: WryCustomProtocolRegistration,
     _context: Option<WebContext>,
-    current_url: SharedString,
-    current_html: Option<SharedString>,
+    rendered_url: SharedString,
+    rendered_html: Option<SharedString>,
     bounds: Bounds<Pixels>,
     background_color: Option<crate::Rgba>,
     opacity: f32,
     live: Rc<RefCell<PlatformWebView>>,
     live_permission_handler: Arc<RwLock<Option<crate::webview::WebViewPermissionHandler>>>,
-    backend: LinuxWebViewBackend,
-}
-
-enum LinuxWebViewBackend {
-    X11,
-    #[cfg(feature = "wayland")]
-    Wayland {
-        overlay_window: gtk::Window,
-    },
-}
-
-impl Drop for LinuxWebViewHost {
-    fn drop(&mut self) {
-        #[cfg(feature = "wayland")]
-        if let LinuxWebViewBackend::Wayland { overlay_window } = &self.backend {
-            overlay_window.close();
-        }
-    }
+    live_top_level_origin: Arc<RwLock<Option<SharedString>>>,
 }
 
 pub(crate) fn pump_gtk_webview_events() {
@@ -74,6 +66,10 @@ pub(crate) fn pump_gtk_webview_events() {
 
 #[cfg(feature = "x11")]
 pub(crate) fn sync_x11_webviews(window: &X11WindowStatePtr, webviews: &[PlatformWebView]) {
+    log::debug!(
+        "synchronizing {} Linux X11 WebView native child surface(s)",
+        webviews.len()
+    );
     let mut active_ids: HashSet<SharedString> = HashSet::default();
     let mut state = window.state.borrow_mut();
     let scale_factor = state.scale_factor;
@@ -92,13 +88,18 @@ pub(crate) fn sync_x11_webviews(window: &X11WindowStatePtr, webviews: &[Platform
         }
 
         if let Some(host) = state.webviews.get_mut(&webview_id) {
-            host.update_desired(webview.clone(), scale_factor, None);
+            host.update_desired(webview.clone(), scale_factor);
         } else {
             let parent = X11WebViewParentHandle {
                 window_id: x_window,
             };
+            log::debug!(
+                "creating Linux X11 WebView {} as child of native window {x_window}",
+                webview.id
+            );
             match LinuxWebViewHost::new(&parent, webview.clone(), scale_factor) {
                 Ok(host) => {
+                    log::debug!("created Linux X11 WebView {} native child", webview.id);
                     state.webviews.insert(webview_id, host);
                 }
                 Err(error) => {
@@ -123,67 +124,13 @@ pub(crate) fn sync_x11_webviews(window: &X11WindowStatePtr, webviews: &[Platform
 }
 
 #[cfg(feature = "wayland")]
-pub(crate) fn sync_wayland_webviews(window: &WaylandWindowStatePtr, webviews: &[PlatformWebView]) {
-    let mut active_ids: HashSet<SharedString> = HashSet::default();
-    let (scale_factor, parent_origin) = {
-        let state = window.state.borrow();
-        (state.scale, state.bounds.origin)
-    };
-
-    for webview in webviews {
-        let webview_id = webview.instance_id.clone();
-        active_ids.insert(webview_id.clone());
-
-        let needs_recreate = {
-            let state = window.state.borrow();
-            state
-                .webviews
-                .get(&webview_id)
-                .is_some_and(|host| host.needs_recreate(webview))
-        };
-
-        if needs_recreate {
-            window.state.borrow_mut().webviews.remove(&webview_id);
-        }
-
-        let updated_existing = {
-            let mut state = window.state.borrow_mut();
-            if let Some(host) = state.webviews.get_mut(&webview_id) {
-                host.update_desired(webview.clone(), scale_factor, Some(parent_origin));
-                true
-            } else {
-                false
-            }
-        };
-
-        if updated_existing {
-            continue;
-        }
-
-        match LinuxWebViewHost::new_wayland(webview.clone(), scale_factor, parent_origin) {
-            Ok(host) => {
-                window.state.borrow_mut().webviews.insert(webview_id, host);
-            }
-            Err(error) => {
-                log::error!(
-                    "failed to create Linux Wayland WebView {}: {error:#}",
-                    webview.id
-                );
-            }
-        }
-    }
-
-    let stale_ids = {
-        let state = window.state.borrow();
-        state
-            .webviews
-            .keys()
-            .filter(|webview_id| !active_ids.contains(*webview_id))
-            .cloned()
-            .collect::<Vec<_>>()
-    };
-    for webview_id in stale_ids {
-        window.state.borrow_mut().webviews.remove(&webview_id);
+pub(crate) fn sync_wayland_webviews(_window: &WaylandWindowStatePtr, webviews: &[PlatformWebView]) {
+    // A detached GTK top-level cannot provide correct Wayland placement,
+    // clipping, stacking, focus, or minimize semantics for an embedded surface.
+    // Do not create a visually plausible but contract-breaking overlay.
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    if !webviews.is_empty() && !REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        log::error!("Linux Wayland WebViews are unsupported; compile and select the X11 backend");
     }
 }
 
@@ -212,25 +159,12 @@ pub(crate) fn dispatch_x11_webview_command(
 
 #[cfg(feature = "wayland")]
 pub(crate) fn dispatch_wayland_webview_command(
-    window: &WaylandWindowStatePtr,
-    command: PlatformWebViewCommand,
+    _window: &WaylandWindowStatePtr,
+    _command: PlatformWebViewCommand,
 ) -> Result<()> {
-    let webview_id = webview_command_id(&command);
-    let mut state = window.state.borrow_mut();
-    let mut matches = state
-        .webviews
-        .values_mut()
-        .filter(|host| host.desired.id == webview_id);
-    let Some(host) = matches.next() else {
-        anyhow::bail!("unknown webview: {}", webview_id);
-    };
-    if matches.next().is_some() {
-        anyhow::bail!(
-            "ambiguous webview id `{}`; WebView command ids must be unique within a window",
-            webview_id
-        );
-    }
-    host.apply_command(command)
+    anyhow::bail!(
+        "Linux Wayland WebViews are unsupported; compile and select the X11 backend before using WebView commands"
+    )
 }
 
 impl LinuxWebViewHost {
@@ -245,6 +179,8 @@ impl LinuxWebViewHost {
         let mut context = create_web_context(&desired)?;
         let live = Rc::new(RefCell::new(desired.clone()));
         let live_permission_handler = Arc::new(RwLock::new(desired.permission_handler.clone()));
+        let live_top_level_origin = Arc::new(RwLock::new(serialized_origin(&desired.url)));
+        let protocol_registration = WryCustomProtocolRegistration::new(&desired);
         let builder = configure_webview_builder(
             if let Some(context) = context.as_mut() {
                 WebViewBuilder::new_with_web_context(context)
@@ -255,7 +191,9 @@ impl LinuxWebViewHost {
             desired.bounds,
             live.clone(),
             live_permission_handler.clone(),
+            live_top_level_origin.clone(),
         );
+        let builder = configure_wry_custom_protocols(builder, &desired, &protocol_registration);
 
         let webview = builder
             .build_as_child(parent)
@@ -263,78 +201,20 @@ impl LinuxWebViewHost {
         webview.set_visible(desired.visible).log_err();
 
         let mut host = Self {
-            current_url: desired.url.clone(),
-            current_html: desired.html.clone(),
+            rendered_url: desired.url.clone(),
+            rendered_html: desired.html.clone(),
             bounds: desired.bounds,
             background_color: desired.background_color,
             opacity: -1.0,
             live,
             live_permission_handler,
+            live_top_level_origin,
             desired,
             webview,
+            _protocol_registration: protocol_registration,
             _context: context,
-            backend: LinuxWebViewBackend::X11,
         };
-        host.apply(scale_factor, None);
-        Ok(host)
-    }
-
-    #[cfg(feature = "wayland")]
-    fn new_wayland(
-        desired: PlatformWebView,
-        scale_factor: f32,
-        parent_origin: Point<Pixels>,
-    ) -> Result<Self> {
-        ensure_gtk_webview_runtime()?;
-
-        let overlay_window = gtk::Window::new(gtk::WindowType::Toplevel);
-        overlay_window.set_decorated(false);
-        overlay_window.set_resizable(false);
-        overlay_window.set_skip_taskbar_hint(true);
-        overlay_window.set_skip_pager_hint(true);
-        overlay_window.set_keep_above(true);
-        overlay_window.set_accept_focus(true);
-        overlay_window.set_focus_on_map(false);
-        overlay_window.set_type_hint(gtk::gdk::WindowTypeHint::Utility);
-
-        let fixed = gtk::Fixed::new();
-        fixed.show();
-        overlay_window.add(&fixed);
-
-        let webview_bounds = zero_origin_bounds(desired.bounds);
-        let mut context = create_web_context(&desired)?;
-        let live = Rc::new(RefCell::new(desired.clone()));
-        let live_permission_handler = Arc::new(RwLock::new(desired.permission_handler.clone()));
-        let builder = configure_webview_builder(
-            if let Some(context) = context.as_mut() {
-                WebViewBuilder::new_with_web_context(context)
-            } else {
-                WebViewBuilder::new()
-            },
-            &desired,
-            webview_bounds,
-            live.clone(),
-            live_permission_handler.clone(),
-        );
-
-        let webview = builder
-            .build_gtk(&fixed)
-            .context("building Linux Wayland GTK overlay webview")?;
-
-        let mut host = Self {
-            current_url: desired.url.clone(),
-            current_html: desired.html.clone(),
-            bounds: webview_bounds,
-            background_color: desired.background_color,
-            opacity: -1.0,
-            live,
-            live_permission_handler,
-            desired,
-            webview,
-            _context: context,
-            backend: LinuxWebViewBackend::Wayland { overlay_window },
-        };
-        host.apply(scale_factor, Some(parent_origin));
+        host.apply(scale_factor);
         Ok(host)
     }
 
@@ -348,79 +228,58 @@ impl LinuxWebViewHost {
             || self.desired.devtools != webview.devtools
             || self.desired.zoom_hotkeys_enabled != webview.zoom_hotkeys_enabled
             || self.desired.media_autoplay != webview.media_autoplay
-            || self.desired.focused != webview.focused
             || self.desired.clipboard_access != webview.clipboard_access
+            || self.desired.custom_protocol_schemes != webview.custom_protocol_schemes
     }
 
-    fn update_desired(
-        &mut self,
-        desired: PlatformWebView,
-        scale_factor: f32,
-        parent_origin: Option<Point<Pixels>>,
-    ) {
+    fn update_desired(&mut self, desired: PlatformWebView, scale_factor: f32) {
+        let focused_changed = self.desired.focused != desired.focused;
         *self.live.borrow_mut() = desired.clone();
         *self.live_permission_handler.write() = desired.permission_handler.clone();
+        self._protocol_registration.update(&desired);
         self.desired = desired;
-        self.apply(scale_factor, parent_origin);
+        self.apply(scale_factor);
+        if focused_changed {
+            match self.desired.focused {
+                Some(true) => self.webview.focus().log_err(),
+                Some(false) => self.webview.focus_parent().log_err(),
+                None => None,
+            };
+        }
     }
 
-    fn apply(&mut self, _scale_factor: f32, parent_origin: Option<Point<Pixels>>) {
-        let _ = &parent_origin;
-        match &self.backend {
-            LinuxWebViewBackend::X11 => {
-                if self.bounds != self.desired.bounds {
-                    self.webview
-                        .set_bounds(to_wry_rect(self.desired.bounds))
-                        .log_err();
-                    self.bounds = self.desired.bounds;
-                }
-            }
-            #[cfg(feature = "wayland")]
-            LinuxWebViewBackend::Wayland { overlay_window } => {
-                let overlay_bounds = parent_origin
-                    .map(|origin| overlay_bounds(origin, self.desired.bounds))
-                    .unwrap_or(self.desired.bounds);
-                let webview_bounds = zero_origin_bounds(self.desired.bounds);
-
-                overlay_window.move_(
-                    overlay_bounds.origin.x.0 as i32,
-                    overlay_bounds.origin.y.0 as i32,
-                );
-                overlay_window.resize(
-                    overlay_bounds.size.width.0.max(1.0) as i32,
-                    overlay_bounds.size.height.0.max(1.0) as i32,
-                );
-
-                if self.bounds != webview_bounds {
-                    self.webview
-                        .set_bounds(to_wry_rect(webview_bounds))
-                        .log_err();
-                    self.bounds = webview_bounds;
-                }
-
-                if self.desired.visible {
-                    overlay_window.show_all();
-                } else {
-                    overlay_window.hide();
-                }
-            }
+    fn apply(&mut self, _scale_factor: f32) {
+        if self.bounds != self.desired.bounds {
+            self.webview
+                .set_bounds(to_wry_rect(self.desired.bounds))
+                .log_err();
+            self.bounds = self.desired.bounds;
         }
 
-        if !self.desired.url.is_empty() && self.current_url != self.desired.url {
-            if let Some(headers) = self.desired.request_headers.clone() {
+        if !self.desired.url.is_empty() && self.rendered_url != self.desired.url {
+            let loaded = if let Some(headers) = self.desired.request_headers.clone() {
                 self.webview
                     .load_url_with_headers(self.desired.url.as_ref(), headers)
-                    .log_err();
+                    .log_err()
             } else {
-                self.webview.load_url(self.desired.url.as_ref()).log_err();
+                self.webview.load_url(self.desired.url.as_ref()).log_err()
+            };
+            if loaded.is_some() {
+                *self.live_top_level_origin.write() = serialized_origin(&self.desired.url);
+                self.rendered_url = self.desired.url.clone();
+                self.rendered_html = None;
             }
-            self.current_url = self.desired.url.clone();
-            self.current_html = None;
-        } else if self.desired.url.is_empty() && self.current_html != self.desired.html {
+        } else if self.desired.url.is_empty() && self.rendered_html != self.desired.html {
             if let Some(html) = self.desired.html.as_ref() {
-                self.webview.load_html(html.as_ref()).log_err();
+                if self.webview.load_html(html.as_ref()).log_err().is_some() {
+                    *self.live_top_level_origin.write() = None;
+                    self.rendered_url = SharedString::default();
+                    self.rendered_html = self.desired.html.clone();
+                }
+            } else {
+                self.rendered_url = SharedString::default();
+                self.rendered_html = None;
             }
-            self.current_html = self.desired.html.clone();
         }
 
         if self.background_color != self.desired.background_color {
@@ -435,13 +294,7 @@ impl LinuxWebViewHost {
 
         if self.opacity != self.desired.opacity {
             let opacity = self.desired.opacity.clamp(0.0, 1.0) as f64;
-            match &self.backend {
-                LinuxWebViewBackend::X11 => self.webview.webview().set_opacity(opacity),
-                #[cfg(feature = "wayland")]
-                LinuxWebViewBackend::Wayland { overlay_window } => {
-                    overlay_window.set_opacity(opacity)
-                }
-            }
+            self.webview.webview().set_opacity(opacity);
             self.opacity = self.desired.opacity;
         }
 
@@ -454,22 +307,19 @@ impl LinuxWebViewHost {
                 self.webview
                     .load_url(url.as_ref())
                     .context("navigating Linux WebView")?;
-                self.current_url = url;
-                self.current_html = None;
+                *self.live_top_level_origin.write() = serialized_origin(&url);
             }
             PlatformWebViewCommand::NavigateWithHeaders { url, headers, .. } => {
                 self.webview
                     .load_url_with_headers(url.as_ref(), headers)
                     .context("navigating Linux WebView with headers")?;
-                self.current_url = url;
-                self.current_html = None;
+                *self.live_top_level_origin.write() = serialized_origin(&url);
             }
             PlatformWebViewCommand::LoadHtml { html, .. } => {
                 self.webview
                     .load_html(html.as_ref())
                     .context("loading HTML into Linux WebView")?;
-                self.current_url = SharedString::default();
-                self.current_html = Some(html);
+                *self.live_top_level_origin.write() = None;
             }
             PlatformWebViewCommand::EvaluateJavaScript { script, .. } => {
                 self.webview
@@ -480,14 +330,18 @@ impl LinuxWebViewHost {
                 script, callback, ..
             } => {
                 let callback_for_result = callback.clone();
-                if let Err(error) = self
-                    .webview
-                    .evaluate_script_with_callback(script.as_ref(), move |result| {
-                        callback_for_result(Ok(result.into()))
-                    })
+                if let Err(error) =
+                    self.webview
+                        .evaluate_script_with_callback(script.as_ref(), move |result| {
+                            super::catch_platform_callback("webview JavaScript result", (), || {
+                                callback_for_result(Ok(result.into()));
+                            });
+                        })
                 {
                     let message: SharedString = error.to_string().into();
-                    callback(Err(message.clone()));
+                    super::catch_platform_callback("webview JavaScript error", (), || {
+                        callback(Err(message.clone()));
+                    });
                     anyhow::bail!(message);
                 }
             }
@@ -506,12 +360,12 @@ impl LinuxWebViewHost {
             }
             PlatformWebViewCommand::GoBack { .. } => {
                 self.webview
-                    .evaluate_script("history.back()")
+                    .go_back()
                     .context("navigating Linux WebView backward")?;
             }
             PlatformWebViewCommand::GoForward { .. } => {
                 self.webview
-                    .evaluate_script("history.forward()")
+                    .go_forward()
                     .context("navigating Linux WebView forward")?;
             }
             PlatformWebViewCommand::OpenDevTools { .. } => {
@@ -565,76 +419,147 @@ impl LinuxWebViewHost {
                 );
             }
             PlatformWebViewCommand::ReadCookies { url, callback, .. } => {
-                callback(read_webview_cookies(&self.webview, url));
+                read_webview_cookies(&self.webview, url, callback);
             }
             PlatformWebViewCommand::SetCookie {
                 cookie, callback, ..
             } => {
-                callback(set_webview_cookie(&self.webview, cookie));
+                set_webview_cookie(&self.webview, cookie, callback);
             }
             PlatformWebViewCommand::DeleteCookie {
                 cookie, callback, ..
             } => {
-                callback(delete_webview_cookie(&self.webview, cookie));
+                delete_webview_cookie(&self.webview, cookie, callback);
             }
         }
         Ok(())
     }
 }
 
-fn set_webview_cookie(webview: &WebView, cookie: WebViewCookie) -> Result<(), SharedString> {
-    let cookie = webview_cookie_to_wry(cookie);
-    webview
-        .set_cookie(&cookie)
-        .map_err(|error| error.to_string().into())
-}
-
-fn delete_webview_cookie(webview: &WebView, cookie: WebViewCookie) -> Result<(), SharedString> {
-    let cookie = webview_cookie_to_wry(cookie);
-    webview
-        .delete_cookie(&cookie)
-        .map_err(|error| error.to_string().into())
-}
-
 fn read_webview_cookies(
     webview: &WebView,
     url: Option<SharedString>,
-) -> Result<Vec<WebViewCookie>, SharedString> {
-    let cookies = if let Some(url) = url {
-        webview.cookies_for_url(url.as_ref())
+    callback: WebViewCookieCallback,
+) {
+    let Some(manager) = webview_cookie_manager(webview) else {
+        defer_cookie_callback(
+            callback,
+            Err("Linux WebView cookie manager unavailable".into()),
+        );
+        return;
+    };
+    let finish = move |result: Result<Vec<soup::Cookie>, gtk::glib::Error>| {
+        let result = result
+            .map(|cookies| cookies.into_iter().map(webview_cookie_from_soup).collect())
+            .map_err(|error| SharedString::from(error.to_string()));
+        super::catch_platform_callback("webview cookie read", (), || callback(result));
+    };
+    if let Some(url) = url {
+        manager.cookies(url.as_ref(), None::<&gtk::gio::Cancellable>, finish);
     } else {
-        webview.cookies()
+        linux_cookie_ffi::CookieManagerExtAll::all_cookies(
+            &manager,
+            None::<&gtk::gio::Cancellable>,
+            finish,
+        );
     }
-    .map_err(|error| SharedString::from(error.to_string()))?;
-
-    Ok(cookies.into_iter().map(webview_cookie_from_wry).collect())
 }
 
-fn webview_cookie_from_wry(cookie: wry::cookie::Cookie<'static>) -> WebViewCookie {
+fn set_webview_cookie(
+    webview: &WebView,
+    cookie: WebViewCookie,
+    callback: WebViewCookieMutationCallback,
+) {
+    let Some(manager) = webview_cookie_manager(webview) else {
+        defer_cookie_mutation_callback(
+            callback,
+            Err("Linux WebView cookie manager unavailable".into()),
+        );
+        return;
+    };
+    let mut cookie = webview_cookie_to_soup(cookie);
+    manager.add_cookie(&mut cookie, None::<&gtk::gio::Cancellable>, move |result| {
+        let result = result.map_err(|error| SharedString::from(error.to_string()));
+        super::catch_platform_callback("webview cookie write", (), || callback(result));
+    });
+}
+
+fn delete_webview_cookie(
+    webview: &WebView,
+    cookie: WebViewCookie,
+    callback: WebViewCookieMutationCallback,
+) {
+    let Some(manager) = webview_cookie_manager(webview) else {
+        defer_cookie_mutation_callback(
+            callback,
+            Err("Linux WebView cookie manager unavailable".into()),
+        );
+        return;
+    };
+    let mut cookie = webview_cookie_to_soup(cookie);
+    manager.delete_cookie(&mut cookie, None::<&gtk::gio::Cancellable>, move |result| {
+        let result = result.map_err(|error| SharedString::from(error.to_string()));
+        super::catch_platform_callback("webview cookie deletion", (), || callback(result));
+    });
+}
+
+fn webview_cookie_manager(webview: &WebView) -> Option<webkit2gtk::CookieManager> {
+    webview
+        .webview()
+        .website_data_manager()
+        .and_then(|manager| manager.cookie_manager())
+}
+
+fn defer_cookie_callback(
+    callback: WebViewCookieCallback,
+    result: Result<Vec<WebViewCookie>, SharedString>,
+) {
+    gtk::glib::idle_add_local_once(move || {
+        super::catch_platform_callback("webview cookie read", (), || callback(result));
+    });
+}
+
+fn defer_cookie_mutation_callback(
+    callback: WebViewCookieMutationCallback,
+    result: Result<(), SharedString>,
+) {
+    gtk::glib::idle_add_local_once(move || {
+        super::catch_platform_callback("webview cookie mutation", (), || callback(result));
+    });
+}
+
+fn webview_cookie_from_soup(mut cookie: soup::Cookie) -> WebViewCookie {
     WebViewCookie {
-        name: cookie.name().to_string().into(),
-        value: cookie.value().to_string().into(),
+        name: cookie
+            .name()
+            .map(|name| name.to_string().into())
+            .unwrap_or_default(),
+        value: cookie
+            .value()
+            .map(|value| value.to_string().into())
+            .unwrap_or_default(),
         domain: cookie.domain().map(|domain| domain.to_string().into()),
         path: cookie.path().map(|path| path.to_string().into()),
-        secure: cookie.secure().unwrap_or(false),
-        http_only: cookie.http_only().unwrap_or(false),
+        secure: cookie.is_secure(),
+        http_only: cookie.is_http_only(),
     }
 }
 
-fn webview_cookie_to_wry(cookie: WebViewCookie) -> wry::cookie::Cookie<'static> {
-    let mut builder =
-        wry::cookie::CookieBuilder::new(cookie.name.to_string(), cookie.value.to_string())
-            .secure(cookie.secure)
-            .http_only(cookie.http_only);
-
-    if let Some(domain) = cookie.domain {
-        builder = builder.domain(domain.to_string());
-    }
-    if let Some(path) = cookie.path {
-        builder = builder.path(path.to_string());
-    }
-
-    builder.build()
+fn webview_cookie_to_soup(cookie: WebViewCookie) -> soup::Cookie {
+    let mut soup_cookie = soup::Cookie::new(
+        cookie.name.as_ref(),
+        cookie.value.as_ref(),
+        cookie
+            .domain
+            .as_ref()
+            .map(|domain| domain.as_ref())
+            .unwrap_or(""),
+        cookie.path.as_ref().map(|path| path.as_ref()).unwrap_or(""),
+        -1,
+    );
+    soup_cookie.set_secure(cookie.secure);
+    soup_cookie.set_http_only(cookie.http_only);
+    soup_cookie
 }
 
 fn ensure_gtk_webview_runtime() -> Result<()> {
@@ -647,11 +572,14 @@ fn configure_webview_builder<'a>(
     bounds: Bounds<Pixels>,
     live: Rc<RefCell<PlatformWebView>>,
     live_permission_handler: Arc<RwLock<Option<crate::webview::WebViewPermissionHandler>>>,
+    live_top_level_origin: Arc<RwLock<Option<SharedString>>>,
 ) -> WebViewBuilder<'a> {
+    let ipc_nonce = uuid::Uuid::new_v4().simple().to_string();
     if desired.storage_key.is_none() {
         builder = builder.with_incognito(true);
     }
 
+    let permission_origin = live_top_level_origin.clone();
     builder = builder.with_permission_handler(move |kind| {
         let handler = live_permission_handler.read().clone();
         handler
@@ -659,7 +587,14 @@ fn configure_webview_builder<'a>(
                 let decision = super::catch_platform_callback(
                     "webview native permission policy",
                     crate::WebViewPermissionDecision::Deny,
-                    || handler(permission_kind_from_wry(kind)),
+                    || {
+                        handler(
+                            crate::WebViewNativePermissionRequest::with_top_level_origin(
+                                permission_kind_from_wry(kind),
+                                permission_origin.read().clone(),
+                            ),
+                        )
+                    },
                 );
                 permission_response_to_wry(decision)
             })
@@ -698,6 +633,9 @@ fn configure_webview_builder<'a>(
     builder = builder.with_clipboard(desired.clipboard_access);
 
     let ipc_live = live.clone();
+    let ipc_nonce_for_handler = ipc_nonce.clone();
+    let ipc_origin = live_top_level_origin.clone();
+    let rejected_ipc_reported = AtomicBool::new(false);
     builder = builder.with_ipc_handler(move |request| {
         let (handler, mut async_window) = {
             let live = ipc_live.borrow();
@@ -707,9 +645,18 @@ fn configure_webview_builder<'a>(
             return;
         };
 
-        let body = request.body().to_string();
-        let payload =
-            serde_json::from_str(&body).unwrap_or_else(|_| serde_json::Value::String(body));
+        let expected_origin = ipc_origin.read().clone();
+        if !ipc_source_matches_top_level(
+            &request.uri().to_string(),
+            expected_origin.as_ref().map(|origin| origin.as_ref()),
+        ) {
+            warn_rejected_ipc_once(&rejected_ipc_reported, "Linux");
+            return;
+        }
+        let Some(payload) = decode_bridge_message(request.body(), &ipc_nonce_for_handler) else {
+            warn_rejected_ipc_once(&rejected_ipc_reported, "Linux");
+            return;
+        };
         super::catch_platform_callback("webview message", (), || {
             let _ = async_window.update(|window, cx| handler(payload, window, cx));
         });
@@ -766,12 +713,19 @@ fn configure_webview_builder<'a>(
         NewWindowResponse::Deny
     });
 
-    builder = builder.with_initialization_script(bridge_script(desired.storage_key.as_ref()));
+    builder = builder.with_initialization_script_for_main_only(
+        bridge_script(desired.storage_key.as_ref(), &ipc_nonce),
+        true,
+    );
     for css in &desired.injected_css {
-        builder = builder.with_initialization_script(css_script(css.as_ref()));
+        builder = builder.with_initialization_script_for_main_only(
+            main_frame_script(&css_script(css.as_ref())),
+            true,
+        );
     }
     for javascript in &desired.injected_javascript {
-        builder = builder.with_initialization_script(javascript.as_ref());
+        builder = builder
+            .with_initialization_script_for_main_only(main_frame_script(javascript.as_ref()), true);
     }
 
     let download_started_live = live.clone();
@@ -815,7 +769,9 @@ fn configure_webview_builder<'a>(
     });
 
     let page_load_live = live.clone();
+    let page_load_origin = live_top_level_origin;
     builder = builder.with_on_page_load_handler(move |event, url| {
+        *page_load_origin.write() = serialized_origin(&url);
         let (handler, async_window) = {
             let live = page_load_live.borrow();
             (live.page_load_handler.clone(), live.async_window.clone())
@@ -993,17 +949,83 @@ fn resolve_new_window_policy(
     WebViewNewWindowPolicy::NavigateCurrent
 }
 
-#[cfg(feature = "wayland")]
-fn zero_origin_bounds(bounds: Bounds<Pixels>) -> Bounds<Pixels> {
-    Bounds::new(Point::default(), bounds.size)
-}
+mod linux_cookie_ffi {
+    use gtk::{
+        gio::{self, Cancellable, ffi::GAsyncReadyCallback},
+        glib::{
+            self,
+            prelude::IsA,
+            translate::{FromGlibPtrContainer, ToGlibPtr},
+        },
+    };
+    use webkit2gtk::CookieManager;
 
-#[cfg(feature = "wayland")]
-fn overlay_bounds(parent_origin: Point<Pixels>, child_bounds: Bounds<Pixels>) -> Bounds<Pixels> {
-    let mut origin = parent_origin;
-    origin.x += child_bounds.origin.x;
-    origin.y += child_bounds.origin.y;
-    Bounds::new(origin, child_bounds.size)
+    pub(super) trait CookieManagerExtAll: IsA<CookieManager> + 'static {
+        fn all_cookies<P: FnOnce(Result<Vec<soup::Cookie>, glib::Error>) + 'static>(
+            &self,
+            cancellable: Option<&impl IsA<Cancellable>>,
+            callback: P,
+        ) {
+            let main_context = glib::MainContext::ref_thread_default();
+            let owns_context = main_context.is_owner();
+            let acquired_context = (!owns_context)
+                .then(|| main_context.acquire().ok())
+                .flatten();
+            assert!(
+                owns_context || acquired_context.is_some(),
+                "WebView cookie operations require ownership of the GTK main context"
+            );
+
+            let user_data: Box<glib::thread_guard::ThreadGuard<P>> =
+                Box::new(glib::thread_guard::ThreadGuard::new(callback));
+            unsafe extern "C" fn trampoline<
+                P: FnOnce(Result<Vec<soup::Cookie>, glib::Error>) + 'static,
+            >(
+                source: *mut glib::gobject_ffi::GObject,
+                result: *mut gio::ffi::GAsyncResult,
+                user_data: glib::ffi::gpointer,
+            ) {
+                let mut error = std::ptr::null_mut();
+                let cookies = unsafe {
+                    webkit_cookie_manager_get_all_cookies_finish(source.cast(), result, &mut error)
+                };
+                let result = if error.is_null() {
+                    Ok(unsafe { FromGlibPtrContainer::from_glib_full(cookies) })
+                } else {
+                    Err(unsafe { glib::translate::from_glib_full(error) })
+                };
+                let callback: Box<glib::thread_guard::ThreadGuard<P>> =
+                    unsafe { Box::from_raw(user_data.cast()) };
+                callback.into_inner()(result);
+            }
+
+            unsafe {
+                webkit_cookie_manager_get_all_cookies(
+                    self.as_ref().to_glib_none().0,
+                    cancellable.map(|value| value.as_ref()).to_glib_none().0,
+                    Some(trampoline::<P>),
+                    Box::into_raw(user_data).cast(),
+                );
+            }
+        }
+    }
+
+    impl CookieManagerExtAll for CookieManager {}
+
+    unsafe extern "C" {
+        fn webkit_cookie_manager_get_all_cookies(
+            cookie_manager: *mut webkit2gtk_sys::WebKitCookieManager,
+            cancellable: *mut gio::ffi::GCancellable,
+            callback: GAsyncReadyCallback,
+            user_data: glib::ffi::gpointer,
+        );
+
+        fn webkit_cookie_manager_get_all_cookies_finish(
+            cookie_manager: *mut webkit2gtk_sys::WebKitCookieManager,
+            result: *mut gio::ffi::GAsyncResult,
+            error: *mut *mut glib::ffi::GError,
+        ) -> *mut glib::ffi::GList;
+    }
 }
 
 #[cfg(feature = "x11")]

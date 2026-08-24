@@ -1,6 +1,22 @@
 use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 
+const SPINNER_START_ANGLE_DEGREES: f32 = 270.0;
+
+fn spinner_gradient(active_color: Hsla, track_color: Hsla, rotation_degrees: f32) -> Background {
+    conic_gradient(
+        0.5,
+        0.5,
+        SPINNER_START_ANGLE_DEGREES + rotation_degrees.rem_euclid(360.0),
+        &[
+            linear_color_stop(active_color, 0.0),
+            linear_color_stop(active_color, 0.75),
+            linear_color_stop(track_color, 0.75),
+            linear_color_stop(track_color, 1.0),
+        ],
+    )
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SpinnerSize {
     Xs,
@@ -154,7 +170,6 @@ impl RenderOnce for Spinner {
         let user_style = self.style;
         let frame_size = self.size.frame_pixels();
         let stroke_width = self.size.stroke_width();
-        let inner_size = frame_size - stroke_width * 2.0;
         let animation_repeat = self.animation_repeat;
 
         let active_color = match self.shade {
@@ -181,18 +196,6 @@ impl RenderOnce for Spinner {
                 | SpinnerVariant::Muted => tokens.input,
             },
         };
-        let spinner_bg = conic_gradient(
-            0.5,
-            0.5,
-            270.0,
-            &[
-                linear_color_stop(active_color, 0.0),
-                linear_color_stop(active_color, 0.75),
-                linear_color_stop(track_color, 0.75),
-                linear_color_stop(track_color, 1.0),
-            ],
-        );
-
         let accessibility = if self.decorative {
             AccessibilityAttributes::new(AccessibilityRole::Group)
                 .states(AccessibilityState::HIDDEN)
@@ -216,22 +219,10 @@ impl RenderOnce for Spinner {
             .child({
                 let spinner = div()
                     .size(frame_size)
-                    .relative()
-                    .overflow_hidden()
+                    .flex_shrink_0()
                     .rounded_full()
-                    .bg(spinner_bg)
-                    .child(
-                        div()
-                            .absolute()
-                            .left(stroke_width)
-                            .top(stroke_width)
-                            .size(inner_size)
-                            .rounded_full()
-                            .bg(match self.shade {
-                                SpinnerShade::OnMedia => kael::transparent_black(),
-                                _ => tokens.background,
-                            }),
-                    );
+                    .border(stroke_width)
+                    .border_gradient(spinner_gradient(active_color, track_color, 0.0));
 
                 if window.animations_enabled() {
                     spinner
@@ -240,7 +231,13 @@ impl RenderOnce for Spinner {
                             Animation::new(std::time::Duration::from_millis(730))
                                 .repeat(animation_repeat)
                                 .with_easing(crate::animations::easings::linear),
-                            |el, delta| el.rotate(delta * 360.0),
+                            move |el, delta| {
+                                el.border_gradient(spinner_gradient(
+                                    active_color,
+                                    track_color,
+                                    delta * 360.0,
+                                ))
+                            },
                         )
                         .into_any_element()
                 } else {
@@ -279,7 +276,7 @@ mod validation_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{Spinner, SpinnerVariant};
+    use super::{Spinner, SpinnerVariant, spinner_gradient};
     use kael::Repeat;
 
     #[test]
@@ -292,5 +289,20 @@ mod tests {
     fn preview_cycles_are_finite_and_nonzero() {
         let spinner = Spinner::new().animation_cycles(0);
         assert_eq!(spinner.animation_repeat, Repeat::Count(1));
+    }
+
+    #[test]
+    fn gradient_rotation_is_seamless_at_a_full_turn() {
+        let active = kael::white();
+        let track = active.opacity(0.3);
+
+        assert_eq!(
+            spinner_gradient(active, track, 0.0),
+            spinner_gradient(active, track, 360.0)
+        );
+        assert_ne!(
+            spinner_gradient(active, track, 0.0),
+            spinner_gradient(active, track, 90.0)
+        );
     }
 }

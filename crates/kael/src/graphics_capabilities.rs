@@ -35,6 +35,8 @@ pub struct GraphicsCapabilityReport {
     pub styled_elements: GraphicsCapabilityStatus,
     /// Immediate-mode drawing with `canvas`, `Window::paint_quad`, and `Window::paint_path`.
     pub immediate_canvas: GraphicsCapabilityStatus,
+    /// Bounded retained 2D quads, sprites, paths, triangles, transforms, clips, and opacity.
+    pub portable_retained_surface: GraphicsCapabilityStatus,
     /// Vector path building and stroke/fill rendering.
     pub vector_paths: GraphicsCapabilityStatus,
     /// Linear, radial, conic, and multi-stop gradients.
@@ -66,10 +68,11 @@ impl GraphicsCapabilityReport {
     }
 
     /// Return the report statuses as a compact list for dashboards/tests.
-    pub fn statuses(&self) -> [GraphicsCapabilityStatus; 12] {
+    pub fn statuses(&self) -> [GraphicsCapabilityStatus; 13] {
         [
             self.styled_elements,
             self.immediate_canvas,
+            self.portable_retained_surface,
             self.vector_paths,
             self.gradients,
             self.svg,
@@ -125,6 +128,7 @@ pub fn graphics_capability_report() -> GraphicsCapabilityReport {
     GraphicsCapabilityReport {
         styled_elements: GraphicsCapabilityStatus::Full,
         immediate_canvas: GraphicsCapabilityStatus::Full,
+        portable_retained_surface: GraphicsCapabilityStatus::Full,
         vector_paths: GraphicsCapabilityStatus::Full,
         gradients: GraphicsCapabilityStatus::Full,
         svg: GraphicsCapabilityStatus::Full,
@@ -161,7 +165,7 @@ mod tests {
         let lottie_enabled = cfg!(feature = "lottie");
         assert_eq!(
             report.count_status(GraphicsCapabilityStatus::Full),
-            if lottie_enabled { 6 } else { 5 }
+            if lottie_enabled { 7 } else { 6 }
         );
         assert_eq!(
             report.count_status(GraphicsCapabilityStatus::Disabled),
@@ -172,6 +176,10 @@ mod tests {
         assert_eq!(report.count_status(GraphicsCapabilityStatus::Roadmap), 2);
         assert_eq!(report.styled_elements, GraphicsCapabilityStatus::Full);
         assert_eq!(report.immediate_canvas, GraphicsCapabilityStatus::Full);
+        assert_eq!(
+            report.portable_retained_surface,
+            GraphicsCapabilityStatus::Full
+        );
         assert_eq!(report.vector_paths, GraphicsCapabilityStatus::Full);
         assert_eq!(report.gradients, GraphicsCapabilityStatus::Full);
         assert_eq!(report.svg, GraphicsCapabilityStatus::Full);
@@ -202,7 +210,7 @@ mod tests {
             report.to_text(),
             format!(
                 "graphics capabilities: full {}, partial 3, webview 1, roadmap 2, disabled {}, all native full false",
-                if lottie_enabled { 6 } else { 5 },
+                if lottie_enabled { 7 } else { 6 },
                 if lottie_enabled { 0 } else { 1 }
             )
         );

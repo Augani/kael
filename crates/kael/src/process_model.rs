@@ -1836,6 +1836,13 @@ pub trait WorkerTask: Send + 'static {
 // Worker IPC Protocol
 // ---------------------------------------------------------------------------
 
+/// Version shared by native process workers and browser Web Workers.
+///
+/// A peer must reject a handshake carrying any other version. Keeping this
+/// constant next to the typed worker protocol prevents browser and native
+/// transports from silently drifting apart.
+pub const WORKER_PROTOCOL_VERSION: u32 = 1;
+
 /// A request sent from host to worker.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum WorkerRequest {

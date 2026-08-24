@@ -278,7 +278,13 @@ impl PlatformTextSystem for DirectWriteTextSystem {
     }
 
     fn supports_subpixel_glyphs(&self) -> bool {
-        true
+        // A window can move between RGB, BGR, rotated, scaled, or compositor-
+        // transformed displays while reusing the same glyph atlas. Per-channel
+        // ClearType coverage bakes one panel's stripe layout into that atlas and
+        // produces color fringing on another. DirectWrite grayscale coverage is
+        // display-independent, uses one byte per atlas texel, and matches Kael's
+        // macOS/Linux/browser policy.
+        false
     }
 
     fn layout_line(&self, text: &str, font_size: Pixels, runs: &[FontRun]) -> LineLayout {

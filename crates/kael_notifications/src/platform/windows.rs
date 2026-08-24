@@ -10,7 +10,7 @@ use windows::{
 
 use crate::{
     action::NotificationAction,
-    local::{LocalNotification, NotificationPayload},
+    local::{DEFAULT_NOTIFICATION_ACTION_ID, LocalNotification, NotificationPayload},
 };
 
 use super::{NotificationBackend, PlatformNotificationSupport};
@@ -21,6 +21,12 @@ pub(crate) const SUPPORT: PlatformNotificationSupport = PlatformNotificationSupp
     delivery_backend: "windows-runtime-toast",
     action_backend: "windows-runtime-toast-activation",
     push_backend: "not-implemented",
+    asynchronous_permission: false,
+    immediate_delivery: true,
+    interval_triggers: true,
+    system_triggers: false,
+    actions: true,
+    cancellation: false,
 };
 
 impl NotificationBackend for PlatformBackend {
@@ -39,7 +45,7 @@ impl NotificationBackend for PlatformBackend {
         let toast = ToastNotification::CreateToastNotification(&document)
             .map_err(|error| anyhow!("failed to create toast notification: {error}"))?;
 
-        if let Some(on_action) = on_action.filter(|_| !actions.is_empty()) {
+        if let Some(on_action) = on_action {
             toast
                 .Activated(&TypedEventHandler::<
                     ToastNotification,
@@ -49,9 +55,11 @@ impl NotificationBackend for PlatformBackend {
                         if let Ok(args) = args.cast::<ToastActivatedEventArgs>() {
                             if let Ok(arguments) = args.Arguments() {
                                 let action_id = arguments.to_string();
-                                if !action_id.is_empty() {
-                                    on_action(action_id);
-                                }
+                                on_action(if action_id.is_empty() {
+                                    DEFAULT_NOTIFICATION_ACTION_ID.into()
+                                } else {
+                                    action_id
+                                });
                             }
                         }
                     }

@@ -18,6 +18,8 @@ mod app;
 pub mod app_runtime;
 /// Background job orchestration with worker-pool integration.
 pub mod background_jobs;
+/// Portable pointer-lock and game-controller input.
+pub mod game_input;
 /// Gesture recognizers and higher-level pointer interaction types.
 pub mod gesture;
 /// Pre-built panel implementations for common dock areas.
@@ -75,12 +77,15 @@ mod lottie;
 pub mod media_capture;
 #[cfg(feature = "media")]
 pub mod media_playback;
+mod native_pointer;
 mod path_builder;
 mod pixel_snap;
 mod platform;
 /// Platform capability detection and feature-level support reporting.
 pub mod platform_caps;
 pub mod plugin;
+/// Bounded retained 2D commands shared by native and browser renderers.
+pub mod portable_scene;
 pub mod prelude;
 mod print;
 pub mod process_model;
@@ -114,6 +119,8 @@ pub mod text_engine;
 mod text_system;
 /// Application themes with JSON or TOML loading and file hot-reload support.
 pub mod theme;
+#[cfg(target_arch = "wasm32")]
+mod timer;
 mod tracer;
 mod util;
 /// Video color: YCbCr→RGB matrices and transfer functions.
@@ -173,6 +180,7 @@ pub use executor::*;
 pub use extension_host::*;
 pub use extension_rpc::*;
 pub use file_watcher::*;
+pub use game_input::*;
 pub use geometry::*;
 pub use gesture::*;
 pub use global::*;
@@ -185,12 +193,29 @@ pub use inspector::*;
 pub use interactive::*;
 pub use ipc_transport::*;
 pub use kael_macros::{AppContext, IntoElement, Render, VisualContext, register_action, test};
+/// Portable, bounded networking and collaboration transports.
+pub use kael_net as net;
+#[cfg(feature = "notifications-full")]
+pub use kael_notifications as notifications;
+#[cfg(feature = "notifications-full")]
+pub use kael_notifications::{
+    ActionOptions as LocalNotificationActionOptions, AuthorizationOptions,
+    CircularRegion as NotificationCircularRegion, DateComponents as NotificationDateComponents,
+    LocalNotification, NotificationAction as LocalNotificationAction, NotificationAttachment,
+    NotificationCategory, NotificationCenter, NotificationError, NotificationEvent, NotificationId,
+    NotificationOperationResult, NotificationPayload, NotificationPermissionStatus,
+    NotificationSound, NotificationTrigger, PlatformNotificationSupport,
+    PushToken as NotificationPushToken, Subscription as NotificationSubscription,
+};
+#[cfg(feature = "office")]
+pub use kael_office as office;
 #[cfg(feature = "pdf")]
 pub use kael_pdf as pdf;
 #[cfg(feature = "share")]
 pub use kael_share::{
-    PlatformShareSupport, ShareFileType, ShareImage, ShareItem, ShareReceiver, ShareResult,
-    ShareSheet, ShareSheetBuilder, ShareType, cleanup_share_temps,
+    PlatformShareSupport, ShareError, ShareFile, ShareFileType, ShareImage, ShareItem,
+    ShareOperationResult, ShareReceiver, ShareResult, ShareSheet, ShareSheetBuilder, ShareType,
+    cleanup_share_temps,
 };
 use key_dispatch::*;
 pub use keymap::*;
@@ -203,8 +228,48 @@ pub use panels::*;
 pub use path_builder::*;
 pub use pixel_snap::PixelSnapPolicy;
 pub use platform::*;
+
+/// Build the retained GSK paintable used by Kael's native-Wayland composition proof.
+///
+/// This hidden integration hook is available only with `webview-wayland-gtk4` and is
+/// not part of Kael's stable application API.
+#[cfg(all(
+    feature = "webview-wayland-gtk4",
+    any(target_os = "linux", target_os = "freebsd")
+))]
+#[doc(hidden)]
+pub fn gtk4_wayland_scene_proof_paintable() -> anyhow::Result<gtk4::gdk::Paintable> {
+    platform::gtk4_wayland_scene_proof_paintable()
+}
+
+/// Return the number of event-driven GTK4/calloop wakeups observed so far.
+///
+/// This hidden integration hook exists only for the native-Wayland release
+/// smoke and is not part of Kael's stable application API.
+#[cfg(all(
+    feature = "webview-wayland-gtk4",
+    any(target_os = "linux", target_os = "freebsd")
+))]
+#[doc(hidden)]
+pub fn gtk4_wayland_event_wakeup_count() -> u64 {
+    platform::gtk4_wayland_event_wakeup_count()
+}
+
+/// Return the number of GTK frame-clock callbacks observed so far.
+///
+/// This hidden integration hook exists only for the native-Wayland release
+/// smoke and is not part of Kael's stable application API.
+#[cfg(all(
+    feature = "webview-wayland-gtk4",
+    any(target_os = "linux", target_os = "freebsd")
+))]
+#[doc(hidden)]
+pub fn gtk4_wayland_frame_tick_count() -> u64 {
+    platform::gtk4_wayland_frame_tick_count()
+}
 pub use platform_caps::*;
 pub use plugin::*;
+pub use portable_scene::*;
 pub use print::*;
 pub use process_model::*;
 pub use refineable::*;
@@ -215,6 +280,7 @@ pub use security::*;
 pub use session_store::*;
 pub use shared_string::*;
 pub use shared_uri::*;
+#[cfg(not(target_arch = "wasm32"))]
 pub use smol::Timer;
 pub use split_pane::*;
 pub use status_bar::*;
@@ -230,6 +296,8 @@ pub use test::*;
 pub use text_engine::*;
 pub use text_system::*;
 pub use theme::*;
+#[cfg(target_arch = "wasm32")]
+pub use timer::Timer;
 pub use tracer::*;
 #[cfg(any(test, feature = "test-support"))]
 pub use util::smol_timeout;

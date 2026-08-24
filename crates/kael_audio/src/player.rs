@@ -7,6 +7,14 @@ use parking_lot::Mutex;
 
 use crate::effects::{clamp_playback_rate, clamp_volume};
 
+#[cfg(target_arch = "wasm32")]
+mod web;
+#[cfg(target_arch = "wasm32")]
+use web::WebAudioHandle as PlaybackHandle;
+
+#[cfg(not(target_arch = "wasm32"))]
+type PlaybackHandle = kael_media::AudioHandle;
+
 type StateListener = Rc<dyn Fn(PlaybackState) + 'static>;
 type PositionListener = Rc<dyn Fn(Duration) + 'static>;
 
@@ -56,7 +64,7 @@ impl std::fmt::Debug for Subscription {
 /// A source of audio content.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum AudioSource {
-    /// Audio loaded from a file on disk.
+    /// Audio loaded from a file on disk (native targets only).
     File(PathBuf),
     /// Audio loaded from a URL.
     Url(String),
@@ -81,6 +89,7 @@ impl std::fmt::Debug for AudioSource {
 }
 
 impl AudioSource {
+    #[cfg(not(target_arch = "wasm32"))]
     fn to_media_source(&self) -> kael_media::MediaSource {
         match self {
             Self::File(path) => kael_media::MediaSource::file(path.clone()),
@@ -141,10 +150,12 @@ const MAX_MEMORY_SOURCE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_URL_BYTES: usize = 16 * 1024;
 const MAX_ERROR_BYTES: usize = 4 * 1024;
 
-/// A clonable, thread-local audio player that wraps `kael-media` playback.
+/// A clonable, thread-local audio player.
 ///
-/// Clone it freely on the UI thread. Device-independent mixing and live output use
-/// [`crate::Mixer`] and [`crate::AudioEngine`], which are designed for cross-thread control.
+/// Native targets use Kael's media backend; browsers use `HTMLAudioElement`. Clone it freely on the
+/// UI thread. Device-independent mixing is available through [`crate::Mixer`]. Native live output
+/// uses [`crate::AudioEngine`], while its synchronous constructor is explicitly unsupported in a
+/// browser because `AudioWorklet` setup is asynchronous.
 #[derive(Clone)]
 pub struct AudioPlayer {
     inner: Rc<Mutex<AudioPlayerState>>,
@@ -152,7 +163,7 @@ pub struct AudioPlayer {
 
 struct AudioPlayerState {
     current_track: Option<Track>,
-    handle: Option<kael_media::AudioHandle>,
+    handle: Option<PlaybackHandle>,
     playback_state: PlaybackState,
     volume: f32,
     rate: f32,
@@ -232,15 +243,10 @@ impl AudioPlayer {
         }
         notify_state_listeners(&loading_listeners, PlaybackState::Loading);
 
-        let duration = smol::unblock({
-            let media_source = source.to_media_source();
-            move || kael_media::probe_audio_duration(media_source)
-        })
-        .await;
+        let prepared = prepare_audio_handle(&source).await;
 
-        match duration {
-            Ok(duration) => {
-                let handle = kael_media::AudioHandle::new(source.to_media_source());
+        match prepared {
+            Ok((handle, duration)) => {
                 let (track, listeners) = {
                     let mut state = self.inner.lock();
                     if state.load_generation != my_generation {
@@ -275,7 +281,7 @@ impl AudioPlayer {
                     state.state_listeners.values().cloned().collect::<Vec<_>>()
                 };
                 notify_state_listeners(&listeners, PlaybackState::Error(message));
-                Err(error.into())
+                Err(error)
             }
         }
     }
@@ -348,17 +354,15 @@ impl AudioPlayer {
             )
         };
 
-        let handle = handle.or_else(|| {
-            source.map(|source| {
-                let handle = kael_media::AudioHandle::new(source.to_media_source());
+        let handle = match (handle, source) {
+            (Some(handle), _) => handle,
+            (None, Some(source)) => {
+                let handle = create_audio_handle(&source)?;
                 handle.set_volume(volume);
                 handle.set_speed(rate);
                 handle
-            })
-        });
-
-        let Some(handle) = handle else {
-            anyhow::bail!("cannot seek without a loaded track");
+            }
+            (None, None) => anyhow::bail!("cannot seek without a loaded track"),
         };
         let position = duration.map_or(position, |duration| position.min(duration));
         handle.seek(position)?;
@@ -512,7 +516,7 @@ impl AudioPlayer {
         })
     }
 
-    fn ensure_track_handle(&self, track: &Track) -> Result<kael_media::AudioHandle> {
+    fn ensure_track_handle(&self, track: &Track) -> Result<PlaybackHandle> {
         let (current_track, existing_handle, volume, rate) = {
             let state = self.inner.lock();
             (
@@ -530,7 +534,7 @@ impl AudioPlayer {
         }
 
         validate_source(&track.source)?;
-        let handle = kael_media::AudioHandle::new(track.source.to_media_source());
+        let handle = create_audio_handle(&track.source)?;
         handle.set_volume(volume);
         handle.set_speed(rate);
         let previous_handle = {
@@ -568,6 +572,36 @@ impl AudioPlayer {
         let state = self.inner.lock();
         state.position_listeners.values().cloned().collect()
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn prepare_audio_handle(source: &AudioSource) -> Result<(PlaybackHandle, Option<Duration>)> {
+    let duration = smol::unblock({
+        let media_source = source.to_media_source();
+        move || kael_media::probe_audio_duration(media_source)
+    })
+    .await?;
+    Ok((
+        kael_media::AudioHandle::new(source.to_media_source()),
+        duration,
+    ))
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn prepare_audio_handle(source: &AudioSource) -> Result<(PlaybackHandle, Option<Duration>)> {
+    PlaybackHandle::load(source.clone())
+        .await
+        .map_err(Into::into)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn create_audio_handle(source: &AudioSource) -> Result<PlaybackHandle> {
+    Ok(kael_media::AudioHandle::new(source.to_media_source()))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn create_audio_handle(source: &AudioSource) -> Result<PlaybackHandle> {
+    PlaybackHandle::new(source.clone()).map_err(Into::into)
 }
 
 fn validate_source(source: &AudioSource) -> Result<()> {

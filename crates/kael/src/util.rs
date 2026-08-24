@@ -50,6 +50,11 @@ pub(crate) fn base_data_dir() -> anyhow::Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("XDG_DATA_HOME or HOME environment variable not set"))
 }
 
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn base_data_dir() -> anyhow::Result<PathBuf> {
+    anyhow::bail!("native application data paths are not available in browser builds")
+}
+
 pub use util::*;
 
 /// A helper trait for building complex objects with imperative conditionals in a fluent style.

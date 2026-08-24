@@ -33,6 +33,7 @@ regex = "1"
 unicode-bidi = "0.3"
 unicode-linebreak = "0.1.5"
 unicode-segmentation.workspace = true
+web-time = "1.1"
 
 [lints]
 workspace = true

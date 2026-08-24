@@ -363,21 +363,18 @@ impl RenderOnce for Dropdown {
         let key_handler = {
             let state = state.clone();
             move |event: &KeyDownEvent, window: &mut Window, cx: &mut App| {
+                if event.keystroke.modifiers.modified() {
+                    return;
+                }
                 let key = event.keystroke.key.as_str();
                 let handled = match key {
                     "escape" => {
                         state.update(cx, |s, cx| s.close(cx));
                         true
                     }
-                    "space" | "enter" if !state.read(cx).open => {
-                        state.update(cx, |s, cx| {
-                            s.open = true;
-                            s.highlighted_index = first_enabled;
-                            s.scroll_highlighted_into_view();
-                            cx.notify();
-                        });
-                        true
-                    }
+                    // Div synthesizes the trigger click on key-up. Do not
+                    // mutate on both halves of a single key press.
+                    "space" | "enter" => true,
                     "up" | "down" => {
                         if enabled_indices.is_empty() {
                             true
@@ -396,16 +393,6 @@ impl RenderOnce for Dropdown {
                             });
                             true
                         }
-                    }
-                    "space" | "enter" => {
-                        if let Some(index) = state.read(cx).highlighted_index
-                            && let Some(item) = keyboard_items.get(index)
-                            && let Some(handler) = item.on_click.as_ref()
-                        {
-                            handler(window, cx);
-                        }
-                        state.update(cx, |s, cx| s.close(cx));
-                        true
                     }
                     _ => false,
                 };
@@ -439,14 +426,26 @@ impl RenderOnce for Dropdown {
                     .cursor_pointer()
                     .on_click({
                         let state = state.clone();
-                        move |_, window, cx| {
+                        move |event, window, cx| {
                             window.focus(&focus_handle);
-                            state.update(cx, |s, cx| {
-                                s.toggle(cx);
-                                if s.open {
-                                    s.highlighted_index = first_enabled;
+                            if event.is_keyboard() && state.read(cx).open {
+                                let highlighted = state.read(cx).highlighted_index;
+                                let handler = highlighted
+                                    .and_then(|index| keyboard_items.get(index))
+                                    .and_then(|item| item.on_click.clone());
+                                if let Some(handler) = handler {
+                                    handler(window, cx);
                                 }
-                            });
+                                state.update(cx, |s, cx| s.close(cx));
+                            } else {
+                                state.update(cx, |s, cx| {
+                                    s.toggle(cx);
+                                    if s.open {
+                                        s.highlighted_index = first_enabled;
+                                        s.scroll_highlighted_into_view();
+                                    }
+                                });
+                            }
                         }
                     })
                     .child(self.trigger)
@@ -645,8 +644,12 @@ impl RenderOnce for Dropdown {
 
 #[cfg(test)]
 mod tests {
-    use super::{DropdownState, next_enabled_index};
-    use kael::{AppContext as _, px};
+    use super::{Dropdown, DropdownItem, DropdownState, next_enabled_index};
+    use kael::{
+        AppContext as _, Context, Entity, IntoElement, KeyUpEvent, Keystroke, ParentElement as _,
+        Render, TestAppContext, Window, div, px,
+    };
+    use std::{cell::Cell, rc::Rc};
 
     #[test]
     fn keyboard_navigation_skips_disabled_and_separator_indices() {
@@ -692,5 +695,66 @@ mod tests {
             state.read(cx).scroll_highlighted_into_view();
             assert_eq!(state.read(cx).scroll_handle.offset().y, px(0.0));
         });
+    }
+
+    struct KeyboardDropdownHost {
+        state: Entity<DropdownState>,
+        first: Rc<Cell<usize>>,
+        second: Rc<Cell<usize>>,
+    }
+
+    impl Render for KeyboardDropdownHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let first = self.first.clone();
+            let second = self.second.clone();
+            Dropdown::new(self.state.clone(), div().child("Open actions")).items(vec![
+                DropdownItem::new("first", "First")
+                    .on_click(move |_, _| first.set(first.get() + 1)),
+                DropdownItem::new("second", "Second")
+                    .on_click(move |_, _| second.set(second.get() + 1)),
+            ])
+        }
+    }
+
+    #[test]
+    fn keyboard_click_sequence_opens_and_commits_exactly_once() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let state = cx.new(DropdownState::new);
+        let first = Rc::new(Cell::new(0));
+        let second = Rc::new(Cell::new(0));
+        let (_host, window) = cx.add_window_view({
+            let state = state.clone();
+            let first = first.clone();
+            let second = second.clone();
+            move |_, _| KeyboardDropdownHost {
+                state,
+                first,
+                second,
+            }
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        window.simulate_keystrokes("tab enter");
+        assert!(
+            !window.update(|_, cx| state.read(cx).is_open()),
+            "key-down alone must not toggle before the standard click"
+        );
+        window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").expect("valid keystroke"),
+        });
+        assert!(window.update(|_, cx| state.read(cx).is_open()));
+
+        window.simulate_keystrokes("down enter");
+        assert!(window.update(|_, cx| state.read(cx).is_open()));
+        assert_eq!(first.get(), 0);
+        assert_eq!(second.get(), 0, "key-down must not commit early");
+        window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").expect("valid keystroke"),
+        });
+        assert!(!window.update(|_, cx| state.read(cx).is_open()));
+        assert_eq!(first.get(), 0);
+        assert_eq!(second.get(), 1, "the highlighted action must run once");
     }
 }

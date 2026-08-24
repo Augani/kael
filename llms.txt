@@ -1,8 +1,9 @@
 # Kael
 
-> Native, GPU-accelerated application framework for building capable,
-> resource-efficient desktop software in Rust. Kael 0.3 is a pre-1.0
-> production candidate using Rust 1.97.1 and Rust 2024.
+> GPU-accelerated application framework for building capable,
+> resource-efficient Rust software for native desktops and an opt-in
+> WebAssembly/WebGL2 browser canvas. Kael 0.4 is a pre-1.0 production
+> candidate using Rust 1.97.1 and Rust 2024.
 
 ## Primary references
 
@@ -20,7 +21,8 @@
 ## Architecture
 
 - `kael`: renderer, application runtime, entities, elements, styling, text,
-  layout, input, accessibility, windows, and native platform primitives.
+  layout, input, accessibility, windows, native platform primitives, and the
+  opt-in browser backend.
 - `kael_ui`: optional, brandable component system built on `kael`.
 - `kael` never depends on `kael_ui`.
 - Focused `kael_*` crates provide storage, secrets, networking, documents,
@@ -33,22 +35,22 @@ Core primitives:
 
 ```toml
 [dependencies]
-kael = "0.3"
+kael = "0.4"
 ```
 
 Core plus ready-made components:
 
 ```toml
 [dependencies]
-kael = "0.3"
-kael_ui = "0.3"
+kael = "0.4"
+kael_ui = "0.4"
 ```
 
 Lean Linux X11 build without WebView:
 
 ```toml
 [dependencies]
-kael = { version = "0.3", default-features = false, features = ["font-kit", "x11"] }
+kael = { version = "0.4", default-features = false, features = ["font-kit", "x11"] }
 ```
 
 ## Minimal application shape
@@ -104,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `Disabled` means a required compile-time feature, such as `webview`, is off.
 - A request builder validates intent; it is not proof of backend support.
 
-Kael 0.3 does not provide native push registration, geolocation,
+Kael 0.4 does not provide native push registration, geolocation,
 USB/HID/serial/Bluetooth discovery and I/O, native spellchecking, file-promise
 drag sources, app-window snapshot backends, or share-receiver registration.
 Do not generate code that claims these are complete.

@@ -1,6 +1,6 @@
 //! Platform metadata and delivery backends.
 
-use std::sync::Arc;
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use anyhow::{Result, anyhow};
 
@@ -14,6 +14,8 @@ use crate::{
 mod linux;
 #[cfg(target_os = "macos")]
 mod mac;
+#[cfg(target_arch = "wasm32")]
+mod web;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -21,6 +23,8 @@ mod windows;
 use linux as imp;
 #[cfg(target_os = "macos")]
 use mac as imp;
+#[cfg(target_arch = "wasm32")]
+use web as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
@@ -33,11 +37,35 @@ pub struct PlatformNotificationSupport {
     pub action_backend: &'static str,
     /// The push-registration backend.
     pub push_backend: &'static str,
+    /// Whether permission is decided through an asynchronous prompt.
+    pub asynchronous_permission: bool,
+    /// Whether immediate notification delivery is available.
+    pub immediate_delivery: bool,
+    /// Whether in-process interval triggers are available.
+    pub interval_triggers: bool,
+    /// Whether calendar or location triggers are available.
+    pub system_triggers: bool,
+    /// Whether application-defined action buttons are available.
+    pub actions: bool,
+    /// Whether delivered notifications can be closed by identifier.
+    pub cancellation: bool,
 }
 
 /// Returns the notification support metadata for the current target.
 pub const fn support() -> PlatformNotificationSupport {
     imp::SUPPORT
+}
+
+/// Returns the current notification permission state without opening a prompt.
+pub fn permission_status() -> crate::NotificationPermissionStatus {
+    #[cfg(target_arch = "wasm32")]
+    {
+        imp::permission_status()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::NotificationPermissionStatus::PlatformManaged
+    }
 }
 
 /// Configure the AppUserModelID used for Windows toast delivery.
@@ -53,6 +81,14 @@ pub fn set_windows_app_user_model_id(id: impl Into<String>) -> Result<()> {
 pub(crate) trait NotificationBackend: Send + Sync + 'static {
     fn request_authorization(&self, _options: &AuthorizationOptions) -> Result<bool> {
         Ok(true)
+    }
+
+    fn request_authorization_async<'a>(
+        &'a self,
+        options: &'a AuthorizationOptions,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + 'a>> {
+        let result = self.request_authorization(options);
+        Box::pin(async move { result })
     }
 
     fn deliver(
@@ -74,6 +110,10 @@ pub(crate) trait NotificationBackend: Send + Sync + 'static {
             "application badge counts are not implemented on this platform"
         ))
     }
+
+    fn cancel(&self, _id: crate::NotificationId) {}
+
+    fn cancel_all(&self) {}
 }
 
 pub(crate) fn default_backend() -> Arc<dyn NotificationBackend> {

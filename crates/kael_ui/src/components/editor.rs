@@ -4,13 +4,226 @@ use crate::theme::{Theme, use_theme};
 use kael::{prelude::FluentBuilder as _, *};
 use regex::Regex;
 use ropey::Rope;
-use smol::Timer;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
+
+// Tree-sitter's native C runtime does not target `wasm32-unknown-unknown`.
+// Keep the editor's public surface and all in-memory editing behavior available
+// in browsers, while making syntax parsing an explicit no-op there.  The real
+// dependency and implementation remain unchanged on native targets.
+#[cfg(target_arch = "wasm32")]
+#[doc(hidden)]
+#[allow(clippy::result_unit_err, clippy::unnecessary_wraps)]
+pub mod tree_sitter {
+    use std::ops::Range;
+
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct Language;
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct Point {
+        pub row: usize,
+        pub column: usize,
+    }
+
+    impl Point {
+        pub const fn new(row: usize, column: usize) -> Self {
+            Self { row, column }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct InputEdit {
+        pub start_byte: usize,
+        pub old_end_byte: usize,
+        pub new_end_byte: usize,
+        pub start_position: Point,
+        pub old_end_position: Point,
+        pub new_end_position: Point,
+    }
+
+    #[derive(Clone, Debug, Default)]
+    pub struct Tree;
+
+    impl Tree {
+        pub fn edit(&mut self, _edit: &InputEdit) {}
+
+        pub fn root_node(&self) -> Node {
+            Node
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct Node;
+
+    impl Node {
+        pub fn walk(self) -> TreeCursor {
+            TreeCursor
+        }
+
+        pub fn kind(self) -> &'static str {
+            ""
+        }
+
+        pub fn start_position(self) -> Point {
+            Point::default()
+        }
+
+        pub fn end_position(self) -> Point {
+            Point::default()
+        }
+
+        pub fn descendant_for_point_range(self, _start: Point, _end: Point) -> Option<Self> {
+            None
+        }
+
+        pub fn parent(self) -> Option<Self> {
+            None
+        }
+
+        pub fn child_count(self) -> usize {
+            0
+        }
+
+        pub fn child(self, _index: usize) -> Option<Self> {
+            None
+        }
+
+        pub fn byte_range(self) -> Range<usize> {
+            0..0
+        }
+
+        pub fn start_byte(self) -> usize {
+            0
+        }
+
+        pub fn end_byte(self) -> usize {
+            0
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct TreeCursor;
+
+    impl TreeCursor {
+        pub fn node(self) -> Node {
+            Node
+        }
+
+        pub fn goto_first_child(&mut self) -> bool {
+            false
+        }
+
+        pub fn goto_next_sibling(&mut self) -> bool {
+            false
+        }
+
+        pub fn goto_parent(&mut self) -> bool {
+            false
+        }
+    }
+
+    #[derive(Debug, Default)]
+    pub struct Parser;
+
+    impl Parser {
+        pub fn new() -> Self {
+            Self
+        }
+
+        pub fn set_language(&mut self, _language: &Language) -> Result<(), ()> {
+            Ok(())
+        }
+
+        pub fn parse(&mut self, _content: &str, _old_tree: Option<&Tree>) -> Option<Tree> {
+            None
+        }
+
+        pub fn parse_with_options<T, F>(
+            &mut self,
+            _callback: &mut F,
+            _old_tree: Option<&Tree>,
+            _options: Option<()>,
+        ) -> Option<Tree>
+        where
+            T: AsRef<[u8]>,
+            F: FnMut(usize, Point) -> T,
+        {
+            None
+        }
+    }
+
+    #[derive(Debug, Default)]
+    pub struct Query {
+        capture_names: Vec<&'static str>,
+    }
+
+    impl Query {
+        pub fn new(_language: &Language, _source: &str) -> Result<Self, ()> {
+            Ok(Self::default())
+        }
+
+        pub fn capture_names(&self) -> &[&'static str] {
+            &self.capture_names
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct QueryCapture {
+        pub index: u32,
+        pub node: Node,
+    }
+
+    #[derive(Debug, Default)]
+    pub struct QueryMatch {
+        pub captures: &'static [QueryCapture],
+    }
+
+    #[derive(Debug, Default)]
+    pub struct QueryMatches;
+
+    pub trait StreamingIterator {
+        type Item;
+
+        fn next(&mut self) -> Option<&Self::Item>;
+    }
+
+    impl StreamingIterator for QueryMatches {
+        type Item = QueryMatch;
+
+        fn next(&mut self) -> Option<&Self::Item> {
+            None
+        }
+    }
+
+    #[derive(Debug, Default)]
+    pub struct QueryCursor;
+
+    impl QueryCursor {
+        pub fn new() -> Self {
+            Self
+        }
+
+        pub fn set_byte_range(&mut self, _range: Range<usize>) {}
+
+        pub fn matches<F, T>(
+            &mut self,
+            _query: &Query,
+            _node: Node,
+            _text_provider: F,
+        ) -> QueryMatches
+        where
+            F: FnMut(Node) -> T,
+        {
+            QueryMatches
+        }
+    }
+}
+
 use tree_sitter::{
     InputEdit, Parser, Point as TSPoint, Query, QueryCursor, StreamingIterator, Tree,
 };
@@ -238,6 +451,39 @@ pub enum Language {
     Plain,
 }
 
+/// Syntax-processing backend available to the editor on the current target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorSyntaxBackend {
+    /// Native Tree-sitter parsing, highlighting, folding, and scope discovery.
+    TreeSitter,
+    /// Browser-safe plain-text editing without Tree-sitter-derived features.
+    PlainText,
+}
+
+impl EditorSyntaxBackend {
+    /// Returns the backend selected by the compilation target.
+    pub const fn current() -> Self {
+        if cfg!(target_arch = "wasm32") {
+            Self::PlainText
+        } else {
+            Self::TreeSitter
+        }
+    }
+
+    /// Stable backend key for diagnostics and capability-aware UI.
+    pub const fn to_text(self) -> &'static str {
+        match self {
+            Self::TreeSitter => "tree-sitter",
+            Self::PlainText => "plain-text",
+        }
+    }
+
+    /// Whether syntax trees and Tree-sitter-derived features are available.
+    pub const fn supports_syntax_trees(self) -> bool {
+        matches!(self, Self::TreeSitter)
+    }
+}
+
 impl Language {
     /// Stable language key for content-safe diagnostics.
     pub fn to_text(&self) -> &'static str {
@@ -331,134 +577,157 @@ impl Language {
         }
     }
 
+    /// Returns the native Tree-sitter grammar for this language when available.
+    ///
+    /// Browser editors always return `None`: the language packages embed C
+    /// parsers that do not target `wasm32-unknown-unknown`, so browser builds
+    /// intentionally retain the editor's plain-text backend instead.
     pub fn tree_sitter_language(&self) -> Option<tree_sitter::Language> {
-        match self {
-            #[cfg(feature = "tree-sitter-rust")]
-            Language::Rust => Some(tree_sitter_rust::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-javascript")]
-            Language::JavaScript => Some(tree_sitter_javascript::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-typescript")]
-            Language::TypeScript => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
-            #[cfg(all(
-                feature = "tree-sitter-javascript",
-                not(feature = "tree-sitter-typescript")
-            ))]
-            Language::TypeScript => Some(tree_sitter_javascript::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-python")]
-            Language::Python => Some(tree_sitter_python::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-json")]
-            Language::Json => Some(tree_sitter_json::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-toml-ng")]
-            Language::Toml => Some(tree_sitter_toml_ng::language()),
-            #[cfg(feature = "tree-sitter-md")]
-            Language::Markdown => Some(tree_sitter_md::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-go")]
-            Language::Go => Some(tree_sitter_go::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-c")]
-            Language::C => Some(tree_sitter_c::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-cpp")]
-            Language::Cpp => Some(tree_sitter_cpp::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-java")]
-            Language::Java => Some(tree_sitter_java::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-ruby")]
-            Language::Ruby => Some(tree_sitter_ruby::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-bash")]
-            Language::Bash => Some(tree_sitter_bash::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-css")]
-            Language::Css => Some(tree_sitter_css::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-html")]
-            Language::Html => Some(tree_sitter_html::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-yaml")]
-            Language::Yaml => Some(tree_sitter_yaml::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-lua")]
-            Language::Lua => Some(tree_sitter_lua::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-zig")]
-            Language::Zig => Some(tree_sitter_zig::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-scala")]
-            Language::Scala => Some(tree_sitter_scala::LANGUAGE.into()),
-            #[cfg(feature = "tree-sitter-php")]
-            Language::Php => Some(tree_sitter_php::LANGUAGE_PHP.into()),
-            #[cfg(feature = "tree-sitter-ocaml")]
-            Language::OCaml => Some(tree_sitter_ocaml::LANGUAGE_OCAML.into()),
-            #[cfg(feature = "tree-sitter-sequel")]
-            Language::Sql => Some(tree_sitter_sequel::LANGUAGE.into()),
-            _ => None,
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            match self {
+                #[cfg(feature = "tree-sitter-rust")]
+                Language::Rust => Some(tree_sitter_rust::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-javascript")]
+                Language::JavaScript => Some(tree_sitter_javascript::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-typescript")]
+                Language::TypeScript => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
+                #[cfg(all(
+                    feature = "tree-sitter-javascript",
+                    not(feature = "tree-sitter-typescript")
+                ))]
+                Language::TypeScript => Some(tree_sitter_javascript::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-python")]
+                Language::Python => Some(tree_sitter_python::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-json")]
+                Language::Json => Some(tree_sitter_json::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-toml-ng")]
+                Language::Toml => Some(tree_sitter_toml_ng::language()),
+                #[cfg(feature = "tree-sitter-md")]
+                Language::Markdown => Some(tree_sitter_md::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-go")]
+                Language::Go => Some(tree_sitter_go::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-c")]
+                Language::C => Some(tree_sitter_c::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-cpp")]
+                Language::Cpp => Some(tree_sitter_cpp::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-java")]
+                Language::Java => Some(tree_sitter_java::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-ruby")]
+                Language::Ruby => Some(tree_sitter_ruby::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-bash")]
+                Language::Bash => Some(tree_sitter_bash::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-css")]
+                Language::Css => Some(tree_sitter_css::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-html")]
+                Language::Html => Some(tree_sitter_html::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-yaml")]
+                Language::Yaml => Some(tree_sitter_yaml::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-lua")]
+                Language::Lua => Some(tree_sitter_lua::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-zig")]
+                Language::Zig => Some(tree_sitter_zig::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-scala")]
+                Language::Scala => Some(tree_sitter_scala::LANGUAGE.into()),
+                #[cfg(feature = "tree-sitter-php")]
+                Language::Php => Some(tree_sitter_php::LANGUAGE_PHP.into()),
+                #[cfg(feature = "tree-sitter-ocaml")]
+                Language::OCaml => Some(tree_sitter_ocaml::LANGUAGE_OCAML.into()),
+                #[cfg(feature = "tree-sitter-sequel")]
+                Language::Sql => Some(tree_sitter_sequel::LANGUAGE.into()),
+                _ => None,
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            None
         }
     }
 
+    /// Returns the native Tree-sitter highlight query when available.
+    ///
+    /// Browser editors always return `None` together with
+    /// [`Self::tree_sitter_language`].
     pub fn highlight_query_source(&self) -> Option<std::borrow::Cow<'static, str>> {
-        match self {
-            #[cfg(feature = "tree-sitter-rust")]
-            Language::Rust => Some(tree_sitter_rust::HIGHLIGHTS_QUERY.into()),
-            #[cfg(feature = "tree-sitter-javascript")]
-            Language::JavaScript => Some(tree_sitter_javascript::HIGHLIGHT_QUERY.into()),
-            #[cfg(all(feature = "tree-sitter-typescript", feature = "tree-sitter-javascript"))]
-            Language::TypeScript => {
-                let combined = format!(
-                    "{}\n{}",
-                    tree_sitter_javascript::HIGHLIGHT_QUERY,
-                    tree_sitter_typescript::HIGHLIGHTS_QUERY
-                );
-                Some(combined.into())
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            match self {
+                #[cfg(feature = "tree-sitter-rust")]
+                Language::Rust => Some(tree_sitter_rust::HIGHLIGHTS_QUERY.into()),
+                #[cfg(feature = "tree-sitter-javascript")]
+                Language::JavaScript => Some(tree_sitter_javascript::HIGHLIGHT_QUERY.into()),
+                #[cfg(all(feature = "tree-sitter-typescript", feature = "tree-sitter-javascript"))]
+                Language::TypeScript => {
+                    let combined = format!(
+                        "{}\n{}",
+                        tree_sitter_javascript::HIGHLIGHT_QUERY,
+                        tree_sitter_typescript::HIGHLIGHTS_QUERY
+                    );
+                    Some(combined.into())
+                }
+                #[cfg(all(
+                    feature = "tree-sitter-typescript",
+                    not(feature = "tree-sitter-javascript")
+                ))]
+                Language::TypeScript => Some(tree_sitter_typescript::HIGHLIGHTS_QUERY.into()),
+                #[cfg(all(
+                    feature = "tree-sitter-javascript",
+                    not(feature = "tree-sitter-typescript")
+                ))]
+                Language::TypeScript => Some(tree_sitter_javascript::HIGHLIGHT_QUERY.into()),
+                #[cfg(feature = "tree-sitter-python")]
+                Language::Python => Some(tree_sitter_python::HIGHLIGHTS_QUERY.into()),
+                #[cfg(feature = "tree-sitter-json")]
+                Language::Json => Some(tree_sitter_json::HIGHLIGHTS_QUERY.into()),
+                #[cfg(feature = "tree-sitter-toml-ng")]
+                Language::Toml => Some(tree_sitter_toml_ng::HIGHLIGHTS_QUERY.into()),
+                #[cfg(feature = "tree-sitter-md")]
+                Language::Markdown => Some(tree_sitter_md::HIGHLIGHT_QUERY_BLOCK.into()),
+                #[cfg(feature = "tree-sitter-go")]
+                Language::Go => Some(tree_sitter_go::HIGHLIGHTS_QUERY.into()),
+                #[cfg(feature = "tree-sitter-c")]
+                Language::C => Some(tree_sitter_c::HIGHLIGHT_QUERY.into()),
+                #[cfg(all(feature = "tree-sitter-cpp", feature = "tree-sitter-c"))]
+                Language::Cpp => {
+                    let combined = format!(
+                        "{}\n{}",
+                        tree_sitter_c::HIGHLIGHT_QUERY,
+                        tree_sitter_cpp::HIGHLIGHT_QUERY
+                    );
+                    Some(combined.into())
+                }
+                #[cfg(all(feature = "tree-sitter-cpp", not(feature = "tree-sitter-c")))]
+                Language::Cpp => Some(tree_sitter_cpp::HIGHLIGHT_QUERY.into()),
+                #[cfg(feature = "tree-sitter-java")]
+                Language::Java => Some(tree_sitter_java::HIGHLIGHTS_QUERY.into()),
+                #[cfg(feature = "tree-sitter-ruby")]
+                Language::Ruby => Some(tree_sitter_ruby::HIGHLIGHTS_QUERY.into()),
+                #[cfg(feature = "tree-sitter-bash")]
+                Language::Bash => Some(tree_sitter_bash::HIGHLIGHT_QUERY.into()),
+                #[cfg(feature = "tree-sitter-css")]
+                Language::Css => Some(tree_sitter_css::HIGHLIGHTS_QUERY.into()),
+                #[cfg(feature = "tree-sitter-html")]
+                Language::Html => Some(tree_sitter_html::HIGHLIGHTS_QUERY.into()),
+                #[cfg(feature = "tree-sitter-yaml")]
+                Language::Yaml => Some(tree_sitter_yaml::HIGHLIGHTS_QUERY.into()),
+                #[cfg(feature = "tree-sitter-lua")]
+                Language::Lua => Some(tree_sitter_lua::HIGHLIGHTS_QUERY.into()),
+                #[cfg(feature = "tree-sitter-zig")]
+                Language::Zig => Some(tree_sitter_zig::HIGHLIGHTS_QUERY.into()),
+                #[cfg(feature = "tree-sitter-scala")]
+                Language::Scala => Some(tree_sitter_scala::HIGHLIGHTS_QUERY.into()),
+                #[cfg(feature = "tree-sitter-php")]
+                Language::Php => Some(tree_sitter_php::HIGHLIGHTS_QUERY.into()),
+                #[cfg(feature = "tree-sitter-ocaml")]
+                Language::OCaml => Some(tree_sitter_ocaml::HIGHLIGHTS_QUERY.into()),
+                #[cfg(feature = "tree-sitter-sequel")]
+                Language::Sql => Some(tree_sitter_sequel::HIGHLIGHTS_QUERY.into()),
+                _ => None,
             }
-            #[cfg(all(
-                feature = "tree-sitter-typescript",
-                not(feature = "tree-sitter-javascript")
-            ))]
-            Language::TypeScript => Some(tree_sitter_typescript::HIGHLIGHTS_QUERY.into()),
-            #[cfg(all(
-                feature = "tree-sitter-javascript",
-                not(feature = "tree-sitter-typescript")
-            ))]
-            Language::TypeScript => Some(tree_sitter_javascript::HIGHLIGHT_QUERY.into()),
-            #[cfg(feature = "tree-sitter-python")]
-            Language::Python => Some(tree_sitter_python::HIGHLIGHTS_QUERY.into()),
-            #[cfg(feature = "tree-sitter-json")]
-            Language::Json => Some(tree_sitter_json::HIGHLIGHTS_QUERY.into()),
-            #[cfg(feature = "tree-sitter-toml-ng")]
-            Language::Toml => Some(tree_sitter_toml_ng::HIGHLIGHTS_QUERY.into()),
-            #[cfg(feature = "tree-sitter-md")]
-            Language::Markdown => Some(tree_sitter_md::HIGHLIGHT_QUERY_BLOCK.into()),
-            #[cfg(feature = "tree-sitter-go")]
-            Language::Go => Some(tree_sitter_go::HIGHLIGHTS_QUERY.into()),
-            #[cfg(feature = "tree-sitter-c")]
-            Language::C => Some(tree_sitter_c::HIGHLIGHT_QUERY.into()),
-            #[cfg(all(feature = "tree-sitter-cpp", feature = "tree-sitter-c"))]
-            Language::Cpp => {
-                let combined = format!(
-                    "{}\n{}",
-                    tree_sitter_c::HIGHLIGHT_QUERY,
-                    tree_sitter_cpp::HIGHLIGHT_QUERY
-                );
-                Some(combined.into())
-            }
-            #[cfg(all(feature = "tree-sitter-cpp", not(feature = "tree-sitter-c")))]
-            Language::Cpp => Some(tree_sitter_cpp::HIGHLIGHT_QUERY.into()),
-            #[cfg(feature = "tree-sitter-java")]
-            Language::Java => Some(tree_sitter_java::HIGHLIGHTS_QUERY.into()),
-            #[cfg(feature = "tree-sitter-ruby")]
-            Language::Ruby => Some(tree_sitter_ruby::HIGHLIGHTS_QUERY.into()),
-            #[cfg(feature = "tree-sitter-bash")]
-            Language::Bash => Some(tree_sitter_bash::HIGHLIGHT_QUERY.into()),
-            #[cfg(feature = "tree-sitter-css")]
-            Language::Css => Some(tree_sitter_css::HIGHLIGHTS_QUERY.into()),
-            #[cfg(feature = "tree-sitter-html")]
-            Language::Html => Some(tree_sitter_html::HIGHLIGHTS_QUERY.into()),
-            #[cfg(feature = "tree-sitter-yaml")]
-            Language::Yaml => Some(tree_sitter_yaml::HIGHLIGHTS_QUERY.into()),
-            #[cfg(feature = "tree-sitter-lua")]
-            Language::Lua => Some(tree_sitter_lua::HIGHLIGHTS_QUERY.into()),
-            #[cfg(feature = "tree-sitter-zig")]
-            Language::Zig => Some(tree_sitter_zig::HIGHLIGHTS_QUERY.into()),
-            #[cfg(feature = "tree-sitter-scala")]
-            Language::Scala => Some(tree_sitter_scala::HIGHLIGHTS_QUERY.into()),
-            #[cfg(feature = "tree-sitter-php")]
-            Language::Php => Some(tree_sitter_php::HIGHLIGHTS_QUERY.into()),
-            #[cfg(feature = "tree-sitter-ocaml")]
-            Language::OCaml => Some(tree_sitter_ocaml::HIGHLIGHTS_QUERY.into()),
-            #[cfg(feature = "tree-sitter-sequel")]
-            Language::Sql => Some(tree_sitter_sequel::HIGHLIGHTS_QUERY.into()),
-            _ => None,
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            None
         }
     }
 }
@@ -576,7 +845,7 @@ pub struct EditorState {
     last_mouse_pos: Option<Point<Pixels>>,
     last_mouse_gutter_width: Pixels,
     autoscroll_task: Option<Task<()>>,
-    last_click_time: Option<std::time::Instant>,
+    last_click_time: Option<web_time::Instant>,
 
     marked_range: Option<Range<usize>>,
 
@@ -590,7 +859,7 @@ pub struct EditorState {
 
     cursor_visible: bool,
     blink_task: Option<Task<()>>,
-    last_cursor_move: std::time::Instant,
+    last_cursor_move: web_time::Instant,
     last_blink_cursor: Position,
 
     overlay_active_check: Option<Box<dyn Fn(&App) -> bool + 'static>>,
@@ -726,7 +995,7 @@ impl EditorState {
             font_family_override: None,
             cursor_visible: true,
             blink_task: None,
-            last_cursor_move: std::time::Instant::now(),
+            last_cursor_move: web_time::Instant::now(),
             last_blink_cursor: Position::zero(),
             overlay_active_check: None,
             reparse_task: None,
@@ -787,10 +1056,10 @@ impl EditorState {
 
     fn reset_cursor_blink(&mut self, cx: &mut Context<Self>) {
         self.cursor_visible = true;
-        self.last_cursor_move = std::time::Instant::now();
+        self.last_cursor_move = web_time::Instant::now();
         self.blink_task = Some(cx.spawn(async |this, cx| {
             loop {
-                smol::Timer::after(std::time::Duration::from_millis(500)).await;
+                Timer::after(std::time::Duration::from_millis(500)).await;
                 let ok = this
                     .update(cx, |state, cx| {
                         state.cursor_visible = !state.cursor_visible;
@@ -930,8 +1199,9 @@ impl EditorState {
             .unwrap_or_else(|| "none".to_string());
 
         format!(
-            "editor_state(language={}, lines={}, content_len_bytes={}, cursor={}, selection={}, has_selection={}, selection_empty={}, modified={}, has_file_path={}, undo_depth={}, redo_depth={}, has_syntax_tree={}, has_highlight_query={}, show_line_numbers={}, tab_size={}, read_only={}, search_query_len_bytes={}, has_search_query={}, search_match_count={}, has_current_match={}, search_case_sensitive={}, search_use_regex={}, fold_range_count={}, folded_range_count={}, diagnostics={}, errors={}, warnings={}, information={}, hints={}, has_visual_overrides={})",
+            "editor_state(language={}, syntax_backend={}, lines={}, content_len_bytes={}, cursor={}, selection={}, has_selection={}, selection_empty={}, modified={}, has_file_path={}, undo_depth={}, redo_depth={}, has_syntax_tree={}, has_highlight_query={}, show_line_numbers={}, tab_size={}, read_only={}, search_query_len_bytes={}, has_search_query={}, search_match_count={}, has_current_match={}, search_case_sensitive={}, search_use_regex={}, fold_range_count={}, folded_range_count={}, diagnostics={}, errors={}, warnings={}, information={}, hints={}, has_visual_overrides={})",
             self.language.to_text(),
+            self.syntax_backend().to_text(),
             self.line_count(),
             self.content_len_bytes(),
             self.cursor.to_text(),
@@ -997,6 +1267,11 @@ impl EditorState {
 
     pub fn language(&self) -> Language {
         self.language
+    }
+
+    /// Syntax-processing backend selected for this editor target.
+    pub const fn syntax_backend(&self) -> EditorSyntaxBackend {
+        EditorSyntaxBackend::current()
     }
 
     pub fn syntax_tree(&self) -> Option<&Tree> {
@@ -1768,21 +2043,21 @@ impl EditorState {
         let content = self.rope.to_string();
         let lang = self.language;
         self.syntax_tree = None;
-        let (tx, rx) = smol::channel::bounded(1);
-        std::thread::spawn(move || {
+        let parse_task = cx.background_spawn(async move {
             let mut parser = Parser::new();
             let tree_sitter_language = lang.tree_sitter_language();
             if let Some(ts_lang) = tree_sitter_language {
                 let _ = parser.set_language(&ts_lang);
-                let tree = parser.parse(&content, None);
-                let _ = tx.send_blocking(tree);
+                parser.parse(&content, None)
+            } else {
+                None
             }
         });
         cx.spawn(async move |this, cx| {
-            if let Ok(tree) = rx.recv().await {
+            if let Some(tree) = parse_task.await {
                 let _ = cx.update(|cx| {
                     let _ = this.update(cx, |state, cx| {
-                        state.syntax_tree = tree;
+                        state.syntax_tree = Some(tree);
                         state.compute_fold_ranges();
                         state.invalidate_all_caches();
                         cx.notify();
@@ -1856,7 +2131,7 @@ impl EditorState {
         self.is_modified = true;
         self.content_version = self.content_version.wrapping_add(1);
         self.cursor_visible = true;
-        self.last_cursor_move = std::time::Instant::now();
+        self.last_cursor_move = web_time::Instant::now();
     }
 
     pub fn content_version(&self) -> u64 {
@@ -2510,6 +2785,7 @@ impl EditorState {
         let use_regex = self.search_use_regex;
         let case_sensitive = self.search_case_sensitive;
         let entity = cx.entity().clone();
+        let background_executor = cx.background_executor().clone();
 
         // Cancel any in-flight search
         self.search_task = Some(cx.spawn(async move |_, cx| {
@@ -2528,37 +2804,38 @@ impl EditorState {
                 return;
             };
 
-            let matches = smol::unblock(move || {
-                let mut results = Vec::new();
-                if use_regex {
-                    let pattern = if case_sensitive {
-                        query_owned.to_string()
+            let matches = background_executor
+                .spawn(async move {
+                    let mut results = Vec::new();
+                    if use_regex {
+                        let pattern = if case_sensitive {
+                            query_owned.to_string()
+                        } else {
+                            format!("(?i){}", query_owned)
+                        };
+                        if let Ok(re) = Regex::new(&pattern) {
+                            for m in re.find_iter(&content) {
+                                results.push((m.start(), m.end()));
+                            }
+                        }
                     } else {
-                        format!("(?i){}", query_owned)
-                    };
-                    if let Ok(re) = Regex::new(&pattern) {
-                        for m in re.find_iter(&content) {
-                            results.push((m.start(), m.end()));
+                        let (haystack, needle): (String, String) = if case_sensitive {
+                            (content.to_string(), query_owned.to_string())
+                        } else {
+                            (content.to_lowercase(), query_owned.to_lowercase())
+                        };
+                        let needle_len = needle.len();
+                        let mut start = 0;
+                        while let Some(pos) = haystack[start..].find(&needle) {
+                            let match_start = start + pos;
+                            let match_end = match_start + needle_len;
+                            results.push((match_start, match_end));
+                            start = match_start + 1;
                         }
                     }
-                } else {
-                    let (haystack, needle): (String, String) = if case_sensitive {
-                        (content.to_string(), query_owned.to_string())
-                    } else {
-                        (content.to_lowercase(), query_owned.to_lowercase())
-                    };
-                    let needle_len = needle.len();
-                    let mut start = 0;
-                    while let Some(pos) = haystack[start..].find(&needle) {
-                        let match_start = start + pos;
-                        let match_end = match_start + needle_len;
-                        results.push((match_start, match_end));
-                        start = match_start + 1;
-                    }
-                }
-                results
-            })
-            .await;
+                    results
+                })
+                .await;
 
             let _ = cx.update(|cx| {
                 entity.update(cx, |state, cx| {
@@ -2959,7 +3236,7 @@ impl EditorState {
 
         let pos = self.position_for_mouse(event.position, bounds, gutter_width, line_height);
 
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
         let is_double_click = if let Some(last_time) = self.last_click_time {
             now.duration_since(last_time).as_millis() < 500
         } else {
@@ -4825,6 +5102,25 @@ mod tests {
         };
 
         assert_eq!(Language::TypeScript.to_text(), "typescript");
+        assert_eq!(
+            EditorSyntaxBackend::current(),
+            if cfg!(target_arch = "wasm32") {
+                EditorSyntaxBackend::PlainText
+            } else {
+                EditorSyntaxBackend::TreeSitter
+            }
+        );
+        #[cfg(target_arch = "wasm32")]
+        {
+            assert!(!EditorSyntaxBackend::current().supports_syntax_trees());
+            assert!(Language::Rust.tree_sitter_language().is_none());
+            assert!(Language::Rust.highlight_query_source().is_none());
+        }
+        #[cfg(all(not(target_arch = "wasm32"), feature = "tree-sitter-rust"))]
+        {
+            assert!(Language::Rust.tree_sitter_language().is_some());
+            assert!(Language::Rust.highlight_query_source().is_some());
+        }
         assert_eq!(DiagnosticSeverity::Error.to_text(), "error");
         assert_eq!(Position::new(2, 3).to_text(), "position(line=2, col=3)");
         assert!(selection.to_text().contains("reversed=true"));
@@ -4909,6 +5205,7 @@ mod tests {
 
             let summary = state.to_text();
             assert!(summary.contains("language=typescript"));
+            assert!(summary.contains("syntax_backend=tree-sitter"));
             assert!(summary.contains("cursor=position(line=1, col=7)"));
             assert!(summary.contains("has_selection=true"));
             assert!(summary.contains("read_only=true"));

@@ -5,17 +5,20 @@ use crate::{
 use anyhow::Context as _;
 use futures::AsyncReadExt;
 use image::{Frame, ImageBuffer, Rgba};
-use rasterlottie::{RenderConfig, Renderer, Rgba8};
+use rasterlottie::{PreparedAnimation, RenderConfig, Renderer, Rgba8};
 use smallvec::SmallVec;
 use std::{
+    cell::RefCell,
+    collections::VecDeque,
     fs, io,
     io::Read as _,
     path::{Path, PathBuf},
     str,
-    sync::Arc,
-    time::{Duration, Instant},
+    sync::{Arc, Weak},
+    time::Duration,
 };
 use thiserror::Error;
+use web_time::Instant;
 
 const MAX_LOTTIE_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LOTTIE_DIMENSION: u32 = 8_192;
@@ -23,6 +26,23 @@ const MAX_LOTTIE_FRAME_BYTES: usize = 256 * 1024 * 1024;
 const MAX_LOTTIE_FRAMES: usize = 100_000;
 const MAX_LOTTIE_FPS: f32 = 1_000.0;
 const MAX_LOTTIE_RENDER_BATCH: usize = 256;
+const MAX_PREPARED_ANIMATIONS_PER_THREAD: usize = 4;
+
+struct PreparedAnimationCacheEntry {
+    source: Weak<[u8]>,
+    animation: PreparedAnimation,
+}
+
+thread_local! {
+    /// Prepared animations contain `Rc` and `RefCell` caches, so they must remain on
+    /// the thread that created them. Render workers each keep a deliberately small
+    /// LRU rather than reparsing and preparing every requested frame batch.
+    static PREPARED_ANIMATION_CACHE: RefCell<VecDeque<PreparedAnimationCacheEntry>> =
+        RefCell::new(VecDeque::with_capacity(MAX_PREPARED_ANIMATIONS_PER_THREAD));
+
+    #[cfg(test)]
+    static PREPARED_ANIMATION_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// A type alias to the resource loader that the `lottie()` element uses.
 pub type LottieResourceLoader = AssetLogger<LottieAssetLoader>;
@@ -305,23 +325,23 @@ impl LottieAnimation {
             )
             .into());
         }
-        let animation = parse_animation(&self.data.bytes)?;
-        let prepared = Renderer::target_corpus().prepare(&animation)?;
         let scale = render_scale(self.data.native_pixel_size, render_size);
         let config = RenderConfig::new(Rgba8::TRANSPARENT, scale);
-        let mut rendered_frames = Vec::with_capacity(frames.len());
+        with_prepared_animation(&self.data.bytes, |prepared| {
+            let mut rendered_frames = Vec::with_capacity(frames.len());
 
-        for &frame_index in frames {
-            let frame = prepared.render_frame(self.timeline_frame(frame_index), config)?;
-            rendered_frames.push(LottieRenderedFrame {
-                frame_index,
-                image: raster_frame_to_image(frame)?,
-            });
-        }
+            for &frame_index in frames {
+                let frame = prepared.render_frame(self.timeline_frame(frame_index), config)?;
+                rendered_frames.push(LottieRenderedFrame {
+                    frame_index,
+                    image: raster_frame_to_image(frame)?,
+                });
+            }
 
-        Ok(LottieRenderBatch {
-            render_size,
-            frames: rendered_frames,
+            Ok(LottieRenderBatch {
+                render_size,
+                frames: rendered_frames,
+            })
         })
     }
 
@@ -337,9 +357,10 @@ impl LottieAnimation {
         let fps = animation.frame_rate;
         let total_frames = animation.duration_frames().ceil() as usize;
         let in_point = animation.in_point;
-        let prepared = Renderer::target_corpus().prepare(&animation)?;
+        let prepared = prepare_animation(&animation)?;
         let poster_frame =
             raster_frame_to_image(prepared.render_frame(in_point, RenderConfig::default())?)?;
+        cache_prepared_animation(&bytes, prepared);
 
         Ok(Self {
             data: Arc::new(LottieData {
@@ -732,6 +753,92 @@ fn parse_animation(bytes: &[u8]) -> Result<rasterlottie::Animation, LottieError>
     }
 }
 
+fn prepare_animation(
+    animation: &rasterlottie::Animation,
+) -> Result<PreparedAnimation, LottieError> {
+    let prepared = Renderer::target_corpus().prepare(animation)?;
+
+    #[cfg(test)]
+    PREPARED_ANIMATION_COUNT.with(|count| count.set(count.get() + 1));
+
+    Ok(prepared)
+}
+
+fn take_prepared_animation(bytes: &Arc<[u8]>) -> Option<PreparedAnimationCacheEntry> {
+    let source = Arc::downgrade(bytes);
+    PREPARED_ANIMATION_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache.retain(|entry| entry.source.strong_count() > 0);
+        let index = cache
+            .iter()
+            .position(|entry| Weak::ptr_eq(&entry.source, &source))?;
+        cache.remove(index)
+    })
+}
+
+fn cache_prepared_animation(bytes: &Arc<[u8]>, animation: PreparedAnimation) {
+    let source = Arc::downgrade(bytes);
+    PREPARED_ANIMATION_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache.retain(|entry| {
+            entry.source.strong_count() > 0 && !Weak::ptr_eq(&entry.source, &source)
+        });
+        while cache.len() >= MAX_PREPARED_ANIMATIONS_PER_THREAD {
+            cache.pop_back();
+        }
+        cache.push_front(PreparedAnimationCacheEntry { source, animation });
+    });
+}
+
+fn with_prepared_animation<T>(
+    bytes: &Arc<[u8]>,
+    render: impl FnOnce(&PreparedAnimation) -> Result<T, LottieError>,
+) -> Result<T, LottieError> {
+    let entry = if let Some(entry) = take_prepared_animation(bytes) {
+        entry
+    } else {
+        let animation = parse_animation(bytes)?;
+        PreparedAnimationCacheEntry {
+            source: Arc::downgrade(bytes),
+            animation: prepare_animation(&animation)?,
+        }
+    };
+
+    // Move the entry out of the RefCell while rendering. Besides shortening the
+    // borrow, this makes a nested render safe: it can independently miss and
+    // prepare instead of panicking on a re-entrant RefCell borrow.
+    let result = render(&entry.animation);
+    cache_prepared_animation(bytes, entry.animation);
+    result
+}
+
+#[cfg(test)]
+fn reset_prepared_animation_cache() {
+    PREPARED_ANIMATION_CACHE.with(|cache| cache.borrow_mut().clear());
+    PREPARED_ANIMATION_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn prepared_animation_count() -> usize {
+    PREPARED_ANIMATION_COUNT.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn prepared_animation_cache_len() -> usize {
+    PREPARED_ANIMATION_CACHE.with(|cache| cache.borrow().len())
+}
+
+#[cfg(test)]
+fn is_prepared_animation_cached(bytes: &Arc<[u8]>) -> bool {
+    let source = Arc::downgrade(bytes);
+    PREPARED_ANIMATION_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .iter()
+            .any(|entry| Weak::ptr_eq(&entry.source, &source))
+    })
+}
+
 fn raster_frame_to_image(
     frame: rasterlottie::RasterFrame,
 ) -> Result<Arc<RenderImage>, LottieError> {
@@ -928,6 +1035,55 @@ mod tests {
                 size(DevicePixels(128), DevicePixels(64))
             );
         }
+    }
+
+    #[test]
+    fn repeated_batches_reuse_the_thread_local_prepared_animation() {
+        reset_prepared_animation_cache();
+        let animation = LottieAnimation::from_json_str(SIMPLE_LOTTIE).unwrap();
+
+        assert_eq!(prepared_animation_count(), 1);
+        assert!(is_prepared_animation_cached(&animation.data.bytes));
+
+        for frames in [&[0, 1][..], &[2, 3][..]] {
+            animation
+                .render_batch(size(DevicePixels(64), DevicePixels(32)), frames)
+                .unwrap();
+        }
+
+        assert_eq!(prepared_animation_count(), 1);
+        assert_eq!(prepared_animation_cache_len(), 1);
+        reset_prepared_animation_cache();
+    }
+
+    #[test]
+    fn prepared_animation_cache_is_bounded_and_evicts_lru_entries() {
+        reset_prepared_animation_cache();
+        let animations = (0..=MAX_PREPARED_ANIMATIONS_PER_THREAD)
+            .map(|_| LottieAnimation::from_json_str(SIMPLE_LOTTIE).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(prepared_animation_count(), animations.len());
+        assert_eq!(
+            prepared_animation_cache_len(),
+            MAX_PREPARED_ANIMATIONS_PER_THREAD
+        );
+        assert!(!is_prepared_animation_cached(&animations[0].data.bytes));
+        assert!(is_prepared_animation_cached(
+            &animations.last().unwrap().data.bytes
+        ));
+
+        animations[0]
+            .render_batch(size(DevicePixels(64), DevicePixels(32)), &[0])
+            .unwrap();
+        assert_eq!(prepared_animation_count(), animations.len() + 1);
+        assert_eq!(
+            prepared_animation_cache_len(),
+            MAX_PREPARED_ANIMATIONS_PER_THREAD
+        );
+        assert!(is_prepared_animation_cached(&animations[0].data.bytes));
+        assert!(!is_prepared_animation_cached(&animations[1].data.bytes));
+        reset_prepared_animation_cache();
     }
 
     #[test]

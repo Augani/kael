@@ -159,6 +159,12 @@ div()
 
 For visuals that styled divs cannot express — waveforms, charts, custom paint — drop to the canvas. `canvas(prepaint, paint)` and `canvas_with_prepaint(prepaint, paint)` hand you the element's `Bounds` and the `Window`, and you paint quads, paths, and shadows directly. The prepaint closure runs first and can return data the paint closure reuses, keeping per-frame work cheap.
 
+For high-volume immediate-mode drawing, `canvas(size, draw)` exposes
+`DrawContext::reserve_commands`, `fill_rects`, and `fill_circles`. Reserve known
+work before mixed command streams, batch repeated rectangles, and prefer the
+rounded-quad circle path for particles or graph nodes that do not require vector
+tessellation.
+
 The `Waveform` component in `crates/kael_ui/src/components/waveform.rs` is the pattern to copy: it builds a `paint_data` struct in prepaint, then a free `paint_waveform(bounds, &data, window)` function does the drawing. Wrap the canvas in a positioned `div()` so layout still owns sizing:
 
 ```rust

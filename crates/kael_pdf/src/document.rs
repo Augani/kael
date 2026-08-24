@@ -2,14 +2,17 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
+    io::Write,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+use std::{
     ffi::OsString,
     fs::OpenOptions,
-    io::{Read as _, Write},
-    path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    io::Read as _,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use anyhow::{Context as _, Result, anyhow};
@@ -17,6 +20,7 @@ use lopdf::{Document as LoDocument, Object, ObjectId};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use thiserror::Error;
 
 use crate::{
     annotation::{Annotation, AnnotationId, PageAnnotation},
@@ -68,7 +72,16 @@ pub struct OutlineItem {
 #[derive(Clone)]
 pub struct PdfDocument {
     inner: Arc<Mutex<DocumentState>>,
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     file_operation_lock: Arc<smol::lock::Mutex<()>>,
+}
+
+/// A typed error returned when a filesystem-only PDF operation is requested in a browser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("PDF operation `{operation}` is unavailable in browsers; use the portable byte APIs")]
+pub struct PdfPlatformError {
+    /// The filesystem-only operation that was requested.
+    pub operation: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +93,7 @@ struct PageDescriptor {
 
 struct DocumentState {
     document: LoDocument,
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     source_path: Option<PathBuf>,
     source_digest: Option<String>,
     pages: Vec<PageDescriptor>,
@@ -196,31 +210,56 @@ struct AnnotationSidecar {
 impl PdfDocument {
     /// Opens a PDF document from disk.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let path = normalize_path(path.as_ref())?;
-        smol::unblock(move || {
-            let data = read_regular_file_bounded(&path, MAX_PDF_BYTES, "PDF document")?;
-            let document = LoDocument::load_mem(&data)
-                .with_context(|| format!("failed to open PDF document {}", path.display()))?;
-            let digest = digest_hex(&data);
-            Self::from_loaded(document, Some(path), Some(digest))
-        })
-        .await
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        {
+            let path = normalize_path(path.as_ref())?;
+            smol::unblock(move || {
+                let data = read_regular_file_bounded(&path, MAX_PDF_BYTES, "PDF document")?;
+                let document = LoDocument::load_mem(&data)
+                    .with_context(|| format!("failed to open PDF document {}", path.display()))?;
+                let digest = digest_hex(&data);
+                Self::from_loaded(document, Some(path), Some(digest))
+            })
+            .await
+        }
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        {
+            let _ = path;
+            Err(PdfPlatformError { operation: "open" }.into())
+        }
     }
 
     /// Opens a PDF document from in-memory bytes.
     pub async fn open_from_memory(data: &[u8]) -> Result<Self> {
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        {
+            ensure_size(
+                u64::try_from(data.len()).unwrap_or(u64::MAX),
+                MAX_PDF_BYTES,
+                "PDF document",
+            )?;
+            let data = data.to_vec();
+            smol::unblock(move || Self::from_bytes(&data)).await
+        }
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        {
+            Self::from_bytes(data)
+        }
+    }
+
+    /// Opens a PDF synchronously from bounded in-memory bytes on desktop or in a browser.
+    ///
+    /// Parsing is CPU work. Browser applications should call this from a Kael web worker when
+    /// opening large or untrusted documents so the UI thread remains responsive.
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
         ensure_size(
             u64::try_from(data.len()).unwrap_or(u64::MAX),
             MAX_PDF_BYTES,
             "PDF document",
         )?;
-        let data = data.to_vec();
-        smol::unblock(move || {
-            let document =
-                LoDocument::load_mem(&data).context("failed to open PDF document from memory")?;
-            Self::from_loaded(document, None, Some(digest_hex(&data)))
-        })
-        .await
+        let document =
+            LoDocument::load_mem(data).context("failed to open PDF document from memory")?;
+        Self::from_loaded(document, None, Some(digest_hex(data)))
     }
 
     /// Returns the number of pages in the document.
@@ -270,41 +309,51 @@ impl PdfDocument {
     ///
     /// The write is refused when the underlying PDF has changed since it was opened or saved.
     pub async fn save_annotations(&self) -> Result<()> {
-        let operation_lock = self.file_operation_lock.clone();
-        let _operation_guard = operation_lock.lock().await;
-        let (path, expected_digest, annotations, page_count, generation) = {
-            let state = self.inner.lock();
-            (
-                state
-                    .source_path
-                    .clone()
-                    .ok_or_else(|| anyhow!("PDF document has not been saved to a path yet"))?,
-                state
-                    .source_digest
-                    .clone()
-                    .ok_or_else(|| anyhow!("PDF document is missing its source digest"))?,
-                state.annotations.clone(),
-                state.pages.len(),
-                state.annotation_generation,
-            )
-        };
-
-        smol::unblock(move || {
-            let current_digest = digest_file(&path)?;
-            anyhow::ensure!(
-                current_digest == expected_digest,
-                "PDF document changed on disk; refusing to save annotations against stale contents"
-            );
-            persist_annotations(&path, &current_digest, &annotations, page_count)
-        })
-        .await?;
-
-        let mut state = self.inner.lock();
-        state.annotation_load_warning = None;
-        if state.annotation_generation == generation {
-            state.annotations_dirty = false;
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        {
+            return Err(PdfPlatformError {
+                operation: "save_annotations",
+            }
+            .into());
         }
-        Ok(())
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        {
+            let operation_lock = self.file_operation_lock.clone();
+            let _operation_guard = operation_lock.lock().await;
+            let (path, expected_digest, annotations, page_count, generation) = {
+                let state = self.inner.lock();
+                (
+                    state
+                        .source_path
+                        .clone()
+                        .ok_or_else(|| anyhow!("PDF document has not been saved to a path yet"))?,
+                    state
+                        .source_digest
+                        .clone()
+                        .ok_or_else(|| anyhow!("PDF document is missing its source digest"))?,
+                    state.annotations.clone(),
+                    state.pages.len(),
+                    state.annotation_generation,
+                )
+            };
+
+            smol::unblock(move || {
+                let current_digest = digest_file(&path)?;
+                anyhow::ensure!(
+                    current_digest == expected_digest,
+                    "PDF document changed on disk; refusing to save annotations against stale contents"
+                );
+                persist_annotations(&path, &current_digest, &annotations, page_count)
+            })
+            .await?;
+
+            let mut state = self.inner.lock();
+            state.annotation_load_warning = None;
+            if state.annotation_generation == generation {
+                state.annotations_dirty = false;
+            }
+            Ok(())
+        }
     }
 
     /// Saves the current PDF and its sidecar annotations to a destination.
@@ -312,29 +361,122 @@ impl PdfDocument {
     /// Prefer [`Self::save_annotations`] when only annotations changed; this method rewrites the
     /// PDF and may invalidate signatures or other byte-sensitive external metadata.
     pub async fn save(&self, path: impl AsRef<Path>) -> Result<()> {
-        let operation_lock = self.file_operation_lock.clone();
-        let _operation_guard = operation_lock.lock().await;
-        let path = normalize_path(path.as_ref())?;
-        let inner = self.inner.clone();
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        {
+            let _ = path;
+            return Err(PdfPlatformError { operation: "save" }.into());
+        }
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        {
+            let operation_lock = self.file_operation_lock.clone();
+            let _operation_guard = operation_lock.lock().await;
+            let path = normalize_path(path.as_ref())?;
+            let inner = self.inner.clone();
 
-        smol::unblock(move || {
-            let mut state = inner.lock();
-            write_file_atomically(&path, "PDF document", false, MAX_PDF_BYTES, |file| {
-                state.document.save_to(file).map(|_| ()).map_err(Into::into)
+            smol::unblock(move || {
+                let mut state = inner.lock();
+                write_file_atomically(&path, "PDF document", false, MAX_PDF_BYTES, |file| {
+                    state.document.save_to(file).map(|_| ()).map_err(Into::into)
+                })
+                .with_context(|| format!("failed to save PDF document {}", path.display()))?;
+                (|| {
+                    let source_digest = digest_file(&path)?;
+                    state.source_path = Some(path.clone());
+                    state.source_digest = Some(source_digest.clone());
+                    persist_annotations(
+                        &path,
+                        &source_digest,
+                        &state.annotations,
+                        state.pages.len(),
+                    )?;
+                    state.annotation_load_warning = None;
+                    state.annotations_dirty = false;
+                    Ok::<(), anyhow::Error>(())
+                })()
+                .context("PDF was saved, but its annotation sidecar could not be updated")
             })
-            .with_context(|| format!("failed to save PDF document {}", path.display()))?;
-            (|| {
-                let source_digest = digest_file(&path)?;
-                state.source_path = Some(path.clone());
-                state.source_digest = Some(source_digest.clone());
-                persist_annotations(&path, &source_digest, &state.annotations, state.pages.len())?;
-                state.annotation_load_warning = None;
-                state.annotations_dirty = false;
-                Ok::<(), anyhow::Error>(())
-            })()
-            .context("PDF was saved, but its annotation sidecar could not be updated")
+            .await
+        }
+    }
+
+    /// Serializes the current PDF to bounded bytes for download or application-managed storage.
+    ///
+    /// Rewriting a PDF can invalidate signatures and other byte-sensitive external metadata.
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        let mut state = self.inner.lock();
+        let mut writer = BoundedVecWriter::new(MAX_PDF_BYTES, "PDF document");
+        state
+            .document
+            .save_to(&mut writer)
+            .context("failed to serialize PDF document")?;
+        Ok(writer.into_inner())
+    }
+
+    /// Serializes the validated sidecar annotation model to portable JSON bytes.
+    pub fn annotations_to_bytes(&self) -> Result<Vec<u8>> {
+        let state = self.inner.lock();
+        let digest = state
+            .source_digest
+            .as_deref()
+            .ok_or_else(|| anyhow!("PDF document is missing its source digest"))?;
+        let pages = state
+            .annotations
+            .iter()
+            .map(|(page_index, annotations)| (*page_index, annotations.as_ref().clone()))
+            .collect::<BTreeMap<_, _>>();
+        validate_annotation_pages(&pages, state.pages.len())?;
+        let bytes = serde_json::to_vec(&AnnotationSidecar {
+            document_sha256: digest.to_string(),
+            pages,
         })
-        .await
+        .context("failed to serialize annotation bytes")?;
+        ensure_size(
+            u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            MAX_ANNOTATION_SIDECAR_BYTES,
+            "PDF annotation bytes",
+        )?;
+        Ok(bytes)
+    }
+
+    /// Replaces annotations from portable sidecar JSON bytes after validating the PDF digest.
+    pub fn load_annotations_from_bytes(&self, bytes: &[u8]) -> Result<()> {
+        ensure_size(
+            u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            MAX_ANNOTATION_SIDECAR_BYTES,
+            "PDF annotation bytes",
+        )?;
+        let sidecar: AnnotationSidecar =
+            serde_json::from_slice(bytes).context("failed to deserialize annotation bytes")?;
+        validate_digest(&sidecar.document_sha256)?;
+        let mut state = self.inner.lock();
+        let digest = state
+            .source_digest
+            .as_deref()
+            .ok_or_else(|| anyhow!("PDF document is missing its source digest"))?;
+        anyhow::ensure!(
+            sidecar.document_sha256 == digest,
+            "PDF annotation bytes do not match the document contents"
+        );
+        validate_annotation_pages(&sidecar.pages, state.pages.len())?;
+        let annotations = sidecar
+            .pages
+            .into_iter()
+            .map(|(page_index, entries)| (page_index, Arc::new(entries)))
+            .collect::<BTreeMap<_, _>>();
+        let (annotation_count, annotation_model_bytes) = annotation_usage(&annotations)?;
+        let next_annotation_id = next_annotation_id(&annotations)?;
+        state.annotations = annotations;
+        state.annotation_count = annotation_count;
+        state.annotation_model_bytes = annotation_model_bytes;
+        state.next_annotation_id = next_annotation_id;
+        state.annotation_generation = state
+            .annotation_generation
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("PDF annotation generation is exhausted"))?;
+        state.annotations_dirty = false;
+        state.annotation_load_warning = None;
+        state.page_preview_cache.clear();
+        Ok(())
     }
 
     pub(crate) fn page_size(&self, page_index: usize) -> Result<PdfPageSize> {
@@ -567,6 +709,7 @@ impl PdfDocument {
             .collect::<BTreeMap<_, _>>();
         let metadata = extract_metadata(&document);
         let outline = extract_outline(&document, &page_indices).unwrap_or_default();
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
         let (annotations, annotation_load_warning) = if let Some(path) = source_path.as_ref() {
             let source_digest = source_digest
                 .as_deref()
@@ -581,12 +724,18 @@ impl PdfDocument {
         } else {
             (BTreeMap::new(), None)
         };
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        let (annotations, annotation_load_warning) = {
+            let _ = source_path;
+            (BTreeMap::new(), None)
+        };
         let (annotation_count, annotation_model_bytes) = annotation_usage(&annotations)?;
         let next_annotation_id = next_annotation_id(&annotations)?;
 
         Ok(Self {
             inner: Arc::new(Mutex::new(DocumentState {
                 document,
+                #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
                 source_path,
                 source_digest,
                 pages,
@@ -603,6 +752,7 @@ impl PdfDocument {
                 annotation_model_bytes,
                 next_annotation_id,
             })),
+            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
             file_operation_lock: Arc::new(smol::lock::Mutex::new(())),
         })
     }
@@ -642,6 +792,7 @@ fn ensure_size(size: u64, limit: u64, label: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 fn read_regular_file_bounded(path: &Path, limit: u64, label: &str) -> Result<Vec<u8>> {
     let path_metadata = std::fs::symlink_metadata(path)
         .with_context(|| format!("failed to inspect {label} {}", path.display()))?;
@@ -698,6 +849,7 @@ fn digest_hex(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 fn digest_file(path: &Path) -> Result<String> {
     let metadata = std::fs::symlink_metadata(path)
         .with_context(|| format!("failed to inspect saved PDF document {}", path.display()))?;
@@ -1068,6 +1220,7 @@ fn bounded_pdf_string(document: &LoDocument, object: &Object, max_bytes: usize) 
     (value.len() <= max_bytes).then_some(value)
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 fn load_annotations(
     path: &Path,
     document_sha256: &str,
@@ -1109,6 +1262,7 @@ fn load_annotations(
         .collect())
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 fn persist_annotations(
     path: &Path,
     document_sha256: &str,
@@ -1139,6 +1293,7 @@ fn persist_annotations(
     write_bytes_atomically(&sidecar_path, &json)
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 fn remove_regular_file_if_exists(path: &Path, label: &str) -> Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -1158,6 +1313,7 @@ fn remove_regular_file_if_exists(path: &Path, label: &str) -> Result<()> {
         .with_context(|| format!("failed to remove {label} {}", path.display()))
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 fn annotations_sidecar_path(path: &Path) -> PathBuf {
     let mut file_name = path
         .file_name()
@@ -1335,6 +1491,7 @@ fn validate_rect(rect: crate::annotation::PdfRect) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     write_file_atomically(
         path,
@@ -1364,12 +1521,56 @@ impl Write for CountingWriter {
     }
 }
 
+struct BoundedVecWriter {
+    bytes: Vec<u8>,
+    limit: u64,
+    label: &'static str,
+}
+
+impl BoundedVecWriter {
+    fn new(limit: u64, label: &'static str) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+            label,
+        }
+    }
+
+    fn into_inner(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+impl Write for BoundedVecWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let next_len = self
+            .bytes
+            .len()
+            .checked_add(buffer.len())
+            .ok_or_else(|| std::io::Error::other("PDF byte length overflow"))?;
+        if u64::try_from(next_len).unwrap_or(u64::MAX) > self.limit {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                format!("{} exceeds its configured byte limit", self.label),
+            ));
+        }
+        self.bytes.extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 struct BoundedFileWriter<'a> {
     file: &'a mut std::fs::File,
     remaining: u64,
     label: &'a str,
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 impl Write for BoundedFileWriter<'_> {
     fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
         if buffer.is_empty() {
@@ -1398,6 +1599,7 @@ impl Write for BoundedFileWriter<'_> {
     }
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 fn write_file_atomically(
     path: &Path,
     label: &str,
@@ -1482,6 +1684,7 @@ fn write_file_atomically(
     Ok(())
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 fn configure_temporary_permissions(
     file: &std::fs::File,
     existing_permissions: Option<std::fs::Permissions>,
@@ -1502,6 +1705,7 @@ fn configure_temporary_permissions(
     Ok(())
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 fn create_temporary_file(path: &Path, label: &str) -> Result<(PathBuf, std::fs::File)> {
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -1530,7 +1734,7 @@ fn create_temporary_file(path: &Path, label: &str) -> Result<(PathBuf, std::fs::
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(all(target_arch = "wasm32", target_os = "unknown"))))]
 fn replace_file(temp_path: &Path, path: &Path) -> std::io::Result<()> {
     std::fs::rename(temp_path, path)
 }
@@ -1571,6 +1775,7 @@ fn replace_file(temp_path: &Path, path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 fn normalize_path(path: &Path) -> Result<PathBuf> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -1622,7 +1827,7 @@ fn normalize_path(path: &Path) -> Result<PathBuf> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(all(target_arch = "wasm32", target_os = "unknown"))))]
 fn sync_parent_directory(path: &Path) -> Result<()> {
     if let Some(parent) = path
         .parent()
@@ -1635,12 +1840,12 @@ fn sync_parent_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(all(target_arch = "wasm32", target_os = "unknown"))))]
 fn sync_parent_directory(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(all(target_arch = "wasm32", target_os = "unknown"))))]
 mod tests {
     use std::path::{Path, PathBuf};
 

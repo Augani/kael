@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 
 use crate::{
     action::NotificationAction,
-    local::{LocalNotification, NotificationPayload},
+    local::{DEFAULT_NOTIFICATION_ACTION_ID, LocalNotification, NotificationPayload},
 };
 
 use super::{NotificationBackend, PlatformNotificationSupport};
@@ -15,6 +15,12 @@ pub(crate) const SUPPORT: PlatformNotificationSupport = PlatformNotificationSupp
     delivery_backend: "mac-notification-sys",
     action_backend: "mac-notification-sys-actions",
     push_backend: "not-implemented",
+    asynchronous_permission: false,
+    immediate_delivery: true,
+    interval_triggers: true,
+    system_triggers: false,
+    actions: true,
+    cancellation: false,
 };
 
 impl NotificationBackend for PlatformBackend {
@@ -25,7 +31,7 @@ impl NotificationBackend for PlatformBackend {
         actions: &[NotificationAction],
         on_action: Option<Arc<dyn Fn(String) + Send + Sync + 'static>>,
     ) -> Result<()> {
-        if actions.is_empty() {
+        if actions.is_empty() && on_action.is_none() {
             let mut options = mac_notification_sys::Notification::new();
             configure_sound(&mut options, notification.sound.as_ref());
             mac_notification_sys::send_notification(
@@ -54,7 +60,7 @@ impl NotificationBackend for PlatformBackend {
                 configure_sound(&mut options, sound.as_ref());
                 if labels.len() == 1 {
                     options.main_button(mac_notification_sys::MainButton::SingleAction(labels[0]));
-                } else {
+                } else if !labels.is_empty() {
                     options.main_button(mac_notification_sys::MainButton::DropdownActions(
                         "Actions", &labels,
                     ));
@@ -71,6 +77,11 @@ impl NotificationBackend for PlatformBackend {
                             && let Some(callback) = on_action.as_ref()
                         {
                             callback(action.identifier.clone());
+                        }
+                    }
+                    Ok(mac_notification_sys::NotificationResponse::Click) => {
+                        if let Some(callback) = on_action.as_ref() {
+                            callback(DEFAULT_NOTIFICATION_ACTION_ID.into());
                         }
                     }
                     Ok(_) => {}

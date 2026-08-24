@@ -4,7 +4,7 @@ use crate::theme::Theme;
 use kael::{prelude::*, *};
 #[cfg(feature = "audio")]
 use std::cell::RefCell;
-#[cfg(feature = "audio")]
+#[cfg(all(feature = "audio", not(target_arch = "wasm32")))]
 use std::io::BufReader;
 use std::{panic::Location, rc::Rc};
 
@@ -71,7 +71,7 @@ impl PlaybackSpeed {
     }
 }
 
-#[cfg(feature = "audio")]
+#[cfg(all(feature = "audio", not(target_arch = "wasm32")))]
 pub struct AudioBackend {
     sink: rodio::Sink,
     _stream: rodio::OutputStream,
@@ -79,7 +79,7 @@ pub struct AudioBackend {
     file_path: Option<String>,
 }
 
-#[cfg(feature = "audio")]
+#[cfg(all(feature = "audio", not(target_arch = "wasm32")))]
 impl AudioBackend {
     pub fn new() -> Option<Self> {
         let (stream, stream_handle) = rodio::OutputStream::try_default().ok()?;
@@ -133,6 +133,101 @@ impl AudioBackend {
     pub fn is_empty(&self) -> bool {
         self.sink.empty()
     }
+
+    pub fn seek(&self, position: std::time::Duration) {
+        let _ = self.sink.try_seek(position);
+    }
+
+    pub fn position(&self) -> std::time::Duration {
+        self.sink.get_pos()
+    }
+
+    pub fn is_playing(&self) -> bool {
+        !self.sink.is_paused() && !self.sink.empty()
+    }
+}
+
+#[cfg(all(feature = "audio", target_arch = "wasm32"))]
+pub struct AudioBackend {
+    player: kael_audio::AudioPlayer,
+}
+
+#[cfg(all(feature = "audio", target_arch = "wasm32"))]
+impl AudioBackend {
+    pub fn new() -> Option<Self> {
+        Some(Self {
+            player: kael_audio::AudioPlayer::new(),
+        })
+    }
+
+    pub fn load(&mut self, _path: &str) -> Result<std::time::Duration, String> {
+        Err(
+            "browser audio loading is asynchronous; use load_url or AudioPlayerState::load_file"
+                .into(),
+        )
+    }
+
+    pub async fn load_url(&self, url: impl Into<String>) -> Result<std::time::Duration, String> {
+        self.load_source(kael_audio::AudioSource::Url(url.into()))
+            .await
+    }
+
+    pub async fn load_source(
+        &self,
+        source: kael_audio::AudioSource,
+    ) -> Result<std::time::Duration, String> {
+        let track = self
+            .player
+            .load(source)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(track.duration.unwrap_or(std::time::Duration::ZERO))
+    }
+
+    pub fn play(&self) {
+        if let Some(track) = self.player.current_track()
+            && let Err(error) = self.player.play(&track)
+        {
+            eprintln!("failed to start browser audio: {error}");
+        }
+    }
+
+    pub fn pause(&self) {
+        self.player.pause();
+    }
+
+    pub fn stop(&self) {
+        self.player.stop();
+    }
+
+    pub fn set_volume(&self, volume: f32) {
+        self.player.set_volume(volume);
+    }
+
+    pub fn set_speed(&self, speed: f32) {
+        self.player.set_rate(speed);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        let Some(duration) = self.player.duration() else {
+            return self.player.current_track().is_none();
+        };
+        duration > std::time::Duration::ZERO && self.player.position() >= duration
+    }
+
+    pub fn seek(&self, position: std::time::Duration) {
+        if let Err(error) = self.player.seek(position) {
+            eprintln!("failed to seek browser audio: {error}");
+        }
+    }
+
+    pub fn position(&self) -> std::time::Duration {
+        self.player.position()
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.player.state() == kael_audio::PlaybackState::Playing
+    }
 }
 
 pub struct AudioPlayerState {
@@ -152,6 +247,8 @@ pub struct AudioPlayerState {
     source_path: Option<String>,
     #[cfg(feature = "audio")]
     backend: Option<Rc<RefCell<AudioBackend>>>,
+    #[cfg(all(feature = "audio", target_arch = "wasm32"))]
+    playback_generation: u64,
 }
 
 impl AudioPlayerState {
@@ -173,10 +270,12 @@ impl AudioPlayerState {
             source_path: None,
             #[cfg(feature = "audio")]
             backend: AudioBackend::new().map(|backend| Rc::new(RefCell::new(backend))),
+            #[cfg(all(feature = "audio", target_arch = "wasm32"))]
+            playback_generation: 0,
         }
     }
 
-    #[cfg(feature = "audio")]
+    #[cfg(all(feature = "audio", not(target_arch = "wasm32")))]
     pub fn load_file(&mut self, path: impl Into<String>, cx: &mut Context<Self>) -> bool {
         let path_str = path.into();
         self.source_path = Some(path_str.clone());
@@ -203,6 +302,83 @@ impl AudioPlayerState {
         false
     }
 
+    #[cfg(all(feature = "audio", target_arch = "wasm32"))]
+    pub fn load_file(&mut self, path: impl Into<String>, cx: &mut Context<Self>) -> bool {
+        let path = path.into();
+        self.source_path = Some(path.clone());
+        if !path
+            .get(..8)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
+        {
+            eprintln!(
+                "Failed to load browser audio: filesystem paths are unavailable; use an HTTPS URL"
+            );
+            return false;
+        }
+        self.load_source(kael_audio::AudioSource::Url(path), cx)
+    }
+
+    #[cfg(all(feature = "audio", target_arch = "wasm32"))]
+    pub fn load_url(&mut self, url: impl Into<String>, cx: &mut Context<Self>) -> bool {
+        self.load_file(url, cx)
+    }
+
+    #[cfg(all(feature = "audio", target_arch = "wasm32"))]
+    pub fn load_source(&mut self, source: kael_audio::AudioSource, cx: &mut Context<Self>) -> bool {
+        let source_label = match &source {
+            kael_audio::AudioSource::Url(url) => url.clone(),
+            kael_audio::AudioSource::Memory(_) => "in-memory audio".into(),
+            kael_audio::AudioSource::File(_) => {
+                eprintln!(
+                    "Failed to load browser audio: filesystem paths are unavailable; use an HTTPS URL or in-memory bytes"
+                );
+                return false;
+            }
+        };
+        self.source_path = Some(source_label);
+        let Some(backend) = self.backend.as_ref() else {
+            return false;
+        };
+        let Ok(backend) = backend.try_borrow() else {
+            return false;
+        };
+        let player = backend.player.clone();
+        player.set_volume(self.effective_volume());
+        player.set_rate(self.playback_speed.value());
+        drop(backend);
+
+        self.playback_generation = self.playback_generation.wrapping_add(1);
+        let generation = self.playback_generation;
+        self.current_time = 0.0;
+        self.duration = 0.0;
+        self.is_playing = false;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = player.load(source).await;
+            _ = this.update(cx, |state, cx| {
+                if state.playback_generation != generation {
+                    return;
+                }
+                match result {
+                    Ok(track) => {
+                        state.duration = track.duration.unwrap_or_default().as_secs_f32();
+                        state.current_time = 0.0;
+                        state.is_playing = false;
+                    }
+                    Err(error) => {
+                        state.duration = 0.0;
+                        state.current_time = 0.0;
+                        state.is_playing = false;
+                        eprintln!("Failed to load browser audio: {error}");
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        true
+    }
+
     #[cfg(not(feature = "audio"))]
     pub fn load_file(&mut self, path: impl Into<String>, cx: &mut Context<Self>) -> bool {
         self.source_path = Some(path.into());
@@ -226,22 +402,53 @@ impl AudioPlayerState {
                 backend.pause();
             }
         }
+        #[cfg(all(feature = "audio", target_arch = "wasm32"))]
+        if playing {
+            self.start_browser_position_updates(cx);
+        } else {
+            self.playback_generation = self.playback_generation.wrapping_add(1);
+        }
         cx.notify();
     }
 
     pub fn toggle_playing(&mut self, cx: &mut Context<Self>) {
-        self.is_playing = !self.is_playing;
-        #[cfg(feature = "audio")]
-        if let Some(ref backend) = self.backend
-            && let Ok(backend) = backend.try_borrow()
-        {
-            if self.is_playing {
-                backend.play();
-            } else {
-                backend.pause();
+        self.set_playing(!self.is_playing, cx);
+    }
+
+    #[cfg(all(feature = "audio", target_arch = "wasm32"))]
+    fn start_browser_position_updates(&mut self, cx: &mut Context<Self>) {
+        self.playback_generation = self.playback_generation.wrapping_add(1);
+        let generation = self.playback_generation;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+                let keep_polling = this
+                    .update(cx, |state, cx| {
+                        if state.playback_generation != generation {
+                            return false;
+                        }
+                        let Some(backend) = state.backend.as_ref() else {
+                            state.is_playing = false;
+                            return false;
+                        };
+                        let Ok(backend) = backend.try_borrow() else {
+                            return true;
+                        };
+                        state.current_time = backend.position().as_secs_f32();
+                        state.is_playing = backend.is_playing();
+                        let keep_polling = state.is_playing;
+                        cx.notify();
+                        keep_polling
+                    })
+                    .unwrap_or(false);
+                if !keep_polling {
+                    break;
+                }
             }
-        }
-        cx.notify();
+        })
+        .detach();
     }
 
     pub fn is_muted(&self) -> bool {
@@ -276,6 +483,12 @@ impl AudioPlayerState {
         } else {
             0.0
         };
+        #[cfg(feature = "audio")]
+        if let Some(ref backend) = self.backend
+            && let Ok(backend) = backend.try_borrow()
+        {
+            backend.seek(std::time::Duration::from_secs_f32(self.current_time));
+        }
         cx.notify();
     }
 
@@ -361,6 +574,10 @@ impl AudioPlayerState {
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         self.is_playing = false;
         self.current_time = 0.0;
+        #[cfg(all(feature = "audio", target_arch = "wasm32"))]
+        {
+            self.playback_generation = self.playback_generation.wrapping_add(1);
+        }
         #[cfg(feature = "audio")]
         if let Some(ref backend) = self.backend
             && let Ok(backend) = backend.try_borrow()
@@ -399,8 +616,7 @@ impl AudioPlayerState {
         }
         let relative_x = (position.x - self.progress_bounds.left()).clamp(px(0.0), track_width);
         let percentage = (relative_x / track_width).clamp(0.0, 1.0);
-        self.current_time = percentage * self.duration;
-        cx.notify();
+        self.set_current_time(percentage * self.duration, cx);
     }
 
     fn update_volume_from_position(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
@@ -413,9 +629,17 @@ impl AudioPlayerState {
         self.set_volume(volume, cx);
     }
 
-    #[cfg(feature = "audio")]
+    #[cfg(all(feature = "audio", not(target_arch = "wasm32")))]
     pub fn is_audio_loaded(&self) -> bool {
         self.backend.is_some() && self.source_path.is_some()
+    }
+
+    #[cfg(all(feature = "audio", target_arch = "wasm32"))]
+    pub fn is_audio_loaded(&self) -> bool {
+        self.backend
+            .as_ref()
+            .and_then(|backend| backend.try_borrow().ok())
+            .is_some_and(|backend| backend.player.current_track().is_some())
     }
 
     #[cfg(not(feature = "audio"))]

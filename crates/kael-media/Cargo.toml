@@ -24,20 +24,42 @@ targets = []
 name = "kael_media"
 path = "src/lib.rs"
 
-[dependencies.ffmpeg-next]
-version = "8.1.0"
-
-[dependencies.parking_lot]
-version = "0.12.1"
-
-[dependencies.rodio]
-version = "0.20"
+[features]
+default = ["native-media"]
+native-media = [
+    "dep:ffmpeg-next",
+    "dep:parking_lot",
+    "dep:rodio",
+    "dep:url",
+]
+# This feature is a target-aware bridge for Kael's native AVIF decoder. The optional dependency is
+# absent on wasm32, where Rust-side AVIF raster decoding remains explicitly unsupported.
+image-avif-native = ["dep:image"]
 
 [dependencies.thiserror]
 workspace = true
 
-[dependencies.url]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.ffmpeg-next]
+version = "8.1.0"
+optional = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.image]
+version = "0.25.1"
+default-features = false
+features = ["avif-native"]
+optional = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.parking_lot]
+version = "0.12.1"
+optional = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.rodio]
+version = "0.20"
+optional = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.url]
 version = "2.5"
+optional = true
 
 [lints]
 workspace = true

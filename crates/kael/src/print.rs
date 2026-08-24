@@ -772,7 +772,10 @@ impl PrintJob {
                 ));
             }
 
-            content_size_for_page(page.size, self.margins)?;
+            content_size_for_page(
+                oriented_print_page_size(page.size, self.orientation),
+                self.margins,
+            )?;
         }
 
         Ok(())
@@ -785,8 +788,9 @@ impl PrintJob {
         let mut rendered_pages = Vec::with_capacity(self.pages.len());
 
         for page in self.pages {
-            let content_size = content_size_for_page(page.size, self.margins)?;
-            let mut context = PrintContext::new(page.size, content_size);
+            let page_size = oriented_print_page_size(page.size, self.orientation);
+            let content_size = content_size_for_page(page_size, self.margins)?;
+            let mut context = PrintContext::new(page_size, content_size);
             (page.render)(&mut context, cx);
             rendered_pages.push(PlatformPrintPage {
                 commands: context.finish(),
@@ -800,6 +804,16 @@ impl PrintJob {
             page_size: first_page_size,
             pages: rendered_pages,
         })
+    }
+}
+
+pub(crate) fn oriented_print_page_size(
+    page_size: Size<Pixels>,
+    orientation: PrintOrientation,
+) -> Size<Pixels> {
+    match orientation {
+        PrintOrientation::Portrait => page_size,
+        PrintOrientation::Landscape => size(page_size.height, page_size.width),
     }
 }
 
@@ -962,15 +976,14 @@ impl PrintStroke {
 
     /// Validate stroke settings before printing.
     pub fn validate(&self) -> Result<()> {
-        validate_positive_pixels(self.width, "print stroke width")
+        validate_positive_pixels(self.width, "print stroke width")?;
+        validate_print_color(self.color, "print stroke color")
     }
 
-    #[cfg(target_os = "macos")]
     pub(crate) fn width(&self) -> Pixels {
         self.width
     }
 
-    #[cfg(target_os = "macos")]
     pub(crate) fn color_ref(&self) -> Rgba {
         self.color
     }
@@ -1011,20 +1024,18 @@ impl PrintTextStyle {
         if let Some(font_family) = &self.font_family {
             validate_print_label(font_family, "print font family", 128)?;
         }
-        validate_positive_pixels(self.font_size, "print font size")
+        validate_positive_pixels(self.font_size, "print font size")?;
+        validate_print_color(self.color, "print text color")
     }
 
-    #[cfg(target_os = "macos")]
     pub(crate) fn font_family_ref(&self) -> Option<&SharedString> {
         self.font_family.as_ref()
     }
 
-    #[cfg(target_os = "macos")]
     pub(crate) fn font_size(&self) -> Pixels {
         self.font_size
     }
 
-    #[cfg(target_os = "macos")]
     pub(crate) fn color_ref(&self) -> Rgba {
         self.color
     }
@@ -1068,6 +1079,7 @@ impl From<ObjectFit> for PrintImageFit {
 pub struct PrintImageStyle {
     object_fit: PrintImageFit,
     frame_index: usize,
+    opacity: f32,
 }
 
 impl PrintImageStyle {
@@ -1076,6 +1088,7 @@ impl PrintImageStyle {
         Self {
             object_fit: PrintImageFit::Contain,
             frame_index: 0,
+            opacity: 1.0,
         }
     }
 
@@ -1091,18 +1104,31 @@ impl PrintImageStyle {
         self
     }
 
+    /// Sets image opacity from fully transparent (`0`) to fully opaque (`1`).
+    pub fn opacity(mut self, opacity: f32) -> Self {
+        self.opacity = opacity;
+        self
+    }
+
     /// Validate image style settings before printing.
     pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.opacity.is_finite() && (0.0..=1.0).contains(&self.opacity),
+            "print image opacity must be finite and between 0 and 1"
+        );
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
     pub(crate) fn object_fit_ref(&self) -> PrintImageFit {
         self.object_fit
     }
 
     pub(crate) fn selected_frame_index(&self) -> usize {
         self.frame_index
+    }
+
+    pub(crate) fn opacity_ref(&self) -> f32 {
+        self.opacity
     }
 }
 
@@ -1220,13 +1246,13 @@ impl PrintContext {
 
     /// Fills a rectangle with a solid color.
     pub fn fill_rect(&mut self, bounds: Bounds<Pixels>, color: impl Into<Rgba>) {
-        if validate_print_bounds(bounds, "print fill rectangle").is_err() {
+        let color = color.into();
+        if validate_print_bounds(bounds, "print fill rectangle").is_err()
+            || validate_print_color(color, "print fill color").is_err()
+        {
             return;
         }
-        self.commands.push(PrintCommand::FillRect {
-            bounds,
-            color: color.into(),
-        });
+        self.commands.push(PrintCommand::FillRect { bounds, color });
     }
 
     /// Fills a rounded rectangle with a solid color.
@@ -1237,15 +1263,17 @@ impl PrintContext {
         color: impl Into<Rgba>,
     ) {
         let radius = radius.into();
+        let color = color.into();
         if validate_print_bounds(bounds, "print rounded fill rectangle").is_err()
             || validate_non_negative_pixels(radius, "print corner radius").is_err()
+            || validate_print_color(color, "print rounded fill color").is_err()
         {
             return;
         }
         self.commands.push(PrintCommand::FillRoundedRect {
             bounds,
             radius,
-            color: color.into(),
+            color,
         });
     }
 
@@ -1518,6 +1546,19 @@ fn validate_finite_pixels(value: Pixels, label: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_print_color(color: Rgba, label: &str) -> Result<()> {
+    let components = [color.r, color.g, color.b, color.a];
+    if components
+        .into_iter()
+        .any(|component| !component.is_finite() || !(0.0..=1.0).contains(&component))
+    {
+        return Err(anyhow!(
+            "{label} components must be finite and between zero and one"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1644,6 +1685,28 @@ mod tests {
         assert_eq!(a4_job.pages_ref()[0].size(), a4);
         assert!(letter_job.validate().is_ok());
         assert!(a4_job.validate().is_ok());
+    }
+
+    #[test]
+    fn landscape_orientation_rotates_the_render_context_and_margin_validation() {
+        let letter = PrintPaperSize::Letter.size();
+        assert_eq!(
+            oriented_print_page_size(letter, PrintOrientation::Landscape),
+            size(px(792.), px(612.))
+        );
+
+        let landscape = PrintJob::letter("Landscape", |_, _| {})
+            .orientation(PrintOrientation::Landscape)
+            .margins(Edges {
+                top: px(350.),
+                right: px(1.),
+                bottom: px(350.),
+                left: px(1.),
+            });
+        assert!(
+            landscape.validate().is_err(),
+            "landscape margins must be validated against the rotated page height"
+        );
     }
 
     #[test]
@@ -1968,6 +2031,25 @@ mod tests {
             point(px(12.), px(24.)),
             PrintTextStyle::new(px(0.)),
         );
+        context.fill_rect(
+            Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.))),
+            Rgba {
+                r: f32::NAN,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
+        );
+        context.stroke_line(
+            point(px(0.), px(0.)),
+            point(px(10.), px(10.)),
+            PrintStroke::new(px(1.)).color(Rgba {
+                r: 0.0,
+                g: 2.0,
+                b: 0.0,
+                a: 1.0,
+            }),
+        );
 
         assert_eq!(
             context.to_text(),
@@ -1975,6 +2057,17 @@ mod tests {
         );
         assert!(context.is_empty());
         assert!(context.finish().is_empty());
+    }
+
+    #[test]
+    fn print_image_opacity_is_bounded() {
+        assert!(PrintImageStyle::default().validate().is_ok());
+        assert!(PrintImageStyle::new().opacity(0.0).validate().is_ok());
+        assert!(PrintImageStyle::new().opacity(0.5).validate().is_ok());
+        assert!(PrintImageStyle::new().opacity(1.0).validate().is_ok());
+        assert!(PrintImageStyle::new().opacity(-0.01).validate().is_err());
+        assert!(PrintImageStyle::new().opacity(1.01).validate().is_err());
+        assert!(PrintImageStyle::new().opacity(f32::NAN).validate().is_err());
     }
 
     #[test]

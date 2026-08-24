@@ -57,6 +57,9 @@ pub(crate) fn support() -> crate::PlatformShareSupport {
         social: false,
         print: false,
         receiver_registration: false,
+        system_picker: false,
+        memory_files: true,
+        requires_user_activation: false,
     }
 }
 

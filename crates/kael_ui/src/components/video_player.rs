@@ -12,8 +12,9 @@ use std::{
     path::PathBuf,
     rc::Rc,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
+use web_time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum VideoPlaybackState {

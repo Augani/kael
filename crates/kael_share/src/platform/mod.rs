@@ -1,11 +1,15 @@
 use anyhow::Result;
 
-use crate::{ReceiverCallback, ShareFileType, ShareResult, ShareSheet};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::ShareError;
+use crate::{ReceiverCallback, ShareFileType, ShareOperationResult, ShareResult, ShareSheet};
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
 mod mac;
+#[cfg(target_arch = "wasm32")]
+mod web;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -26,6 +30,12 @@ pub struct PlatformShareSupport {
     pub print: bool,
     /// Whether the application can register as a share target.
     pub receiver_registration: bool,
+    /// Whether a system-owned destination picker is available.
+    pub system_picker: bool,
+    /// Whether the backend can pass bounded in-memory files and images.
+    pub memory_files: bool,
+    /// Whether the operation must begin during a transient user activation.
+    pub requires_user_activation: bool,
 }
 
 impl PlatformShareSupport {
@@ -39,6 +49,7 @@ impl PlatformShareSupport {
             self.social,
             self.print,
             self.receiver_registration,
+            self.system_picker,
         ]
         .into_iter()
         .filter(|supported| *supported)
@@ -53,7 +64,7 @@ impl PlatformShareSupport {
     /// Human-readable, content-safe support summary for logs and agents.
     pub fn to_text(&self) -> String {
         format!(
-            "share support: {} supported, mail {}, messages {}, airdrop {}, clipboard {}, social {}, print {}, receiver {}",
+            "share support: {} supported, mail {}, messages {}, airdrop {}, clipboard {}, social {}, print {}, receiver {}, picker {}, memory files {}, activation {}",
             self.supported_count(),
             self.mail,
             self.messages,
@@ -61,7 +72,10 @@ impl PlatformShareSupport {
             self.clipboard,
             self.social,
             self.print,
-            self.receiver_registration
+            self.receiver_registration,
+            self.system_picker,
+            self.memory_files,
+            self.requires_user_activation
         )
     }
 }
@@ -72,11 +86,19 @@ pub(crate) struct PlatformShareReceiver;
 use linux as imp;
 #[cfg(target_os = "macos")]
 use mac as imp;
+#[cfg(target_arch = "wasm32")]
+use web as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
-pub(crate) async fn show(sheet: &ShareSheet) -> Result<ShareResult> {
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn show(sheet: &ShareSheet) -> ShareOperationResult<ShareResult> {
     imp::show(sheet).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) async fn show(sheet: &ShareSheet) -> ShareOperationResult<ShareResult> {
+    imp::show(sheet).await.map_err(ShareError::platform)
 }
 
 pub(crate) fn register_receiver(

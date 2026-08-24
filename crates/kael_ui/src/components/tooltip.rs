@@ -365,7 +365,10 @@ impl RenderOnce for Tooltip {
         let max_width = self.max_width;
         let (content_width, content_wraps) = tooltip_content_metrics(content.as_ref(), max_width);
         let fade = Animation::new(theme.tokens.duration_fast).with_easing(easings::ease_out_cubic);
-        let forced_open = self.is_open.unwrap_or(self.is_default_open);
+        let controlled_open = self.is_open;
+        // Disabled tooltips stay closed even when a controlled/default value
+        // requests visibility.
+        let forced_open = !self.disabled && controlled_open.unwrap_or(self.is_default_open);
         let placement = match self.placement {
             TooltipPlacement::Above => TooltipPlacement::Top,
             TooltipPlacement::Below => TooltipPlacement::Bottom,
@@ -515,49 +518,52 @@ impl RenderOnce for Tooltip {
                     ))
                 })
             })
-            .when(!self.disabled && !forced_open, move |this| {
-                let content = content.clone();
-                let user_style = user_style.clone();
-                let fade = fade.clone();
-                let build_tooltip = move || {
-                    div()
-                        .id("kael-ui-hover-tooltip-bubble")
-                        .debug_selector(|| "kael-ui-hover-tooltip-bubble".to_string())
-                        .w(content_width)
-                        .px(px(8.0))
-                        .py(px(4.0))
-                        .bg(theme.tokens.foreground)
-                        .text_color(theme.tokens.background)
-                        .rounded(theme.tokens.radius_lg)
-                        .text_size(px(14.0))
-                        .line_height(px(20.0))
-                        .font_family(theme.tokens.font_family.clone())
-                        .when(!content_wraps, |this| this.whitespace_nowrap())
-                        .when_some(max_width, |this, width| this.max_w(width))
-                        .map(|mut this| {
-                            this.style().refine(&user_style);
-                            this
-                        })
-                        .child(StyledText::new(content.clone()).accessibility_hidden(true))
-                        .with_animation("tooltip-fade-in", fade.clone(), |el, delta| {
-                            el.opacity(delta)
-                        })
-                };
-                if let Some(handler) = on_open_change {
-                    this.tooltip_element_with_options(
-                        show_delay,
-                        hide_delay,
-                        move |open, window, cx| handler(open, window, cx),
-                        build_tooltip,
-                    )
-                    .tooltip_focus_behavior(focus_behavior)
-                    .tooltip_anchor_placement(core_side, core_align)
-                } else {
-                    this.tooltip_element_with_delays(show_delay, hide_delay, build_tooltip)
+            .when(
+                !self.disabled && controlled_open.is_none() && !forced_open,
+                move |this| {
+                    let content = content.clone();
+                    let user_style = user_style.clone();
+                    let fade = fade.clone();
+                    let build_tooltip = move || {
+                        div()
+                            .id("kael-ui-hover-tooltip-bubble")
+                            .debug_selector(|| "kael-ui-hover-tooltip-bubble".to_string())
+                            .w(content_width)
+                            .px(px(8.0))
+                            .py(px(4.0))
+                            .bg(theme.tokens.foreground)
+                            .text_color(theme.tokens.background)
+                            .rounded(theme.tokens.radius_lg)
+                            .text_size(px(14.0))
+                            .line_height(px(20.0))
+                            .font_family(theme.tokens.font_family.clone())
+                            .when(!content_wraps, |this| this.whitespace_nowrap())
+                            .when_some(max_width, |this, width| this.max_w(width))
+                            .map(|mut this| {
+                                this.style().refine(&user_style);
+                                this
+                            })
+                            .child(StyledText::new(content.clone()).accessibility_hidden(true))
+                            .with_animation("tooltip-fade-in", fade.clone(), |el, delta| {
+                                el.opacity(delta)
+                            })
+                    };
+                    if let Some(handler) = on_open_change {
+                        this.tooltip_element_with_options(
+                            show_delay,
+                            hide_delay,
+                            move |open, window, cx| handler(open, window, cx),
+                            build_tooltip,
+                        )
                         .tooltip_focus_behavior(focus_behavior)
                         .tooltip_anchor_placement(core_side, core_align)
-                }
-            })
+                    } else {
+                        this.tooltip_element_with_delays(show_delay, hide_delay, build_tooltip)
+                            .tooltip_focus_behavior(focus_behavior)
+                            .tooltip_anchor_placement(core_side, core_align)
+                    }
+                },
+            )
     }
 }
 
@@ -633,6 +639,52 @@ mod window_tests {
         assert!(
             (bubble.left() - trigger.left()).abs() <= px(1.0),
             "Start alignment must match the trigger's left edge: {bubble:?} vs {trigger:?}"
+        );
+    }
+
+    struct ControlledClosedTooltipHost;
+
+    impl Render for ControlledClosedTooltipHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            Tooltip::new("Controlled closed")
+                .open(false)
+                .show_delay(Duration::ZERO)
+                .child(
+                    div()
+                        .id("controlled-closed-tooltip-trigger")
+                        .debug_selector(|| "controlled-closed-tooltip-trigger".to_string())
+                        .w(px(120.0))
+                        .h(px(40.0)),
+                )
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn controlled_closed_tooltip_does_not_reopen_on_hover() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let (_view, window) = cx.add_window_view(|_, _| ControlledClosedTooltipHost);
+
+        let trigger = window
+            .debug_bounds("controlled-closed-tooltip-trigger")
+            .expect("trigger must render");
+        window.simulate_mouse_move(trigger.center(), None, Modifiers::default());
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+
+        assert!(
+            window
+                .debug_bounds("kael-ui-hover-tooltip-bubble")
+                .is_none(),
+            "controlled false must suppress internal hover state"
+        );
+        assert!(
+            window
+                .debug_bounds("kael-ui-forced-tooltip-bubble")
+                .is_none(),
+            "controlled false must not render the forced bubble"
         );
     }
 

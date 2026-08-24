@@ -637,7 +637,7 @@ impl Dialog {
         cx.notify();
 
         cx.spawn_in(window, async move |this, cx| {
-            smol::Timer::after(Duration::from_millis(200)).await;
+            Timer::after(Duration::from_millis(200)).await;
             let _ = this.update(cx, |dialog, cx| {
                 dialog.dismiss_complete = true;
                 cx.notify();

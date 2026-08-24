@@ -9,9 +9,9 @@ use crate::{
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
-    time::Instant,
 };
 use util::ResultExt;
+use web_time::Instant;
 
 const DEFAULT_PREFETCH_FRAMES: usize = 5;
 
@@ -233,7 +233,8 @@ impl Element for Lottie {
                                 if let Length::Auto = style.size.width {
                                     style.size.width = match style.size.height {
                                         Length::Definite(DefiniteLength::Absolute(abs_length)) => {
-                                            let height_px = abs_length.to_pixels(window.rem_size());
+                                            let height_px =
+                                                window.unscaled_ui_length_in_pixels(abs_length);
                                             Length::Definite(
                                                 px(animation_size.width.0 * height_px.0
                                                     / animation_size.height.0)
@@ -247,7 +248,8 @@ impl Element for Lottie {
                                 if let Length::Auto = style.size.height {
                                     style.size.height = match style.size.width {
                                         Length::Definite(DefiniteLength::Absolute(abs_length)) => {
-                                            let width_px = abs_length.to_pixels(window.rem_size());
+                                            let width_px =
+                                                window.unscaled_ui_length_in_pixels(abs_length);
                                             Length::Definite(
                                                 px(animation_size.height.0 * width_px.0
                                                     / animation_size.width.0)
@@ -414,9 +416,8 @@ impl Element for Lottie {
                         },
                     );
 
-                    let corner_radii = style
-                        .corner_radii
-                        .to_pixels(window.rem_size())
+                    let corner_radii = window
+                        .ui_corners_in_pixels(style.corner_radii)
                         .clamp_radii_for_quad_size(draw_bounds.size);
                     window
                         .paint_image(draw_bounds, corner_radii, maybe_image, 0, false)

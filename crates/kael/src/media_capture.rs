@@ -12,8 +12,8 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::Instant,
 };
+use web_time::Instant;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,10 @@ use crate::process_model::ProcessId;
 use crate::security::{Capability, PermissionBroker, PermissionResult};
 
 use crate::tracer::{TracePhase, Tracer};
+
+#[cfg(all(target_arch = "wasm32", feature = "screen-capture"))]
+#[path = "media_capture/browser.rs"]
+mod browser;
 
 // ---------------------------------------------------------------------------
 // Device Enumeration
@@ -1463,6 +1467,14 @@ pub trait CaptureSession: Send {
     fn latency_ms(&self) -> u64 {
         0
     }
+    /// Most recent asynchronous backend error, if the session reports one.
+    ///
+    /// Native backends usually return setup failures directly from [`Self::start`].
+    /// Browser permission pickers resolve asynchronously, so their session can
+    /// transition to [`CaptureSessionState::Error`] after `start` returns.
+    fn last_error(&self) -> Option<String> {
+        None
+    }
 }
 
 fn trace_capture_event(name: &str, phase: TracePhase) {
@@ -1779,6 +1791,16 @@ pub fn default_capture_manager() -> CaptureManager {
             CaptureDeviceKind::Microphone,
             Arc::new(LinuxMicrophoneBackend::new()),
         );
+    }
+
+    #[cfg(all(target_arch = "wasm32", feature = "screen-capture"))]
+    {
+        use browser::BrowserCaptureBackend;
+
+        let backend = Arc::new(BrowserCaptureBackend::new());
+        manager.register_backend(CaptureDeviceKind::Screen, backend.clone());
+        manager.register_backend(CaptureDeviceKind::Window, backend.clone());
+        manager.register_backend(CaptureDeviceKind::Camera, backend);
     }
 
     manager

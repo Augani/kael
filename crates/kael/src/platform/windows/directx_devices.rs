@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use util::ResultExt;
 use windows::Win32::{
     Foundation::HMODULE,
@@ -91,6 +91,24 @@ impl DirectXDevices {
     }
 }
 
+fn parse_force_warp(value: Option<&str>) -> Result<bool> {
+    match value {
+        None | Some("0") => Ok(false),
+        Some("1") => Ok(true),
+        Some(other) => bail!("KAEL_FORCE_WARP must be exactly `0` or `1`, not {other:?}"),
+    }
+}
+
+fn force_warp_from_env() -> Result<bool> {
+    match std::env::var("KAEL_FORCE_WARP") {
+        Ok(value) => parse_force_warp(Some(&value)),
+        Err(std::env::VarError::NotPresent) => parse_force_warp(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("KAEL_FORCE_WARP must contain valid UTF-8 and be exactly `0` or `1`")
+        }
+    }
+}
+
 #[inline]
 fn check_debug_layer_available() -> bool {
     #[cfg(debug_assertions)]
@@ -123,11 +141,28 @@ fn get_dxgi_factory(debug_layer_available: bool) -> Result<IDXGIFactory6> {
 
 #[inline]
 fn get_adapter(dxgi_factory: &IDXGIFactory6, debug_layer_available: bool) -> Result<IDXGIAdapter1> {
+    if force_warp_from_env()? {
+        log::warn!(
+            "KAEL_FORCE_WARP=1: selecting the Direct3D WARP software adapter for correctness/liveness proof"
+        );
+        return get_warp_adapter(dxgi_factory, debug_layer_available);
+    }
+
     let mut adapter_index = 0_u32;
     loop {
-        let adapter: IDXGIAdapter1 = unsafe {
+        let adapter: IDXGIAdapter1 = match unsafe {
             dxgi_factory
-                .EnumAdapterByGpuPreference(adapter_index, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE)?
+                .EnumAdapterByGpuPreference(adapter_index, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE)
+        } {
+            Ok(adapter) => adapter,
+            Err(error) => {
+                log::warn!(
+                    "Direct3D hardware adapter enumeration ended at index {adapter_index} ({error}); falling back to WARP"
+                );
+                return get_warp_adapter(dxgi_factory, debug_layer_available).context(
+                    "No compatible hardware adapter was available; creating WARP adapter",
+                );
+            }
         };
         if let Ok(desc) = unsafe { adapter.GetDesc1() } {
             let gpu_name = String::from_utf16_lossy(&desc.Description)
@@ -147,6 +182,28 @@ fn get_adapter(dxgi_factory: &IDXGIFactory6, debug_layer_available: bool) -> Res
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("DXGI adapter index exhausted"))?;
     }
+}
+
+fn get_warp_adapter(
+    dxgi_factory: &IDXGIFactory6,
+    debug_layer_available: bool,
+) -> Result<IDXGIAdapter1> {
+    let adapter = unsafe {
+        dxgi_factory
+            .EnumWarpAdapter::<IDXGIAdapter1>()
+            .context("Enumerating Direct3D WARP adapter")?
+    };
+    get_device(&adapter, None, None, debug_layer_available)
+        .context("Direct3D WARP does not support Kael's required feature level")?;
+    if let Ok(desc) = unsafe { adapter.GetDesc1() } {
+        let adapter_name = String::from_utf16_lossy(&desc.Description)
+            .trim_matches(char::from(0))
+            .to_string();
+        log::warn!(
+            "Using Direct3D software adapter {adapter_name:?}; this is correctness/liveness fallback, not hardware performance evidence"
+        );
+    }
+    Ok(adapter)
 }
 
 #[inline]
@@ -201,5 +258,20 @@ fn get_device(
         Err(anyhow::anyhow!(
             "Required feature StructuredBuffer is not supported by GPU/driver"
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_force_warp;
+
+    #[test]
+    fn force_warp_environment_value_is_strict() {
+        assert!(!parse_force_warp(None).unwrap());
+        assert!(!parse_force_warp(Some("0")).unwrap());
+        assert!(parse_force_warp(Some("1")).unwrap());
+        for invalid in ["", "true", "yes", "01", " 1"] {
+            assert!(parse_force_warp(Some(invalid)).is_err(), "{invalid:?}");
+        }
     }
 }

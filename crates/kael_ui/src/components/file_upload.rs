@@ -7,19 +7,27 @@ use crate::components::icon_button::IconButton;
 use crate::components::spinner::{Spinner, SpinnerSize, SpinnerVariant};
 use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
+use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 
 type FilesChangedHandler = Rc<dyn Fn(&[SelectedFile], &mut Window, &mut App)>;
 type FileErrorHandler = Rc<dyn Fn(&FileUploadError, &mut Window, &mut App)>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SelectedFile {
     pub name: String,
+    /// Native source path when one exists. Browser selections use the safe
+    /// display-only filename here; use [`Self::bytes`] to consume their data.
     pub path: PathBuf,
     pub size: u64,
     pub mime_type: Option<String>,
     pub is_image: bool,
+    /// Portable contents returned by file pickers and browser drops.
+    pub contents: Option<Arc<[u8]>>,
+    /// Cached encoded image used by byte-backed thumbnail previews.
+    pub preview_image: Option<Arc<Image>>,
 }
 
 impl SelectedFile {
@@ -61,7 +69,55 @@ impl SelectedFile {
             size,
             mime_type,
             is_image,
+            contents: None,
+            preview_image: None,
         }
+    }
+
+    /// Create a selection from portable file bytes.
+    pub fn from_external(file: ExternalFile) -> Self {
+        let name = file.name().to_string();
+        let path = file
+            .source_path()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(&name));
+        let extension = Path::new(&name)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let mime_type = file
+            .mime_type()
+            .map(str::to_string)
+            .or_else(|| mime_type_for_extension(&extension).map(str::to_string));
+        let is_image = mime_type
+            .as_deref()
+            .is_some_and(|mime| mime.starts_with("image/"))
+            || is_image_extension(&extension);
+        let contents = file.shared_bytes();
+        let preview_image = image_format_for(&extension, mime_type.as_deref())
+            .map(|format| Arc::new(Image::from_bytes(format, contents.as_ref().to_vec())));
+
+        Self {
+            name,
+            path,
+            size: contents.len() as u64,
+            mime_type,
+            is_image,
+            contents: Some(contents),
+            preview_image,
+        }
+    }
+
+    /// Portable contents, when the file was selected through the shared
+    /// desktop/browser picker or arrived as a browser drop.
+    pub fn bytes(&self) -> Option<&[u8]> {
+        self.contents.as_deref()
+    }
+
+    /// Whether this selection can be consumed without filesystem access.
+    pub fn is_byte_backed(&self) -> bool {
+        self.contents.is_some()
     }
 
     pub fn formatted_size(&self) -> String {
@@ -79,6 +135,45 @@ impl SelectedFile {
             format!("{} B", self.size)
         }
     }
+}
+
+fn mime_type_for_extension(extension: &str) -> Option<&'static str> {
+    match extension {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "bmp" => Some("image/bmp"),
+        "webp" => Some("image/webp"),
+        "svg" => Some("image/svg+xml"),
+        "tif" | "tiff" => Some("image/tiff"),
+        "pdf" => Some("application/pdf"),
+        "txt" => Some("text/plain"),
+        "json" => Some("application/json"),
+        "zip" => Some("application/zip"),
+        _ => None,
+    }
+}
+
+fn is_image_extension(extension: &str) -> bool {
+    matches!(
+        extension,
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "svg" | "ico" | "tif" | "tiff"
+    )
+}
+
+fn image_format_for(extension: &str, mime_type: Option<&str>) -> Option<ImageFormat> {
+    mime_type
+        .and_then(ImageFormat::from_mime_type)
+        .or(match extension {
+            "png" => Some(ImageFormat::Png),
+            "jpg" | "jpeg" => Some(ImageFormat::Jpeg),
+            "gif" => Some(ImageFormat::Gif),
+            "bmp" => Some(ImageFormat::Bmp),
+            "webp" => Some(ImageFormat::Webp),
+            "svg" => Some(ImageFormat::Svg),
+            "tif" | "tiff" => Some(ImageFormat::Tiff),
+            _ => None,
+        })
 }
 
 #[derive(Clone, Debug)]
@@ -511,8 +606,55 @@ fn validate_upload_path(
     Ok(SelectedFile::new(path))
 }
 
-fn accept_upload_paths(
+fn validate_upload_file(
+    file: ExternalFile,
+    max_file_size: Option<u64>,
+    file_types: Option<&FileTypeFilter>,
+) -> Result<SelectedFile, FileUploadError> {
+    let file_name = file.name().to_string();
+    if let Some(error) = file.read_error() {
+        return Err(FileUploadError {
+            file_name,
+            message: format!("This file could not be read: {error}"),
+        });
+    }
+    if let Some(filter) = file_types
+        && !filter.matches(Path::new(file.name()))
+    {
+        let accepted = if filter.extensions.is_empty() {
+            "all files".to_string()
+        } else {
+            filter.extensions.join(", ")
+        };
+        return Err(FileUploadError {
+            file_name,
+            message: format!("File type not allowed. Accepted: {accepted}"),
+        });
+    }
+    if let Some(max_size) = max_file_size
+        && file.byte_len() as u64 > max_size
+    {
+        return Err(FileUploadError {
+            file_name,
+            message: format!(
+                "File exceeds maximum size of {:.1} MB",
+                max_size as f64 / (1024.0 * 1024.0)
+            ),
+        });
+    }
+    Ok(SelectedFile::from_external(file))
+}
+
+fn same_upload_identity(left: &SelectedFile, right: &SelectedFile) -> bool {
+    left.path == right.path
+        && left.name == right.name
+        && left.size == right.size
+        && left.is_byte_backed() == right.is_byte_backed()
+}
+
+fn accept_upload_sources(
     paths: Vec<PathBuf>,
+    external_files: Vec<ExternalFile>,
     state: Entity<FileUploadState>,
     multiple: bool,
     max_file_size: Option<u64>,
@@ -530,20 +672,26 @@ fn accept_upload_paths(
             Err(error) => errors.push(error),
         }
     }
+    for file in external_files {
+        match validate_upload_file(file, max_file_size, file_types) {
+            Ok(file) => accepted.push(file),
+            Err(error) => errors.push(error),
+        }
+    }
 
     let (files, changed) = state.update(cx, |state, cx| {
         state.clear_errors();
         state.errors.extend(errors.iter().cloned());
         state.set_dragging(false);
 
-        let previous_paths = state
-            .files
-            .iter()
-            .map(|file| file.path.clone())
-            .collect::<Vec<_>>();
+        let previous_files = state.files.clone();
         if multiple {
             for file in accepted {
-                if !state.files.iter().any(|current| current.path == file.path) {
+                if !state
+                    .files
+                    .iter()
+                    .any(|current| same_upload_identity(current, &file))
+                {
                     state.add_file(file);
                 }
             }
@@ -552,12 +700,11 @@ fn accept_upload_paths(
             state.add_file(file);
         }
 
-        let changed = previous_paths
-            != state
-                .files
+        let changed = previous_files.len() != state.files.len()
+            || previous_files
                 .iter()
-                .map(|file| file.path.clone())
-                .collect::<Vec<_>>();
+                .zip(&state.files)
+                .any(|(previous, current)| !same_upload_identity(previous, current));
         cx.notify();
         (state.files.clone(), changed)
     });
@@ -593,7 +740,7 @@ fn prompt_for_upload_files(
         .map(|filter| FileDialogFilter::new(filter.label.clone(), filter.extensions.clone()))
         .into_iter()
         .collect();
-    let receiver = cx.prompt_for_paths(PathPromptOptions {
+    let receiver = cx.prompt_for_files(PathPromptOptions {
         files: true,
         directories: false,
         multiple,
@@ -602,24 +749,45 @@ fn prompt_for_upload_files(
     });
 
     window
-        .spawn(cx, async move |cx| {
-            let Ok(Ok(Some(paths))) = receiver.await else {
-                return;
-            };
-
-            _ = cx.update(|window, cx| {
-                accept_upload_paths(
-                    paths,
-                    state,
-                    multiple,
-                    max_file_size,
-                    file_types.as_ref(),
-                    on_files_changed.as_ref(),
-                    on_error.as_ref(),
-                    window,
-                    cx,
-                );
-            });
+        .spawn(cx, async move |cx| match receiver.await {
+            Ok(Ok(Some(files))) => {
+                _ = cx.update(|window, cx| {
+                    accept_upload_sources(
+                        Vec::new(),
+                        files,
+                        state,
+                        multiple,
+                        max_file_size,
+                        file_types.as_ref(),
+                        on_files_changed.as_ref(),
+                        on_error.as_ref(),
+                        window,
+                        cx,
+                    );
+                });
+            }
+            Ok(Ok(None)) => {}
+            result => {
+                let message = match result {
+                    Ok(Err(error)) => error.to_string(),
+                    Err(error) => error.to_string(),
+                    Ok(Ok(_)) => unreachable!(),
+                };
+                _ = cx.update(|window, cx| {
+                    let error = FileUploadError {
+                        file_name: "File picker".to_string(),
+                        message,
+                    };
+                    state.update(cx, |state, cx| {
+                        state.clear_errors();
+                        state.add_error(error.clone());
+                        cx.notify();
+                    });
+                    if let Some(handler) = &on_error {
+                        handler(&error, window, cx);
+                    }
+                });
+            }
         })
         .detach();
 }
@@ -733,11 +901,12 @@ impl RenderOnce for FileUpload {
                         this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
                             .can_drop(|value, _, _| {
                                 ExternalDropData::from_drag_value(value)
-                                    .is_some_and(|data| data.has_paths())
+                                    .is_some_and(|data| data.has_paths() || data.has_files())
                             })
                             .on_external_drop(move |data, window, cx| {
-                                accept_upload_paths(
+                                accept_upload_sources(
                                     data.paths().to_vec(),
+                                    data.files().to_vec(),
                                     state_for_drop.clone(),
                                     multiple,
                                     max_file_size,
@@ -1000,6 +1169,9 @@ impl RenderOnce for FileUpload {
                             let file_size = file.formatted_size();
                             let is_image = file.is_image;
                             let file_path = file.path.clone();
+                            let preview_image = file.preview_image.clone();
+                            let has_image_preview =
+                                preview_image.is_some() || !file.is_byte_backed();
 
                             div()
                                 .id(ElementId::NamedChild(
@@ -1015,7 +1187,7 @@ impl RenderOnce for FileUpload {
                                 .bg(theme.tokens.card)
                                 .border_1()
                                 .border_color(theme.tokens.input)
-                                .when(show_previews && is_image, |this| {
+                                .when(show_previews && is_image && has_image_preview, |this| {
                                     this.child(
                                         div()
                                             .w(px(36.0))
@@ -1026,15 +1198,22 @@ impl RenderOnce for FileUpload {
                                             .items_center()
                                             .justify_center()
                                             .overflow_hidden()
-                                            .child(
-                                                img(file_path.to_string_lossy().to_string())
+                                            .child(if let Some(preview_image) = preview_image {
+                                                img(preview_image)
                                                     .w(px(36.0))
                                                     .h(px(36.0))
-                                                    .object_fit(ObjectFit::Cover),
-                                            ),
+                                                    .object_fit(ObjectFit::Cover)
+                                                    .into_any_element()
+                                            } else {
+                                                img(file_path)
+                                                    .w(px(36.0))
+                                                    .h(px(36.0))
+                                                    .object_fit(ObjectFit::Cover)
+                                                    .into_any_element()
+                                            }),
                                     )
                                 })
-                                .when(!show_previews || !is_image, |this| {
+                                .when(!show_previews || !is_image || !has_image_preview, |this| {
                                     this.child(
                                         div()
                                             .w(px(32.0))
@@ -1130,7 +1309,8 @@ impl RenderOnce for FileUpload {
 
 #[cfg(test)]
 mod tests {
-    use super::{FileTypeFilter, validate_upload_path};
+    use super::{FileTypeFilter, validate_upload_file, validate_upload_path};
+    use kael::ExternalFile;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1174,5 +1354,35 @@ mod tests {
                 .message,
             "Folders are not supported"
         );
+    }
+
+    #[test]
+    fn validates_portable_browser_files_and_exposes_bytes() {
+        let selected = validate_upload_file(
+            ExternalFile::new("deck.PPTX", Some("application/zip"), b"slides".to_vec()),
+            Some(6),
+            Some(&FileTypeFilter::new(vec!["pptx"], "Slides")),
+        )
+        .unwrap();
+        assert_eq!(selected.name, "deck.PPTX");
+        assert_eq!(selected.path, PathBuf::from("deck.PPTX"));
+        assert_eq!(selected.bytes(), Some(b"slides".as_slice()));
+        assert!(selected.is_byte_backed());
+
+        let oversized = validate_upload_file(
+            ExternalFile::from_bytes("deck.pptx", b"slides".to_vec()),
+            Some(5),
+            None,
+        )
+        .unwrap_err();
+        assert!(oversized.message.contains("maximum size"));
+
+        let unreadable = validate_upload_file(
+            ExternalFile::unavailable("deck.pptx", None::<String>, "read failed"),
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(unreadable.message.contains("read failed"));
     }
 }

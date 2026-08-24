@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::panic::Location;
 use std::rc::Rc;
 use std::sync::atomic::AtomicUsize;
-use std::time::Instant;
+use web_time::Instant;
 
 static SCROLL_CONTAINER_COUNTER: AtomicUsize = AtomicUsize::new(0);
 

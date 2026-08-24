@@ -175,6 +175,20 @@ impl PlatformAtlas for BladeAtlas {
             }
         }
     }
+
+    #[cfg(target_arch = "wasm32")]
+    fn clear(&self) {
+        let keys = self
+            .0
+            .lock()
+            .tiles_by_key
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in keys {
+            self.remove(&key);
+        }
+    }
 }
 
 impl BladeAtlasState {

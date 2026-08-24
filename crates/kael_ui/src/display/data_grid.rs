@@ -1,4 +1,5 @@
 use crate::theme::use_theme;
+use crate::virtual_list::vlist_uniform;
 use kael::{prelude::FluentBuilder as _, *};
 use std::collections::HashMap;
 use std::{panic::Location, rc::Rc};
@@ -989,12 +990,12 @@ impl<T: 'static> RenderOnce for DataGrid<T> {
 
         let state = state_entity.read(cx);
         let num_rows = state.data.len();
-        let num_cols = state.columns.len();
         let editing = state.editing_cell.clone();
         let edit_val = state.edit_value.clone();
         let sort_col = state.sort_column.clone();
         let sort_dir = state.sort_direction.clone();
         let selected_cells = state.selected_cells.clone();
+        let vertical_scroll_handle = state.scroll_handle.clone();
 
         let col_infos: Vec<ColSnapshot> = state
             .columns
@@ -1011,34 +1012,7 @@ impl<T: 'static> RenderOnce for DataGrid<T> {
                 editor: c.editor.clone(),
             })
             .collect();
-
-        let mut all_cells: Vec<Vec<AnyElement>> = Vec::with_capacity(num_rows);
-        for row_idx in 0..num_rows {
-            let mut row_cells: Vec<AnyElement> = Vec::with_capacity(num_cols);
-            for col_idx in 0..num_cols {
-                let is_editing = editing
-                    .as_ref()
-                    .is_some_and(|p| p.row == row_idx && p.col == col_idx);
-                if is_editing {
-                    row_cells.push(
-                        div()
-                            .flex()
-                            .items_center()
-                            .size_full()
-                            .text_size(px(13.0))
-                            .text_color(theme.tokens.foreground)
-                            .child(format!("{}|", edit_val))
-                            .into_any_element(),
-                    );
-                } else {
-                    let content =
-                        (state.columns[col_idx].cell_renderer)(&state.data[row_idx], row_idx);
-                    row_cells.push(content);
-                }
-            }
-            all_cells.push(row_cells);
-        }
-
+        let num_columns = col_infos.len();
         let total_width: f32 = col_infos.iter().map(|c| -> f32 { c.width.into() }).sum();
         let total_width_px = px(total_width);
 
@@ -1091,16 +1065,21 @@ impl<T: 'static> RenderOnce for DataGrid<T> {
                     Box::new(grid_id.clone()),
                     format!("header-{col_idx}").into(),
                 );
-                let mut header_accessibility = AccessibilityAttributes::new(if info.sortable {
-                    AccessibilityRole::Button
-                } else {
-                    AccessibilityRole::StaticText
-                })
-                .label(if info.sortable {
-                    format!("Sort by {}", info.header)
-                } else {
-                    info.header.to_string()
-                });
+                let mut header_accessibility =
+                    AccessibilityAttributes::new(AccessibilityRole::ColumnHeader)
+                        .label(if info.sortable {
+                            format!("Sort by {}", info.header)
+                        } else {
+                            info.header.to_string()
+                        })
+                        .column_index(col_idx + 1);
+                if is_sorted {
+                    header_accessibility = header_accessibility.sort_direction(match sort_dir {
+                        GridSortDirection::Ascending => AccessibilitySortDirection::Ascending,
+                        GridSortDirection::Descending => AccessibilitySortDirection::Descending,
+                        GridSortDirection::None => AccessibilitySortDirection::Other,
+                    });
+                }
                 if info.sortable {
                     header_accessibility = header_accessibility
                         .actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]);
@@ -1185,170 +1164,222 @@ impl<T: 'static> RenderOnce for DataGrid<T> {
             .collect();
 
         let header_row = div()
+            .accessibility(AccessibilityAttributes::new(AccessibilityRole::Row).row_index(1))
             .flex()
             .w_full()
             .min_w(total_width_px)
             .children(header_cells);
 
-        let body_rows: Vec<AnyElement> = all_cells
-            .into_iter()
-            .enumerate()
-            .map(|(row_idx, cell_contents)| {
-                let row_bg = if striped && row_idx % 2 == 1 {
-                    theme.tokens.muted.opacity(0.3)
-                } else {
-                    theme.tokens.background
-                };
-
-                let cells: Vec<AnyElement> = cell_contents
-                    .into_iter()
-                    .enumerate()
-                    .map(|(col_idx, content)| {
-                        let width = col_infos[col_idx].width;
-                        let is_editing = editing
-                            .as_ref()
-                            .is_some_and(|p| p.row == row_idx && p.col == col_idx);
-                        let is_editable = col_infos[col_idx].editable;
-                        let is_selected = selected_cells.contains(&CellPosition {
-                            row: row_idx,
-                            col: col_idx,
-                        });
-                        let mut cell_state = AccessibilityState::NONE;
-                        if is_selected {
-                            cell_state |= AccessibilityState::SELECTED;
-                        }
-
-                        let mut cell_accessibility = AccessibilityAttributes::new(if is_editing {
-                            AccessibilityRole::TextInput
+        let state_for_rows = state_entity.clone();
+        let columns_for_rows = Rc::new(col_infos);
+        let columns_for_renderer = columns_for_rows.clone();
+        let editing_for_rows = editing.clone();
+        let selected_for_rows = Rc::new(selected_cells);
+        let selected_for_renderer = selected_for_rows.clone();
+        let edit_value_for_rows = edit_val.clone();
+        let focus_for_rows = focus_handle.clone();
+        let grid_id_for_rows = grid_id.clone();
+        let row_extent = if compact { px(34.0) } else { px(44.0) };
+        let body_height = px(
+            (num_rows.max(1) as f32 * f32::from(row_extent)).min(if compact {
+                510.0
+            } else {
+                600.0
+            }),
+        );
+        let body_rows = vlist_uniform(
+            ElementId::NamedChild(Box::new(grid_id.clone()), "body-list".into()),
+            num_rows,
+            row_extent,
+            move |visible_rows, _window, cx| {
+                let state = state_for_rows.read(cx);
+                visible_rows
+                    .map(|row_idx| {
+                        let row_bg = if striped && row_idx % 2 == 1 {
+                            theme.tokens.muted.opacity(0.3)
                         } else {
-                            AccessibilityRole::Group
-                        })
-                        .label(if is_editing {
-                            format!(
-                                "Edit {} column, row {}",
-                                col_infos[col_idx].header,
-                                row_idx + 1
-                            )
-                        } else {
-                            format!("{} column, row {}", col_infos[col_idx].header, row_idx + 1)
-                        })
-                        .states(cell_state);
-                        if is_editing {
-                            cell_accessibility = cell_accessibility
-                                .value(AccessibilityValue::Text(edit_val.clone()));
-                        } else {
-                            cell_accessibility =
-                                cell_accessibility.actions(vec![AccessibilityAction::Click]);
-                        }
+                            theme.tokens.background
+                        };
 
-                        let mut cell = div()
-                            .id(ElementId::NamedChild(
-                                Box::new(grid_id.clone()),
-                                format!("cell-{row_idx}-{col_idx}").into(),
-                            ))
-                            .accessibility(cell_accessibility)
-                            .when(is_selected && !is_editing, |cell| {
-                                cell.bg(theme.tokens.accent.opacity(0.18))
-                                    .border_1()
-                                    .border_color(theme.tokens.ring)
-                            })
-                            .on_mouse_down(MouseButton::Left, {
-                                let st = state_entity.clone();
-                                let focus_on_mouse = focus_handle.clone();
-                                move |_, window, cx| {
-                                    window.focus(&focus_on_mouse);
-                                    st.update(cx, |s, scx| {
-                                        s.select_cell(CellPosition {
-                                            row: row_idx,
-                                            col: col_idx,
-                                        });
-                                        scx.notify();
-                                    });
+                        let cells: Vec<AnyElement> = columns_for_renderer
+                            .iter()
+                            .enumerate()
+                            .map(|(col_idx, column)| {
+                                let width = column.width;
+                                let is_editing = editing_for_rows
+                                    .as_ref()
+                                    .is_some_and(|p| p.row == row_idx && p.col == col_idx);
+                                let is_editable = column.editable;
+                                let is_selected = selected_for_renderer.contains(&CellPosition {
+                                    row: row_idx,
+                                    col: col_idx,
+                                });
+                                let content = if is_editing {
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .size_full()
+                                        .text_size(px(13.0))
+                                        .text_color(theme.tokens.foreground)
+                                        .child(format!("{}|", edit_value_for_rows))
+                                        .into_any_element()
+                                } else {
+                                    (state.columns[col_idx].cell_renderer)(
+                                        &state.data[row_idx],
+                                        row_idx,
+                                    )
+                                };
+                                let mut cell_state = AccessibilityState::NONE;
+                                if is_selected {
+                                    cell_state |= AccessibilityState::SELECTED;
                                 }
-                            })
-                            .flex()
-                            .items_center()
-                            .w(width)
-                            .min_w(width)
-                            .flex_1()
-                            .px(cell_px)
-                            .py(cell_py)
-                            .text_size(px(13.0))
-                            .text_color(theme.tokens.foreground)
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .when(bordered, |el| {
-                                el.border_b_1()
-                                    .border_r_1()
-                                    .border_color(theme.tokens.border.opacity(0.5))
-                            });
+                                if !is_editable {
+                                    cell_state |= AccessibilityState::READ_ONLY;
+                                }
 
-                        if is_editing {
-                            cell = cell
-                                .bg(theme.tokens.background)
-                                .border_2()
-                                .border_color(theme.tokens.ring);
-                        }
-
-                        if is_editable && !is_editing {
-                            let st = state_entity.clone();
-                            let editor = col_infos[col_idx].editor.clone();
-                            cell = cell.cursor(CursorStyle::IBeam).on_mouse_down(
-                                MouseButton::Left,
-                                move |event: &MouseDownEvent, window, cx| {
-                                    if event.click_count < 2 {
-                                        return;
-                                    }
-                                    let fh = st.update(cx, |s, scx| {
-                                        if s.editing_cell.is_some() {
-                                            s.commit_edit();
-                                        }
-                                        let position = CellPosition {
-                                            row: row_idx,
-                                            col: col_idx,
-                                        };
-                                        if editor == CellEditor::Checkbox {
-                                            s.toggle_checkbox(position);
+                                let mut cell_accessibility =
+                                    AccessibilityAttributes::new(AccessibilityRole::Cell)
+                                        .label(if is_editing {
+                                            format!(
+                                                "Edit {} column, row {}",
+                                                column.header,
+                                                row_idx + 1
+                                            )
                                         } else {
-                                            s.start_editing(position);
+                                            format!("{} column, row {}", column.header, row_idx + 1)
+                                        })
+                                        .row_index(row_idx + 2)
+                                        .column_index(col_idx + 1)
+                                        .states(cell_state);
+                                if is_editing {
+                                    cell_accessibility = cell_accessibility
+                                        .value(AccessibilityValue::Text(
+                                            edit_value_for_rows.clone(),
+                                        ))
+                                        .actions(vec![
+                                            AccessibilityAction::Focus,
+                                            AccessibilityAction::SetValue,
+                                        ]);
+                                } else {
+                                    cell_accessibility = cell_accessibility
+                                        .actions(vec![AccessibilityAction::Click]);
+                                }
+
+                                let mut cell = div()
+                                    .id(ElementId::NamedChild(
+                                        Box::new(grid_id_for_rows.clone()),
+                                        format!("cell-{row_idx}-{col_idx}").into(),
+                                    ))
+                                    .accessibility(cell_accessibility)
+                                    .when(is_selected && !is_editing, |cell| {
+                                        cell.bg(theme.tokens.accent.opacity(0.18))
+                                            .border_1()
+                                            .border_color(theme.tokens.ring)
+                                    })
+                                    .on_mouse_down(MouseButton::Left, {
+                                        let st = state_for_rows.clone();
+                                        let focus_on_mouse = focus_for_rows.clone();
+                                        move |_, window, cx| {
+                                            window.focus(&focus_on_mouse);
+                                            st.update(cx, |s, scx| {
+                                                s.select_cell(CellPosition {
+                                                    row: row_idx,
+                                                    col: col_idx,
+                                                });
+                                                scx.notify();
+                                            });
                                         }
-                                        scx.notify();
-                                        s.focus_handle.clone()
+                                    })
+                                    .flex()
+                                    .items_center()
+                                    .w(width)
+                                    .min_w(width)
+                                    .flex_1()
+                                    .px(cell_px)
+                                    .py(cell_py)
+                                    .text_size(px(13.0))
+                                    .text_color(theme.tokens.foreground)
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .when(bordered, |el| {
+                                        el.border_b_1()
+                                            .border_r_1()
+                                            .border_color(theme.tokens.border.opacity(0.5))
                                     });
-                                    if let Some(handle) = fh {
-                                        window.focus(&handle);
-                                    }
-                                },
-                            );
-                        }
 
-                        cell.child(content).into_any_element()
+                                if is_editing {
+                                    cell = cell
+                                        .bg(theme.tokens.background)
+                                        .border_2()
+                                        .border_color(theme.tokens.ring);
+                                }
+
+                                if is_editable && !is_editing {
+                                    let st = state_for_rows.clone();
+                                    let editor = column.editor.clone();
+                                    cell = cell.cursor(CursorStyle::IBeam).on_mouse_down(
+                                        MouseButton::Left,
+                                        move |event: &MouseDownEvent, window, cx| {
+                                            if event.click_count < 2 {
+                                                return;
+                                            }
+                                            let fh = st.update(cx, |s, scx| {
+                                                if s.editing_cell.is_some() {
+                                                    s.commit_edit();
+                                                }
+                                                let position = CellPosition {
+                                                    row: row_idx,
+                                                    col: col_idx,
+                                                };
+                                                if editor == CellEditor::Checkbox {
+                                                    s.toggle_checkbox(position);
+                                                } else {
+                                                    s.start_editing(position);
+                                                }
+                                                scx.notify();
+                                                s.focus_handle.clone()
+                                            });
+                                            if let Some(handle) = fh {
+                                                window.focus(&handle);
+                                            }
+                                        },
+                                    );
+                                }
+
+                                cell.child(content).into_any_element()
+                            })
+                            .collect();
+
+                        div()
+                            .accessibility(
+                                AccessibilityAttributes::new(AccessibilityRole::Row)
+                                    .row_index(row_idx + 2),
+                            )
+                            .flex()
+                            .w_full()
+                            .min_w(total_width_px)
+                            .bg(row_bg)
+                            .hover(|s| s.bg(theme.tokens.accent.opacity(0.1)))
+                            .children(cells)
+                            .into_any_element()
                     })
-                    .collect();
-
-                div()
-                    .accessibility(AccessibilityAttributes::new(AccessibilityRole::ListItem))
-                    .flex()
-                    .w_full()
-                    .min_w(total_width_px)
-                    .bg(row_bg)
-                    .hover(|s| s.bg(theme.tokens.accent.opacity(0.1)))
-                    .children(cells)
-                    .into_any_element()
-            })
-            .collect();
+                    .collect::<Vec<_>>()
+            },
+        )
+        .track_scroll(&vertical_scroll_handle)
+        .overscan(8)
+        .h(body_height);
 
         let body = div()
             .id(ElementId::NamedChild(
                 Box::new(grid_id.clone()),
                 "body".into(),
             ))
-            .accessibility(AccessibilityAttributes::new(AccessibilityRole::List))
-            .flex_1()
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .children(body_rows)
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group).label("Grid rows"),
+            )
+            .h(body_height)
+            .child(body_rows)
             .when(num_rows == 0, |body| {
                 body.child(
                     div()
@@ -1372,7 +1403,10 @@ impl<T: 'static> RenderOnce for DataGrid<T> {
         div()
             .id(grid_id)
             .accessibility(
-                AccessibilityAttributes::new(AccessibilityRole::Group).label("Data grid"),
+                AccessibilityAttributes::new(AccessibilityRole::Grid)
+                    .label("Data grid")
+                    .row_count(num_rows.saturating_add(1))
+                    .column_count(num_columns),
             )
             .track_focus(&tracked_focus_handle)
             .flex()

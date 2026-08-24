@@ -5,6 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod web;
+
 const CARGO_TEMPLATE: &str = include_str!("../template/Cargo.toml.tmpl");
 const MAIN_TEMPLATE: &str = include_str!("../template/main.rs.tmpl");
 const README_TEMPLATE: &str = include_str!("../template/README.md.tmpl");
@@ -209,13 +211,15 @@ fn sync_directory(_path: &Path) -> std::io::Result<()> {
 
 fn print_help() {
     println!(
-        "kael {VERSION} — tools for the Kael native application framework
+        "kael {VERSION} — tools for the Kael application framework
 
 USAGE:
     kael <COMMAND>
 
 COMMANDS:
-    new <name>    Scaffold a new Kael app in ./<name>
+    new <name>       Scaffold a desktop + browser Kael app in ./<name>
+    web build        Build the current app into dist/web
+    web serve        Build and run the current app in a local browser
 
 OPTIONS:
     -h, --help       Print this help
@@ -262,12 +266,19 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if args.len() > 3 {
-        eprintln!("error: too many arguments");
-        return ExitCode::FAILURE;
-    }
     match args.get(1).map(String::as_str) {
-        Some("new") => run_new(args.get(2).map(String::as_str)),
+        Some("new") if args.len() <= 3 => run_new(args.get(2).map(String::as_str)),
+        Some("new") => {
+            eprintln!("error: too many arguments for `kael new`");
+            ExitCode::FAILURE
+        }
+        Some("web") => match web::run(&args[2..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("error: {error}");
+                ExitCode::FAILURE
+            }
+        },
         Some("-V") | Some("--version") if args.len() == 2 => {
             println!("kael {VERSION}");
             ExitCode::SUCCESS
@@ -331,6 +342,8 @@ mod tests {
             "kael = {{ version = \"{VERSION}\", features = [\"runtime_shaders\"] }}"
         )));
         assert!(cargo.contains(&format!("kael_ui = \"{VERSION}\"")));
+        assert!(cargo.contains("cfg(target_arch = \"wasm32\")"));
+        assert!(cargo.contains("features = [\"browser\"]"));
 
         let main = fs::read_to_string(dest.join("my_app/src/main.rs")).unwrap();
         assert!(main.contains("Hello, Kael!"));
@@ -341,6 +354,7 @@ mod tests {
         assert!(dest.join("my_app/.gitignore").exists());
         let toolchain = fs::read_to_string(dest.join("my_app/rust-toolchain.toml")).unwrap();
         assert!(toolchain.contains(&format!("channel = \"{RUST_VERSION}\"")));
+        assert!(toolchain.contains("wasm32-unknown-unknown"));
 
         fs::remove_dir_all(&dest).ok();
     }

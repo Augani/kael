@@ -1,5 +1,131 @@
 # Testing
 
+## Browser engine matrix
+
+The release-level browser proof runs the same packaged WebAssembly artifacts in
+Chromium, Firefox, and WebKit. Install the pinned Playwright dependency and
+browser binaries, then run:
+
+```sh
+cargo install wasm-bindgen-cli --version 0.2.122 --locked
+python3 -m venv target/browser-matrix-venv
+target/browser-matrix-venv/bin/python -m pip install \
+  -r scripts/browser-matrix-requirements.txt
+target/browser-matrix-venv/bin/python -m playwright install \
+  chromium firefox webkit
+KAEL_PLAYWRIGHT_PYTHON=target/browser-matrix-venv/bin/python \
+  bash scripts/verify-browser-matrix.sh
+```
+
+Use `KAEL_BROWSER_MATRIX_ENGINES=firefox` for one-engine diagnosis.
+`KAEL_BROWSER_MATRIX_SKIP_BUILD=1` reuses existing packaged artifacts, while
+`KAEL_BROWSER_MATRIX_SKIP_SUITE=1` and
+`KAEL_BROWSER_MATRIX_SKIP_REALTIME=1` are diagnostic-only reductions.
+`KAEL_BROWSER_MATRIX_SKIP_CAPTURE=1` omits only the injected canvas-backed
+display-capture lifecycle fixture. Release CI uses none of these reductions.
+Evidence is written to `target/browser-matrix`.
+
+## Generated project parity
+
+The maintained release gate invokes the actual CLI, leaves its generated
+`src/main.rs` and `Cargo.toml` byte-for-byte unchanged, and checks the same
+source against both target dependency sets:
+
+```sh
+KAEL_PLAYWRIGHT_PYTHON=target/browser-matrix-venv/bin/python \
+  bash scripts/verify-generated-project-parity.sh
+```
+
+The verifier creates a temporary nested workspace under `target`, applies
+`kael` and `kael_ui` through a parent workspace `[patch.crates-io]` table, seeds
+resolution from the repository `Cargo.lock`, and deletes only that temporary
+workspace on exit. This lets release CI prove the next unpublished Kael version
+without rewriting the generated project or selecting an unrelated fresh set of
+transitive versions. It checks the native target, fetches the locked wasm graph,
+then packages the unchanged binary offline through `kael web build`. The gate
+requires the pinned `wasm-bindgen` and Binaryen optimization pass before it
+applies the release artifact budget and launches the static output in pinned
+Chromium. The browser proof requires successful Wasm initialization, at least
+two retained frames, non-blank composited pixels, a viewport-filling canvas,
+and no page or request errors.
+The untouched generated source and manifest, metadata, hashes, logs, packaged
+web files, a screenshot, and the JSON report are retained in
+`target/generated-project-parity-evidence`.
+
+The publish workflow waits for the reusable platform-readiness workflow before
+starting its release preflight, so this proof is release-blocking. The native
+renderer jobs independently scaffold the same unchanged template on Windows and
+Linux to prove that the generated desktop binary launches there too.
+
+## Native renderer runtime smoke
+
+Platform readiness does not treat a successful native compile as renderer
+evidence. `native_renderer_smoke` rejects `KAEL_HEADLESS`, opens and activates a
+real window, advances four visually different retained scene revisions, reads
+the selected GPU identity, and exports the final scene through the backend at
+device-pixel resolution. The gate decodes the PNG and checks its dimensions,
+visible-pixel ratio, color diversity, and luminance range before exiting itself
+within a 20-second deadline.
+
+Linux runs the X11 surface path under a private Xvfb server and selects Mesa
+lavapipe explicitly on the GPU-less hosted runner. This proves Blade/Vulkan
+window, presentation, and readback behavior with an honestly reported software
+adapter; it is not a hardware-throughput or native-Wayland-compositor claim.
+Windows runs the same scene through Direct3D 11. Normal applications prefer a
+compatible hardware adapter and fall back to WARP if enumeration finds none.
+Hosted CI explicitly sets the strictly parsed `KAEL_FORCE_WARP=1` proof switch,
+then requires the adapter to identify itself as software. This is likewise a
+correctness/liveness gate rather than Direct3D hardware performance evidence.
+
+```sh
+# Linux, with Xvfb and Mesa Vulkan packages installed
+KAEL_NATIVE_RENDERER_USE_SOFTWARE=1 \
+  bash scripts/ci/verify-linux-native-renderer.sh
+
+# Windows
+pwsh -File scripts/ci/verify-windows-native-renderer.ps1
+```
+
+Both scripts then invoke `kael new`, build the untouched generated source, and
+prove that its visible native window is mapped. Windows closes the starter via
+its normal Win32 window lifecycle. The Linux starter is deliberately an
+interactive app with no test-only exit branch, so CI captures its X11 window
+geometry and pixels and then stops it externally under a bound. Evidence lives
+under `target/native-renderer-smoke/{linux,windows}` and includes adapter logs,
+the decoded-scene PNG, generated-source snapshots, and native-window evidence.
+
+## Native WebView runtime smoke
+
+Platform readiness executes `webview_smoke` against WKWebView on macOS,
+WebView2 on Windows, and the maintained GTK4 + WebKitGTK 6 host on both
+Weston/XWayland and native Wayland. The
+macOS verifier explicitly removes `KAEL_HEADLESS` from the child environment
+and requires page-load, page-to-host IPC, host-to-page messaging, JavaScript
+result, and current-URL stages plus successful focus and zoom commands before
+accepting the final marker:
+
+```sh
+bash scripts/ci/verify-macos-wkwebview.sh
+```
+
+The log is retained in `target/macos-wkwebview-smoke/wkwebview.log`. This is a
+real platform runtime gate; a headless capability check cannot satisfy it.
+
+The native-Wayland gate runs
+`scripts/ci/run-linux-webview-wayland-gtk4.sh`. It requires the focused
+same-surface composition proof and the production `PlatformWindow` proof,
+including retained-scene PNG export, raw Wayland handles, app-owned custom
+protocol navigation and subresources, page/host IPC, JavaScript results, URL
+state, and clean shutdown under a headless Weston compositor.
+
+`scripts/ci/run-linux-webview-xwayland.sh` selects the same production host
+through GDK's X11 backend and requires X11 raw handles, GSK scene export, the
+native XI2 pointer-lock implementation to acquire and release after a native
+context menu has been shown, the full WebView protocol/IPC stages, event-driven
+idle behavior, and clean shutdown without terminating XWayland. The legacy
+feature spelling is compiled in isolation to prove it redirects to the
+maintained host and cannot reintroduce GTK3.
+
 Kael ships a headless test platform so you can drive real windows, views, and
 input from ordinary unit tests — no display server, GPU, or windowing backend
 required. Tests run the same on macOS, Windows, and Linux CI.
@@ -71,7 +197,7 @@ the `test-support` feature so `TestAppContext` is in scope during tests.
 ```toml
 # crates/kael_ui/Cargo.toml
 [dev-dependencies]
-kael = { path = "../kael", version = "0.3.1", features = ["test-support"] }
+kael = { path = "../kael", version = "0.4.0", features = ["test-support"] }
 ```
 
 > `test-support` is platform-agnostic: the test platform mocks the windowing

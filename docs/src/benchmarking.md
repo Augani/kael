@@ -102,3 +102,37 @@ do not make parity claims until those are resolved.
 For CI, keep using `CiReport` and `RegressionThresholds` to compare a Kael
 candidate against a previous Kael baseline. Use `BaselineComparisonReport` for
 product/positioning evidence against a baseline sample app.
+
+## Browser artifact size
+
+Release packaging runs pinned Binaryen 132 at `-O3`, then
+`scripts/verify-browser-artifact-budget.sh` rejects the maintained retained-scene
+proof above 12 MiB raw Wasm, 5 MiB gzip Wasm, or 100 KiB JavaScript glue. These
+are regression ceilings, not a promise that every application has the same
+size: enabled features, fonts, codecs, and product assets remain app-owned.
+The workspace release profile also uses fat LTO and one codegen unit; measure
+clean release-build time separately from runtime and transfer performance.
+
+## Dynamic SceneGraph probe
+
+Large games and whiteboards have a different hot path from retained interface
+layout: objects move repeatedly while the scene population stays stable. Run the
+maintained release probe with:
+
+```bash
+cargo run --release -p kael --example scene_graph_move_query_probe
+```
+
+The probe builds and indexes exactly 100,000 nodes, then performs 10,000
+cross-cell `move_node` plus point-query operations. It requires:
+
+- zero full spatial-index rebuilds during bounds-only movement;
+- exactly 10,000 incremental spatial updates;
+- no more than two candidates in any representative point query; and
+- the complete move/query phase to finish within two seconds.
+
+The two-second ceiling is a deliberately generous regression budget for shared
+CI hosts, not a frame-time or cross-framework performance claim. Preserve the
+raw elapsed time and environment when publishing results. Correctness tests also
+cover z-order retention, moves between normal and oversized spatial lanes, and
+the full-rebuild fallback when cached entry metadata is unavailable.

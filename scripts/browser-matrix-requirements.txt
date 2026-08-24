@@ -1,0 +1,3 @@
+# Browser revisions are coupled to this Playwright version. Update the release
+# baseline in docs/src/browser.md and the CI cache key by changing this pin.
+playwright==1.62.0

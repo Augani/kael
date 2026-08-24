@@ -1,21 +1,22 @@
 use anyhow::{Context as _, anyhow};
 use x11rb::connection::RequestConnection;
 
-#[cfg(feature = "webview")]
+#[cfg(any())]
 use crate::SharedString;
 use crate::platform::blade::{BladeContext, BladeRenderer, BladeSurfaceConfig};
-#[cfg(feature = "webview")]
+#[cfg(any())]
 use crate::platform::linux::webview::{self as linux_webview, LinuxWebViewHost};
 use crate::platform::tab_manager::{TabManagerState, WindowTabManager};
-#[cfg(feature = "webview")]
+#[cfg(any())]
 use crate::webview::{PlatformWebView, PlatformWebViewCommand};
 use crate::{
     AnyWindowHandle, Bounds, Decorations, DevicePixels, DispatchEventResult, ForegroundExecutor,
-    GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
-    PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
+    GameInputAvailability, GameInputCapabilities, GameInputError, GameInputErrorKind, GpuSpecs,
+    Modifiers, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler,
+    PlatformWindow, Point, PointerLockStatus, PromptButton, PromptLevel, RequestFrameOptions,
     ResizeEdge, ScaledPixels, Scene, Size, Tiling, WindowAppearance, WindowBackgroundAppearance,
     WindowBounds, WindowControlArea, WindowDecorations, WindowKind, WindowParams,
-    X11ClientStatePtr, px, size,
+    X11ClientStatePtr, point, px, size,
 };
 
 use blade_graphics as gpu;
@@ -27,7 +28,6 @@ use x11rb::{
     errors::ConnectionError,
     properties::WmSizeHints,
     protocol::{
-        randr::ConnectionExt as RandrConnectionExt,
         sync,
         xinput::{self, ConnectionExt as _},
         xproto::{self, ClientMessageEvent, ConnectionExt, TranslateCoordinatesReply},
@@ -36,7 +36,7 @@ use x11rb::{
     xcb_ffi::XCBConnection,
 };
 
-#[cfg(feature = "webview")]
+#[cfg(any())]
 use std::collections::HashMap;
 use std::{
     cell::RefCell,
@@ -274,6 +274,7 @@ pub struct X11WindowState {
     executor: ForegroundExecutor,
     atoms: XcbAtoms,
     x_root_window: xproto::Window,
+    x_screen_index: usize,
     pub(crate) counter_id: sync::Counter,
     pub(crate) last_sync_counter: Option<sync::Int64>,
     bounds: Bounds<Pixels>,
@@ -296,7 +297,8 @@ pub struct X11WindowState {
     last_insets: [u32; 4],
     tab_manager: WindowTabManager,
     accessibility_root: crate::platform::linux::accessibility::AtSpiAccessibleRoot,
-    #[cfg(feature = "webview")]
+    pointer_lock: crate::game_input::NativePointerLockState,
+    #[cfg(any())]
     pub(crate) webviews: HashMap<SharedString, LinuxWebViewHost>,
 }
 
@@ -432,6 +434,7 @@ impl X11WindowState {
         atoms: &XcbAtoms,
         scale_factor: f32,
         appearance: WindowAppearance,
+        xinput_touch_supported: bool,
         parent_window: Option<xproto::Window>,
         tab_manager_state: Arc<Mutex<TabManagerState>>,
     ) -> anyhow::Result<Self> {
@@ -450,6 +453,17 @@ impl X11WindowState {
         };
         log::info!("Using {:?}", visual);
 
+        let mut pointer_mask = xinput::XIEventMask::MOTION
+            | xinput::XIEventMask::BUTTON_PRESS
+            | xinput::XIEventMask::BUTTON_RELEASE
+            | xinput::XIEventMask::ENTER
+            | xinput::XIEventMask::LEAVE;
+        if xinput_touch_supported {
+            pointer_mask = pointer_mask
+                | xinput::XIEventMask::TOUCH_BEGIN
+                | xinput::XIEventMask::TOUCH_UPDATE
+                | xinput::XIEventMask::TOUCH_END;
+        }
         let colormap = if visual.colormap != 0 {
             visual.colormap
         } else {
@@ -693,13 +707,7 @@ impl X11WindowState {
                     x_window,
                     &[xinput::EventMask {
                         deviceid: XINPUT_ALL_DEVICE_GROUPS,
-                        mask: vec![
-                            xinput::XIEventMask::MOTION
-                                | xinput::XIEventMask::BUTTON_PRESS
-                                | xinput::XIEventMask::BUTTON_RELEASE
-                                | xinput::XIEventMask::ENTER
-                                | xinput::XIEventMask::LEAVE,
-                        ],
+                        mask: vec![pointer_mask],
                     }],
                 ),
             )?;
@@ -748,6 +756,7 @@ impl X11WindowState {
                 executor,
                 display,
                 x_root_window: visual_set.root,
+                x_screen_index,
                 bounds: bounds.to_pixels(scale_factor),
                 scale_factor,
                 renderer,
@@ -772,7 +781,8 @@ impl X11WindowState {
                 tab_manager: WindowTabManager::new(handle, tab_manager_state),
                 accessibility_root: crate::platform::linux::accessibility::AtSpiAccessibleRoot::new(
                 ),
-                #[cfg(feature = "webview")]
+                pointer_lock: crate::game_input::NativePointerLockState::new(true),
+                #[cfg(any())]
                 webviews: HashMap::default(),
             })
         });
@@ -801,12 +811,13 @@ pub(crate) struct X11Window(pub X11WindowStatePtr);
 
 impl Drop for X11Window {
     fn drop(&mut self) {
+        self.0.release_native_pointer_lock().log_err();
         let mut state = self.0.state.borrow_mut();
 
         // Clean up tab manager tracking for this window.
         state.tab_manager.remove_window();
 
-        #[cfg(feature = "webview")]
+        #[cfg(any())]
         state.webviews.clear();
 
         state.renderer.destroy();
@@ -862,6 +873,7 @@ impl X11Window {
         atoms: &XcbAtoms,
         scale_factor: f32,
         appearance: WindowAppearance,
+        xinput_touch_supported: bool,
         parent_window: Option<xproto::Window>,
         tab_manager_state: Arc<Mutex<TabManagerState>>,
     ) -> anyhow::Result<Self> {
@@ -879,6 +891,7 @@ impl X11Window {
                 atoms,
                 scale_factor,
                 appearance,
+                xinput_touch_supported,
                 parent_window,
                 tab_manager_state,
             )?)),
@@ -976,6 +989,55 @@ impl X11Window {
 }
 
 impl X11WindowStatePtr {
+    pub(crate) fn pointer_lock_metrics(&self) -> (f32, Point<Pixels>) {
+        let state = self.state.borrow();
+        (
+            state.scale_factor,
+            point(
+                px(state.bounds.size.width.0 * 0.5),
+                px(state.bounds.size.height.0 * 0.5),
+            ),
+        )
+    }
+
+    fn request_native_pointer_lock(&self) -> Result<(), GameInputError> {
+        let (client, active) = {
+            let mut state = self.state.borrow_mut();
+            if !state.pointer_lock.begin_request()? {
+                return Ok(());
+            }
+            (state.client.clone(), state.active)
+        };
+        if !active {
+            let error = GameInputError::new(
+                GameInputErrorKind::Rejected,
+                "X11 pointer lock requires the Kael window to be active",
+            );
+            return Err(self.state.borrow_mut().pointer_lock.fail(error));
+        }
+
+        match client.request_pointer_lock(self.x_window) {
+            Ok(()) => {
+                self.state.borrow_mut().pointer_lock.lock();
+                Ok(())
+            }
+            Err(error) => Err(self.state.borrow_mut().pointer_lock.fail(error)),
+        }
+    }
+
+    fn release_native_pointer_lock(&self) -> Result<(), GameInputError> {
+        let client = self.state.borrow().client.clone();
+        let result = client.release_pointer_lock(self.x_window);
+        let mut state = self.state.borrow_mut();
+        match result {
+            Ok(()) => {
+                state.pointer_lock.unlock();
+                Ok(())
+            }
+            Err(error) => Err(state.pointer_lock.fail(error)),
+        }
+    }
+
     pub fn should_close(&self) -> bool {
         let callback = self.callbacks.borrow_mut().should_close.take();
         if let Some(mut should_close) = callback {
@@ -1181,51 +1243,78 @@ impl X11WindowStatePtr {
         bounds.map(|b| b.scale(scale_factor))
     }
 
-    pub fn set_bounds(&self, bounds: Bounds<i32>) -> anyhow::Result<()> {
-        let mut resize_args = None;
-        let is_resize;
-        {
+    pub fn set_bounds(&self, bounds: Bounds<i32>) -> anyhow::Result<bool> {
+        let root_origin = self
+            .xcb
+            .translate_coordinates(self.x_window, self.state.borrow().x_root_window, 0, 0)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .map(|reply| Point {
+                x: i32::from(reply.dst_x),
+                y: i32::from(reply.dst_y),
+            })
+            .unwrap_or(bounds.origin);
+        let physical_bounds = Bounds {
+            origin: root_origin,
+            size: bounds.size,
+        };
+        let (root, old_scale, old_display_id, screen_index) = {
+            let state = self.state.borrow();
+            (
+                state.x_root_window,
+                state.scale_factor,
+                state.display.id(),
+                state.x_screen_index,
+            )
+        };
+        let new_display =
+            X11Display::for_window(&self.xcb, root, screen_index, physical_bounds, old_scale).ok();
+        let new_scale = new_display
+            .as_ref()
+            .map(PlatformDisplay::scale_factor)
+            .filter(|scale| scale.is_finite() && *scale > 0.0)
+            .unwrap_or(old_scale);
+        let display_changed = new_display
+            .as_ref()
+            .is_some_and(|display| display.id() != old_display_id)
+            || (new_scale - old_scale).abs() > f32::EPSILON;
+        let (resize_args, is_move) = {
             let mut state = self.state.borrow_mut();
-            let bounds = bounds.map(|f| px(f as f32 / state.scale_factor));
-
-            is_resize = bounds.size.width != state.bounds.size.width
-                || bounds.size.height != state.bounds.size.height;
-
-            // If it's a resize event (only width/height changed), we ignore `bounds.origin`
-            // because it contains wrong values.
-            if is_resize {
-                state.bounds.size = bounds.size;
-            } else {
-                state.bounds = bounds;
+            if let Some(display) = new_display {
+                state.display = Rc::new(display);
             }
+            state.scale_factor = new_scale;
+            let bounds = physical_bounds.map(|f| px(f as f32 / new_scale));
+
+            let is_move = bounds.origin != state.bounds.origin;
+
+            state.bounds = bounds;
 
             let gpu_size = query_render_extent(&self.xcb, self.x_window)?;
-            if true {
-                state.renderer.update_drawable_size(size(
-                    DevicePixels(gpu_size.width as i32),
-                    DevicePixels(gpu_size.height as i32),
-                ));
-                resize_args = Some((state.content_size(), state.scale_factor));
-            }
+            state.renderer.update_drawable_size(size(
+                DevicePixels(gpu_size.width as i32),
+                DevicePixels(gpu_size.height as i32),
+            ));
+            let resize_args = (state.content_size(), state.scale_factor);
             if let Some(value) = state.last_sync_counter.take() {
                 check_reply(
                     || "X11 sync SetCounter failed.",
                     sync::set_counter(&self.xcb, state.counter_id, value),
                 )?;
             }
-        }
+            (resize_args, is_move)
+        };
 
-        if let Some((content_size, scale_factor)) = resize_args {
-            let mut callback = self.callbacks.borrow_mut().resize.take();
-            if let Some(ref mut fun) = callback {
-                super::super::catch_platform_callback("window resize", (), || {
-                    fun(content_size, scale_factor)
-                });
-            }
-            self.callbacks.borrow_mut().resize = callback;
+        let (content_size, scale_factor) = resize_args;
+        let mut callback = self.callbacks.borrow_mut().resize.take();
+        if let Some(ref mut fun) = callback {
+            super::super::catch_platform_callback("window resize", (), || {
+                fun(content_size, scale_factor)
+            });
         }
+        self.callbacks.borrow_mut().resize = callback;
 
-        if !is_resize {
+        if is_move {
             let mut callback = self.callbacks.borrow_mut().moved.take();
             if let Some(ref mut fun) = callback {
                 super::super::catch_platform_callback("window moved", (), fun);
@@ -1233,10 +1322,18 @@ impl X11WindowStatePtr {
             self.callbacks.borrow_mut().moved = callback;
         }
 
-        Ok(())
+        Ok(display_changed)
+    }
+
+    pub(crate) fn input_scale_factor(&self) -> f32 {
+        self.state.borrow().scale_factor
     }
 
     pub fn set_active(&self, focus: bool) {
+        self.state.borrow_mut().active = focus;
+        if !focus {
+            self.release_native_pointer_lock().log_err();
+        }
         let mut callback = self.callbacks.borrow_mut().active_status_change.take();
         if let Some(ref mut fun) = callback {
             super::super::catch_platform_callback("active status change", (), || fun(focus));
@@ -1505,6 +1602,12 @@ impl PlatformWindow for X11Window {
             || "X11 MapWindow failed.",
             self.0.xcb.map_window(self.0.x_window),
         )?;
+        // Waiting for the checked MapWindow reply can move MapNotify into XCB's
+        // userspace queue. In that case the socket is no longer readable, so
+        // calloop cannot discover the event through its file-descriptor source.
+        // Drain the queue now so the initial retained frame can be scheduled.
+        let client = self.0.state.borrow().client.clone();
+        client.process_pending_x11_events();
         Ok(())
     }
 
@@ -1616,6 +1719,31 @@ impl PlatformWindow for X11Window {
         self.0.callbacks.borrow_mut().input = Some(callback);
     }
 
+    fn game_input_capabilities(&self) -> GameInputCapabilities {
+        let gamepads = if cfg!(feature = "game-input") {
+            GameInputAvailability::Available
+        } else {
+            GameInputAvailability::DisabledAtCompileTime
+        };
+        GameInputCapabilities::new(GameInputAvailability::Available, gamepads)
+    }
+
+    fn pointer_lock_status(&self) -> PointerLockStatus {
+        self.0.state.borrow().pointer_lock.status()
+    }
+
+    fn request_pointer_lock(&self) -> Result<(), GameInputError> {
+        self.0.request_native_pointer_lock()
+    }
+
+    fn exit_pointer_lock(&self) -> Result<(), GameInputError> {
+        self.0.release_native_pointer_lock()
+    }
+
+    fn pointer_lock_error(&self) -> Option<GameInputError> {
+        self.0.state.borrow().pointer_lock.error()
+    }
+
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>) {
         self.0.callbacks.borrow_mut().active_status_change = Some(callback);
     }
@@ -1647,14 +1775,53 @@ impl PlatformWindow for X11Window {
         self.0.callbacks.borrow_mut().appearance_changed = Some(callback);
     }
 
-    #[cfg(feature = "webview")]
+    #[cfg(any())]
     fn sync_webviews(&mut self, webviews: &[PlatformWebView]) {
         linux_webview::sync_x11_webviews(&self.0, webviews);
+        let client = {
+            let state = self.0.state.borrow();
+            (!state.webviews.is_empty()).then(|| state.client.clone())
+        };
+        if let Some(client) = client {
+            client.ensure_webview_event_pump();
+        }
     }
 
-    #[cfg(feature = "webview")]
+    #[cfg(any())]
     fn dispatch_webview_command(&mut self, command: PlatformWebViewCommand) -> anyhow::Result<()> {
         linux_webview::dispatch_x11_webview_command(&self.0, command)
+    }
+
+    fn print(&mut self, job: crate::PlatformPrintJob) -> anyhow::Result<()> {
+        crate::platform::linux::print::print_silent(job)
+    }
+
+    fn show_print_dialog(&mut self, job: crate::PlatformPrintJob) -> anyhow::Result<()> {
+        let parent = ashpd::WindowIdentifier::from_xid(self.0.x_window.into());
+        smol::block_on(crate::platform::linux::print::show_print_dialog(
+            job,
+            Some(parent),
+        ))
+    }
+
+    fn export_scene_png(
+        &self,
+        scene: &Scene,
+    ) -> std::result::Result<crate::Image, crate::WindowCaptureError> {
+        let readback = self
+            .0
+            .state
+            .borrow_mut()
+            .renderer
+            .render_scene_to_bgra(scene)
+            .map_err(|error| crate::WindowCaptureError::Backend(error.to_string()))?;
+        crate::platform::encode_bgra_png(
+            readback.width,
+            readback.height,
+            readback.bgra,
+            readback.premultiplied_alpha,
+        )
+        .map_err(|error| crate::WindowCaptureError::Backend(error.to_string()))
     }
 
     fn draw(&self, scene: &Scene) {
@@ -1668,6 +1835,7 @@ impl PlatformWindow for X11Window {
     }
 
     fn show_window_menu(&self, position: Point<Pixels>) {
+        self.0.release_native_pointer_lock().log_err();
         let state = self.0.state.borrow();
 
         check_reply(
@@ -1922,38 +2090,7 @@ impl PlatformWindow for X11Window {
     }
 
     fn display_refresh_rate(&self) -> Option<f32> {
-        let xcb = &self.0.xcb;
-        let x_window = self.0.x_window;
-
-        let screen_resources = xcb
-            .randr_get_screen_resources_current(x_window)
-            .ok()?
-            .reply()
-            .ok()?;
-
-        // Find the CRTC that this window's screen is using and get its mode's refresh rate
-        let mode_info = screen_resources.crtcs.iter().find_map(|crtc| {
-            let crtc_info = xcb
-                .randr_get_crtc_info(*crtc, x11rb::CURRENT_TIME)
-                .ok()?
-                .reply()
-                .ok()?;
-
-            screen_resources
-                .modes
-                .iter()
-                .find(|m| m.id == crtc_info.mode)
-        });
-
-        mode_info.map(|mode| {
-            if mode.dot_clock == 0 || mode.htotal == 0 || mode.vtotal == 0 {
-                60.0
-            } else {
-                let millihertz =
-                    mode.dot_clock as f64 * 1_000.0 / (mode.htotal as f64 * mode.vtotal as f64);
-                (millihertz / 1_000.0) as f32
-            }
-        })
+        self.0.state.borrow().display.refresh_rate()
     }
 
     fn update_accessibility_tree(

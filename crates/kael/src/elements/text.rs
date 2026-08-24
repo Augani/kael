@@ -341,10 +341,8 @@ impl TextLayout {
         _: &mut App,
     ) -> LayoutId {
         let text_style = window.text_style();
-        let font_size = text_style.font_size.to_pixels(window.rem_size());
-        let line_height = text_style
-            .line_height
-            .to_pixels(font_size.into(), window.rem_size());
+        let font_size = window.ui_length_in_pixels(text_style.font_size);
+        let line_height = window.ui_definite_length_in_pixels(text_style.line_height, font_size);
 
         let mut runs = if let Some(runs) = runs {
             runs

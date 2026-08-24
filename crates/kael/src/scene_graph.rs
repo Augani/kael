@@ -6,13 +6,17 @@
 
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
 const MAX_FRAME_BUDGET_SAMPLES: usize = 100_000;
 const MIN_TARGET_FPS: f64 = 0.001;
 const MAX_TARGET_FPS: f64 = 1_000_000.0;
-const MAX_SPATIAL_ENTRIES: usize = 100_000;
+const MAX_SPATIAL_ENTRIES: usize = 1_000_000;
+const SPATIAL_CELL_SIZE: f64 = 256.0;
+const MAX_CELLS_PER_SPATIAL_ENTRY: usize = 4_096;
+const MAX_CELLS_PER_SPATIAL_QUERY: usize = 4_096;
 const MAX_SCENE_NODES: usize = 100_000;
 const MAX_SCENE_DEPTH: usize = 256;
 const MAX_SCENE_NAME_BYTES: usize = 1_024;
@@ -254,9 +258,18 @@ pub struct SpatialEntry<T> {
     pub data: T,
 }
 
-/// A brute-force spatial index for hit testing and region queries.
+/// A spatial hash for high-volume hit testing and viewport-region queries.
+///
+/// Entries are assigned to fixed-size world-space cells. Shapes spanning an
+/// unusually large number of cells use a bounded overflow lane, and region
+/// queries spanning too many cells fall back to one exact linear scan. Results
+/// preserve insertion order and are always filtered against the original bounds,
+/// so indexing changes performance without changing geometry semantics.
 pub struct SpatialIndex<T> {
     entries: Vec<SpatialEntry<T>>,
+    cells: HashMap<(i64, i64), Vec<usize>>,
+    oversized_entries: Vec<usize>,
+    last_query_candidate_count: Cell<usize>,
 }
 
 impl<T> SpatialIndex<T> {
@@ -264,6 +277,9 @@ impl<T> SpatialIndex<T> {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            cells: HashMap::new(),
+            oversized_entries: Vec::new(),
+            last_query_candidate_count: Cell::new(0),
         }
     }
 
@@ -279,32 +295,122 @@ impl<T> SpatialIndex<T> {
             self.entries.len() < MAX_SPATIAL_ENTRIES,
             "spatial index cannot exceed {MAX_SPATIAL_ENTRIES} entries"
         );
+        let index = self.entries.len();
         self.entries.push(SpatialEntry { bounds, data });
+        self.index_entry(index, bounds);
         Ok(())
     }
 
     /// Return all entries whose bounds contain the given point.
     pub fn query(&self, point_x: f64, point_y: f64) -> Vec<&T> {
-        self.entries
-            .iter()
-            .filter(|e| e.bounds.contains_point(point_x, point_y))
-            .map(|e| &e.data)
-            .collect()
+        self.query_map(point_x, point_y, |data| data)
+    }
+
+    fn query_map<'a, R>(
+        &'a self,
+        point_x: f64,
+        point_y: f64,
+        mut map: impl FnMut(&'a T) -> R,
+    ) -> Vec<R> {
+        if !point_x.is_finite() || !point_y.is_finite() {
+            self.last_query_candidate_count.set(0);
+            return Vec::new();
+        }
+        let cell = (spatial_cell(point_x), spatial_cell(point_y));
+        let local = self.cells.get(&cell).map(Vec::as_slice).unwrap_or(&[]);
+        let oversized = self.oversized_entries.as_slice();
+        let mut local_index = 0;
+        let mut oversized_index = 0;
+        let mut candidate_count = 0;
+        let mut hits = Vec::with_capacity(local.len().saturating_add(oversized.len()));
+
+        // Both lanes stay sorted by insertion index, so a merge preserves exact
+        // insertion order without cloning and normalizing a candidate vector.
+        while local_index < local.len() || oversized_index < oversized.len() {
+            let index = match (
+                local.get(local_index).copied(),
+                oversized.get(oversized_index).copied(),
+            ) {
+                (Some(local), Some(oversized)) if local < oversized => {
+                    local_index += 1;
+                    local
+                }
+                (Some(local), Some(oversized)) if oversized < local => {
+                    oversized_index += 1;
+                    oversized
+                }
+                (Some(local), Some(_)) => {
+                    local_index += 1;
+                    oversized_index += 1;
+                    local
+                }
+                (Some(local), None) => {
+                    local_index += 1;
+                    local
+                }
+                (None, Some(oversized)) => {
+                    oversized_index += 1;
+                    oversized
+                }
+                (None, None) => break,
+            };
+            candidate_count += 1;
+            if let Some(entry) = self.entries.get(index)
+                && entry.bounds.contains_point(point_x, point_y)
+            {
+                hits.push(map(&entry.data));
+            }
+        }
+        self.last_query_candidate_count.set(candidate_count);
+        hits
     }
 
     /// Return all entries whose bounds intersect the given rectangle.
     pub fn query_rect(&self, rect: &SceneRect<f64>) -> Vec<&T> {
-        self.entries
-            .iter()
-            .filter(|e| e.bounds.intersects(rect))
-            .map(|e| &e.data)
-            .collect()
+        self.query_rect_map(rect, |data| data)
+    }
+
+    fn query_rect_map<'a, R>(
+        &'a self,
+        rect: &SceneRect<f64>,
+        mut map: impl FnMut(&'a T) -> R,
+    ) -> Vec<R> {
+        if !rect.is_valid() {
+            self.last_query_candidate_count.set(0);
+            return Vec::new();
+        }
+        let mut candidates =
+            if let Some(cells) = spatial_cell_range(rect, MAX_CELLS_PER_SPATIAL_QUERY) {
+                let mut candidates = Vec::new();
+                cells.for_each(|cell| {
+                    if let Some(indices) = self.cells.get(&cell) {
+                        candidates.extend(indices.iter().copied());
+                    }
+                });
+                candidates.extend(self.oversized_entries.iter().copied());
+                candidates
+            } else {
+                (0..self.entries.len()).collect()
+            };
+        normalize_candidates(&mut candidates);
+        self.last_query_candidate_count.set(candidates.len());
+        let mut hits = Vec::with_capacity(candidates.len());
+        for index in candidates {
+            if let Some(entry) = self.entries.get(index)
+                && entry.bounds.intersects(rect)
+            {
+                hits.push(map(&entry.data));
+            }
+        }
+        hits
     }
 
     /// Remove and return the entry at the given index, if it exists.
     pub fn remove_at(&mut self, index: usize) -> Option<SpatialEntry<T>> {
         if index < self.entries.len() {
-            Some(self.entries.remove(index))
+            let removed = self.entries.remove(index);
+            self.rebuild_cells();
+            Some(removed)
         } else {
             None
         }
@@ -323,13 +429,367 @@ impl<T> SpatialIndex<T> {
     /// Remove all entries.
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.cells.clear();
+        self.oversized_entries.clear();
+        self.last_query_candidate_count.set(0);
     }
+
+    /// Number of occupied spatial-hash cells.
+    pub fn cell_count(&self) -> usize {
+        self.cells.len()
+    }
+
+    /// Number of entries using the bounded oversized-shape lane.
+    pub fn oversized_entry_count(&self) -> usize {
+        self.oversized_entries.len()
+    }
+
+    /// Number of candidate entries examined by the most recent query.
+    ///
+    /// This is useful for performance diagnostics and regression tests. It can
+    /// exceed the number of returned entries because exact bounds filtering runs
+    /// after the hash lookup.
+    pub fn last_query_candidate_count(&self) -> usize {
+        self.last_query_candidate_count.get()
+    }
+
+    fn update_bounds_at_checked(&mut self, index: usize, bounds: SceneRect<f64>) -> Result<()> {
+        anyhow::ensure!(bounds.is_valid(), "spatial bounds are invalid");
+        let old_bounds = self
+            .entries
+            .get(index)
+            .ok_or_else(|| anyhow!("spatial entry {index} does not exist"))?
+            .bounds;
+        if old_bounds == bounds {
+            return Ok(());
+        }
+        self.unindex_entry(index, old_bounds);
+        self.entries[index].bounds = bounds;
+        self.index_entry(index, bounds);
+        self.last_query_candidate_count.set(0);
+        Ok(())
+    }
+
+    fn index_entry(&mut self, index: usize, bounds: SceneRect<f64>) {
+        if let Some(cells) = spatial_cell_range(&bounds, MAX_CELLS_PER_SPATIAL_ENTRY) {
+            cells.for_each(|cell| {
+                insert_sorted_unique(self.cells.entry(cell).or_default(), index);
+            });
+        } else {
+            insert_sorted_unique(&mut self.oversized_entries, index);
+        }
+    }
+
+    fn unindex_entry(&mut self, index: usize, bounds: SceneRect<f64>) {
+        if let Some(cells) = spatial_cell_range(&bounds, MAX_CELLS_PER_SPATIAL_ENTRY) {
+            cells.for_each(|cell| {
+                let remove_cell = self.cells.get_mut(&cell).is_some_and(|indices| {
+                    if let Ok(position) = indices.binary_search(&index) {
+                        indices.remove(position);
+                    }
+                    indices.is_empty()
+                });
+                if remove_cell {
+                    self.cells.remove(&cell);
+                }
+            });
+        } else if let Ok(position) = self.oversized_entries.binary_search(&index) {
+            self.oversized_entries.remove(position);
+        }
+    }
+
+    fn rebuild_cells(&mut self) {
+        self.cells.clear();
+        self.oversized_entries.clear();
+        for index in 0..self.entries.len() {
+            let bounds = self.entries[index].bounds;
+            self.index_entry(index, bounds);
+        }
+        self.last_query_candidate_count.set(0);
+    }
+}
+
+fn normalize_candidates(candidates: &mut Vec<usize>) {
+    candidates.sort_unstable();
+    candidates.dedup();
+}
+
+fn insert_sorted_unique(indices: &mut Vec<usize>, index: usize) {
+    if let Err(position) = indices.binary_search(&index) {
+        indices.insert(position, index);
+    }
+}
+
+fn spatial_cell(value: f64) -> i64 {
+    (value / SPATIAL_CELL_SIZE).floor() as i64
+}
+
+#[derive(Clone, Copy)]
+struct SpatialCellRange {
+    min_x: i64,
+    min_y: i64,
+    max_x: i64,
+    max_y: i64,
+}
+
+impl SpatialCellRange {
+    fn for_each(self, mut callback: impl FnMut((i64, i64))) {
+        for y in self.min_y..=self.max_y {
+            for x in self.min_x..=self.max_x {
+                callback((x, y));
+            }
+        }
+    }
+}
+
+fn spatial_cell_range(rect: &SceneRect<f64>, limit: usize) -> Option<SpatialCellRange> {
+    let min_x = spatial_cell(rect.x);
+    let min_y = spatial_cell(rect.y);
+    let max_x = spatial_cell(rect.x + rect.width);
+    let max_y = spatial_cell(rect.y + rect.height);
+    let width = i128::from(max_x)
+        .checked_sub(i128::from(min_x))?
+        .checked_add(1)?;
+    let height = i128::from(max_y)
+        .checked_sub(i128::from(min_y))?
+        .checked_add(1)?;
+    let count = width.checked_mul(height)?;
+    if count <= 0 || count > limit as i128 {
+        return None;
+    }
+    Some(SpatialCellRange {
+        min_x,
+        min_y,
+        max_x,
+        max_y,
+    })
 }
 
 impl<T> Default for SpatialIndex<T> {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tiled damage tracking
+// ---------------------------------------------------------------------------
+
+/// Integer coordinate of one retained canvas tile.
+#[derive(Debug, Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TileCoordinate {
+    x: i64,
+    y: i64,
+}
+
+impl TileCoordinate {
+    /// Construct a tile coordinate.
+    pub const fn new(x: i64, y: i64) -> Self {
+        Self { x, y }
+    }
+
+    /// Horizontal tile coordinate.
+    pub const fn x(self) -> i64 {
+        self.x
+    }
+
+    /// Vertical tile coordinate.
+    pub const fn y(self) -> i64 {
+        self.y
+    }
+}
+
+/// Damage accumulated since the last retained-canvas update.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TileDamage {
+    /// No tiles changed.
+    None,
+    /// Only the listed tiles need to be re-rendered.
+    Tiles(Vec<TileCoordinate>),
+    /// The safe dirty-tile bound was exceeded, so the full surface must be rendered.
+    Full,
+}
+
+impl TileDamage {
+    /// Return true when no rendering work is needed.
+    pub fn is_empty(&self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    /// Return true when a full-surface render is required.
+    pub fn is_full(&self) -> bool {
+        matches!(self, Self::Full)
+    }
+
+    /// Return dirty tile coordinates, or an empty slice for none/full damage.
+    pub fn tiles(&self) -> &[TileCoordinate] {
+        match self {
+            Self::Tiles(tiles) => tiles,
+            Self::None | Self::Full => &[],
+        }
+    }
+}
+
+/// Bounded tile invalidation for retained whiteboards and large 2D scenes.
+///
+/// Call [`Self::invalidate`] for changed world-space bounds (or
+/// [`Self::invalidate_transition`] when an object moves), repaint the tiles from
+/// [`Self::take`], and retain every other cached tile. If one operation would
+/// create pathological work, the tracker explicitly promotes to
+/// [`TileDamage::Full`] instead of allocating without bound.
+pub struct TileDamageTracker {
+    tile_size: f64,
+    max_dirty_tiles: usize,
+    dirty_tiles: HashSet<TileCoordinate>,
+    full: bool,
+}
+
+impl TileDamageTracker {
+    /// Construct a tracker with the given square world-space tile size.
+    ///
+    /// Invalid sizes fall back to 256 units; use [`Self::new_checked`] when an
+    /// invalid configuration should be reported.
+    pub fn new(tile_size: f64) -> Self {
+        let tile_size = if tile_size.is_finite() && tile_size > 0.0 {
+            tile_size
+        } else {
+            256.0
+        };
+        Self {
+            tile_size,
+            max_dirty_tiles: 65_536,
+            dirty_tiles: HashSet::new(),
+            full: false,
+        }
+    }
+
+    /// Construct a validated tracker.
+    pub fn new_checked(tile_size: f64, max_dirty_tiles: usize) -> Result<Self> {
+        anyhow::ensure!(
+            tile_size.is_finite() && tile_size > 0.0,
+            "tile size must be finite and positive"
+        );
+        anyhow::ensure!(
+            max_dirty_tiles > 0 && max_dirty_tiles <= MAX_SPATIAL_ENTRIES,
+            "dirty tile bound must be between 1 and {MAX_SPATIAL_ENTRIES}"
+        );
+        Ok(Self {
+            tile_size,
+            max_dirty_tiles,
+            dirty_tiles: HashSet::new(),
+            full: false,
+        })
+    }
+
+    /// Configured square tile size in world-space units.
+    pub fn tile_size(&self) -> f64 {
+        self.tile_size
+    }
+
+    /// Number of explicitly dirty tiles, excluding full-surface damage.
+    pub fn dirty_tile_count(&self) -> usize {
+        self.dirty_tiles.len()
+    }
+
+    /// Return true when the tracker has promoted to full-surface damage.
+    pub fn is_full(&self) -> bool {
+        self.full
+    }
+
+    /// Mark every tile intersecting `bounds` as dirty.
+    pub fn invalidate(&mut self, bounds: SceneRect<f64>) {
+        let _ = self.invalidate_checked(bounds);
+    }
+
+    /// Mark validated bounds dirty, promoting to full damage when the configured
+    /// tile-count bound would be exceeded.
+    pub fn invalidate_checked(&mut self, bounds: SceneRect<f64>) -> Result<()> {
+        anyhow::ensure!(bounds.is_valid(), "damage bounds are invalid");
+        if self.full {
+            return Ok(());
+        }
+        let Some((min_x, min_y, max_x, max_y, count)) = tile_span(&bounds, self.tile_size) else {
+            self.promote_to_full();
+            return Ok(());
+        };
+        if count > self.max_dirty_tiles {
+            self.promote_to_full();
+            return Ok(());
+        }
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                self.dirty_tiles.insert(TileCoordinate::new(x, y));
+                if self.dirty_tiles.len() > self.max_dirty_tiles {
+                    self.promote_to_full();
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Invalidate both the old and new bounds of a moved or resized object.
+    pub fn invalidate_transition(&mut self, old: SceneRect<f64>, new: SceneRect<f64>) {
+        self.invalidate(old);
+        self.invalidate(new);
+    }
+
+    /// Return the world-space bounds covered by a tile coordinate.
+    pub fn tile_bounds(&self, tile: TileCoordinate) -> SceneRect<f64> {
+        SceneRect::new(
+            tile.x as f64 * self.tile_size,
+            tile.y as f64 * self.tile_size,
+            self.tile_size,
+            self.tile_size,
+        )
+    }
+
+    /// Consume current damage and reset the tracker for the next update.
+    pub fn take(&mut self) -> TileDamage {
+        if std::mem::take(&mut self.full) {
+            self.dirty_tiles.clear();
+            return TileDamage::Full;
+        }
+        if self.dirty_tiles.is_empty() {
+            return TileDamage::None;
+        }
+        let mut tiles = self.dirty_tiles.drain().collect::<Vec<_>>();
+        tiles.sort_unstable();
+        TileDamage::Tiles(tiles)
+    }
+
+    /// Discard accumulated damage.
+    pub fn clear(&mut self) {
+        self.full = false;
+        self.dirty_tiles.clear();
+    }
+
+    fn promote_to_full(&mut self) {
+        self.full = true;
+        self.dirty_tiles.clear();
+    }
+}
+
+impl Default for TileDamageTracker {
+    fn default() -> Self {
+        Self::new(256.0)
+    }
+}
+
+fn tile_span(rect: &SceneRect<f64>, tile_size: f64) -> Option<(i64, i64, i64, i64, usize)> {
+    let tile = |value: f64| (value / tile_size).floor() as i64;
+    let min_x = tile(rect.x);
+    let min_y = tile(rect.y);
+    let max_x = tile(rect.x + rect.width);
+    let max_y = tile(rect.y + rect.height);
+    let width = i128::from(max_x)
+        .checked_sub(i128::from(min_x))?
+        .checked_add(1)?;
+    let height = i128::from(max_y)
+        .checked_sub(i128::from(min_y))?
+        .checked_add(1)?;
+    let count = usize::try_from(width.checked_mul(height)?).ok()?;
+    Some((min_x, min_y, max_x, max_y, count))
 }
 
 // ---------------------------------------------------------------------------
@@ -541,6 +1001,11 @@ pub struct SceneGraph {
     nodes: HashMap<SceneNodeId, SceneNode>,
     roots: Vec<SceneNodeId>,
     next_id: SceneNodeId,
+    spatial_index: RefCell<SpatialIndex<SceneNodeId>>,
+    spatial_entry_indices: RefCell<HashMap<SceneNodeId, usize>>,
+    spatial_dirty: Cell<bool>,
+    spatial_full_rebuild_count: Cell<u64>,
+    spatial_incremental_update_count: Cell<u64>,
 }
 
 impl SceneGraph {
@@ -550,6 +1015,11 @@ impl SceneGraph {
             nodes: HashMap::new(),
             roots: Vec::new(),
             next_id: 1,
+            spatial_index: RefCell::new(SpatialIndex::new()),
+            spatial_entry_indices: RefCell::new(HashMap::new()),
+            spatial_dirty: Cell::new(false),
+            spatial_full_rebuild_count: Cell::new(0),
+            spatial_incremental_update_count: Cell::new(0),
         }
     }
 
@@ -620,6 +1090,8 @@ impl SceneGraph {
             self.roots.push(id);
         }
 
+        self.spatial_dirty.set(true);
+
         Ok(id)
     }
 
@@ -642,6 +1114,7 @@ impl SceneGraph {
                 .retain(|child| !removed_ids.contains(child));
         }
         self.roots.retain(|root| !removed_ids.contains(root));
+        self.spatial_dirty.set(true);
 
         Some(node)
     }
@@ -653,6 +1126,7 @@ impl SceneGraph {
 
     /// Get a mutable reference to a node by id.
     pub fn get_mut(&mut self, id: SceneNodeId) -> Option<&mut SceneNode> {
+        self.spatial_dirty.set(true);
         self.nodes.get_mut(&id)
     }
 
@@ -671,38 +1145,46 @@ impl SceneGraph {
         if !x.is_finite() || !y.is_finite() {
             return Vec::new();
         }
-        let mut hits = Vec::new();
-        let mut visited = HashSet::new();
-        let mut pending = self
-            .roots
-            .iter()
-            .copied()
-            .map(|root| (root, false))
-            .collect::<Vec<_>>();
-        while let Some((node_id, children_visited)) = pending.pop() {
-            let Some(node) = self.nodes.get(&node_id) else {
-                continue;
-            };
-            if children_visited {
-                if node.visible && node.bounds.contains_point(x, y) {
-                    hits.push(node_id);
-                }
-                continue;
-            }
-            if !node.visible || !visited.insert(node_id) {
-                continue;
-            }
-            pending.push((node_id, true));
-            pending.extend(node.children.iter().copied().map(|child| (child, false)));
+        self.rebuild_spatial_index_if_needed();
+        self.spatial_index.borrow().query_map(x, y, |id| *id)
+    }
+
+    /// Find visible nodes intersecting a world-space viewport, topmost first.
+    ///
+    /// This is the preferred culling query for large whiteboards and game scenes;
+    /// it uses the same cached spatial index as [`Self::hit_test`].
+    pub fn visible_in_rect(&self, rect: &SceneRect<f64>) -> Vec<SceneNodeId> {
+        if !rect.is_valid() {
+            return Vec::new();
         }
-        hits
+        self.rebuild_spatial_index_if_needed();
+        self.spatial_index.borrow().query_rect_map(rect, |id| *id)
+    }
+
+    /// Candidate count examined by the most recent hit-test or viewport query.
+    pub fn last_spatial_candidate_count(&self) -> usize {
+        self.spatial_index.borrow().last_query_candidate_count()
+    }
+
+    /// Number of complete spatial-index rebuilds performed by this graph.
+    ///
+    /// Bounds-only movement on a clean graph does not increase this counter;
+    /// structural, visibility, or arbitrary mutable-node changes retain the safe
+    /// lazy full-rebuild fallback.
+    pub fn spatial_full_rebuild_count(&self) -> u64 {
+        self.spatial_full_rebuild_count.get()
+    }
+
+    /// Number of bounds changes applied directly to the cached spatial index.
+    pub fn spatial_incremental_update_count(&self) -> u64 {
+        self.spatial_incremental_update_count.get()
     }
 
     /// Move a node by the given delta, updating its bounds.
     pub fn move_node(&mut self, id: SceneNodeId, dx: f64, dy: f64) -> Result<()> {
         let node = self
             .nodes
-            .get_mut(&id)
+            .get(&id)
             .ok_or_else(|| anyhow!("node {} not found", id))?;
         anyhow::ensure!(!node.locked, "locked scene node cannot be moved");
         anyhow::ensure!(
@@ -712,8 +1194,41 @@ impl SceneGraph {
         let x = node.bounds.x + dx;
         let y = node.bounds.y + dy;
         anyhow::ensure!(x.is_finite() && y.is_finite(), "scene movement overflowed");
-        node.bounds.x = x;
-        node.bounds.y = y;
+        let old_bounds = node.bounds;
+        let new_bounds = SceneRect::new(x, y, node.bounds.width, node.bounds.height);
+        if old_bounds == new_bounds {
+            return Ok(());
+        }
+
+        self.nodes
+            .get_mut(&id)
+            .expect("validated scene node disappeared")
+            .bounds = new_bounds;
+
+        if !self.spatial_dirty.get() {
+            let entry_index = self.spatial_entry_indices.borrow().get(&id).copied();
+            let incrementally_updated = entry_index.is_some_and(|entry_index| {
+                let mut index = self.spatial_index.borrow_mut();
+                if index.entries.get(entry_index).map(|entry| entry.data) != Some(id) {
+                    return false;
+                }
+                index
+                    .update_bounds_at_checked(entry_index, new_bounds)
+                    .is_ok()
+            });
+            if incrementally_updated {
+                self.spatial_incremental_update_count.set(
+                    self.spatial_incremental_update_count
+                        .get()
+                        .saturating_add(1),
+                );
+            } else {
+                // A visible-order mapping can be absent for hidden/corrupt
+                // hierarchies or after an unexpected index inconsistency. Keep
+                // movement correct and let the next query repair everything.
+                self.spatial_dirty.set(true);
+            }
+        }
         Ok(())
     }
 
@@ -777,7 +1292,59 @@ impl SceneGraph {
             node.parent = new_parent;
         }
 
+        self.spatial_dirty.set(true);
+
         Ok(())
+    }
+
+    fn rebuild_spatial_index_if_needed(&self) {
+        if !self.spatial_dirty.get() {
+            return;
+        }
+        let mut index = SpatialIndex::new();
+        let mut entry_indices = HashMap::with_capacity(self.nodes.len());
+        for id in self.visible_hit_order() {
+            let Some(node) = self.nodes.get(&id) else {
+                continue;
+            };
+            if node.bounds.is_valid() {
+                let entry_index = index.len();
+                if index.insert_checked(node.bounds, id).is_ok() {
+                    entry_indices.insert(id, entry_index);
+                }
+            }
+        }
+        *self.spatial_index.borrow_mut() = index;
+        *self.spatial_entry_indices.borrow_mut() = entry_indices;
+        self.spatial_dirty.set(false);
+        self.spatial_full_rebuild_count
+            .set(self.spatial_full_rebuild_count.get().saturating_add(1));
+    }
+
+    fn visible_hit_order(&self) -> Vec<SceneNodeId> {
+        let mut order = Vec::new();
+        let mut visited = HashSet::new();
+        let mut pending = self
+            .roots
+            .iter()
+            .copied()
+            .map(|root| (root, false))
+            .collect::<Vec<_>>();
+        while let Some((node_id, children_visited)) = pending.pop() {
+            let Some(node) = self.nodes.get(&node_id) else {
+                continue;
+            };
+            if children_visited {
+                order.push(node_id);
+                continue;
+            }
+            if !node.visible || !visited.insert(node_id) {
+                continue;
+            }
+            pending.push((node_id, true));
+            pending.extend(node.children.iter().copied().map(|child| (child, false)));
+        }
+        order
     }
 
     fn allocate_id(&mut self) -> Result<SceneNodeId> {
@@ -1187,6 +1754,38 @@ mod tests {
     }
 
     #[test]
+    fn spatial_index_updates_bounds_without_changing_insertion_order() {
+        let mut index = SpatialIndex::new();
+        index.insert(rect(1_024.0, 0.0, 32.0, 32.0), "first");
+        index.insert(rect(0.0, 0.0, 32.0, 32.0), "second");
+        index.insert(
+            rect(-1_000_000.0, -1_000_000.0, 2_000_000.0, 2_000_000.0),
+            "oversized",
+        );
+
+        index
+            .update_bounds_at_checked(0, rect(4.0, 4.0, 32.0, 32.0))
+            .unwrap();
+        assert_eq!(
+            index.query(8.0, 8.0),
+            vec![&"first", &"second", &"oversized"]
+        );
+        assert_eq!(index.last_query_candidate_count(), 3);
+
+        index
+            .update_bounds_at_checked(2, rect(2_048.0, 0.0, 32.0, 32.0))
+            .unwrap();
+        assert_eq!(index.oversized_entry_count(), 0);
+        assert_eq!(index.query(8.0, 8.0), vec![&"first", &"second"]);
+        assert_eq!(index.query(2_050.0, 2.0), vec![&"oversized"]);
+        assert!(
+            index
+                .update_bounds_at_checked(99, rect(0.0, 0.0, 1.0, 1.0))
+                .is_err()
+        );
+    }
+
+    #[test]
     fn spatial_index_remove_and_clear() {
         let mut idx = SpatialIndex::new();
         idx.insert(rect(0.0, 0.0, 10.0, 10.0), "a");
@@ -1201,6 +1800,67 @@ mod tests {
 
         idx.clear();
         assert!(idx.is_empty());
+    }
+
+    #[test]
+    fn spatial_index_limits_candidates_for_large_whiteboards() {
+        let mut index = SpatialIndex::new();
+        for row in 0..100 {
+            for column in 0..100 {
+                let id = row * 100 + column;
+                index.insert(
+                    rect(column as f64 * 512.0, row as f64 * 512.0, 32.0, 32.0),
+                    id,
+                );
+            }
+        }
+
+        assert_eq!(index.len(), 10_000);
+        assert_eq!(index.query(5.0, 5.0), vec![&0]);
+        assert!(index.last_query_candidate_count() <= 1);
+        let visible = index.query_rect(&rect(0.0, 0.0, 600.0, 600.0));
+        assert_eq!(visible.len(), 4);
+        assert!(index.last_query_candidate_count() < 16);
+        assert!(index.cell_count() >= index.len());
+    }
+
+    #[test]
+    fn spatial_index_bounds_huge_shapes_and_queries() {
+        let mut index = SpatialIndex::new();
+        index.insert(
+            rect(-1_000_000.0, -1_000_000.0, 2_000_000.0, 2_000_000.0),
+            1,
+        );
+        index.insert(rect(10.0, 10.0, 5.0, 5.0), 2);
+        assert_eq!(index.oversized_entry_count(), 1);
+        assert_eq!(index.query(12.0, 12.0), vec![&1, &2]);
+
+        let hits = index.query_rect(&rect(-2_000_000.0, -2_000_000.0, 4_000_000.0, 4_000_000.0));
+        assert_eq!(hits, vec![&1, &2]);
+        assert_eq!(index.last_query_candidate_count(), 2);
+    }
+
+    #[test]
+    fn tile_damage_tracks_moves_deterministically_and_promotes_safely() {
+        let mut damage = TileDamageTracker::new_checked(256.0, 8).unwrap();
+        damage.invalidate_transition(rect(0.0, 0.0, 32.0, 32.0), rect(512.0, 256.0, 32.0, 32.0));
+        let tiles = damage.take();
+        assert_eq!(
+            tiles.tiles(),
+            &[TileCoordinate::new(0, 0), TileCoordinate::new(2, 1)]
+        );
+        assert!(damage.take().is_empty());
+        assert_eq!(
+            damage.tile_bounds(TileCoordinate::new(-1, 2)),
+            rect(-256.0, 512.0, 256.0, 256.0)
+        );
+
+        damage.invalidate(rect(0.0, 0.0, 10_000.0, 10_000.0));
+        assert!(damage.is_full());
+        assert_eq!(damage.take(), TileDamage::Full);
+        assert!(!damage.is_full());
+        assert!(TileDamageTracker::new_checked(0.0, 8).is_err());
+        assert!(TileDamageTracker::new_checked(256.0, 0).is_err());
     }
 
     #[test]
@@ -1333,6 +1993,132 @@ mod tests {
 
         let hits = sg.hit_test(50.0, 50.0);
         assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn scene_graph_uses_spatial_culling_and_refreshes_after_mutation() {
+        let mut graph = SceneGraph::new();
+        let mut ids = Vec::new();
+        for row in 0..50 {
+            for column in 0..50 {
+                ids.push(graph.add_node(
+                    format!("node-{row}-{column}"),
+                    rect(column as f64 * 512.0, row as f64 * 512.0, 40.0, 40.0),
+                    None,
+                ));
+            }
+        }
+        let first = ids[0];
+        assert_eq!(graph.hit_test(10.0, 10.0), vec![first]);
+        assert!(graph.last_spatial_candidate_count() <= 1);
+        assert_eq!(
+            graph.visible_in_rect(&rect(0.0, 0.0, 600.0, 600.0)).len(),
+            4
+        );
+        assert!(graph.last_spatial_candidate_count() < 16);
+
+        graph.move_node(first, 10_000.0, 10_000.0).unwrap();
+        assert!(graph.hit_test(10.0, 10.0).is_empty());
+        assert_eq!(graph.hit_test(10_010.0, 10_010.0), vec![first]);
+    }
+
+    #[test]
+    fn scene_graph_moves_update_spatial_bounds_without_rebuilding_or_reordering() {
+        let mut graph = SceneGraph::new();
+        let bottom = graph.add_node("bottom", rect(0.0, 0.0, 64.0, 64.0), None);
+        let top = graph.add_node("top", rect(0.0, 0.0, 64.0, 64.0), None);
+
+        assert_eq!(graph.hit_test(16.0, 16.0), vec![top, bottom]);
+        assert_eq!(graph.spatial_full_rebuild_count(), 1);
+        assert_eq!(graph.spatial_incremental_update_count(), 0);
+
+        graph.move_node(top, 512.0, 0.0).unwrap();
+        assert_eq!(graph.hit_test(16.0, 16.0), vec![bottom]);
+        assert_eq!(graph.hit_test(528.0, 16.0), vec![top]);
+        assert_eq!(graph.spatial_full_rebuild_count(), 1);
+        assert_eq!(graph.spatial_incremental_update_count(), 1);
+
+        graph.move_node(top, -512.0, 0.0).unwrap();
+        assert_eq!(graph.hit_test(16.0, 16.0), vec![top, bottom]);
+        assert_eq!(graph.spatial_full_rebuild_count(), 1);
+        assert_eq!(graph.spatial_incremental_update_count(), 2);
+    }
+
+    #[test]
+    fn scene_graph_move_falls_back_to_a_full_rebuild_when_mapping_is_inconsistent() {
+        let mut graph = SceneGraph::new();
+        let node = graph.add_node("node", rect(0.0, 0.0, 32.0, 32.0), None);
+        let other = graph.add_node("other", rect(1_024.0, 0.0, 32.0, 32.0), None);
+        assert_eq!(graph.hit_test(8.0, 8.0), vec![node]);
+        let rebuilds = graph.spatial_full_rebuild_count();
+
+        let other_entry = graph.spatial_entry_indices.borrow()[&other];
+        graph
+            .spatial_entry_indices
+            .borrow_mut()
+            .insert(node, other_entry);
+        graph.move_node(node, 512.0, 0.0).unwrap();
+        assert!(graph.spatial_dirty.get());
+        assert_eq!(graph.hit_test(520.0, 8.0), vec![node]);
+        assert_eq!(graph.hit_test(1_032.0, 8.0), vec![other]);
+        assert_eq!(graph.spatial_full_rebuild_count(), rebuilds + 1);
+    }
+
+    #[test]
+    fn scene_graph_incremental_move_query_probe_stays_bounded_at_one_hundred_thousand_nodes() {
+        const NODE_COUNT: usize = 100_000;
+        const MOVE_QUERY_OPERATIONS: usize = 1_024;
+        const MOVE_QUERY_BUDGET: Duration = Duration::from_secs(5);
+        const COLUMNS: usize = 400;
+
+        let mut graph = SceneGraph::new();
+        let mut ids = Vec::with_capacity(NODE_COUNT);
+        for index in 0..NODE_COUNT {
+            ids.push(graph.add_node(
+                "shape",
+                rect(
+                    (index % COLUMNS) as f64 * 512.0,
+                    (index / COLUMNS) as f64 * 512.0,
+                    32.0,
+                    32.0,
+                ),
+                None,
+            ));
+        }
+        assert_eq!(graph.node_count(), NODE_COUNT);
+        assert_ne!(ids.last(), Some(&0));
+        assert_eq!(graph.hit_test(1.0, 1.0), vec![ids[0]]);
+        let initial_rebuilds = graph.spatial_full_rebuild_count();
+        assert_eq!(initial_rebuilds, 1);
+        let initial_incremental_updates = graph.spatial_incremental_update_count();
+        let started = std::time::Instant::now();
+        let mut max_candidates = 0;
+
+        for operation in 0..MOVE_QUERY_OPERATIONS {
+            let id = ids[(operation * 97) % ids.len()];
+            graph.move_node(id, 300.0, 0.0).unwrap();
+            let bounds = graph.get(id).unwrap().bounds;
+            assert!(graph.hit_test(bounds.x + 1.0, bounds.y + 1.0).contains(&id));
+            assert_eq!(graph.spatial_full_rebuild_count(), initial_rebuilds);
+            max_candidates = max_candidates.max(graph.last_spatial_candidate_count());
+        }
+
+        let elapsed = started.elapsed();
+        assert_eq!(
+            graph.spatial_incremental_update_count() - initial_incremental_updates,
+            MOVE_QUERY_OPERATIONS as u64
+        );
+        assert!(
+            max_candidates <= 2,
+            "unexpected candidate count: {max_candidates}"
+        );
+        assert!(
+            elapsed <= MOVE_QUERY_BUDGET,
+            "100k-node incremental move/query probe took {elapsed:?}, budget {MOVE_QUERY_BUDGET:?}"
+        );
+        eprintln!(
+            "100k SceneGraph move/query probe: {MOVE_QUERY_OPERATIONS} operations in {elapsed:?}, max candidates {max_candidates}"
+        );
     }
 
     #[test]

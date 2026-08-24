@@ -14,6 +14,10 @@
   PipeWire, and FFmpeg packages. The repository's
   [`install-linux-deps.sh`](https://github.com/Augani/kael/blob/main/scripts/ci/install-linux-deps.sh)
   is the canonical Ubuntu/Debian list.
+- **Browser:** the `wasm32-unknown-unknown` Rust target and
+  `wasm-bindgen-cli` 0.2.122. Optimized release builds also use Binaryen 132.
+  Projects created by `kael new` request the Rust target automatically through
+  their toolchain file.
 
 With only the macOS Command Line Tools installed, enable runtime shader
 compilation during development:
@@ -34,12 +38,25 @@ cd my_app
 cargo run
 ```
 
+The generated project uses that same source for the browser target. Install the
+packager once, then build and open it locally:
+
+```bash
+cargo install wasm-bindgen-cli --version 0.2.122 --locked
+npm install --global binaryen@132.0.0
+kael web serve
+```
+
+Use `kael web build` for optimized `dist/web` deployment files. See
+[Browser (WebAssembly)](browser.md) for target-specific dependencies and the
+initial browser capability boundary.
+
 To configure a project manually, choose the layer you need:
 
 ```toml
 [dependencies]
-kael = "0.3"
-kael_ui = "0.3" # remove this line when building a custom component system
+kael = "0.4"
+kael_ui = "0.4" # remove this line when building a custom component system
 ```
 
 `kael_ui` depends on `kael`; the core framework never depends on `kael_ui`.
@@ -92,11 +109,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## What just happened
 
-1. `Application::try_new()` initializes the native platform and returns startup
-   failures instead of panicking.
+1. `Application::try_new()` initializes the selected native or browser platform
+   and returns startup failures instead of panicking.
 2. `kael_ui::init(cx)` registers the component systems used by the optional UI
    layer.
-3. `cx.open_window(...)` creates a native, GPU-rendered window.
+3. `cx.open_window(...)` creates a GPU-rendered native window or the browser's
+   `#blade` canvas window.
 4. `cx.new(...)` stores the view in a reactive `Entity<Counter>`.
 5. `entity.update(...)` mutates the model, and `cx.notify()` invalidates the
    affected view so Kael can render the next state.

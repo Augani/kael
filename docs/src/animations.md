@@ -60,6 +60,58 @@ svg()
     )
 ```
 
+Kael coalesces duplicate animation-frame requests from the same entity in a
+frame. Reduced-motion, low-power, and cancelled explicit animations jump to
+their completed state instead of keeping a hidden frame loop alive.
+
+## Custom display-frame effects
+
+Use `kael_ui::animations::DisplayFrameClock` for custom particles, canvas
+effects, or springs whose state changes every presented frame. Call `restart`
+when the effect starts, pair `try_arm` with `Window::on_next_frame`, and pass the
+returned generation to `sample` inside the callback. `sample` returns monotonic,
+refresh-rate-independent delta time, so the same motion runs correctly at 60,
+90, 120, or 144 Hz. It also rejects callbacks left behind by a restart and
+clamps the first frame after a suspended browser tab.
+
+Schedule one callback from the effect's render path and notify its state from
+that callback. The next render arms the following frame. This pattern naturally
+stops when the effect leaves the retained tree and coalesces repeated renders
+before a presentation. `Confetti`, `ParticleEmitter`, and `DraggableSpring` use
+this path on both desktop and WebAssembly; none of them polls a fixed 16 ms
+timer.
+
+## Fixed-timestep games and simulations
+
+UI animation should follow display time, but gameplay, physics, editors, and
+deterministic simulations usually need fixed updates. `kael_engines` provides a
+browser-compatible clock with bounded catch-up work and render interpolation:
+
+```rust
+use std::time::Duration;
+use kael_engines::game_loop::{FixedFrameClock, FixedFrameClockConfig};
+
+let config = FixedFrameClockConfig::from_updates_per_second(60)?
+    .with_max_frame_delta(Duration::from_millis(250))
+    .with_max_catch_up_steps(8);
+let mut clock = FixedFrameClock::new(config)?;
+
+let frame = clock.advance_by(Duration::from_millis(17));
+for _ in frame.updates() {
+    // update simulation by frame.fixed_timestep()
+}
+let render_alpha = frame.interpolation_alpha();
+# let _ = render_alpha;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Use `tick()` in a live render loop and `advance_by` for replay/tests. Request the
+next Kael animation frame only while the simulation is active. The clock clamps
+long display gaps, caps update steps, and exposes dropped-time telemetry so a
+stall cannot become an unbounded spiral of work. Pair it with canvas bulk
+submission (`reserve_commands`, `fill_rects`, and `fill_circles`) for particles,
+sprites, maps, and dense game/editor surfaces.
+
 ## The `Animation` timeline
 
 ```rust
@@ -150,7 +202,7 @@ Enable the optional native renderer first:
 
 ```toml
 [dependencies]
-kael = { version = "0.3", features = ["lottie"] }
+kael = { version = "0.4", features = ["lottie"] }
 ```
 
 Use `lottie(src)` for native vector animation assets instead of routing every animated visual through a WebView. Sources can be embedded resources, paths, URLs, byte buffers, or pre-decoded `LottieAnimation` values, and the element supports autoplay, once/loop/ping-pong playback, object-fit placement, loading content, failure fallback content, and frame prefetching:

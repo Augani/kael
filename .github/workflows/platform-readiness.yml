@@ -1,6 +1,7 @@
 name: Platform Readiness
 
 on:
+  workflow_call:
   pull_request:
   push:
     branches:
@@ -26,36 +27,58 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
         with:
           toolchain: 1.97.1
           components: rustfmt
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Check formatting
         run: cargo fmt --all --check
+
+  book-docs:
+    name: mdBook Documentation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
+        with:
+          toolchain: 1.97.1
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Install pinned mdBook
+        run: cargo install mdbook --version 0.4.52 --locked --no-default-features
+
+      - name: Build documentation book
+        run: |
+          mdbook build docs
+          test -s target/book/index.html
 
   api-docs:
     name: API Documentation
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Linux dependencies
         run: bash scripts/ci/install-linux-deps.sh
 
       - name: Install toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
         with:
           toolchain: 1.97.1
           targets: aarch64-apple-darwin
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Check docs.rs profiles
         env:
@@ -83,20 +106,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
         with:
           toolchain: 1.97.1
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Install cargo-audit
         run: cargo install --locked cargo-audit --version 0.22.2
 
       - name: Audit Cargo.lock
-        run: cargo audit
+        run: bash scripts/ci/audit-dependencies.sh
 
   verify:
     name: Verify (${{ matrix.label }})
@@ -117,7 +140,7 @@ jobs:
             timeout_minutes: 75
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -153,7 +176,7 @@ jobs:
 
       - name: Restore Windows vcpkg binary cache
         if: runner.os == 'Windows'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~\AppData\Local\vcpkg\archives
           key: vcpkg-${{ runner.os }}-x64-windows-${{ steps.windows-vcpkg.outputs.revision }}-${{ hashFiles('scripts/ci/install-windows-deps.ps1') }}
@@ -166,12 +189,12 @@ jobs:
         run: pwsh -File scripts/ci/install-windows-deps.ps1
 
       - name: Install toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
         with:
           toolchain: 1.97.1
           components: clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Verify on macOS/Linux
         if: runner.os != 'Windows'
@@ -183,18 +206,24 @@ jobs:
         shell: bash
         run: bash scripts/ci/verify-kael.sh macos-blade
 
+      - name: Execute native WKWebView IPC and JavaScript smoke
+        if: runner.os == 'macOS'
+        shell: bash
+        timeout-minutes: 15
+        run: bash scripts/ci/verify-macos-wkwebview.sh
+
+      - name: Upload macOS WKWebView smoke log
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-wkwebview-smoke
+          path: target/macos-wkwebview-smoke/wkwebview.log
+          if-no-files-found: warn
+
       - name: Verify on Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: pwsh -File scripts/ci/verify-kael.ps1
-
-      - name: Upload release dry-run feed
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: release-dry-run-${{ matrix.label }}
-          path: dist/update-feed.json
-          if-no-files-found: ignore
 
   linux-backends:
     name: Linux Backend Check (${{ matrix.mode }})
@@ -208,23 +237,475 @@ jobs:
           - linux-wayland
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Linux dependencies
         shell: bash
         run: bash scripts/ci/install-linux-deps.sh
 
       - name: Install toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
         with:
           toolchain: 1.97.1
           components: clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Check Linux backend feature set
         shell: bash
         run: bash scripts/ci/verify-kael.sh ${{ matrix.mode }}
+
+  macos-native-renderer-runtime:
+    name: macOS Metal Renderer Runtime
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
+        with:
+          toolchain: 1.97.1
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Execute Metal retained-scene runtime proof
+        shell: bash
+        timeout-minutes: 30
+        run: bash scripts/ci/verify-macos-native-renderer.sh
+
+      - name: Upload macOS native renderer evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-native-renderer-evidence
+          path: target/native-renderer-smoke/macos
+          if-no-files-found: warn
+
+  linux-native-renderer-runtime:
+    name: Linux Blade Renderer Runtime / Generated App
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux renderer and virtual-desktop dependencies
+        shell: bash
+        run: |
+          bash scripts/ci/install-linux-deps.sh
+          sudo apt-get install --yes --no-install-recommends \
+            mesa-vulkan-drivers vulkan-tools \
+            xvfb xdotool x11-apps x11-utils
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
+        with:
+          toolchain: 1.97.1
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Execute Blade retained-scene and generated-project runtime proofs
+        shell: bash
+        timeout-minutes: 60
+        env:
+          KAEL_NATIVE_RENDERER_USE_SOFTWARE: 1
+        run: bash scripts/ci/verify-linux-native-renderer.sh
+
+      - name: Upload Linux native renderer evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-native-renderer-evidence
+          path: target/native-renderer-smoke/linux
+          if-no-files-found: warn
+
+  windows-native-renderer-runtime:
+    name: Windows Direct3D 11 Renderer Runtime / Generated App
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
+        with:
+          toolchain: 1.97.1
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Execute Direct3D retained-scene and generated-project runtime proofs
+        shell: pwsh
+        timeout-minutes: 60
+        run: pwsh -NoProfile -File scripts/ci/verify-windows-native-renderer.ps1
+
+      - name: Upload Windows native renderer evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-native-renderer-evidence
+          path: target/native-renderer-smoke/windows
+          if-no-files-found: warn
+
+  linux-webview-runtime:
+    name: Linux WebView / Weston Native Wayland + XWayland
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux dependencies
+        shell: bash
+        run: |
+          bash scripts/ci/install-linux-deps.sh
+          sudo apt-get install --yes --no-install-recommends \
+            at-spi2-core libgtk-4-dev libwebkitgtk-6.0-dev \
+            mesa-vulkan-drivers weston xwayland
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
+        with:
+          toolchain: 1.97.1
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Check isolated maintained WebView feature
+        shell: bash
+        run: cargo clippy --locked -p kael --lib --no-default-features --features webview -- -D warnings
+
+      - name: Execute embedded WebView in a real Wayland desktop session
+        shell: bash
+        timeout-minutes: 20
+        run: |
+          bash scripts/ci/run-linux-webview-wayland-gtk4.sh
+          bash scripts/ci/run-linux-webview-xwayland.sh
+
+      - name: Upload Linux WebView smoke logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-webview-smoke
+          path: |
+            ${{ runner.temp }}/kael-webview-wayland-gtk4/*.log
+            ${{ runner.temp }}/kael-webview-xwayland/*.log
+          if-no-files-found: warn
+
+  browser:
+    name: WebAssembly / WebGL2 Browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux framework dependencies
+        run: bash scripts/ci/install-linux-deps.sh
+
+      - name: Install pinned Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: scripts/browser-matrix-requirements.txt
+
+      - name: Restore pinned Playwright browser binaries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/browser-matrix-requirements.txt') }}
+
+      - name: Install toolchain and browser target
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Install version-matched WebAssembly packager
+        run: cargo install wasm-bindgen-cli --version 0.2.122 --locked
+
+      - name: Install version-matched WebAssembly optimizer
+        run: npm install --global binaryen@132.0.0
+
+      - name: Install matching ChromeDriver
+        uses: nanasess/setup-chromedriver@e913548694400f275b4070efcd90f47dbbc8914c # v3.0.0
+
+      - name: Install three-engine browser runner
+        run: |
+          python -m pip install --requirement scripts/browser-matrix-requirements.txt
+          python -m playwright install-deps chromium firefox webkit
+          python -m playwright install chromium firefox webkit
+
+      - name: Verify unchanged generated project on native and browser targets
+        env:
+          KAEL_PLAYWRIGHT_PYTHON: python
+        run: bash scripts/verify-generated-project-parity.sh
+
+      - name: Check browser framework surfaces
+        run: |
+          cargo check -p kael --lib --target wasm32-unknown-unknown \
+            --no-default-features \
+            --features browser,storage,document,pdf,office,notifications-full,share,screen-capture
+          cargo check -p kael_ui --lib --target wasm32-unknown-unknown \
+            --no-default-features \
+            --features browser,editor-languages,markdown,html-render,http,media,audio,screen-capture
+          cargo check -p kael_markdown --lib --target wasm32-unknown-unknown
+          cargo check -p kael_engines --lib --target wasm32-unknown-unknown \
+            --no-default-features
+          cargo clippy -p kael_audio --all-targets --target wasm32-unknown-unknown \
+            --no-default-features --features browser -- -D warnings
+          RUSTDOCFLAGS='-D warnings' cargo doc -p kael_audio --no-deps \
+            --target wasm32-unknown-unknown --no-default-features --features browser
+          cargo check -p kael_storage -p kael_document --all-targets \
+            --target wasm32-unknown-unknown
+          cargo clippy -p kael_net --all-targets \
+            --target wasm32-unknown-unknown --features browser -- -D warnings
+          cargo clippy -p kael_pdf -p kael_office --all-targets \
+            --target wasm32-unknown-unknown -- -D warnings
+          cargo clippy -p kael_notifications -p kael_share --all-targets \
+            --target wasm32-unknown-unknown -- -D warnings
+
+      - name: Exercise browser notification and share policy in real Chrome
+        run: bash scripts/verify-browser-notify-share.sh
+
+      - name: Parse PDF and Office bytes in real Chrome
+        run: bash scripts/verify-browser-document-formats.sh
+
+      - name: Reopen browser storage and documents in real Chrome
+        run: bash scripts/verify-browser-persistence.sh
+
+      - name: Package the real component smoke app
+        run: |
+          bash scripts/build-web.sh \
+            --package kael_ui \
+            --example browser_smoke \
+            --features browser \
+            --out-dir target/browser-smoke \
+            --out-name browser_smoke \
+            --html crates/kael_ui/examples/browser_smoke/index.html
+          test -s target/browser-smoke/index.html
+          test -s target/browser-smoke/browser_smoke.js
+          test -s target/browser-smoke/browser_smoke_bg.wasm
+
+      - name: Enforce optimized browser artifact budget
+        run: bash scripts/verify-browser-artifact-budget.sh
+
+      - name: Run real browser worker probe
+        run: bash scripts/verify-browser-worker-smoke.sh
+
+      - name: Run real portable WebSocket loopback probe
+        run: bash scripts/verify-browser-websocket-smoke.sh
+
+      - name: Run real bounded browser audio probe
+        run: bash scripts/verify-browser-audio-smoke.sh
+
+      - name: Run real browser display-capture probe
+        run: bash scripts/verify-browser-capture-smoke.sh
+
+      - name: Run portable pointer-lock and gamepad probe
+        run: bash scripts/verify-browser-game-input-smoke.sh
+
+      - name: Check maximum browser consumer graphs
+        run: bash scripts/verify-browser-consumer-graph.sh
+
+      - name: Run real browser suite-scale workload probe
+        run: bash scripts/verify-browser-suite-smoke.sh
+
+      - name: Run Chromium, Firefox, and WebKit release matrix
+        env:
+          KAEL_BROWSER_MATRIX_SKIP_BUILD: 1
+          KAEL_BROWSER_MATRIX_SOFTWARE: 1
+        run: bash scripts/verify-browser-matrix.sh
+
+      - name: Start the packaged app in headless Chrome
+        shell: bash
+        run: |
+          python3 -m http.server 8000 --directory target/browser-smoke \
+            > "${RUNNER_TEMP}/kael-browser-http.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "${server_pid}" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8000/ > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          browser="$(command -v google-chrome || command -v google-chrome-stable || true)"
+          test -n "${browser}"
+          browser_status=0
+          timeout 30 "${browser}" \
+            --headless=new \
+            --no-sandbox \
+            --enable-webgl \
+            --enable-unsafe-swiftshader \
+            --use-angle=swiftshader \
+            --virtual-time-budget=20000 \
+            --dump-dom 'http://127.0.0.1:8000/?software_renderer=1' \
+            > "${RUNNER_TEMP}/kael-browser-dom.html" \
+            2> "${RUNNER_TEMP}/kael-browser-chrome.log" \
+            || browser_status=$?
+          if [[ "${browser_status}" -ne 0 && "${browser_status}" -ne 124 ]]; then
+            echo "headless Chrome failed with status ${browser_status}" >&2
+            exit "${browser_status}"
+          fi
+          if [[ "${browser_status}" -eq 124 ]]; then
+            echo "headless Chrome reached the wall-clock limit; validating captured DOM" \
+              >> "${RUNNER_TEMP}/kael-browser-chrome.log"
+          fi
+          test -s "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-ready="true"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-text-shaper="cosmic-text"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-text-probe="passed"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-ime-probe="passed"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-clipboard-input="passed"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-clipboard-probe="passed"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-clipboard-bounds="passed"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-accessibility-probe="passed"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-accessibility-action="passed"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-print-probe="available"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-text-kerning="verified"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-virtual-table="verified"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-virtual-jump="last-row-visible"' \
+            "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-virtual-logical-rows="1000000"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -Eq 'data-kael-virtual-mounted-rows="([2-9]|[1-5][0-9]|6[0-4])"' \
+            "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -Eq 'data-kael-virtual-materialize-us="[0-9]+"' \
+            "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-virtual-scrollbar="always-visible"' \
+            "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-context-recovery="verified"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-webgl-context="restored"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -Eq 'data-kael-context-recovery-hash="[0-9a-f]{16}"' \
+            "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-context-differing-bytes="0"' \
+            "${RUNNER_TEMP}/kael-browser-dom.html"
+
+      - name: Upload packaged browser smoke
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-smoke
+          path: |
+            target/browser-smoke
+            target/browser-suite-smoke
+            target/browser-suite-smoke-logs
+            target/browser-audio-smoke
+            target/browser-audio-smoke-logs
+            target/browser-capture-smoke
+            target/browser-capture-smoke-logs
+            target/browser-matrix
+            target/generated-project-parity-evidence
+            ${{ runner.temp }}/kael-browser-*.log
+            ${{ runner.temp }}/kael-browser-dom.html
+          if-no-files-found: warn
+
+  browser-hardware-macos:
+    name: Browser Hardware Performance (macOS Metal)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pinned Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: scripts/browser-matrix-requirements.txt
+
+      - name: Restore pinned Playwright Chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/browser-matrix-requirements.txt') }}
+
+      - name: Install Rust and WebAssembly target
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Install pinned browser build and runner tools
+        run: |
+          cargo install wasm-bindgen-cli --version 0.2.122 --locked
+          npm install --global binaryen@132.0.0
+          python -m pip install --requirement scripts/browser-matrix-requirements.txt
+          python -m playwright install chromium
+
+      - name: Build optimized million-row browser proof
+        run: bash scripts/build-browser-smoke.sh
+
+      - name: Enforce real Metal-backed browser performance
+        env:
+          KAEL_BROWSER_MATRIX_ARTIFACT_DIR: target/browser-hardware-macos
+          KAEL_BROWSER_MATRIX_ENGINES: chromium
+          KAEL_BROWSER_MATRIX_SKIP_BUILD: 1
+          KAEL_BROWSER_MATRIX_SKIP_CAPTURE: 1
+          KAEL_BROWSER_MATRIX_SKIP_SUITE: 1
+          KAEL_BROWSER_MATRIX_SKIP_REALTIME: 1
+        run: bash scripts/verify-browser-matrix.sh
+
+      - name: Upload hardware performance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-hardware-macos
+          path: target/browser-hardware-macos
+          if-no-files-found: error
+
+  windows-runtime-and-msi:
+    name: Windows WebView Runtime / MSI
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
+        with:
+          toolchain: 1.97.1
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Execute native WebView IPC and JavaScript smoke
+        shell: pwsh
+        timeout-minutes: 15
+        run: pwsh -NoProfile -File scripts/ci/verify-windows-webview.ps1
+
+      - name: Install pinned WiX v4 CLI
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 4.0.6
+          "$env:USERPROFILE\.dotnet\tools" | Out-File `
+            -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build release CLI and MSI
+        shell: pwsh
+        run: |
+          cargo build --release -p kael-cli
+          cargo run -p xtask -- bundle kael.dist.toml `
+            --output target/release-artifacts `
+            --binary target/release/kael.exe
+
+      - name: Verify MSI database, payload, and executable
+        shell: pwsh
+        run: >-
+          pwsh -File scripts/ci/verify-windows-msi.ps1
+          -Msi target/release-artifacts/Kael.msi
+          -ExpectedName Kael
+
+      - name: Upload verified Windows release evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-release-evidence
+          path: |
+            target/release-artifacts/Kael.msi
+            target/windows-msi-verification
+            target/windows-webview-smoke
+          if-no-files-found: error
 
   benchmark:
     name: Benchmark (${{ matrix.os }})
@@ -239,7 +720,7 @@ jobs:
           - windows-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -247,11 +728,11 @@ jobs:
         run: bash scripts/ci/install-linux-deps.sh
 
       - name: Install toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
         with:
           toolchain: 1.97.1
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Download main branch baseline
         id: download-baseline
@@ -280,7 +761,7 @@ jobs:
           fi
 
       - name: Upload benchmark results
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: benchmark-results-${{ matrix.os }}
           path: benchmark-results.json
@@ -290,39 +771,39 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Linux dependencies
         run: bash scripts/ci/install-linux-deps.sh
 
       - name: Install toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
         with:
           toolchain: 1.97.1
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Check templates compile
         run: cargo check -p dashboard-app -p messaging-app -p workspace-app
 
-  dry-run-release:
-    name: Dry-Run Release Validation
+  distribution-metadata-simulation:
+    name: Distribution Metadata Simulation (non-strict)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
         with:
           toolchain: 1.97.1
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Validate dist config
         run: cargo run -p xtask -- validate kael.dist.toml
 
-      - name: Dry-run release pipeline
+      - name: Simulate release metadata (does not validate artifacts or signing)
         run: cargo run -p xtask -- dry-run kael.dist.toml
 
       - name: Audit publishable crate contents

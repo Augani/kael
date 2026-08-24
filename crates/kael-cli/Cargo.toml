@@ -6,9 +6,9 @@ rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
-description = "Scaffold release-aligned native Kael applications from the command line"
+description = "Scaffold and build release-aligned Kael applications for desktop and the web"
 documentation = "https://docs.rs/kael-cli"
-keywords = ["kael", "cli", "scaffold", "gui"]
+keywords = ["kael", "cli", "scaffold", "gui", "wasm"]
 categories = ["command-line-utilities", "gui"]
 authors.workspace = true
 repository.workspace = true
@@ -26,3 +26,6 @@ doc = true
 
 [lints]
 workspace = true
+
+[dependencies]
+serde_json.workspace = true

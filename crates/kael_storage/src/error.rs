@@ -29,8 +29,31 @@ pub enum Error {
         source: std::io::Error,
     },
     /// A SQLite operation failed.
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     #[error("sqlite error: {0}")]
     Sql(#[from] rusqlite::Error),
+    /// A browser storage API was unavailable or rejected an operation.
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    #[error("browser storage operation `{operation}` failed: {message}")]
+    BrowserStorage {
+        /// The browser API operation that failed.
+        operation: &'static str,
+        /// The browser-provided diagnostic, if one was available.
+        message: String,
+    },
+    /// SQLite is not part of the browser storage backend.
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    #[error(
+        "SQLite operation `{operation}` is unavailable in browser WebAssembly; use PlatformKvStore or BlobStore"
+    )]
+    BrowserSqlUnsupported {
+        /// The requested SQLite operation.
+        operation: &'static str,
+    },
+    /// A native file path was requested from an origin-scoped browser store.
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    #[error("native storage paths are unavailable in browser WebAssembly")]
+    BrowserPathUnsupported,
     /// Serializing a JSON payload failed.
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
@@ -67,6 +90,14 @@ pub enum Error {
         /// Observed or serialized size.
         actual: u64,
         /// Maximum accepted size.
+        limit: u64,
+    },
+    /// A binary value exceeded the bounded per-record size.
+    #[error("blob is {actual} bytes, exceeding the {limit} byte limit")]
+    BlobTooLarge {
+        /// Observed byte length.
+        actual: u64,
+        /// Maximum accepted byte length.
         limit: u64,
     },
     /// Migration version zero is reserved for an unmigrated database.
@@ -108,6 +139,7 @@ pub enum Error {
 }
 
 impl Error {
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     pub(crate) fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
         Self::Io {
             path: path.into(),

@@ -1,0 +1,20 @@
+[package]
+name = "kael_markdown"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = true
+description = "Typed, presentation-neutral Markdown parsing for Kael applications"
+keywords = ["markdown", "commonmark", "kael", "parser"]
+categories = ["parser-implementations", "text-processing"]
+readme = "README.md"
+
+[dependencies]
+pulldown-cmark = { version = "0.12", default-features = false }
+
+[lints]
+workspace = true

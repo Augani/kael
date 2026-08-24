@@ -22,6 +22,9 @@ pub trait CanvasConstructor<Arg2> {
 /// - `canvas(prepaint, paint)` keeps the legacy low-level API that passes bounds through a
 ///   prepaint phase before painting.
 /// - `canvas(size, draw)` creates an immediate-mode canvas powered by [`crate::DrawContext`].
+///   Real-time callers can preallocate with [`crate::DrawContext::reserve_commands`], batch
+///   quads with [`crate::DrawContext::fill_rects`], and batch circles through the rounded-quad
+///   fast path with [`crate::DrawContext::fill_circles`].
 pub fn canvas<Arg1, Arg2>(arg1: Arg1, arg2: Arg2) -> <Arg1 as CanvasConstructor<Arg2>>::Output
 where
     Arg1: CanvasConstructor<Arg2>,

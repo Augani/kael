@@ -9,14 +9,9 @@ use crate::{
     SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine, fill, point,
     px, relative, rgb, rgba, size, util::wrapped_line_end_indices, white,
 };
-use std::{
-    any::TypeId,
-    cell::RefCell,
-    ops::Range,
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{any::TypeId, cell::RefCell, ops::Range, rc::Rc, time::Duration};
 use unicode_segmentation::UnicodeSegmentation;
+use web_time::Instant;
 
 const TEXT_INPUT_CONTEXT: &str = "TextInput";
 const PASSWORD_MASK_TEXT: &str = "•";
@@ -647,6 +642,7 @@ pub struct TextInput {
     placeholder: SharedString,
     controller: Option<TextInputController>,
     multi_line: bool,
+    min_lines: Option<usize>,
     max_lines: Option<usize>,
     key_policy: TextInputKeyPolicy,
     content_insets: Edges<Pixels>,
@@ -675,6 +671,7 @@ impl TextInput {
             placeholder: SharedString::default(),
             controller: None,
             multi_line: false,
+            min_lines: None,
             max_lines: None,
             key_policy: TextInputKeyPolicy::Multiline,
             content_insets: uniform_edges(field_padding()),
@@ -710,6 +707,12 @@ impl TextInput {
     /// Enable wrapped multiline editing.
     pub fn multi_line(mut self) -> Self {
         self.multi_line = true;
+        self
+    }
+
+    /// Set the minimum visible height of a multiline field.
+    pub fn min_lines(mut self, min_lines: usize) -> Self {
+        self.min_lines = Some(min_lines.max(1));
         self
     }
 
@@ -969,6 +972,7 @@ impl TextInput {
         let text = self.text.clone();
         let placeholder = self.placeholder.clone();
         let multi_line = self.multi_line;
+        let min_lines = self.min_lines;
         let max_lines = self.max_lines;
         let key_policy = self.key_policy;
         let read_only = self.read_only;
@@ -988,6 +992,7 @@ impl TextInput {
                 text,
                 placeholder,
                 multi_line,
+                min_lines,
                 max_lines,
                 key_policy,
                 read_only,
@@ -1289,9 +1294,9 @@ impl Element for TextInput {
                     .iter()
                     .fold(px(0.0), |width, line| width.max(line.layout.width().ceil()));
                 let total_lines = total_visual_line_count(&lines).max(1);
-                let visible_lines = input
-                    .max_lines
-                    .map_or(total_lines, |max_lines| total_lines.min(max_lines.max(1)));
+                let min_lines = input.min_lines.unwrap_or(1);
+                let max_lines = input.max_lines.unwrap_or(usize::MAX).max(min_lines);
+                let visible_lines = total_lines.max(min_lines).min(max_lines);
 
                 size(
                     outer_width.unwrap_or(
@@ -1739,6 +1744,7 @@ struct TextInputState {
     content: SharedString,
     placeholder: SharedString,
     multi_line: bool,
+    min_lines: Option<usize>,
     max_lines: Option<usize>,
     key_policy: TextInputKeyPolicy,
     read_only: bool,
@@ -1773,6 +1779,7 @@ impl TextInputState {
             content: SharedString::default(),
             placeholder: SharedString::default(),
             multi_line: false,
+            min_lines: None,
             max_lines: None,
             key_policy: TextInputKeyPolicy::Multiline,
             read_only: false,
@@ -1805,6 +1812,7 @@ impl TextInputState {
         text: SharedString,
         placeholder: SharedString,
         multi_line: bool,
+        min_lines: Option<usize>,
         max_lines: Option<usize>,
         key_policy: TextInputKeyPolicy,
         read_only: bool,
@@ -1834,6 +1842,7 @@ impl TextInputState {
 
         self.placeholder = placeholder;
         self.multi_line = multi_line;
+        self.min_lines = min_lines.map(|value| value.max(1));
         self.max_lines = max_lines.map(|value| value.max(1));
         self.key_policy = key_policy;
         self.read_only = read_only;
@@ -3029,7 +3038,7 @@ fn shape_text_input_lines(
         style.font(),
         marked_range.as_ref(),
     );
-    let font_size = style.font_size.to_pixels(window.rem_size());
+    let font_size = window.ui_length_in_pixels(style.font_size);
     let lines = window
         .text_system()
         .shape_text(display_text, font_size, &runs, wrap_width, None)
@@ -3570,6 +3579,7 @@ mod tests {
     fn multiline_builders_configure_internal_state() {
         let input = text_input("message", "")
             .multi_line()
+            .min_lines(0)
             .max_lines(0)
             .content_insets(Edges {
                 top: px(1.0),
@@ -3579,6 +3589,7 @@ mod tests {
             });
 
         assert!(input.multi_line);
+        assert_eq!(input.min_lines, Some(1));
         assert_eq!(input.max_lines, Some(1));
         assert_eq!(input.content_insets.left, px(4.0));
         assert_eq!(input.content_insets.bottom, px(3.0));

@@ -1,6 +1,7 @@
 # {{name}}
 
-A native desktop app built with [Kael](https://github.com/Augani/kael).
+A desktop and browser app built from the same Rust source with
+[Kael](https://github.com/Augani/kael).
 
 The project pins the Rust toolchain used by its matching Kael release.
 On macOS, the starter compiles Metal shaders at launch so development works
@@ -12,6 +13,19 @@ Xcode, remove `runtime_shaders` from the `kael` dependency to precompile them.
 ```bash
 cargo run
 ```
+
+## Run in a browser
+
+Install the matching WebAssembly packager once, then build and open a local
+server through the Kael CLI:
+
+```bash
+cargo install wasm-bindgen-cli --version 0.2.122 --locked
+npm install --global binaryen@132.0.0
+kael web serve
+```
+
+`kael web build` writes deployable static files to `dist/web`.
 
 ## Release build
 

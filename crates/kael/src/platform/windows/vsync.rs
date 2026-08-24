@@ -91,35 +91,6 @@ fn query_dwm_interval() -> Duration {
         .unwrap_or(DEFAULT_VSYNC_INTERVAL)
 }
 
-/// Get the current display refresh rate in Hz from DWM timing info.
-/// Returns `None` if the DWM timing info cannot be retrieved.
-pub(crate) fn get_display_refresh_rate_hz() -> Option<f32> {
-    let mut timing_info = DWM_TIMING_INFO {
-        cbSize: std::mem::size_of::<DWM_TIMING_INFO>() as u32,
-        ..Default::default()
-    };
-    unsafe { DwmGetCompositionTimingInfo(HWND::default(), &mut timing_info) }.ok()?;
-
-    let rate = if timing_info.rateRefresh.uiDenominator > 0 {
-        timing_info.rateRefresh.uiNumerator as f32 / timing_info.rateRefresh.uiDenominator as f32
-    } else {
-        // Fall back to computing from qpcRefreshPeriod
-        let period_us =
-            timing_info.qpcRefreshPeriod as f64 / (*QPC_TICKS_PER_SECOND as f64 / 1_000_000.0);
-        if period_us > 0.0 {
-            (1_000_000.0 / period_us) as f32
-        } else {
-            return None;
-        }
-    };
-
-    if rate > 0.0 && rate.is_finite() {
-        Some(rate)
-    } else {
-        None
-    }
-}
-
 fn get_dwm_interval() -> Result<Duration> {
     let mut timing_info = DWM_TIMING_INFO {
         cbSize: std::mem::size_of::<DWM_TIMING_INFO>() as u32,

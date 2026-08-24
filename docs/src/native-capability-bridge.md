@@ -52,9 +52,9 @@ they do not substitute for an OS backend.
 4. Use a WebView only for a scoped web dependency, with explicit navigation,
    permission, storage, and bridge policy.
 
-## Important 0.3 boundaries
+## Important 0.4 boundaries
 
-The following are not native batteries in Kael 0.3 and are reported as
+The following are not native batteries in Kael 0.4 and are reported as
 unsupported: push-registration backends, native geolocation, USB/HID/serial/
 Bluetooth discovery and I/O, outbound file-promise drag sources, app-window
 snapshot backends, and native spellchecking. Applications may supply their own
@@ -63,7 +63,12 @@ integration without pretending Kael completed it.
 Outbound sharing is feature-gated and platform-dependent. macOS has the
 broadest destination support; Windows and Linux currently provide narrower
 mail/clipboard handoffs. Registering an app as a share receiver is not yet
-implemented. WebView support is reported as disabled when the `webview` feature
+implemented. Browser builds use the transient-activation-gated Web Share API
+for bounded text, URLs, images, and in-memory files; the browser owns the
+destination list, and PWA share-target registration remains product work.
+Browser notifications similarly require an asynchronous permission decision
+and provide immediate page-created delivery, not a fake durable scheduler or
+service-worker push/action backend. WebView support is reported as disabled when the `webview` feature
 is absent and partial when enabled because it is a native composition island
 with platform/runtime constraints rather than a GPU scene primitive.
 
@@ -75,7 +80,7 @@ implementation work; normal applications should not pay to compile them.
 
 ```toml
 [dependencies]
-kael = { version = "0.3", features = ["agent-tools"] }
+kael = { version = "0.4", features = ["agent-tools"] }
 ```
 
 Agents do not need this feature to build Kael applications. The public Rust API,

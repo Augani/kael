@@ -29,13 +29,13 @@ use crate::{
     KeyboardClickEvent, LayoutId, LongPressGesture, LongPressGestureEvent, MagnifyEvent,
     ModifiersChangedEvent, MouseButton, MouseClickEvent, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, Overflow, PanGesture, PanGestureEvent, PanState, ParentElement, PinchGesture,
-    PinchGestureEvent, Pixels, Point, Render, Rgba, ScaledPixels, ScrollDelta, ScrollWheelEvent,
-    SharedString, Size, Style, StyleRefinement, Styled, SwipeDirection, SwipeGesture,
-    SwipeGestureEvent, TapGesture, TapGestureEvent, Task, TooltipAlign, TooltipAnchor, TooltipId,
-    TooltipSide, TouchPhase, TransformationMatrix, Visibility, Window, WindowControlArea, point,
-    px, scroll_trace_enabled, size,
+    PinchGestureEvent, Pixels, Point, PointerId, PointerInputEvent, PointerPhase, Render, Rgba,
+    ScaledPixels, ScrollDelta, ScrollWheelEvent, SharedString, Size, Style, StyleRefinement,
+    Styled, SwipeDirection, SwipeGesture, SwipeGestureEvent, TapGesture, TapGestureEvent, Task,
+    TooltipAlign, TooltipAnchor, TooltipId, TooltipSide, TouchPhase, TransformationMatrix,
+    Visibility, Window, WindowControlArea, point, px, scroll_trace_enabled, size,
 };
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use refineable::Refineable;
 use smallvec::SmallVec;
 use stacksafe::{StackSafe, stacksafe};
@@ -236,13 +236,13 @@ impl Default for TransitionConfig {
 struct ImplicitStyleTransition {
     from: ImplicitVisualStyle,
     to: ImplicitVisualStyle,
-    started_at: std::time::Instant,
+    started_at: web_time::Instant,
     duration: Duration,
     easing: Option<crate::animation::Easing>,
 }
 
 impl ImplicitStyleTransition {
-    fn progress(&self, now: std::time::Instant) -> f32 {
+    fn progress(&self, now: web_time::Instant) -> f32 {
         if self.duration.is_zero() {
             return 1.0;
         }
@@ -250,7 +250,7 @@ impl ImplicitStyleTransition {
             .clamp(0.0, 1.0)
     }
 
-    fn current_style(&self, now: std::time::Instant) -> ImplicitVisualStyle {
+    fn current_style(&self, now: web_time::Instant) -> ImplicitVisualStyle {
         let progress = self.progress(now);
         let eased = match &self.easing {
             Some(easing) => easing.ease(progress),
@@ -270,7 +270,7 @@ impl ImplicitStyleAnimationState {
     fn animate(&mut self, style: Style, config: &TransitionConfig, window: &mut Window) -> Style {
         let (style, needs_animation_frame) = self.resolve(
             style,
-            std::time::Instant::now(),
+            web_time::Instant::now(),
             window.animations_enabled(),
             config,
         );
@@ -283,7 +283,7 @@ impl ImplicitStyleAnimationState {
     fn resolve(
         &mut self,
         style: Style,
-        now: std::time::Instant,
+        now: web_time::Instant,
         animations_enabled: bool,
         config: &TransitionConfig,
     ) -> (Style, bool) {
@@ -332,7 +332,7 @@ impl ImplicitStyleAnimationState {
         (style, needs_animation_frame)
     }
 
-    fn current_style(&self, now: std::time::Instant) -> Option<ImplicitVisualStyle> {
+    fn current_style(&self, now: web_time::Instant) -> Option<ImplicitVisualStyle> {
         self.active_transition
             .as_ref()
             .map(|transition| transition.current_style(now))
@@ -369,14 +369,14 @@ pub(crate) struct FlipLayoutState {
 
 struct FlipAnimation {
     offset: Point<Pixels>,
-    started_at: std::time::Instant,
+    started_at: web_time::Instant,
 }
 
 impl FlipLayoutState {
     fn resolve(
         &mut self,
         origin: Point<Pixels>,
-        now: std::time::Instant,
+        now: web_time::Instant,
         animations_enabled: bool,
         config: &TransitionConfig,
     ) -> (Option<Point<Pixels>>, bool) {
@@ -411,7 +411,7 @@ impl FlipLayoutState {
 
     fn current_offset(
         &self,
-        now: std::time::Instant,
+        now: web_time::Instant,
         config: &TransitionConfig,
     ) -> Option<Point<Pixels>> {
         let animation = self.animation.as_ref()?;
@@ -782,6 +782,21 @@ impl Interactivity {
                     (listener)(event, window, cx);
                 }
             }));
+    }
+
+    /// Bind a high-fidelity mouse, touch, or pen callback during the bubble phase.
+    ///
+    /// Pointer sequences that begin over this element remain routed to the
+    /// callback through move, leave, up, or cancellation, matching native and
+    /// browser pointer-capture behavior. Independent pointer identifiers allow
+    /// a single element to track multiple simultaneous touches. Give a surface
+    /// a stable [`InteractiveElement::id`] when it can rerender during an active
+    /// sequence so capture state survives the frame boundary.
+    pub fn on_pointer_event(
+        &mut self,
+        listener: impl Fn(&PointerInputEvent, &mut Window, &mut App) + 'static,
+    ) {
+        self.pointer_listeners.push(Box::new(listener));
     }
 
     /// Bind the given callback to the mouse drag event of the given type. Note that this
@@ -1702,6 +1717,17 @@ pub trait InteractiveElement: Sized {
         self
     }
 
+    /// Bind a high-fidelity mouse, touch, or pen callback.
+    ///
+    /// The fluent API equivalent to [`Interactivity::on_pointer_event`].
+    fn on_pointer_event(
+        mut self,
+        listener: impl Fn(&PointerInputEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.interactivity().on_pointer_event(listener);
+        self
+    }
+
     /// Bind the given callback to the mouse drag event of the given type. Note that this
     /// will be called for all move events, inside or outside of this element, as long as the
     /// drag was started with this element under the mouse. Useful for implementing draggable
@@ -2376,6 +2402,8 @@ pub(crate) type MouseUpListener =
 pub(crate) type MouseMoveListener =
     Box<dyn Fn(&MouseMoveEvent, DispatchPhase, &Hitbox, &mut Window, &mut App) + 'static>;
 
+pub(crate) type PointerListener = Box<dyn Fn(&PointerInputEvent, &mut Window, &mut App) + 'static>;
+
 pub(crate) type ScrollWheelListener =
     Box<dyn Fn(&ScrollWheelEvent, DispatchPhase, &Hitbox, &mut Window, &mut App) + 'static>;
 
@@ -2981,6 +3009,7 @@ pub struct Interactivity {
     pub(crate) mouse_down_listeners: Vec<MouseDownListener>,
     pub(crate) mouse_up_listeners: Vec<MouseUpListener>,
     pub(crate) mouse_move_listeners: Vec<MouseMoveListener>,
+    pub(crate) pointer_listeners: Vec<PointerListener>,
     pub(crate) scroll_wheel_listeners: Vec<ScrollWheelListener>,
     pub(crate) pan_listeners: Vec<PanListener>,
     pub(crate) swipe_listeners: Vec<(SwipeDirection, SwipeListener)>,
@@ -3300,6 +3329,7 @@ impl Interactivity {
             || !self.mouse_up_listeners.is_empty()
             || !self.mouse_down_listeners.is_empty()
             || !self.mouse_move_listeners.is_empty()
+            || !self.pointer_listeners.is_empty()
             || !self.click_listeners.is_empty()
             || !self.scroll_wheel_listeners.is_empty()
             || !self.pan_listeners.is_empty()
@@ -3402,6 +3432,13 @@ impl Interactivity {
             if let Some(mut scroll_handle_state) = tracked_scroll_handle {
                 scroll_handle_state.max_offset = scroll_max;
                 scroll_handle_state.bounds = bounds;
+                scroll_handle_state.content_bounds = Bounds::from_corners(
+                    point(bounds.left() + padding.left, bounds.top() + padding.top),
+                    point(
+                        bounds.right() - padding.right,
+                        bounds.bottom() - padding.bottom,
+                    ),
+                );
             }
 
             display_offset
@@ -3757,7 +3794,7 @@ impl Interactivity {
     fn paint_mouse_listeners(
         &mut self,
         hitbox: &Hitbox,
-        element_state: Option<&mut InteractiveElementState>,
+        mut element_state: Option<&mut InteractiveElementState>,
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -3803,6 +3840,51 @@ impl Interactivity {
             let hitbox = hitbox.clone();
             window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
                 listener(event, phase, &hitbox, window, cx);
+            })
+        }
+
+        let pointer_listener_count = self.pointer_listeners.len();
+        let active_pointer_sets = if let Some(element_state) = element_state.as_deref_mut() {
+            element_state
+                .pointer_listener_active
+                .resize_with(pointer_listener_count, Default::default);
+            element_state
+                .pointer_listener_active
+                .truncate(pointer_listener_count);
+            element_state.pointer_listener_active.clone()
+        } else {
+            (0..pointer_listener_count)
+                .map(|_| Rc::new(RefCell::new(HashSet::default())))
+                .collect()
+        };
+        for (listener, active_pointers) in self.pointer_listeners.drain(..).zip(active_pointer_sets)
+        {
+            let hitbox = hitbox.clone();
+            window.on_pointer_event(move |event, phase, window, cx| {
+                if phase != DispatchPhase::Bubble {
+                    return;
+                }
+                let hovered = hitbox.is_hovered(window);
+                let mut active = active_pointers.borrow_mut();
+                let should_dispatch = match event.phase {
+                    PointerPhase::Down => {
+                        if hovered {
+                            active.insert(event.pointer_id);
+                        }
+                        hovered
+                    }
+                    PointerPhase::Move | PointerPhase::Enter => {
+                        hovered || active.contains(&event.pointer_id)
+                    }
+                    PointerPhase::Leave => active.contains(&event.pointer_id) || hovered,
+                    PointerPhase::Up | PointerPhase::Cancel => {
+                        active.remove(&event.pointer_id) || hovered
+                    }
+                };
+                drop(active);
+                if should_dispatch {
+                    listener(event, window, cx);
+                }
             })
         }
 
@@ -4936,7 +5018,7 @@ impl Interactivity {
         let mut flip_state = flip_state.borrow_mut();
         let (offset, needs_frame) = flip_state.resolve(
             bounds.origin,
-            std::time::Instant::now(),
+            web_time::Instant::now(),
             window.animations_enabled(),
             config,
         );
@@ -4986,6 +5068,7 @@ pub struct InteractiveElementState {
     pub(crate) hover_state: Option<Rc<RefCell<bool>>>,
     pub(crate) pending_mouse_down: Option<Rc<RefCell<Option<MouseDownEvent>>>>,
     pub(crate) gesture_state: Option<Rc<RefCell<ElementGestureState>>>,
+    pub(crate) pointer_listener_active: Vec<Rc<RefCell<HashSet<PointerId>>>>,
     pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
     pub(crate) scroll_elastic_state: Option<Rc<RefCell<ScrollElasticState>>>,
     pub(crate) active_tooltip: Option<Rc<RefCell<Option<ActiveTooltip>>>>,
@@ -5974,8 +6057,8 @@ pub(crate) struct ScrollElasticState {
     max_offset: Size<Pixels>,
     overscroll: Point<Pixels>,
     animating: bool,
-    last_scrolled: Option<std::time::Instant>,
-    last_advance: Option<std::time::Instant>,
+    last_scrolled: Option<web_time::Instant>,
+    last_advance: Option<web_time::Instant>,
 }
 
 impl ScrollElasticState {
@@ -5985,7 +6068,7 @@ impl ScrollElasticState {
     }
 
     pub(crate) fn mark_scrolled(&mut self) {
-        self.last_scrolled = Some(std::time::Instant::now());
+        self.last_scrolled = Some(web_time::Instant::now());
     }
 
     pub(crate) fn seconds_since_last_scroll(&self) -> f64 {
@@ -6240,6 +6323,7 @@ struct ScrollHandleState {
     offset: Rc<RefCell<Point<Pixels>>>,
     elastic: Rc<RefCell<ScrollElasticState>>,
     bounds: Bounds<Pixels>,
+    content_bounds: Bounds<Pixels>,
     max_offset: Size<Pixels>,
     child_bounds: Vec<Bounds<Pixels>>,
     scroll_to_bottom: bool,
@@ -6299,7 +6383,7 @@ impl ScrollHandle {
     /// Get the top child that's scrolled into view.
     pub fn top_item(&self) -> usize {
         let state = self.0.borrow();
-        let top = state.bounds.top() - state.offset.borrow().y;
+        let top = state.content_bounds.top() - state.offset.borrow().y;
 
         match state.child_bounds.binary_search_by(|bounds| {
             if top < bounds.top() {
@@ -6318,7 +6402,7 @@ impl ScrollHandle {
     /// Get the bottom child that's scrolled into view.
     pub fn bottom_item(&self) -> usize {
         let state = self.0.borrow();
-        let bottom = state.bounds.bottom() - state.offset.borrow().y;
+        let bottom = state.content_bounds.bottom() - state.offset.borrow().y;
 
         match state.child_bounds.binary_search_by(|bounds| {
             if bottom < bounds.top() {
@@ -6394,23 +6478,25 @@ impl ScrollHandle {
                 match active_item.strategy {
                     ScrollStrategy::FirstVisible => {
                         if axis_is_scrollable(state.overflow.y, state.max_offset.height) {
-                            if bounds.top() + scroll_offset.y < state.bounds.top() {
-                                scroll_offset.y = state.bounds.top() - bounds.top();
-                            } else if bounds.bottom() + scroll_offset.y > state.bounds.bottom() {
-                                scroll_offset.y = state.bounds.bottom() - bounds.bottom();
+                            if bounds.top() + scroll_offset.y < state.content_bounds.top() {
+                                scroll_offset.y = state.content_bounds.top() - bounds.top();
+                            } else if bounds.bottom() + scroll_offset.y
+                                > state.content_bounds.bottom()
+                            {
+                                scroll_offset.y = state.content_bounds.bottom() - bounds.bottom();
                             }
                         }
                     }
                     ScrollStrategy::Top => {
-                        scroll_offset.y = state.bounds.top() - bounds.top();
+                        scroll_offset.y = state.content_bounds.top() - bounds.top();
                     }
                 }
 
                 if axis_is_scrollable(state.overflow.x, state.max_offset.width) {
-                    if bounds.left() + scroll_offset.x < state.bounds.left() {
-                        scroll_offset.x = state.bounds.left() - bounds.left();
-                    } else if bounds.right() + scroll_offset.x > state.bounds.right() {
-                        scroll_offset.x = state.bounds.right() - bounds.right();
+                    if bounds.left() + scroll_offset.x < state.content_bounds.left() {
+                        scroll_offset.x = state.content_bounds.left() - bounds.left();
+                    } else if bounds.right() + scroll_offset.x > state.content_bounds.right() {
+                        scroll_offset.x = state.content_bounds.right() - bounds.right();
                     }
                 }
                 state.elastic.borrow_mut().reset();
@@ -6444,7 +6530,7 @@ impl ScrollHandle {
         if let Some(child_bounds) = state.child_bounds.get(ix) {
             (
                 ix,
-                child_bounds.top() + state.offset.borrow().y - state.bounds.top(),
+                child_bounds.top() + state.offset.borrow().y - state.content_bounds.top(),
             )
         } else {
             (ix, px(0.))
@@ -6459,7 +6545,7 @@ impl ScrollHandle {
         if let Some(child_bounds) = state.child_bounds.get(ix) {
             (
                 ix,
-                child_bounds.bottom() + state.offset.borrow().y - state.bounds.bottom(),
+                child_bounds.bottom() + state.offset.borrow().y - state.content_bounds.bottom(),
             )
         } else {
             (ix, px(0.))
@@ -6485,10 +6571,10 @@ mod test {
     use crate::{
         AccessibilityAttributes, AccessibilityRole, AccessibilityState, AppContext, Context,
         FocusHandle, InteractiveElement, Interactivity, MouseButton, MouseDownEvent,
-        MouseMoveEvent, MouseUpEvent, PanState, ParentElement, PinchState, Render,
-        RequestFrameOptions, Rgba, ScrollDelta, ScrollHandle, ScrollWheelEvent,
-        StatefulInteractiveElement, StyleRefinement, Styled, SwipeDirection, TestAppContext,
-        VisualContext, Window, div, point, px,
+        MouseMoveEvent, MouseUpEvent, PanState, ParentElement, PinchState, PointerButtons,
+        PointerId, PointerInputEvent, PointerPhase, PointerType, Render, RequestFrameOptions, Rgba,
+        ScrollDelta, ScrollHandle, ScrollWheelEvent, StatefulInteractiveElement, StyleRefinement,
+        Styled, SwipeDirection, TestAppContext, VisualContext, Window, div, point, px,
     };
     use std::{
         cell::{Cell, RefCell},
@@ -6610,6 +6696,151 @@ mod test {
         assert!(auto_scrollbar_should_poll_for_fade(false, false, 0.25));
         assert!(!auto_scrollbar_should_poll_for_fade(true, false, 0.25));
         assert!(!auto_scrollbar_should_poll_for_fade(false, true, 0.25));
+    }
+
+    #[test]
+    fn scroll_to_item_respects_the_padded_content_viewport() {
+        let handle = ScrollHandle::new();
+        {
+            let mut state = handle.0.borrow_mut();
+            state.bounds =
+                crate::Bounds::new(point(px(0.0), px(0.0)), crate::size(px(100.0), px(100.0)));
+            state.content_bounds =
+                crate::Bounds::new(point(px(4.0), px(4.0)), crate::size(px(92.0), px(92.0)));
+            state.child_bounds = vec![crate::Bounds::new(
+                point(px(4.0), px(100.0)),
+                crate::size(px(92.0), px(32.0)),
+            )];
+            state.max_offset.height = px(36.0);
+            state.overflow.y = crate::Overflow::Scroll;
+        }
+
+        handle.scroll_to_item(0);
+        handle.scroll_to_active_item();
+
+        assert_eq!(handle.offset().y, px(-36.0));
+        let item = handle.bounds_for_item(0).expect("tracked child bounds");
+        let content_bottom = handle.0.borrow().content_bounds.bottom();
+        assert_eq!(item.bottom() + handle.offset().y, content_bottom);
+    }
+
+    #[kael::test]
+    fn rich_pointer_events_reach_retained_element_listeners(cx: &mut TestAppContext) {
+        let phases = Rc::new(RefCell::new(Vec::new()));
+
+        struct PointerView(Rc<RefCell<Vec<PointerPhase>>>);
+
+        impl Render for PointerView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                let phases = self.0.clone();
+                div()
+                    .size_full()
+                    .on_pointer_event(move |event, _, _| phases.borrow_mut().push(event.phase))
+            }
+        }
+
+        let (_view, cx) = cx.add_window_view(|_, _| PointerView(phases.clone()));
+        let position = point(px(20.0), px(20.0));
+        let pointer_id = PointerId::new(71);
+
+        for (phase, buttons, pressure) in [
+            (PointerPhase::Down, PointerButtons::PRIMARY, 0.7),
+            (PointerPhase::Move, PointerButtons::PRIMARY, 0.8),
+            (PointerPhase::Up, PointerButtons::empty(), 0.0),
+        ] {
+            cx.simulate_event(PointerInputEvent {
+                phase,
+                pointer_id,
+                pointer_type: PointerType::Pen,
+                position,
+                buttons,
+                is_primary: true,
+                pressure,
+                ..Default::default()
+            });
+        }
+
+        assert_eq!(
+            *phases.borrow(),
+            [PointerPhase::Down, PointerPhase::Move, PointerPhase::Up]
+        );
+    }
+
+    #[kael::test]
+    fn identified_pointer_listener_keeps_capture_across_rerenders(cx: &mut TestAppContext) {
+        struct PointerView {
+            phases: Rc<RefCell<Vec<PointerPhase>>>,
+            revision: usize,
+        }
+
+        impl Render for PointerView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                let phases = self.phases.clone();
+                div()
+                    .id("persistent-pointer-surface")
+                    .debug_selector(|| "persistent-pointer-surface".to_string())
+                    .w(px(100.0 + self.revision as f32))
+                    .h(px(100.0))
+                    .on_pointer_event(move |event, _, _| phases.borrow_mut().push(event.phase))
+            }
+        }
+
+        let phases = Rc::new(RefCell::new(Vec::new()));
+        let (view, window) = cx.add_window_view({
+            let phases = phases.clone();
+            move |_, _| PointerView {
+                phases,
+                revision: 0,
+            }
+        });
+        let bounds = window
+            .debug_bounds("persistent-pointer-surface")
+            .expect("pointer surface should be painted");
+        let pointer_id = PointerId::new(72);
+        window.simulate_event(PointerInputEvent {
+            phase: PointerPhase::Down,
+            pointer_id,
+            pointer_type: PointerType::Touch,
+            position: bounds.center(),
+            buttons: PointerButtons::PRIMARY,
+            is_primary: true,
+            ..Default::default()
+        });
+
+        window.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                view.revision += 1;
+                cx.notify();
+            });
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+
+        let outside = point(bounds.right() + px(80.0), bounds.bottom() + px(80.0));
+        window.simulate_event(PointerInputEvent {
+            phase: PointerPhase::Move,
+            pointer_id,
+            pointer_type: PointerType::Touch,
+            position: outside,
+            movement: point(px(80.0), px(80.0)),
+            buttons: PointerButtons::PRIMARY,
+            is_primary: true,
+            ..Default::default()
+        });
+        window.simulate_event(PointerInputEvent {
+            phase: PointerPhase::Up,
+            pointer_id,
+            pointer_type: PointerType::Touch,
+            position: outside,
+            button: Some(MouseButton::Left),
+            buttons: PointerButtons::empty(),
+            is_primary: true,
+            ..Default::default()
+        });
+
+        assert_eq!(
+            *phases.borrow(),
+            [PointerPhase::Down, PointerPhase::Move, PointerPhase::Up]
+        );
     }
 
     #[kael::test]

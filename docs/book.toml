@@ -1,7 +1,7 @@
 [book]
 title = "Kael Documentation"
 authors = ["Augustus Otu"]
-description = "Native Rust application framework for capable, resource-efficient desktop software"
+description = "Retained Rust application framework for capable, resource-efficient desktop and browser software"
 src = "src"
 language = "en"
 

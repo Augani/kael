@@ -59,6 +59,12 @@ assert!(capability.check_network());
 
 ## File access bookmarks
 
+Kael's standard UI threat model grants only `PathScope::UserSelected` file
+read/write capabilities by default, so open/save dialogs and browser file
+pickers work after an explicit user gesture. This does not grant arbitrary path
+access: `PathScope::Any`, app-data access, and worker access still require an
+explicit application policy or delegated bookmark.
+
 Use file access bookmarks after open/save dialogs, recent-project restore, or
 extension handoff flows. They keep app-owned path access explicit and can issue
 temporary tokens instead of passing raw paths everywhere.
@@ -90,3 +96,16 @@ keychain.write("api-token", "secret-value")?;
 let token = keychain.read("api-token")?;
 keychain.delete("api-token")?;
 ```
+
+## Release dependency audit
+
+Release CI runs `cargo audit -D warnings`, so a new vulnerability, unsoundness,
+unmaintained dependency, or yanked crate fails the gate. The checked-in
+`scripts/ci/audit-dependencies.sh` contains the complete reviewed exception
+list. Cargo.lock still records Wry's target-conditional GTK3 metadata because
+Wry is the supported Windows WebView2 host, including `RUSTSEC-2024-0429` for
+glib 0.18. The audit script separately proves that neither Linux WebView feature
+spelling can reach Wry, GTK3, WebKitGTK 4.1, or Blade. Linux ships only the
+GTK4/WebKitGTK 6 host. The other reviewed exceptions are unmaintained
+transitive parser/build crates, not known exploitable vulnerabilities. Remove
+an exception as soon as the dependency that leaves the lockfile permits it.

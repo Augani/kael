@@ -1,12 +1,17 @@
 use super::{BoolExt, MacDisplay, NSRange, NSRangeExt, NSStringExt, ns_string, renderer};
+#[cfg(feature = "macos-blade")]
+use crate::platform::encode_bgra_png;
+#[cfg(not(feature = "macos-blade"))]
+use crate::platform::encode_premultiplied_bgra_png;
 use crate::{
     AnyWindowHandle, AsyncWindowContext, Bounds, Capslock, DisplayLink, Edges, ExternalDropData,
-    FileDropEvent, ForegroundExecutor, KeyDownEvent, Keystroke, Modifiers, ModifiersChangedEvent,
+    FileDropEvent, ForegroundExecutor, GameInputAvailability, GameInputCapabilities,
+    GameInputError, GameInputErrorKind, KeyDownEvent, Keystroke, Modifiers, ModifiersChangedEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformAtlas,
-    PlatformDisplay, PlatformInput, PlatformWindow, Point, PromptButton, PromptLevel, RenderImage,
-    RequestFrameOptions, Rgba, SharedString, Size, SystemWindowTab, Timer, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowKind, WindowParams,
-    dispatch_get_main_queue,
+    PlatformDisplay, PlatformInput, PlatformWindow, Point, PointerInputEvent, PointerLockStatus,
+    PromptButton, PromptLevel, RenderImage, RequestFrameOptions, Rgba, SharedString, Size,
+    SystemWindowTab, Timer, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    WindowControlArea, WindowKind, WindowParams, dispatch_get_main_queue,
     dispatch_sys::dispatch_async_f,
     platform::PlatformInputHandler,
     point,
@@ -17,15 +22,21 @@ use crate::{
         WebViewDocumentTitleChangedHandler, WebViewDownloadCompleted,
         WebViewDownloadCompletedHandler, WebViewDownloadPolicy, WebViewDownloadStartedHandler,
         WebViewDragDropEvent, WebViewDragDropHandler, WebViewDragDropPolicy, WebViewMessageHandler,
-        WebViewNavigationHandler, WebViewNewWindowHandler, WebViewNewWindowPolicy,
-        WebViewPageLoadEvent, WebViewPageLoadHandler, WebViewPermissionDecision,
-        WebViewPermissionHandler, WebViewPermissionKind,
+        WebViewNativePermissionRequest, WebViewNavigationHandler, WebViewNewWindowHandler,
+        WebViewNewWindowPolicy, WebViewPageLoadEvent, WebViewPageLoadHandler,
+        WebViewPermissionDecision, WebViewPermissionFrame, WebViewPermissionHandler,
+        WebViewPermissionKind,
     },
 };
 use anyhow::Context as _;
 use block2::{Block, RcBlock};
 
-use core_graphics::display::CGDirectDisplayID;
+use core_graphics::{
+    display::{CGDirectDisplayID, CGDisplay},
+    event::CGEvent,
+    event_source::{CGEventSource, CGEventSourceStateID},
+    geometry::CGPoint,
+};
 use ctor::ctor;
 use futures::channel::oneshot;
 use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba as ImageRgba};
@@ -49,7 +60,10 @@ use std::{
     path::PathBuf,
     ptr::{self, NonNull},
     rc::Rc,
-    sync::{Arc, Weak},
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use util::ResultExt;
@@ -76,6 +90,20 @@ fn catch_platform_callback<T>(name: &'static str, fallback: T, callback: impl Fn
     crate::platform::catch_platform_callback("macOS", name, fallback, callback)
 }
 
+fn dispatch_webview_completion(
+    async_window: AsyncWindowContext,
+    name: &'static str,
+    completion: impl FnOnce() + 'static,
+) {
+    catch_platform_callback("webview completion dispatch", (), || {
+        async_window
+            .spawn(async move |_| {
+                catch_platform_callback(name, (), completion);
+            })
+            .detach();
+    });
+}
+
 const YES: Bool = Bool::YES;
 const NO: Bool = Bool::NO;
 #[allow(non_upper_case_globals)]
@@ -92,6 +120,11 @@ static mut BLURRED_VIEW_CLASS: *const Class = ptr::null();
 static mut WEBVIEW_CLASS: *const Class = ptr::null();
 static mut WEBVIEW_DELEGATE_CLASS: *const Class = ptr::null();
 static mut PRINT_VIEW_CLASS: *const Class = ptr::null();
+
+/// CoreGraphics cursor association and AppKit's cursor-hide count are process
+/// global. Serialize ownership so two Kael windows can never leak or unbalance
+/// another window's lock.
+static MAC_POINTER_LOCK_OWNER: Mutex<Option<usize>> = Mutex::new(None);
 
 unsafe fn lookup_class(name: &CStr) -> &'static AnyClass {
     AnyClass::get(name).unwrap_or_else(|| panic!("missing class {name:?}"))
@@ -413,6 +446,8 @@ unsafe fn build_classes() {
                 decl.add_method(sel!(mouseMoved:), handle_view_event);
                 decl.add_method(sel!(mouseExited:), handle_view_event);
                 decl.add_method(sel!(mouseDragged:), handle_view_event);
+                decl.add_method(sel!(tabletPoint:), handle_view_event);
+                decl.add_method(sel!(tabletProximity:), handle_view_event);
                 decl.add_method(sel!(scrollWheel:), handle_view_event);
                 decl.add_method(sel!(swipeWithEvent:), handle_view_event);
                 decl.add_method(sel!(magnifyWithEvent:), handle_view_event);
@@ -537,6 +572,10 @@ unsafe fn build_classes() {
                     webview_did_finish_navigation as Method2<id, id, ()>;
                 let webview_observe_value_for_key_path =
                     webview_observe_value_for_key_path as Method4<id, id, id, *mut c_void, ()>;
+                let webview_start_url_scheme_task =
+                    webview_start_url_scheme_task as Method2<id, id, ()>;
+                let webview_stop_url_scheme_task =
+                    webview_stop_url_scheme_task as Method2<id, id, ()>;
 
                 decl.add_method(sel!(dealloc), dealloc_webview_delegate);
                 if let Some(protocol) = AnyProtocol::get(c"WKNavigationDelegate") {
@@ -549,6 +588,9 @@ unsafe fn build_classes() {
                     decl.add_protocol(protocol);
                 }
                 if let Some(protocol) = AnyProtocol::get(c"WKScriptMessageHandler") {
+                    decl.add_protocol(protocol);
+                }
+                if let Some(protocol) = AnyProtocol::get(c"WKURLSchemeHandler") {
                     decl.add_protocol(protocol);
                 }
                 decl.add_method(
@@ -604,6 +646,14 @@ unsafe fn build_classes() {
                 decl.add_method(
                     sel!(observeValueForKeyPath:ofObject:change:context:),
                     webview_observe_value_for_key_path,
+                );
+                decl.add_method(
+                    sel!(webView:startURLSchemeTask:),
+                    webview_start_url_scheme_task,
+                );
+                decl.add_method(
+                    sel!(webView:stopURLSchemeTask:),
+                    webview_stop_url_scheme_task,
                 );
                 decl.register()
             }
@@ -693,7 +743,7 @@ fn json_string_literal(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into())
 }
 
-fn webview_bridge_script(storage_key: Option<&SharedString>) -> String {
+fn webview_bridge_script(storage_key: Option<&SharedString>, nonce: &str) -> String {
     let storage_key = storage_key
         .map(|storage_key| {
             format!(
@@ -703,9 +753,21 @@ fn webview_bridge_script(storage_key: Option<&SharedString>) -> String {
         })
         .unwrap_or_default();
 
+    let nonce = json_string_literal(nonce);
     format!(
-        "(() => {{ {storage_key} if (!window.external) {{ window.external = {{}}; }} window.external.invoke = function(message) {{ const payload = typeof message === 'string' ? message : JSON.stringify(message); window.webkit.messageHandlers.{WEBVIEW_MESSAGE_HANDLER_NAME}.postMessage(payload); }}; if (!window.gpui) {{ window.gpui = {{}}; }} window.gpui.postMessage = function(message) {{ window.external.invoke(message); }}; }})();"
+        "(() => {{ {storage_key} const nonce = {nonce}; if (!window.external) {{ window.external = {{}}; }} window.external.invoke = function(message) {{ const body = typeof message === 'string' ? message : JSON.stringify(message); window.webkit.messageHandlers.{WEBVIEW_MESSAGE_HANDLER_NAME}.postMessage(JSON.stringify({{ __kaelIpcNonce: nonce, body }})); }}; if (!window.gpui) {{ window.gpui = {{}}; }} window.gpui.postMessage = function(message) {{ window.external.invoke(message); }}; }})();"
     )
+}
+
+fn decode_mac_webview_bridge_message(
+    payload: &serde_json::Value,
+    nonce: &str,
+) -> Option<serde_json::Value> {
+    if payload.get("__kaelIpcNonce")?.as_str()? != nonce {
+        return None;
+    }
+    let body = payload.get("body")?.as_str()?;
+    Some(serde_json::from_str(body).unwrap_or_else(|_| serde_json::Value::String(body.to_owned())))
 }
 
 fn webview_css_script(css: &str) -> String {
@@ -715,17 +777,19 @@ fn webview_css_script(css: &str) -> String {
     )
 }
 
-fn webview_clipboard_script() -> String {
+fn webview_clipboard_script(nonce: &str) -> String {
+    let nonce = json_string_literal(nonce);
     format!(
         "(() => {{
             if (!window.webkit || !window.webkit.messageHandlers || !window.webkit.messageHandlers.{WEBVIEW_MESSAGE_HANDLER_NAME}) {{ return; }}
             const handler = window.webkit.messageHandlers.{WEBVIEW_MESSAGE_HANDLER_NAME};
+            const nonce = {nonce};
             const pending = new Map();
             let nextId = 1;
             const send = (op, value) => new Promise((resolve, reject) => {{
                 const id = String(nextId++);
                 pending.set(id, {{ resolve, reject }});
-                handler.postMessage({{ __kaelClipboard: true, id, op, value }});
+                handler.postMessage(JSON.stringify({{ __kaelIpcNonce: nonce, __kaelClipboard: true, id, op, value }}));
             }});
             const bridge = {{
                 readText: () => send('readText'),
@@ -825,13 +889,17 @@ unsafe fn get_print_view_state(this: id) -> Option<&'static mut MacPrintViewStat
 
 unsafe fn build_print_view(job: PlatformPrintJob) -> id {
     let view: id = unsafe { msg_send![PRINT_VIEW_CLASS, alloc] };
+    let rendered_page_size = crate::print::oriented_print_page_size(job.page_size, job.orientation);
     let frame = NSRect::new(
         NSPoint::new(0., 0.),
-        NSSize::new(job.page_size.width.0 as f64, job.page_size.height.0 as f64),
+        NSSize::new(
+            rendered_page_size.width.0 as f64,
+            rendered_page_size.height.0 as f64,
+        ),
     );
     let view: id = unsafe { msg_send![view, initWithFrame: frame] };
     let state = Box::new(MacPrintViewState {
-        page_size: job.page_size,
+        page_size: rendered_page_size,
         margins: job.margins,
         pages: job.pages,
     });
@@ -1286,13 +1354,20 @@ unsafe fn draw_print_command(command: &PrintCommand, margins: Edges<Pixels>) {
                     u32::from(source_size.height) as f64,
                 ),
             );
+            // `Cover` deliberately makes `target_rect` larger than the
+            // requested image box. Keep the crop local to this command so it
+            // cannot bleed into neighboring print content.
+            let _: () = msg_send![lookup_class(c"NSGraphicsContext"), saveGraphicsState];
+            let clip_rect = ns_rect_for_print_bounds(*bounds, margins);
+            let _: () = msg_send![lookup_class(c"NSBezierPath"), clipRect: clip_rect];
             let _: () = msg_send![
                 ns_image,
                 drawInRect: target_rect,
                 fromRect: source_rect,
                 operation: NSCompositingOperationSourceOver,
-                fraction: 1.0f64
+                fraction: style.opacity_ref() as f64
             ];
+            let _: () = msg_send![lookup_class(c"NSGraphicsContext"), restoreGraphicsState];
         },
     }
 }
@@ -1336,6 +1411,142 @@ fn ns_error_message(error: id) -> String {
     }
 
     "WebView JavaScript evaluation failed".into()
+}
+
+fn finish_mac_custom_protocol_task(task: id, response: crate::CustomProtocolResponse) {
+    unsafe {
+        if task.is_null() {
+            return;
+        }
+        let request: id = msg_send![task, request];
+        let url: id = if request.is_null() {
+            nil
+        } else {
+            msg_send![request, URL]
+        };
+        if url.is_null() {
+            fail_mac_custom_protocol_task(task, 400, "custom protocol request URL is missing");
+            return;
+        }
+
+        let headers: id = msg_send![lookup_class(c"NSMutableDictionary"), dictionary];
+        let _: () = msg_send![
+            headers,
+            setObject: ns_string(&response.mime_type),
+            forKey: ns_string("Content-Type")
+        ];
+        let _: () = msg_send![
+            headers,
+            setObject: ns_string(&response.body.len().to_string()),
+            forKey: ns_string("Content-Length")
+        ];
+        for (name, value) in &response.headers {
+            if !name.eq_ignore_ascii_case("content-type")
+                && !name.eq_ignore_ascii_case("content-length")
+            {
+                let _: () = msg_send![
+                    headers,
+                    setObject: ns_string(value),
+                    forKey: ns_string(name)
+                ];
+            }
+        }
+
+        let url_response: id = msg_send![lookup_class(c"NSHTTPURLResponse"), alloc];
+        let url_response: id = msg_send![
+            url_response,
+            initWithURL: url,
+            statusCode: response.status as NSInteger,
+            HTTPVersion: ns_string("HTTP/1.1"),
+            headerFields: headers
+        ];
+        if url_response.is_null() {
+            fail_mac_custom_protocol_task(
+                task,
+                500,
+                "could not construct custom protocol response",
+            );
+            return;
+        }
+
+        let data: id = msg_send![
+            lookup_class(c"NSData"),
+            dataWithBytes: response.body.as_ptr() as *const c_void,
+            length: response.body.len()
+        ];
+        let _: () = msg_send![task, didReceiveResponse: url_response];
+        let _: () = msg_send![task, didReceiveData: data];
+        let _: () = msg_send![task, didFinish];
+        let _: () = msg_send![url_response, release];
+    }
+}
+
+unsafe fn fail_mac_custom_protocol_task(task: id, code: NSInteger, message: &str) {
+    unsafe {
+        if task.is_null() {
+            return;
+        }
+        let user_info: id = msg_send![lookup_class(c"NSMutableDictionary"), dictionary];
+        let _: () = msg_send![
+            user_info,
+            setObject: ns_string(message),
+            forKey: ns_string("NSLocalizedDescription")
+        ];
+        let error: id = msg_send![
+            lookup_class(c"NSError"),
+            errorWithDomain: ns_string("KaelCustomProtocolError"),
+            code: code,
+            userInfo: user_info
+        ];
+        let _: () = msg_send![task, didFailWithError: error];
+    }
+}
+
+extern "C" fn webview_start_url_scheme_task(handler: id, _: Sel, _webview: id, task: id) {
+    catch_platform_callback("webview custom protocol", (), || unsafe {
+        let is_main_thread: BOOL = msg_send![lookup_class(c"NSThread"), isMainThread];
+        if !is_main_thread.as_bool() {
+            fail_mac_custom_protocol_task(
+                task,
+                500,
+                "custom protocol callback was invoked outside the WebView UI thread",
+            );
+            return;
+        }
+
+        let request: id = msg_send![task, request];
+        let url: id = if request.is_null() {
+            nil
+        } else {
+            msg_send![request, URL]
+        };
+        let raw_url = ns_url_absolute_string(url);
+        if raw_url.is_empty() {
+            fail_mac_custom_protocol_task(task, 400, "custom protocol request URL is missing");
+            return;
+        }
+
+        let Some(state) = get_webview_delegate_state(handler) else {
+            fail_mac_custom_protocol_task(task, 500, "custom protocol host is unavailable");
+            return;
+        };
+        let mut context = state.async_window.clone();
+        match context.update(|_, cx| cx.handle_custom_protocol_url(raw_url.to_string())) {
+            Ok(Ok(Some(response))) => finish_mac_custom_protocol_task(task, response),
+            Ok(Ok(None)) => {
+                finish_mac_custom_protocol_task(task, crate::CustomProtocolResponse::not_found())
+            }
+            Ok(Err(error)) | Err(error) => {
+                log::warn!("serving WKWebView custom protocol failed: {error:#}");
+                fail_mac_custom_protocol_task(task, 500, "custom protocol handler failed");
+            }
+        }
+    });
+}
+
+extern "C" fn webview_stop_url_scheme_task(_handler: id, _: Sel, _webview: id, _task: id) {
+    // Responses are completed synchronously on WebKit's UI-thread callback.
+    // There is no outstanding body producer to cancel after this method runs.
 }
 
 fn mac_webview_url(webview: id) -> SharedString {
@@ -1611,6 +1822,13 @@ fn mac_webview_cookie_to_ns(cookie: WebViewCookie, origin_url: Option<&str>) -> 
                 forKey: ns_string("Secure")
             ];
         }
+        if cookie.http_only {
+            let _: () = msg_send![
+                properties,
+                setObject: ns_string("TRUE"),
+                forKey: ns_string("HttpOnly")
+            ];
+        }
 
         let cookie: id = msg_send![lookup_class(c"NSHTTPCookie"), cookieWithProperties: properties];
         if cookie.is_null() { None } else { Some(cookie) }
@@ -1634,6 +1852,24 @@ fn ns_optional_shared_string(value: id) -> Option<SharedString> {
         None
     } else {
         Some(value.to_string().into())
+    }
+}
+
+fn webkit_security_origin_string(origin: id) -> Option<SharedString> {
+    if origin.is_null() {
+        return None;
+    }
+    let scheme: id = unsafe { msg_send![origin, protocol] };
+    let host: id = unsafe { msg_send![origin, host] };
+    let scheme = ns_optional_shared_string(scheme)?;
+    let host = ns_optional_shared_string(host)?;
+    let port: NSInteger = unsafe { msg_send![origin, port] };
+    let default_port = matches!(scheme.as_ref(), "http" | "ws") && port == 80
+        || matches!(scheme.as_ref(), "https" | "wss") && port == 443;
+    if port > 0 && !default_port {
+        Some(format!("{scheme}://{host}:{port}").into())
+    } else {
+        Some(format!("{scheme}://{host}").into())
     }
 }
 
@@ -1669,14 +1905,21 @@ extern "C" fn webview_request_media_capture_permission(
     delegate: id,
     _: Sel,
     _: id,
-    _: id,
-    _: id,
+    origin: id,
+    frame: id,
     capture_type: NSInteger,
     decision_handler: id,
 ) {
     const PROMPT: NSInteger = 0;
     const GRANT: NSInteger = 1;
     const DENY: NSInteger = 2;
+
+    let is_main_frame = if frame.is_null() {
+        None
+    } else {
+        let is_main_frame: BOOL = unsafe { msg_send![frame, isMainFrame] };
+        Some(is_main_frame.as_bool())
+    };
 
     let Some(state) = (unsafe { get_webview_delegate_state(delegate) }) else {
         unsafe { call_webview_permission_decision_handler(decision_handler, PROMPT) };
@@ -1688,10 +1931,20 @@ extern "C" fn webview_request_media_capture_permission(
     };
 
     let decide = |kind| {
+        let request = WebViewNativePermissionRequest::with_requesting_origin(
+            kind,
+            webkit_security_origin_string(origin),
+            match is_main_frame {
+                Some(true) => WebViewPermissionFrame::Main,
+                Some(false) => WebViewPermissionFrame::Subframe,
+                None => WebViewPermissionFrame::Unknown,
+            },
+            None,
+        );
         catch_platform_callback(
             "webview native permission policy",
             WebViewPermissionDecision::Deny,
-            || handler(kind),
+            || handler(request),
         )
     };
     let decision = match capture_type {
@@ -1954,9 +2207,24 @@ fn handle_mac_webview_clipboard_message(
         return false;
     }
 
+    if payload
+        .get("__kaelIpcNonce")
+        .and_then(|value| value.as_str())
+        != Some(state.ipc_nonce.as_ref())
+    {
+        warn_rejected_mac_webview_ipc_once(
+            state,
+            "clipboard message had a missing or invalid authentication nonce",
+        );
+        return true;
+    }
+
     let webview = mac_webview_from_script_message(script_message);
     if webview.is_null() {
-        log::warn!("WebView clipboard request could not resolve its source WebView");
+        warn_rejected_mac_webview_ipc_once(
+            state,
+            "clipboard message source WebView was unavailable",
+        );
         return true;
     }
 
@@ -2142,6 +2410,7 @@ struct MacWindowState {
     event_callback: Option<Box<dyn FnMut(PlatformInput) -> crate::DispatchEventResult>>,
     activate_callback: Option<Box<dyn FnMut(bool)>>,
     resize_callback: Option<Box<dyn FnMut(Size<Pixels>, f32)>>,
+    resize_sync_scheduled: bool,
     moved_callback: Option<Box<dyn FnMut()>>,
     should_close_callback: Option<Box<dyn FnMut() -> bool>>,
     close_callback: Option<Box<dyn FnOnce()>>,
@@ -2164,6 +2433,9 @@ struct MacWindowState {
     select_previous_tab_callback: Option<Box<dyn FnMut()>>,
     toggle_tab_bar_callback: Option<Box<dyn FnMut()>>,
     activated_least_once: bool,
+    pointer_lock: crate::game_input::NativePointerLockState,
+    pointer_lock_saved_position: Option<CGPoint>,
+    pointer_lock_cursor_hidden: bool,
     accessibility_provider: super::accessibility::MacAccessibilityProvider,
     webviews: HashMap<SharedString, MacWebViewHost>,
     pending_webview_commands: HashMap<SharedString, Vec<PlatformWebViewCommand>>,
@@ -2180,10 +2452,12 @@ struct MacWebViewDelegateState {
     page_load_handler: Option<WebViewPageLoadHandler>,
     drag_drop_handler: Option<WebViewDragDropHandler>,
     permission_handler: Option<WebViewPermissionHandler>,
+    ipc_nonce: SharedString,
+    ipc_rejection_reported: AtomicBool,
+    popup_downgrade_reported: AtomicBool,
     zoom_hotkeys_enabled: bool,
     clipboard_access: bool,
     downloads: HashMap<usize, MacWebViewDownloadState>,
-    pending_allowed_popups: HashSet<SharedString>,
 }
 
 #[derive(Clone)]
@@ -2206,13 +2480,17 @@ struct MacWebViewHost {
     native_window: id,
     native_view: id,
     state: Box<MacWebViewDelegateState>,
+    // The declarative source last accepted from `PlatformWebView`. Controller commands do not
+    // modify this baseline, otherwise the next unchanged render would navigate backward.
     declared_url: SharedString,
     declared_html: Option<SharedString>,
     request_headers: Option<http_client::http::HeaderMap>,
+    current_url_hint: SharedString,
     user_agent: Option<SharedString>,
     storage_key: Option<SharedString>,
     javascript_disabled: bool,
     media_autoplay: Option<bool>,
+    custom_protocol_schemes: Vec<SharedString>,
     background_color: Option<Rgba>,
     devtools: bool,
     user_scripts_initialized: bool,
@@ -2226,6 +2504,123 @@ struct MacWebViewHost {
 }
 
 impl MacWindowState {
+    fn pointer_lock_owner_id(&self) -> usize {
+        self.native_window as usize
+    }
+
+    fn current_global_pointer_position() -> Result<CGPoint, GameInputError> {
+        let source =
+            CGEventSource::new(CGEventSourceStateID::CombinedSessionState).map_err(|()| {
+                GameInputError::new(
+                    GameInputErrorKind::InitializationFailed,
+                    "macOS could not create a CoreGraphics event source for pointer lock",
+                )
+            })?;
+        CGEvent::new(source)
+            .map(|event| event.location())
+            .map_err(|()| {
+                GameInputError::new(
+                    GameInputErrorKind::InitializationFailed,
+                    "macOS could not query the global cursor position for pointer lock",
+                )
+            })
+    }
+
+    fn request_pointer_lock(&mut self) -> Result<(), GameInputError> {
+        if !self.pointer_lock.begin_request()? {
+            return Ok(());
+        }
+
+        if unsafe { self.native_window.isKeyWindow() != YES } {
+            let error = GameInputError::new(
+                GameInputErrorKind::Rejected,
+                "macOS pointer lock requires the Kael window to be active",
+            );
+            return Err(self.pointer_lock.fail(error));
+        }
+
+        let owner_id = self.pointer_lock_owner_id();
+        {
+            let mut owner = MAC_POINTER_LOCK_OWNER.lock();
+            if owner.is_some_and(|owner| owner != owner_id) {
+                let error = GameInputError::new(
+                    GameInputErrorKind::Rejected,
+                    "another Kael window currently owns the macOS pointer lock",
+                );
+                return Err(self.pointer_lock.fail(error));
+            }
+            *owner = Some(owner_id);
+        }
+
+        let saved_position = match Self::current_global_pointer_position() {
+            Ok(position) => position,
+            Err(error) => {
+                *MAC_POINTER_LOCK_OWNER.lock() = None;
+                return Err(self.pointer_lock.fail(error));
+            }
+        };
+
+        if let Err(code) = CGDisplay::associate_mouse_and_mouse_cursor_position(false) {
+            *MAC_POINTER_LOCK_OWNER.lock() = None;
+            let error = GameInputError::new(
+                GameInputErrorKind::Platform,
+                format!("macOS failed to disassociate the mouse cursor (CGError {code})"),
+            );
+            return Err(self.pointer_lock.fail(error));
+        }
+
+        NSCursor::hide();
+        self.pointer_lock_saved_position = Some(saved_position);
+        self.pointer_lock_cursor_hidden = true;
+        self.pointer_lock.lock();
+        Ok(())
+    }
+
+    /// Release only resources owned by this window. This is safe to call from
+    /// focus-loss and drop paths and remains balanced after partial failures.
+    fn release_pointer_lock(&mut self) -> Result<(), GameInputError> {
+        let owner_id = self.pointer_lock_owner_id();
+        let owns_global_lock = MAC_POINTER_LOCK_OWNER
+            .lock()
+            .is_some_and(|id| id == owner_id);
+
+        let mut first_error = None;
+        if owns_global_lock {
+            if let Some(position) = self.pointer_lock_saved_position.take()
+                && let Err(code) = CGDisplay::warp_mouse_cursor_position(position)
+            {
+                first_error = Some(GameInputError::new(
+                    GameInputErrorKind::Platform,
+                    format!("macOS failed to restore the cursor position (CGError {code})"),
+                ));
+            }
+
+            if let Err(code) = CGDisplay::associate_mouse_and_mouse_cursor_position(true)
+                && first_error.is_none()
+            {
+                first_error = Some(GameInputError::new(
+                    GameInputErrorKind::Platform,
+                    format!("macOS failed to reassociate the mouse cursor (CGError {code})"),
+                ));
+            }
+
+            if self.pointer_lock_cursor_hidden {
+                NSCursor::unhide();
+                self.pointer_lock_cursor_hidden = false;
+            }
+            *MAC_POINTER_LOCK_OWNER.lock() = None;
+        } else {
+            self.pointer_lock_saved_position = None;
+            self.pointer_lock_cursor_hidden = false;
+        }
+
+        if let Some(error) = first_error {
+            return Err(self.pointer_lock.fail(error));
+        }
+        self.pointer_lock.unlock();
+        Ok(())
+    }
+
     fn move_traffic_light(&self) {
         if let Some(traffic_light_position) = self.traffic_light_position {
             if self.is_fullscreen() {
@@ -2375,6 +2770,7 @@ impl MacWindowState {
                 host.storage_key != webview.storage_key
                     || host.javascript_disabled != webview.javascript_disabled
                     || host.media_autoplay != webview.media_autoplay
+                    || host.custom_protocol_schemes != webview.custom_protocol_schemes
             });
             if needs_rebuild {
                 self.webviews.remove(&webview_id);
@@ -2518,10 +2914,12 @@ impl MacWebViewHost {
             page_load_handler: webview.page_load_handler.clone(),
             drag_drop_handler: webview.drag_drop_handler.clone(),
             permission_handler: webview.permission_handler.clone(),
+            ipc_nonce: uuid::Uuid::new_v4().simple().to_string().into(),
+            ipc_rejection_reported: AtomicBool::new(false),
+            popup_downgrade_reported: AtomicBool::new(false),
             zoom_hotkeys_enabled: webview.zoom_hotkeys_enabled,
             clipboard_access: webview.clipboard_access,
             downloads: HashMap::default(),
-            pending_allowed_popups: HashSet::default(),
         });
 
         let delegate: id = unsafe { msg_send![WEBVIEW_DELEGATE_CLASS, alloc] };
@@ -2540,10 +2938,20 @@ impl MacWebViewHost {
                 name: ns_string(WEBVIEW_MESSAGE_HANDLER_NAME)
             ]
         };
+        for scheme in &webview.custom_protocol_schemes {
+            let _: () = unsafe {
+                msg_send![
+                    config,
+                    setURLSchemeHandler: delegate,
+                    forURLScheme: ns_string(scheme.as_ref())
+                ]
+            };
+        }
 
         let webview_view: id = unsafe { msg_send![WEBVIEW_CLASS, alloc] };
         let webview_view: id =
             unsafe { msg_send![webview_view, initWithFrame: frame, configuration: config] };
+        let _: () = unsafe { msg_send![config, release] };
         unsafe {
             store_ivar(
                 webview_view,
@@ -2581,10 +2989,12 @@ impl MacWebViewHost {
             declared_url: SharedString::default(),
             declared_html: None,
             request_headers: None,
+            current_url_hint: SharedString::default(),
             user_agent: None,
             storage_key: webview.storage_key.clone(),
             javascript_disabled: webview.javascript_disabled,
             media_autoplay: webview.media_autoplay,
+            custom_protocol_schemes: webview.custom_protocol_schemes.clone(),
             background_color: webview.background_color,
             devtools: webview.devtools,
             user_scripts_initialized: false,
@@ -2689,6 +3099,7 @@ impl MacWebViewHost {
                     self.declared_url = webview.url.clone();
                     self.declared_html = None;
                     self.request_headers = webview.request_headers.clone();
+                    self.current_url_hint = webview.url.clone();
                 }
                 Err(error) => {
                     log::error!("failed to navigate macOS WebView {}: {error:#}", webview.id)
@@ -2701,6 +3112,7 @@ impl MacWebViewHost {
                         self.declared_url = SharedString::default();
                         self.declared_html = webview.html.clone();
                         self.request_headers = None;
+                        self.current_url_hint = SharedString::default();
                     }
                     Err(error) => {
                         log::error!(
@@ -2713,18 +3125,12 @@ impl MacWebViewHost {
                 self.declared_url = SharedString::default();
                 self.declared_html = None;
                 self.request_headers = None;
+                self.current_url_hint = SharedString::default();
             }
         } else if scripts_changed || user_agent_changed {
-            if !self.declared_url.as_ref().is_empty() {
-                self.reload();
-            } else if let Some(html) = self.declared_html.clone()
-                && let Err(error) = self.load_html(html.as_ref())
-            {
-                log::error!(
-                    "failed to reload macOS WebView {} HTML after configuration change: {error:#}",
-                    webview.id
-                );
-            }
+            // Reload the document that is actually visible. Re-loading the declarative HTML here
+            // would undo an imperative controller navigation on the next render.
+            self.reload();
         }
     }
 
@@ -2745,7 +3151,7 @@ impl MacWebViewHost {
         unsafe {
             add_webview_user_script(
                 self.controller,
-                &webview_bridge_script(webview.storage_key.as_ref()),
+                &webview_bridge_script(webview.storage_key.as_ref(), self.state.ipc_nonce.as_ref()),
                 WKUserScriptInjectionTimeAtDocumentStart,
             );
         }
@@ -2754,7 +3160,7 @@ impl MacWebViewHost {
             unsafe {
                 add_webview_user_script(
                     self.controller,
-                    &webview_clipboard_script(),
+                    &webview_clipboard_script(self.state.ipc_nonce.as_ref()),
                     WKUserScriptInjectionTimeAtDocumentStart,
                 );
             }
@@ -2817,21 +3223,15 @@ impl MacWebViewHost {
         match command {
             PlatformWebViewCommand::Navigate { url, .. } => {
                 self.load_url(url.as_ref())?;
-                self.declared_url = url;
-                self.declared_html = None;
-                self.request_headers = None;
+                self.current_url_hint = url;
             }
             PlatformWebViewCommand::NavigateWithHeaders { url, headers, .. } => {
                 self.load_url_with_headers(url.as_ref(), Some(&headers))?;
-                self.declared_url = url;
-                self.declared_html = None;
-                self.request_headers = Some(headers);
+                self.current_url_hint = url;
             }
             PlatformWebViewCommand::LoadHtml { html, .. } => {
                 self.load_html(html.as_ref())?;
-                self.declared_url = SharedString::default();
-                self.declared_html = Some(html);
-                self.request_headers = None;
+                self.current_url_hint = SharedString::default();
             }
             PlatformWebViewCommand::EvaluateJavaScript { script, .. } => {
                 self.evaluate_javascript(script.as_ref())
@@ -2857,14 +3257,9 @@ impl MacWebViewHost {
                 let _: () = msg_send![self.webview, goForward];
             },
             PlatformWebViewCommand::OpenDevTools { .. } => {
-                if set_webview_inspectable(self.webview, true) {
-                    self.devtools = true;
-                    log::warn!(
-                        "WebView devtools were made inspectable on macOS; open the inspector from Safari/Web Inspector because WKWebView does not expose a public open-inspector API"
-                    );
-                } else {
-                    anyhow::bail!("WebView inspectability is unavailable on this macOS version");
-                }
+                anyhow::bail!(
+                    "opening WebView devtools is unsupported by WKWebView; enable WebView inspectability and open the inspector from Safari"
+                );
             }
             PlatformWebViewCommand::CloseDevTools { .. } => {
                 anyhow::bail!(
@@ -2872,16 +3267,10 @@ impl MacWebViewHost {
                 );
             }
             PlatformWebViewCommand::IsDevToolsOpen { callback, .. } => {
-                log::warn!(
-                    "WebView devtools open-state is not supported by Kael's macOS WebView backend; WKWebView does not expose a public inspector-state API"
-                );
                 callback(Err(
                     "WebView devtools open-state is not supported by Kael's macOS WebView backend"
                         .into(),
                 ));
-                anyhow::bail!(
-                    "WebView devtools open-state is unavailable because WKWebView has no public inspector-state API"
-                );
             }
             PlatformWebViewCommand::Print { .. } => self.print()?,
             PlatformWebViewCommand::SetZoomFactor { factor, .. } => self.set_zoom_factor(factor),
@@ -2971,7 +3360,7 @@ impl MacWebViewHost {
             return url;
         }
 
-        self.declared_url.clone()
+        self.current_url_hint.clone()
     }
 
     fn cookie_store(&self) -> id {
@@ -2993,9 +3382,12 @@ impl MacWebViewHost {
         url: Option<SharedString>,
         callback: crate::webview::WebViewCookieCallback,
     ) {
+        let async_window = self.state.async_window.clone();
         let cookie_store = self.cookie_store();
         if cookie_store.is_null() {
-            callback(Err("WebView cookie store is unavailable".into()));
+            dispatch_webview_completion(async_window, "webview cookie read", move || {
+                callback(Err("WebView cookie store is unavailable".into()));
+            });
             return;
         }
 
@@ -3003,8 +3395,15 @@ impl MacWebViewHost {
             .as_ref()
             .and_then(|url| WebViewCookieUrlFilter::parse(url.as_ref()));
         let block = RcBlock::new(move |cookies: id| {
-            let cookies = unsafe { mac_webview_cookies_from_array(cookies, filter.as_ref()) };
-            callback(Ok(cookies));
+            let result = catch_platform_callback(
+                "webview cookie decode",
+                Err("WebView cookie response could not be decoded".into()),
+                || Ok(unsafe { mac_webview_cookies_from_array(cookies, filter.as_ref()) }),
+            );
+            dispatch_webview_completion(async_window.clone(), "webview cookie read", {
+                let callback = callback.clone();
+                move || callback(result)
+            });
         });
 
         unsafe {
@@ -3017,20 +3416,30 @@ impl MacWebViewHost {
         cookie: WebViewCookie,
         callback: crate::webview::WebViewCookieMutationCallback,
     ) {
+        let async_window = self.state.async_window.clone();
         let cookie_store = self.cookie_store();
         if cookie_store.is_null() {
-            callback(Err("WebView cookie store is unavailable".into()));
+            dispatch_webview_completion(async_window, "webview cookie set", move || {
+                callback(Err("WebView cookie store is unavailable".into()));
+            });
             return;
         }
         let current_url = self.current_url();
         let Some(cookie) = mac_webview_cookie_to_ns(cookie, Some(current_url.as_ref())) else {
-            callback(Err(
-                "WebView cookie mutation requires a domain or committed WebView URL".into(),
-            ));
+            dispatch_webview_completion(async_window, "webview cookie set", move || {
+                callback(Err(
+                    "WebView cookie mutation requires a domain or committed WebView URL".into(),
+                ));
+            });
             return;
         };
 
-        let block = RcBlock::new(move || callback(Ok(())));
+        let block = RcBlock::new(move || {
+            dispatch_webview_completion(async_window.clone(), "webview cookie set", {
+                let callback = callback.clone();
+                move || callback(Ok(()))
+            });
+        });
         unsafe {
             let _: () = msg_send![
                 cookie_store,
@@ -3045,20 +3454,30 @@ impl MacWebViewHost {
         cookie: WebViewCookie,
         callback: crate::webview::WebViewCookieMutationCallback,
     ) {
+        let async_window = self.state.async_window.clone();
         let cookie_store = self.cookie_store();
         if cookie_store.is_null() {
-            callback(Err("WebView cookie store is unavailable".into()));
+            dispatch_webview_completion(async_window, "webview cookie delete", move || {
+                callback(Err("WebView cookie store is unavailable".into()));
+            });
             return;
         }
         let current_url = self.current_url();
         let Some(cookie) = mac_webview_cookie_to_ns(cookie, Some(current_url.as_ref())) else {
-            callback(Err(
-                "WebView cookie mutation requires a domain or committed WebView URL".into(),
-            ));
+            dispatch_webview_completion(async_window, "webview cookie delete", move || {
+                callback(Err(
+                    "WebView cookie mutation requires a domain or committed WebView URL".into(),
+                ));
+            });
             return;
         };
 
-        let block = RcBlock::new(move || callback(Ok(())));
+        let block = RcBlock::new(move || {
+            dispatch_webview_completion(async_window.clone(), "webview cookie delete", {
+                let callback = callback.clone();
+                move || callback(Ok(()))
+            });
+        });
         unsafe {
             let _: () = msg_send![
                 cookie_store,
@@ -3083,19 +3502,30 @@ impl MacWebViewHost {
         script: &str,
         callback: crate::webview::WebViewJavaScriptResultCallback,
     ) {
+        let async_window = self.state.async_window.clone();
         let script = serde_json::to_string(script).unwrap_or_else(|_| "\"\"".into());
         let script = format!(
             "(() => {{ const value = (0, eval)({script}); const serialized = JSON.stringify(value); return serialized === undefined ? 'null' : serialized; }})()"
         );
         let callback_for_block = callback.clone();
         let block = RcBlock::new(move |result: id, error: id| {
-            if !error.is_null() {
-                callback_for_block(Err(ns_error_message(error).into()));
-            } else if result.is_null() {
-                callback_for_block(Ok("null".into()));
-            } else {
-                callback_for_block(Ok(unsafe { result.to_str() }.to_string().into()));
-            }
+            let result = catch_platform_callback(
+                "webview JavaScript result decode",
+                Err("WebView JavaScript result could not be decoded".into()),
+                || {
+                    if !error.is_null() {
+                        Err(ns_error_message(error).into())
+                    } else if result.is_null() {
+                        Ok("null".into())
+                    } else {
+                        Ok(unsafe { result.to_str() }.to_string().into())
+                    }
+                },
+            );
+            dispatch_webview_completion(async_window.clone(), "webview JavaScript result", {
+                let callback = callback_for_block.clone();
+                move || callback(result)
+            });
         });
 
         unsafe {
@@ -3248,7 +3678,9 @@ impl Drop for MacWebViewHost {
                 ];
             }
             if !self.webview.is_null() {
+                store_ivar(self.webview, WEBVIEW_STATE_IVAR, ptr::null_mut::<c_void>());
                 let _: () = msg_send![self.webview, setNavigationDelegate: nil];
+                let _: () = msg_send![self.webview, setUIDelegate: nil];
                 self.webview.removeFromSuperview();
             }
         }
@@ -3392,6 +3824,7 @@ impl MacWindow {
                 event_callback: None,
                 activate_callback: None,
                 resize_callback: None,
+                resize_sync_scheduled: false,
                 moved_callback: None,
                 should_close_callback: None,
                 close_callback: None,
@@ -3417,6 +3850,9 @@ impl MacWindow {
                 select_previous_tab_callback: None,
                 toggle_tab_bar_callback: None,
                 activated_least_once: false,
+                pointer_lock: crate::game_input::NativePointerLockState::new(true),
+                pointer_lock_saved_position: None,
+                pointer_lock_cursor_hidden: false,
                 accessibility_provider: super::accessibility::MacAccessibilityProvider::new(
                     native_view as *mut c_void,
                 ),
@@ -3656,6 +4092,9 @@ impl MacWindow {
 impl Drop for MacWindow {
     fn drop(&mut self) {
         let mut this = self.0.lock();
+        if let Err(error) = this.release_pointer_lock() {
+            log::error!("failed to release macOS pointer lock while dropping window: {error}");
+        }
         this.renderer.destroy();
         let window = this.native_window;
         this.display_link.take();
@@ -3672,6 +4111,10 @@ impl Drop for MacWindow {
             })
             .detach();
     }
+}
+
+fn should_start_display_link(active: bool, was_active: bool, has_display_link: bool) -> bool {
+    active && (!was_active || !has_display_link)
 }
 
 impl PlatformWindow for MacWindow {
@@ -4071,7 +4514,12 @@ impl PlatformWindow for MacWindow {
         let mut this = self.0.as_ref().lock();
         let was_active = this.frame_polling_active;
         this.frame_polling_active = active;
-        if active && !was_active {
+        // Polling can first be enabled while AppKit still reports the window as
+        // occluded, in which case `start_display_link` deliberately leaves no
+        // link behind. A transient CoreVideo start failure has the same state.
+        // Treat a later active refresh as a retry instead of requiring an
+        // unrelated false -> true transition to make the window render again.
+        if should_start_display_link(active, was_active, this.display_link.is_some()) {
             this.start_display_link();
         } else if !active && was_active {
             this.stop_display_link();
@@ -4151,6 +4599,31 @@ impl PlatformWindow for MacWindow {
 
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> crate::DispatchEventResult>) {
         self.0.as_ref().lock().event_callback = Some(callback);
+    }
+
+    fn game_input_capabilities(&self) -> GameInputCapabilities {
+        let gamepads = if cfg!(feature = "game-input") {
+            GameInputAvailability::Available
+        } else {
+            GameInputAvailability::DisabledAtCompileTime
+        };
+        GameInputCapabilities::new(GameInputAvailability::Available, gamepads)
+    }
+
+    fn pointer_lock_status(&self) -> PointerLockStatus {
+        self.0.lock().pointer_lock.status()
+    }
+
+    fn request_pointer_lock(&self) -> Result<(), GameInputError> {
+        self.0.lock().request_pointer_lock()
+    }
+
+    fn exit_pointer_lock(&self) -> Result<(), GameInputError> {
+        self.0.lock().release_pointer_lock()
+    }
+
+    fn pointer_lock_error(&self) -> Option<GameInputError> {
+        self.0.lock().pointer_lock.error()
     }
 
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>) {
@@ -4271,6 +4744,56 @@ impl PlatformWindow for MacWindow {
         unsafe { run_print_job(native_window, job, true) }
     }
 
+    #[cfg(not(feature = "macos-blade"))]
+    fn export_scene_png(
+        &self,
+        scene: &crate::Scene,
+    ) -> std::result::Result<crate::Image, crate::WindowCaptureError> {
+        let readback = {
+            let mut this = self.0.lock();
+            let content_size = this.content_size();
+            let scale_factor = this.scale_factor();
+            let device_dimension = |logical: Pixels| {
+                let scaled = f64::from(logical.0) * f64::from(scale_factor);
+                if !scaled.is_finite() || scaled < 1.0 || scaled > f64::from(i32::MAX) {
+                    return Err(crate::WindowCaptureError::Backend(
+                        "window capture dimensions are invalid".into(),
+                    ));
+                }
+                Ok(crate::DevicePixels(scaled.round() as i32))
+            };
+            let viewport = size(
+                device_dimension(content_size.width)?,
+                device_dimension(content_size.height)?,
+            );
+            this.renderer
+                .render_scene_to_bytes(scene, viewport)
+                .map_err(|error| crate::WindowCaptureError::Backend(error.to_string()))?
+        };
+        encode_premultiplied_bgra_png(readback.width, readback.height, readback.bgra)
+            .map_err(|error| crate::WindowCaptureError::Backend(error.to_string()))
+    }
+
+    #[cfg(feature = "macos-blade")]
+    fn export_scene_png(
+        &self,
+        scene: &crate::Scene,
+    ) -> std::result::Result<crate::Image, crate::WindowCaptureError> {
+        let readback = self
+            .0
+            .lock()
+            .renderer
+            .render_scene_to_bgra(scene)
+            .map_err(|error| crate::WindowCaptureError::Backend(error.to_string()))?;
+        encode_bgra_png(
+            readback.width,
+            readback.height,
+            readback.bgra,
+            readback.premultiplied_alpha,
+        )
+        .map_err(|error| crate::WindowCaptureError::Backend(error.to_string()))
+    }
+
     fn draw(&self, scene: &crate::Scene) {
         let mut this = self.0.lock();
         this.renderer.draw(scene);
@@ -4327,8 +4850,13 @@ impl PlatformWindow for MacWindow {
     }
 
     fn titlebar_double_click(&self) {
-        let window = self.0.lock().native_window;
-        perform_titlebar_double_click_action(window)
+        let this = self.0.lock();
+        let window = this.native_window;
+        this.executor
+            .spawn(async move {
+                perform_titlebar_double_click_action(window);
+            })
+            .detach();
     }
 
     fn set_progress_bar(&self, state: crate::ProgressBarState) {
@@ -4535,15 +5063,39 @@ extern "C" fn draw_print_view(this: id, _: Sel, _: NSRect) {
     }
 }
 
+fn warn_rejected_mac_webview_ipc_once(state: &MacWebViewDelegateState, reason: &str) {
+    if !state.ipc_rejection_reported.swap(true, Ordering::Relaxed) {
+        log::warn!("rejected macOS WebView IPC message: {reason}");
+    }
+}
+
 extern "C" fn webview_did_receive_script_message(this: id, _: Sel, _: id, message: id) {
     let Some(state) = (unsafe { get_webview_delegate_state(this) }) else {
         return;
     };
+    let frame_info: id = unsafe { msg_send![message, frameInfo] };
+    let is_main_frame = if frame_info.is_null() {
+        false
+    } else {
+        let value: BOOL = unsafe { msg_send![frame_info, isMainFrame] };
+        value.as_bool()
+    };
+    if !is_main_frame {
+        warn_rejected_mac_webview_ipc_once(state, "message originated in a subframe");
+        return;
+    }
+
     let body: id = unsafe { msg_send![message, body] };
     let payload = unsafe { webview_message_value(body) };
     if handle_mac_webview_clipboard_message(state, message, &payload) {
         return;
     }
+
+    let Some(payload) = decode_mac_webview_bridge_message(&payload, state.ipc_nonce.as_ref())
+    else {
+        warn_rejected_mac_webview_ipc_once(state, "missing or invalid authentication nonce");
+        return;
+    };
 
     let Some(handler) = state.message_handler.clone() else {
         return;
@@ -4613,7 +5165,7 @@ extern "C" fn webview_create_webview_with_configuration(
     this: id,
     _: Sel,
     webview: id,
-    configuration: id,
+    _: id,
     navigation_action: id,
     _: id,
 ) -> id {
@@ -4623,36 +5175,15 @@ extern "C" fn webview_create_webview_with_configuration(
 
     let request: id = unsafe { msg_send![navigation_action, request] };
     let url = ns_request_url_string(request);
-    let allow_popup = state.pending_allowed_popups.remove(&url)
-        || resolve_mac_new_window_policy(url.as_ref(), state) == WebViewNewWindowPolicy::Allow;
-    if !allow_popup {
-        return nil;
-    }
-
-    unsafe {
-        let frame: NSRect = msg_send![webview, frame];
-        let popup: id = msg_send![WEBVIEW_CLASS, alloc];
-        let popup: id = msg_send![popup, initWithFrame: frame, configuration: configuration];
-        store_ivar(
-            popup,
-            WEBVIEW_STATE_IVAR,
-            state as *mut MacWebViewDelegateState as *mut c_void,
-        );
-        let _: () = msg_send![popup, setNavigationDelegate: this];
-        let _: () = msg_send![popup, setUIDelegate: this];
-        let _: () = msg_send![popup, setAutoresizingMask: NSViewWidthSizable | NSViewHeightSizable];
-        register_dragged_types(popup);
-        let superview: id = msg_send![webview, superview];
-        if !superview.is_null() {
-            let _: () = msg_send![
-                superview,
-                addSubview: popup,
-                positioned: NSWindowOrderingMode::Above,
-                relativeTo: webview
-            ];
+    if resolve_mac_new_window_policy(url.as_ref(), state) != WebViewNewWindowPolicy::Deny {
+        // A WKWebView returned here may outlive the Kael element that owns the
+        // delegate state. Until popup ownership and teardown are explicit,
+        // preserve the navigation without creating a second native view.
+        unsafe {
+            let _: () = msg_send![webview, loadRequest: request];
         }
-        popup.autorelease()
     }
+    nil
 }
 
 extern "C" fn webview_did_close(_: id, _: Sel, webview: id) {
@@ -4888,13 +5419,21 @@ fn emit_webview_document_title_changed(delegate: id, webview: id) {
     });
 }
 
+fn safe_mac_new_window_policy(policy: WebViewNewWindowPolicy) -> WebViewNewWindowPolicy {
+    if policy == WebViewNewWindowPolicy::Allow {
+        WebViewNewWindowPolicy::NavigateCurrent
+    } else {
+        policy
+    }
+}
+
 fn resolve_mac_new_window_policy(
     url: &str,
     state: &MacWebViewDelegateState,
 ) -> WebViewNewWindowPolicy {
     if let Some(handler) = state.new_window_handler.clone() {
         let mut async_window = state.async_window.clone();
-        return catch_platform_callback(
+        let policy = catch_platform_callback(
             "webview new-window policy",
             WebViewNewWindowPolicy::Deny,
             || {
@@ -4903,6 +5442,13 @@ fn resolve_mac_new_window_policy(
                     .unwrap_or(WebViewNewWindowPolicy::Deny)
             },
         );
+        let safe_policy = safe_mac_new_window_policy(policy);
+        if policy != safe_policy && !state.popup_downgrade_reported.swap(true, Ordering::Relaxed) {
+            log::warn!(
+                "macOS WebView popup Allow is downgraded to NavigateCurrent until popup lifetime ownership is safe"
+            );
+        }
+        return safe_policy;
     }
 
     if let Some(handler) = state.navigation_handler.clone() {
@@ -4979,12 +5525,6 @@ extern "C" fn webview_decide_policy_for_navigation_action(
             unsafe {
                 let _: () = msg_send![webview, loadRequest: request];
             }
-        } else if policy == WebViewNewWindowPolicy::Allow {
-            state.pending_allowed_popups.insert(url_string);
-            unsafe {
-                call_navigation_decision_handler(decision_handler, WKNavigationActionPolicyAllow);
-            }
-            return;
         }
         unsafe {
             call_navigation_decision_handler(decision_handler, WKNavigationActionPolicyCancel);
@@ -5240,6 +5780,29 @@ extern "C" fn handle_view_event(this: id, _: Sel, native_event: id) {
             _ => {}
         };
 
+        if let Some(pointer) = crate::platform::mac::events::tablet_pointer_event(
+            unsafe { &*(native_event as *const NSEvent) },
+            &event,
+            window_height,
+        ) {
+            event = PlatformInput::Pointer(pointer);
+        }
+
+        // CoreGraphics keeps the absolute cursor fixed while it is
+        // disassociated. Preserve that stable hit-test position and expose the
+        // unbounded AppKit deltas through the portable pointer contract.
+        if lock.pointer_lock.status() == PointerLockStatus::Locked
+            && let PlatformInput::MouseMove(mouse_move) = &event
+        {
+            let native_event = unsafe { &*(native_event as *const NSEvent) };
+            let mut pointer = PointerInputEvent::from(mouse_move);
+            pointer.movement = point(
+                px(native_event.deltaX() as f32),
+                px(-(native_event.deltaY() as f32)),
+            );
+            event = PlatformInput::Pointer(pointer);
+        }
+
         match &event {
             PlatformInput::MouseDown(_) => {
                 drop(lock);
@@ -5325,7 +5888,26 @@ extern "C" fn window_did_change_occlusion_state(this: id, _: Sel, _: id) {
 
 extern "C" fn window_did_resize(this: id, _: Sel, _: id) {
     let window_state = unsafe { get_window_state(this) };
-    window_state.as_ref().lock().move_traffic_light();
+    let mut lock = window_state.as_ref().lock();
+    lock.move_traffic_light();
+
+    // NSWindow resize notifications can arrive while Kael is still dispatching the input event
+    // that initiated the resize (notably a titlebar double click). Updating the app and drawing a
+    // frame re-entrantly from that notification leaves the view tree at the previous viewport until
+    // another event enters the run loop. Coalesce resize completion onto the next main-thread turn.
+    if lock.resize_sync_scheduled {
+        return;
+    }
+
+    lock.resize_sync_scheduled = true;
+    let executor = lock.executor.clone();
+    drop(lock);
+
+    executor
+        .spawn(async move {
+            unsafe { complete_native_resize(window_state) };
+        })
+        .detach();
 }
 
 extern "C" fn window_will_enter_fullscreen(this: id, _: Sel, _: id) {
@@ -5379,14 +5961,25 @@ extern "C" fn window_did_move(this: id, _: Sel, _: id) {
 
 extern "C" fn window_did_change_screen(this: id, _: Sel, _: id) {
     let window_state = unsafe { get_window_state(this) };
-    let mut lock = window_state.as_ref().lock();
-    lock.start_display_link();
+    window_state.as_ref().lock().start_display_link();
+
+    // AppKit normally follows this notification with
+    // `viewDidChangeBackingProperties`, but that delivery can be delayed (or
+    // omitted for some display/Space transitions). Synchronize eagerly so a
+    // window never presents a drawable rasterized for the previous screen's
+    // scale factor.
+    sync_backing_scale(&window_state, "window screen change");
 }
 
 extern "C" fn window_did_change_key_status(this: id, selector: Sel, _: id) {
     let window_state = unsafe { get_window_state(this) };
     let mut lock = window_state.lock();
     let is_active = unsafe { lock.native_window.isKeyWindow() == YES };
+    if !is_active && lock.pointer_lock.status() != PointerLockStatus::Unlocked {
+        if let Err(error) = lock.release_pointer_lock() {
+            log::error!("failed to release macOS pointer lock after focus loss: {error}");
+        }
+    }
     lock.accessibility_provider
         .update_view_focus_state(is_active);
 
@@ -5491,6 +6084,10 @@ extern "C" fn make_backing_layer(this: id, _: Sel) -> id {
 
 extern "C" fn view_did_change_backing_properties(this: id, _: Sel) {
     let window_state = unsafe { get_window_state(this) };
+    sync_backing_scale(&window_state, "window backing-scale change");
+}
+
+fn sync_backing_scale(window_state: &Arc<Mutex<MacWindowState>>, callback_name: &'static str) {
     let mut lock = window_state.as_ref().lock();
 
     let scale_factor = lock.scale_factor();
@@ -5510,27 +6107,39 @@ extern "C" fn view_did_change_backing_properties(this: id, _: Sel) {
         let content_size = lock.content_size();
         let scale_factor = lock.scale_factor();
         drop(lock);
-        catch_platform_callback("window resize", (), || callback(content_size, scale_factor));
+        catch_platform_callback(callback_name, (), || callback(content_size, scale_factor));
         window_state.as_ref().lock().resize_callback = Some(callback);
     };
 }
 
 extern "C" fn set_frame_size(this: id, _: Sel, size: NSSize) {
     let window_state = unsafe { get_window_state(this) };
+    unsafe { update_native_view_size(this, &window_state, size, false) };
+}
+
+unsafe fn update_native_view_size(
+    native_view: id,
+    window_state: &Arc<Mutex<MacWindowState>>,
+    size: NSSize,
+    notify_if_unchanged: bool,
+) {
     let mut lock = window_state.as_ref().lock();
 
     let new_size = Size::<Pixels>::from(size);
     let old_size = unsafe {
-        let old_frame: NSRect = msg_send![this, frame];
+        let old_frame: NSRect = msg_send![native_view, frame];
         Size::<Pixels>::from(old_frame.size)
     };
 
-    if old_size == new_size {
+    let size_changed = old_size != new_size;
+    if !size_changed && !notify_if_unchanged {
         return;
     }
 
-    unsafe {
-        let _: () = msg_send![super(this, lookup_class(c"NSView")), setFrameSize: size];
+    if size_changed {
+        unsafe {
+            let _: () = msg_send![super(native_view, lookup_class(c"NSView")), setFrameSize: size];
+        }
     }
 
     let scale_factor = lock.scale_factor();
@@ -5544,6 +6153,40 @@ extern "C" fn set_frame_size(this: id, _: Sel, size: NSSize) {
         catch_platform_callback("window resize", (), || callback(content_size, scale_factor));
         window_state.lock().resize_callback = Some(callback);
     };
+}
+
+unsafe fn complete_native_resize(window_state: Arc<Mutex<MacWindowState>>) {
+    unsafe {
+        let (window, native_view) = {
+            let mut lock = window_state.lock();
+            lock.resize_sync_scheduled = false;
+            (lock.native_window, lock.native_view.as_ptr() as id)
+        };
+
+        let content_view: id = msg_send![window, contentView];
+        if content_view == nil {
+            return;
+        }
+
+        let content_bounds: NSRect = msg_send![content_view, bounds];
+
+        // Complete the native autoresize ourselves. Calling the shared helper directly avoids
+        // depending on AppKit to deliver `setFrameSize:` before the next input event and also
+        // guarantees Kael receives an authoritative bounds callback after re-entrant dispatch has
+        // unwound, even when AppKit already resized the view.
+        update_native_view_size(native_view, &window_state, content_bounds.size, true);
+
+        request_frame_immediately(
+            &window_state,
+            RequestFrameOptions {
+                require_presentation: true,
+                force_render: true,
+            },
+        );
+
+        let _: () = msg_send![native_view, setNeedsDisplay: YES];
+        let _: () = msg_send![window, displayIfNeeded];
+    }
 }
 
 extern "C" fn display_layer(this: id, _: Sel, _: id) {
@@ -5991,6 +6634,29 @@ fn zoom_window_immediately(window: id) {
     }
 }
 
+fn request_frame_immediately(
+    window_state: &Arc<Mutex<MacWindowState>>,
+    options: RequestFrameOptions,
+) {
+    let mut lock = window_state.lock();
+    let Some(mut callback) = lock.request_frame_callback.take() else {
+        return;
+    };
+
+    #[cfg(not(feature = "macos-blade"))]
+    lock.renderer.set_presents_with_transaction(true);
+    lock.stop_display_link();
+    drop(lock);
+
+    catch_platform_callback("frame request", (), || callback(options));
+
+    let mut lock = window_state.lock();
+    lock.request_frame_callback = Some(callback);
+    #[cfg(not(feature = "macos-blade"))]
+    lock.renderer.set_presents_with_transaction(false);
+    lock.start_display_link();
+}
+
 fn with_input_handler<F, R>(window: id, f: F) -> Option<R>
 where
     F: FnOnce(&mut PlatformInputHandler) -> R,
@@ -6187,6 +6853,15 @@ mod tests {
     }
 
     #[test]
+    fn active_frame_polling_retries_a_missing_display_link() {
+        assert!(should_start_display_link(true, false, false));
+        assert!(should_start_display_link(true, true, false));
+        assert!(!should_start_display_link(true, true, true));
+        assert!(!should_start_display_link(false, true, true));
+        assert!(!should_start_display_link(false, false, false));
+    }
+
+    #[test]
     fn native_alert_responses_map_back_to_original_answer_indices() {
         let button_order = [0, 2, 1];
         assert_eq!(alert_response_index(1_000, &button_order), Some(0));
@@ -6198,7 +6873,7 @@ mod tests {
 
     #[test]
     fn webview_clipboard_script_exposes_text_clipboard_bridge() {
-        let script = webview_clipboard_script();
+        let script = webview_clipboard_script("test-nonce");
 
         assert!(script.contains("navigator, 'clipboard'"));
         assert!(script.contains("readText: () => send('readText')"));
@@ -6209,6 +6884,66 @@ mod tests {
         assert!(script.contains("document.execCommand = function"));
         assert!(script.contains("normalized === 'copy' || normalized === 'cut'"));
         assert!(script.contains("__kaelClipboard"));
+        assert!(script.contains("__kaelIpcNonce"));
+        assert!(script.contains("test-nonce"));
         assert!(script.contains("__kaelClipboardBridge"));
+        assert!(script.contains("handler.postMessage(JSON.stringify("));
+    }
+
+    #[test]
+    fn webview_message_bridge_serializes_the_authenticated_envelope() {
+        let script = webview_bridge_script(None, "test-nonce");
+
+        assert!(script.contains("postMessage(JSON.stringify("));
+        assert!(script.contains("__kaelIpcNonce: nonce"));
+        assert!(script.contains("test-nonce"));
+    }
+
+    #[test]
+    fn unsafe_popup_allow_is_downgraded_to_current_view_navigation() {
+        assert_eq!(
+            safe_mac_new_window_policy(WebViewNewWindowPolicy::Allow),
+            WebViewNewWindowPolicy::NavigateCurrent
+        );
+        assert_eq!(
+            safe_mac_new_window_policy(WebViewNewWindowPolicy::Deny),
+            WebViewNewWindowPolicy::Deny
+        );
+    }
+
+    #[test]
+    fn native_cookie_conversion_preserves_http_only_and_secure() {
+        objc2::rc::autoreleasepool(|_| {
+            let expected = WebViewCookie::new("session", "secret")
+                .domain("example.com")
+                .path("/")
+                .secure(true)
+                .http_only(true);
+            let native = mac_webview_cookie_to_ns(expected.clone(), None)
+                .expect("valid native cookie properties");
+            let actual = unsafe { mac_webview_cookie_from_ns(native) };
+
+            assert_eq!(actual.name, expected.name);
+            assert_eq!(actual.value, expected.value);
+            assert!(actual.secure);
+            assert!(actual.http_only);
+        });
+    }
+
+    #[test]
+    fn mac_webview_bridge_rejects_missing_or_wrong_nonce() {
+        let payload = serde_json::json!({
+            "__kaelIpcNonce": "expected",
+            "body": r#"{"kind":"ready"}"#,
+        });
+        assert_eq!(
+            decode_mac_webview_bridge_message(&payload, "expected"),
+            Some(serde_json::json!({ "kind": "ready" }))
+        );
+        assert_eq!(decode_mac_webview_bridge_message(&payload, "wrong"), None);
+        assert_eq!(
+            decode_mac_webview_bridge_message(&serde_json::json!({ "body": "{}" }), "expected"),
+            None
+        );
     }
 }

@@ -98,7 +98,10 @@ pub use crate::components::dropdown::{
     Dropdown, DropdownAlign, DropdownItem, DropdownMenuDivider, DropdownMenuItem,
     DropdownMenuItemData, DropdownMenuOption, DropdownMenuSection, DropdownState,
 };
-pub use crate::components::editor::{Editor, EditorState, Language as EditorLanguage};
+#[cfg(feature = "editor")]
+pub use crate::components::editor::{
+    Editor, EditorState, EditorSyntaxBackend, Language as EditorLanguage,
+};
 pub use crate::components::empty_state::{EmptyState, EmptyStateSize};
 pub use crate::components::field::{Field, FieldLabel, FieldStatusType, InputClearButton};
 pub use crate::components::field_status::{FieldStatus, FieldStatusTone, FieldStatusVariant};
@@ -262,7 +265,10 @@ pub use crate::display::card::{Card, CardVariant};
 pub use crate::display::data_grid::{
     CellEditor, CellPosition, DataGrid, DataGridState, GridColumnDef, GridSortDirection,
 };
-pub use crate::display::data_table::{ColumnDef, DataTable, SortDirection};
+pub use crate::display::data_table::{
+    ColumnDef, DATA_TABLE_LEGACY_SELECTION_MATERIALIZATION_LIMIT, DataTable, DataTablePageRequest,
+    DataTableSelectionSnapshot, SortDirection,
+};
 pub use crate::display::html::Html;
 pub use crate::display::markdown::{
     BlockNode, IncrementalParseState, IncrementalState, InlineNode, ListItemNode, Markdown,
@@ -277,6 +283,17 @@ pub use crate::display::table::{
     TableCell, TableColumn, TableColumnAlign, TableDensity, TableDividers, TableFooter,
     TableHeader, TableHeaderCell, TableRow, TableSortDirection, TableTextOverflow,
     TableVerticalAlign, pixel, proportional,
+};
+pub use crate::display::virtual_sheet_grid::{
+    SheetCellEdit, SheetCellPosition, SheetCellRange, SheetClipboardExport, SheetEditReason,
+    SheetNormalizedRange, SheetTileKey, SheetTileRequest, SheetViewportMetrics,
+    VIRTUAL_SHEET_CLIPBOARD_BYTE_LIMIT, VIRTUAL_SHEET_CLIPBOARD_CELL_LIMIT,
+    VIRTUAL_SHEET_DEFAULT_CACHE_TILES, VIRTUAL_SHEET_DEFAULT_EDIT_BYTE_LIMIT,
+    VIRTUAL_SHEET_DEFAULT_EDIT_LIMIT, VIRTUAL_SHEET_DEFAULT_PENDING_TILES,
+    VIRTUAL_SHEET_DEFAULT_UNDO_BYTE_LIMIT, VIRTUAL_SHEET_DEFAULT_UNDO_CELL_LIMIT,
+    VIRTUAL_SHEET_MAX_CELL_BYTES, VIRTUAL_SHEET_MAX_COLUMNS, VIRTUAL_SHEET_MAX_FROZEN_COLUMNS,
+    VIRTUAL_SHEET_MAX_FROZEN_ROWS, VIRTUAL_SHEET_MAX_ROWS, VIRTUAL_SHEET_MAX_TILE_BYTES,
+    VIRTUAL_SHEET_MAX_TILE_CELLS, VirtualSheetGrid, VirtualSheetGridError,
 };
 pub use crate::headless::{
     AccordionController, CarouselController, ComboboxController, DisclosureController,

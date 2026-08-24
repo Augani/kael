@@ -1,6 +1,6 @@
 app_id = "com.augani.kael"
 name = "Kael"
-version = "0.3.1"
+version = "0.4.0"
 
 [icons]
 
@@ -12,6 +12,11 @@ file_description = "A GPU-accelerated desktop application framework"
 linux_categories = ["Development", "Utility"]
 
 [signing]
+macos_team_id = "864H636QW4"
+macos_certificate = "Developer ID Application: Augustus Otu (864H636QW4)"
 
 [updater]
 feed_url = "https://kael.dev/updates/feed.json"
+artifact_base_url = "https://kael.dev/updates/artifacts"
+# A real `xtask publish` also requires `updater.public_key` and the matching
+# `KAEL_UPDATE_SIGNING_KEY`; create both with `xtask generate-update-key`.

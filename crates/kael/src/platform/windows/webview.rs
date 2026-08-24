@@ -1,6 +1,7 @@
 use super::super::webview_common::{
-    bridge_script, create_web_context, css_script, permission_kind_from_wry,
-    permission_response_to_wry, to_wry_rect, webview_command_id,
+    WryCustomProtocolRegistration, bridge_script, configure_wry_custom_protocols,
+    create_web_context, css_script, decode_bridge_message, ipc_source_matches_top_level,
+    main_frame_script, serialized_origin, to_wry_rect, warn_rejected_ipc_once, webview_command_id,
 };
 use super::{WindowsWindow, WindowsWindowInner};
 use crate::{
@@ -11,13 +12,34 @@ use crate::{
         WebViewDocumentTitleChangedHandler, WebViewDownloadCompletedHandler,
         WebViewDownloadStartedHandler, WebViewDragDropEvent, WebViewDragDropHandler,
         WebViewDragDropPolicy, WebViewNavigationHandler, WebViewNewWindowHandler,
-        WebViewPageLoadEvent, WebViewPageLoadHandler, rgba_to_webview_color,
+        WebViewPageLoadEvent, WebViewPageLoadHandler, WebViewPermissionFrame,
+        WebViewPermissionKind, rgba_to_webview_color,
     },
 };
 use anyhow::{Context as _, Result};
 use parking_lot::RwLock;
-use std::{cell::RefCell, collections::HashSet, rc::Rc, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::HashSet,
+    rc::Rc,
+    sync::{Arc, atomic::AtomicBool},
+};
 use util::ResultExt;
+use webview2_com::{
+    Microsoft::Web::WebView2::Win32::{
+        COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_KIND_AUTOPLAY,
+        COREWEBVIEW2_PERMISSION_KIND_CAMERA, COREWEBVIEW2_PERMISSION_KIND_CLIPBOARD_READ,
+        COREWEBVIEW2_PERMISSION_KIND_FILE_READ_WRITE, COREWEBVIEW2_PERMISSION_KIND_GEOLOCATION,
+        COREWEBVIEW2_PERMISSION_KIND_LOCAL_FONTS, COREWEBVIEW2_PERMISSION_KIND_MICROPHONE,
+        COREWEBVIEW2_PERMISSION_KIND_MIDI_SYSTEM_EXCLUSIVE_MESSAGES,
+        COREWEBVIEW2_PERMISSION_KIND_MULTIPLE_AUTOMATIC_DOWNLOADS,
+        COREWEBVIEW2_PERMISSION_KIND_NOTIFICATIONS, COREWEBVIEW2_PERMISSION_KIND_OTHER_SENSORS,
+        COREWEBVIEW2_PERMISSION_KIND_WINDOW_MANAGEMENT, COREWEBVIEW2_PERMISSION_STATE_ALLOW,
+        COREWEBVIEW2_PERMISSION_STATE_DENY, ICoreWebView2,
+        ICoreWebView2PermissionRequestedEventArgs3,
+    },
+    PermissionRequestedEventHandler, take_pwstr,
+};
 use windows::Win32::{
     Foundation::{COLORREF, HWND},
     UI::WindowsAndMessaging::{
@@ -25,6 +47,7 @@ use windows::Win32::{
         SWP_NOZORDER, SetLayeredWindowAttributes, SetWindowLongW, SetWindowPos, WS_EX_LAYERED,
     },
 };
+use windows_core_webview2::Interface as _;
 use wry::{
     DragDropEvent as WryDragDropEvent, NewWindowResponse, PageLoadEvent, WebContext, WebView,
     WebViewBuilder, WebViewExtWindows,
@@ -32,14 +55,31 @@ use wry::{
 
 pub(crate) struct WindowsWebViewHost {
     desired: PlatformWebView,
+    // Detach callbacks before Wry closes the underlying controller.
+    _permission_registration: WindowsPermissionRegistration,
     webview: WebView,
+    _protocol_registration: WryCustomProtocolRegistration,
     _context: Option<WebContext>,
-    current_url: SharedString,
-    current_html: Option<SharedString>,
+    rendered_url: SharedString,
+    rendered_html: Option<SharedString>,
     background_color: Option<crate::Rgba>,
     opacity: f32,
     live: Rc<RefCell<PlatformWebView>>,
     live_permission_handler: Arc<RwLock<Option<crate::webview::WebViewPermissionHandler>>>,
+    live_top_level_origin: Arc<RwLock<Option<SharedString>>>,
+}
+
+struct WindowsPermissionRegistration {
+    webview: ICoreWebView2,
+    token: i64,
+}
+
+impl Drop for WindowsPermissionRegistration {
+    fn drop(&mut self) {
+        if let Err(error) = unsafe { self.webview.remove_PermissionRequested(self.token) } {
+            log::debug!("failed to detach Windows WebView permission handler: {error}");
+        }
+    }
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -54,8 +94,9 @@ struct WindowsWebViewSignature {
     devtools: bool,
     zoom_hotkeys_enabled: bool,
     media_autoplay: Option<bool>,
-    focused: Option<bool>,
     clipboard_access: bool,
+    drag_drop_handler: bool,
+    custom_protocol_schemes: Vec<SharedString>,
 }
 
 pub(crate) fn sync_webviews(window: &Rc<WindowsWindowInner>, webviews: &[PlatformWebView]) {
@@ -131,6 +172,8 @@ impl WindowsWebViewHost {
         let mut context = create_web_context(&desired)?;
         let live = Rc::new(RefCell::new(desired.clone()));
         let live_permission_handler = Arc::new(RwLock::new(desired.permission_handler.clone()));
+        let live_top_level_origin = Arc::new(RwLock::new(serialized_origin(&desired.url)));
+        let protocol_registration = WryCustomProtocolRegistration::new(&desired);
         let builder = configure_webview_builder(
             if let Some(context) = context.as_mut() {
                 WebViewBuilder::new_with_web_context(context)
@@ -140,26 +183,32 @@ impl WindowsWebViewHost {
             &desired,
             desired.bounds,
             live.clone(),
-            live_permission_handler.clone(),
+            live_top_level_origin.clone(),
         );
+        let builder = configure_wry_custom_protocols(builder, &desired, &protocol_registration);
 
         let webview = builder
             .build_as_child(&WindowsWindow(window.clone()))
             .context("building Windows child webview")?;
         webview.set_visible(desired.visible).log_err();
+        let permission_registration =
+            register_permission_handler(&webview, live_permission_handler.clone())?;
 
-        let current_url = desired.url.clone();
-        let current_html = desired.html.clone();
+        let rendered_url = desired.url.clone();
+        let rendered_html = desired.html.clone();
         let mut host = Self {
             background_color: desired.background_color,
             opacity: -1.0,
             live,
             live_permission_handler,
+            live_top_level_origin,
+            _permission_registration: permission_registration,
             desired,
             webview,
+            _protocol_registration: protocol_registration,
             _context: context,
-            current_url,
-            current_html,
+            rendered_url,
+            rendered_html,
         };
         host.apply(scale_factor);
         Ok(host)
@@ -170,10 +219,19 @@ impl WindowsWebViewHost {
     }
 
     fn update_desired(&mut self, desired: PlatformWebView, scale_factor: f32) {
+        let focused_changed = self.desired.focused != desired.focused;
         *self.live.borrow_mut() = desired.clone();
         *self.live_permission_handler.write() = desired.permission_handler.clone();
+        self._protocol_registration.update(&desired);
         self.desired = desired;
         self.apply(scale_factor);
+        if focused_changed {
+            match self.desired.focused {
+                Some(true) => self.webview.focus().log_err(),
+                Some(false) => self.webview.focus_parent().log_err(),
+                None => None,
+            };
+        }
     }
 
     fn apply(&mut self, _scale_factor: f32) {
@@ -182,21 +240,30 @@ impl WindowsWebViewHost {
             .log_err();
         self.webview.set_visible(self.desired.visible).log_err();
 
-        if !self.desired.url.is_empty() && self.current_url != self.desired.url {
-            if let Some(headers) = self.desired.request_headers.clone() {
+        if !self.desired.url.is_empty() && self.rendered_url != self.desired.url {
+            let loaded = if let Some(headers) = self.desired.request_headers.clone() {
                 self.webview
                     .load_url_with_headers(self.desired.url.as_ref(), headers)
-                    .log_err();
+                    .log_err()
             } else {
-                self.webview.load_url(self.desired.url.as_ref()).log_err();
+                self.webview.load_url(self.desired.url.as_ref()).log_err()
+            };
+            if loaded.is_some() {
+                *self.live_top_level_origin.write() = serialized_origin(&self.desired.url);
+                self.rendered_url = self.desired.url.clone();
+                self.rendered_html = None;
             }
-            self.current_url = self.desired.url.clone();
-            self.current_html = None;
-        } else if self.desired.url.is_empty() && self.current_html != self.desired.html {
+        } else if self.desired.url.is_empty() && self.rendered_html != self.desired.html {
             if let Some(html) = self.desired.html.as_ref() {
-                self.webview.load_html(html.as_ref()).log_err();
+                if self.webview.load_html(html.as_ref()).log_err().is_some() {
+                    *self.live_top_level_origin.write() = None;
+                    self.rendered_url = SharedString::default();
+                    self.rendered_html = self.desired.html.clone();
+                }
+            } else {
+                self.rendered_url = SharedString::default();
+                self.rendered_html = None;
             }
-            self.current_html = self.desired.html.clone();
         }
 
         if self.background_color != self.desired.background_color {
@@ -221,22 +288,19 @@ impl WindowsWebViewHost {
                 self.webview
                     .load_url(url.as_ref())
                     .context("navigating Windows WebView")?;
-                self.current_url = url;
-                self.current_html = None;
+                *self.live_top_level_origin.write() = serialized_origin(&url);
             }
             PlatformWebViewCommand::NavigateWithHeaders { url, headers, .. } => {
                 self.webview
                     .load_url_with_headers(url.as_ref(), headers)
                     .context("navigating Windows WebView with headers")?;
-                self.current_url = url;
-                self.current_html = None;
+                *self.live_top_level_origin.write() = serialized_origin(&url);
             }
             PlatformWebViewCommand::LoadHtml { html, .. } => {
                 self.webview
                     .load_html(html.as_ref())
                     .context("loading HTML into Windows WebView")?;
-                self.current_url = SharedString::default();
-                self.current_html = Some(html);
+                *self.live_top_level_origin.write() = None;
             }
             PlatformWebViewCommand::EvaluateJavaScript { script, .. } => {
                 self.webview
@@ -247,14 +311,18 @@ impl WindowsWebViewHost {
                 script, callback, ..
             } => {
                 let callback_for_result = callback.clone();
-                if let Err(error) = self
-                    .webview
-                    .evaluate_script_with_callback(script.as_ref(), move |result| {
-                        callback_for_result(Ok(result.into()))
-                    })
+                if let Err(error) =
+                    self.webview
+                        .evaluate_script_with_callback(script.as_ref(), move |result| {
+                            super::catch_platform_callback("webview JavaScript result", (), || {
+                                callback_for_result(Ok(result.into()));
+                            });
+                        })
                 {
                     let message: SharedString = error.to_string().into();
-                    callback(Err(message.clone()));
+                    super::catch_platform_callback("webview JavaScript error", (), || {
+                        callback(Err(message.clone()));
+                    });
                     anyhow::bail!(message);
                 }
             }
@@ -273,12 +341,12 @@ impl WindowsWebViewHost {
             }
             PlatformWebViewCommand::GoBack { .. } => {
                 self.webview
-                    .evaluate_script("history.back()")
+                    .go_back()
                     .context("navigating Windows WebView backward")?;
             }
             PlatformWebViewCommand::GoForward { .. } => {
                 self.webview
-                    .evaluate_script("history.forward()")
+                    .go_forward()
                     .context("navigating Windows WebView forward")?;
             }
             PlatformWebViewCommand::OpenDevTools { .. } => {
@@ -290,20 +358,11 @@ impl WindowsWebViewHost {
                 );
             }
             PlatformWebViewCommand::CloseDevTools { .. } => {
-                #[cfg(any(debug_assertions, feature = "devtools"))]
-                self.webview.close_devtools();
-                #[cfg(not(any(debug_assertions, feature = "devtools")))]
-                anyhow::bail!(
-                    "Windows WebView devtools require a debug build or `devtools` feature"
-                );
+                anyhow::bail!("closing Windows WebView devtools is not supported by WebView2");
             }
             PlatformWebViewCommand::IsDevToolsOpen { callback, .. } => {
-                #[cfg(any(debug_assertions, feature = "devtools"))]
-                callback(Ok(self.webview.is_devtools_open()));
-                #[cfg(not(any(debug_assertions, feature = "devtools")))]
                 callback(Err(
-                    "WebView devtools state requires a debug build or backend devtools support"
-                        .into(),
+                    "querying Windows WebView devtools state is not supported by WebView2".into(),
                 ));
             }
             PlatformWebViewCommand::Print { .. } => {
@@ -421,10 +480,108 @@ impl From<&PlatformWebView> for WindowsWebViewSignature {
             devtools: webview.devtools,
             zoom_hotkeys_enabled: webview.zoom_hotkeys_enabled,
             media_autoplay: webview.media_autoplay,
-            focused: webview.focused,
             clipboard_access: webview.clipboard_access,
+            drag_drop_handler: webview.drag_drop_handler.is_some(),
+            custom_protocol_schemes: webview.custom_protocol_schemes.clone(),
         }
     }
+}
+
+fn permission_kind_from_webview2(kind: COREWEBVIEW2_PERMISSION_KIND) -> WebViewPermissionKind {
+    match kind {
+        COREWEBVIEW2_PERMISSION_KIND_MICROPHONE => WebViewPermissionKind::Microphone,
+        COREWEBVIEW2_PERMISSION_KIND_CAMERA => WebViewPermissionKind::Camera,
+        COREWEBVIEW2_PERMISSION_KIND_GEOLOCATION => WebViewPermissionKind::Geolocation,
+        COREWEBVIEW2_PERMISSION_KIND_NOTIFICATIONS => WebViewPermissionKind::Notifications,
+        COREWEBVIEW2_PERMISSION_KIND_CLIPBOARD_READ => WebViewPermissionKind::ClipboardRead,
+        COREWEBVIEW2_PERMISSION_KIND_LOCAL_FONTS => WebViewPermissionKind::LocalFonts,
+        COREWEBVIEW2_PERMISSION_KIND_OTHER_SENSORS => WebViewPermissionKind::Sensors,
+        COREWEBVIEW2_PERMISSION_KIND_MIDI_SYSTEM_EXCLUSIVE_MESSAGES => WebViewPermissionKind::Midi,
+        COREWEBVIEW2_PERMISSION_KIND_MULTIPLE_AUTOMATIC_DOWNLOADS => {
+            WebViewPermissionKind::AutomaticDownloads
+        }
+        COREWEBVIEW2_PERMISSION_KIND_FILE_READ_WRITE => WebViewPermissionKind::FileSystemAccess,
+        COREWEBVIEW2_PERMISSION_KIND_AUTOPLAY => WebViewPermissionKind::Autoplay,
+        COREWEBVIEW2_PERMISSION_KIND_WINDOW_MANAGEMENT => WebViewPermissionKind::WindowManagement,
+        _ => WebViewPermissionKind::Other,
+    }
+}
+
+fn register_permission_handler(
+    webview: &WebView,
+    live_handler: Arc<RwLock<Option<crate::webview::WebViewPermissionHandler>>>,
+) -> Result<WindowsPermissionRegistration> {
+    let core_webview = webview.webview();
+    let persistence_api_reported = AtomicBool::new(false);
+    let callback = PermissionRequestedEventHandler::create(Box::new(move |_, args| {
+        let Some(args) = args else {
+            return Ok(());
+        };
+        let Some(handler) = live_handler.read().clone() else {
+            return Ok(());
+        };
+
+        let Ok(args_with_profile_policy) =
+            args.cast::<ICoreWebView2PermissionRequestedEventArgs3>()
+        else {
+            // Without this interface WebView2 may persist an Allow (or the
+            // user's answer to Default) and skip future Kael policy calls.
+            // Fail closed so a stale profile decision cannot outlive a changed
+            // handler or origin policy.
+            if !persistence_api_reported.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                log::warn!(
+                    "Windows WebView2 runtime lacks transient permission decisions; denying native permissions"
+                );
+            }
+            unsafe { args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY)? };
+            return Ok(());
+        };
+        unsafe { args_with_profile_policy.SetSavesInProfile(false)? };
+
+        let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+        unsafe { args.PermissionKind(&mut kind)? };
+
+        let uri = {
+            let mut uri = Default::default();
+            unsafe { args.Uri(&mut uri)? };
+            take_pwstr(uri)
+        };
+        let user_gesture = {
+            let mut is_user_initiated = Default::default();
+            unsafe { args.IsUserInitiated(&mut is_user_initiated)? };
+            is_user_initiated.as_bool()
+        };
+        let request = crate::WebViewNativePermissionRequest::with_requesting_origin(
+            permission_kind_from_webview2(kind),
+            serialized_origin(&uri),
+            WebViewPermissionFrame::Unknown,
+            Some(user_gesture),
+        );
+        let decision = super::catch_platform_callback(
+            "webview native permission policy",
+            crate::WebViewPermissionDecision::Deny,
+            || handler(request),
+        );
+
+        match decision {
+            crate::WebViewPermissionDecision::Allow => unsafe {
+                args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
+            },
+            crate::WebViewPermissionDecision::Deny => unsafe {
+                args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY)?;
+            },
+            crate::WebViewPermissionDecision::Default => {}
+        }
+        Ok(())
+    }));
+
+    let mut token = 0;
+    unsafe { core_webview.add_PermissionRequested(&callback, &mut token) }
+        .context("registering Windows WebView2 permission handler")?;
+    Ok(WindowsPermissionRegistration {
+        webview: core_webview,
+        token,
+    })
 }
 
 fn configure_webview_builder<'a>(
@@ -432,25 +589,12 @@ fn configure_webview_builder<'a>(
     desired: &PlatformWebView,
     bounds: Bounds<Pixels>,
     live: Rc<RefCell<PlatformWebView>>,
-    live_permission_handler: Arc<RwLock<Option<crate::webview::WebViewPermissionHandler>>>,
+    live_top_level_origin: Arc<RwLock<Option<SharedString>>>,
 ) -> WebViewBuilder<'a> {
+    let ipc_nonce = uuid::Uuid::new_v4().simple().to_string();
     if desired.storage_key.is_none() {
         builder = builder.with_incognito(true);
     }
-
-    builder = builder.with_permission_handler(move |kind| {
-        let handler = live_permission_handler.read().clone();
-        handler
-            .map(|handler| {
-                let decision = super::catch_platform_callback(
-                    "webview native permission policy",
-                    crate::WebViewPermissionDecision::Deny,
-                    || handler(permission_kind_from_wry(kind)),
-                );
-                permission_response_to_wry(decision)
-            })
-            .unwrap_or(wry::PermissionResponse::Default)
-    });
 
     builder = builder.with_bounds(to_wry_rect(bounds));
     if let Some(color) = desired.background_color {
@@ -487,6 +631,9 @@ fn configure_webview_builder<'a>(
     builder = builder.with_clipboard(desired.clipboard_access);
 
     let ipc_live = live.clone();
+    let ipc_nonce_for_handler = ipc_nonce.clone();
+    let ipc_origin = live_top_level_origin.clone();
+    let rejected_ipc_reported = AtomicBool::new(false);
     builder = builder.with_ipc_handler(move |request| {
         let (handler, mut async_window) = {
             let live = ipc_live.borrow();
@@ -496,21 +643,35 @@ fn configure_webview_builder<'a>(
             return;
         };
 
-        let body = request.body().to_string();
-        let payload =
-            serde_json::from_str(&body).unwrap_or_else(|_| serde_json::Value::String(body));
+        let expected_origin = ipc_origin.read().clone();
+        if !ipc_source_matches_top_level(
+            &request.uri().to_string(),
+            expected_origin.as_ref().map(|origin| origin.as_ref()),
+        ) {
+            warn_rejected_ipc_once(&rejected_ipc_reported, "Windows");
+            return;
+        }
+        let Some(payload) = decode_bridge_message(request.body(), &ipc_nonce_for_handler) else {
+            warn_rejected_ipc_once(&rejected_ipc_reported, "Windows");
+            return;
+        };
         super::catch_platform_callback("webview message", (), || {
             let _ = async_window.update(|window, cx| handler(payload, window, cx));
         });
     });
 
     let navigation_live = live.clone();
+    let navigation_origin = live_top_level_origin.clone();
     builder = builder.with_navigation_handler(move |url| {
         let (handler, async_window) = {
             let live = navigation_live.borrow();
             (live.navigation_handler.clone(), live.async_window.clone())
         };
-        handle_navigation_request(&url, handler, async_window)
+        let allowed = handle_navigation_request(&url, handler, async_window);
+        if allowed {
+            *navigation_origin.write() = serialized_origin(&url);
+        }
+        allowed
     });
 
     let new_window_live = live.clone();
@@ -543,12 +704,19 @@ fn configure_webview_builder<'a>(
         NewWindowResponse::Deny
     });
 
-    builder = builder.with_initialization_script(bridge_script(desired.storage_key.as_ref()));
+    builder = builder.with_initialization_script_for_main_only(
+        bridge_script(desired.storage_key.as_ref(), &ipc_nonce),
+        true,
+    );
     for css in &desired.injected_css {
-        builder = builder.with_initialization_script(css_script(css.as_ref()));
+        builder = builder.with_initialization_script_for_main_only(
+            main_frame_script(&css_script(css.as_ref())),
+            true,
+        );
     }
     for javascript in &desired.injected_javascript {
-        builder = builder.with_initialization_script(javascript.as_ref());
+        builder = builder
+            .with_initialization_script_for_main_only(main_frame_script(javascript.as_ref()), true);
     }
 
     let download_started_live = live.clone();
@@ -592,7 +760,9 @@ fn configure_webview_builder<'a>(
     });
 
     let page_load_live = live.clone();
+    let page_load_origin = live_top_level_origin;
     builder = builder.with_on_page_load_handler(move |event, url| {
+        *page_load_origin.write() = serialized_origin(&url);
         let (handler, async_window) = {
             let live = page_load_live.borrow();
             (live.page_load_handler.clone(), live.async_window.clone())
@@ -602,15 +772,26 @@ fn configure_webview_builder<'a>(
         }
     });
 
-    builder = builder.with_drag_drop_handler(move |event| {
-        let (handler, async_window) = {
-            let live = live.borrow();
-            (live.drag_drop_handler.clone(), live.async_window.clone())
-        };
-        handler.is_some_and(|handler| {
-            dispatch_drag_drop_event(event, handler, async_window).blocks_browser_default()
-        })
-    });
+    if desired.drag_drop_handler.is_some() {
+        let allow_default_reported = AtomicBool::new(false);
+        builder = builder.with_drag_drop_handler(move |event| {
+            let (handler, async_window) = {
+                let live = live.borrow();
+                (live.drag_drop_handler.clone(), live.async_window.clone())
+            };
+            if let Some(handler) = handler
+                && dispatch_drag_drop_event(event, handler, async_window)
+                    == WebViewDragDropPolicy::AllowBrowserDefault
+                && !allow_default_reported.swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
+                log::warn!(
+                    "Windows WebView drag/drop interception replaces HTML drag/drop; AllowBrowserDefault cannot be honored"
+                );
+            }
+            // Wry ignores this value on Windows.
+            true
+        });
+    }
 
     builder
 }

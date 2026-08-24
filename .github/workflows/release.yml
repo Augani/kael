@@ -21,23 +21,208 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  platform-readiness:
+    name: Exact-SHA platform readiness
+    uses: ./.github/workflows/platform-readiness.yml
+
   preflight:
     name: Release preflight
+    needs: platform-readiness
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pinned Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: scripts/browser-matrix-requirements.txt
+
+      - name: Restore pinned Playwright browser binaries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/browser-matrix-requirements.txt') }}
 
       - name: Install Linux dependencies
         run: bash scripts/ci/install-linux-deps.sh
 
       - name: Install Rust 1.97.1
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
         with:
           toolchain: 1.97.1
           components: clippy
+          targets: wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Install version-matched WebAssembly packager
+        run: cargo install wasm-bindgen-cli --version 0.2.122 --locked
+
+      - name: Install version-matched WebAssembly optimizer
+        run: npm install --global binaryen@132.0.0
+
+      - name: Install matching ChromeDriver
+        uses: nanasess/setup-chromedriver@e913548694400f275b4070efcd90f47dbbc8914c # v3.0.0
+
+      - name: Install three-engine browser runner
+        run: |
+          python -m pip install --requirement scripts/browser-matrix-requirements.txt
+          python -m playwright install-deps chromium firefox webkit
+          python -m playwright install chromium firefox webkit
+
+      - name: Lint, verify, and package browser release surface
+        run: |
+          cargo clippy -p kael --lib --target wasm32-unknown-unknown \
+            --no-default-features \
+            --features browser,storage,document,pdf,office,screen-capture -- -D warnings
+          cargo clippy -p kael_ui --lib --target wasm32-unknown-unknown \
+            --no-default-features \
+            --features browser,editor-languages,markdown,html-render,http,media,audio,screen-capture \
+            -- -D warnings
+          cargo clippy -p kael_markdown --lib --target wasm32-unknown-unknown \
+            -- -D warnings
+          cargo clippy -p kael_engines --lib --target wasm32-unknown-unknown \
+            --no-default-features -- -D warnings
+          cargo clippy -p kael_audio --all-targets --target wasm32-unknown-unknown \
+            --no-default-features --features browser -- -D warnings
+          RUSTDOCFLAGS='-D warnings' cargo doc -p kael_audio --no-deps \
+            --target wasm32-unknown-unknown --no-default-features --features browser
+          cargo clippy -p kael_storage -p kael_document --all-targets \
+            --target wasm32-unknown-unknown \
+            -- -D warnings
+          cargo clippy -p kael_net --all-targets \
+            --target wasm32-unknown-unknown --features browser \
+            -- -D warnings
+          cargo clippy -p kael_pdf -p kael_office --all-targets \
+            --target wasm32-unknown-unknown \
+            -- -D warnings
+          bash scripts/build-web.sh \
+            --package kael_ui \
+            --example browser_smoke \
+            --features browser \
+            --out-dir target/browser-smoke \
+            --out-name browser_smoke \
+            --html crates/kael_ui/examples/browser_smoke/index.html
+          test -s target/browser-smoke/index.html
+          test -s target/browser-smoke/browser_smoke.js
+          test -s target/browser-smoke/browser_smoke_bg.wasm
+
+      - name: Enforce optimized browser artifact budget
+        run: bash scripts/verify-browser-artifact-budget.sh
+
+      - name: Reopen browser storage and documents in real Chrome
+        run: bash scripts/verify-browser-persistence.sh
+
+      - name: Parse PDF and Office bytes in real Chrome
+        run: bash scripts/verify-browser-document-formats.sh
+
+      - name: Run real browser worker probe
+        run: bash scripts/verify-browser-worker-smoke.sh
+
+      - name: Run real portable WebSocket loopback probe
+        run: bash scripts/verify-browser-websocket-smoke.sh
+
+      - name: Run real bounded browser audio probe
+        run: bash scripts/verify-browser-audio-smoke.sh
+
+      - name: Run real browser display-capture probe
+        run: bash scripts/verify-browser-capture-smoke.sh
+
+      - name: Run portable pointer-lock and gamepad probe
+        run: bash scripts/verify-browser-game-input-smoke.sh
+
+      - name: Check maximum browser consumer graphs
+        run: bash scripts/verify-browser-consumer-graph.sh
+
+      - name: Run real browser suite-scale workload probe
+        run: bash scripts/verify-browser-suite-smoke.sh
+
+      - name: Run Chromium, Firefox, and WebKit release matrix
+        env:
+          KAEL_BROWSER_MATRIX_SKIP_BUILD: 1
+          KAEL_BROWSER_MATRIX_SOFTWARE: 1
+        run: bash scripts/verify-browser-matrix.sh
+
+      - name: Upload cross-browser release evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-browser-matrix
+          path: |
+            target/browser-matrix
+            target/browser-capture-smoke
+            target/browser-capture-smoke-logs
+          if-no-files-found: warn
+
+      - name: Launch the packaged browser release in headless Chrome
+        shell: bash
+        run: |
+          python3 -m http.server 8000 --bind 127.0.0.1 --directory target/browser-smoke \
+            > "${RUNNER_TEMP}/kael-browser-http.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "${server_pid}" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8000/ > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          browser="$(command -v google-chrome || command -v google-chrome-stable || true)"
+          test -n "${browser}"
+          browser_status=0
+          timeout 30 "${browser}" \
+            --headless=new \
+            --no-sandbox \
+            --enable-webgl \
+            --enable-unsafe-swiftshader \
+            --use-angle=swiftshader \
+            --virtual-time-budget=20000 \
+            --dump-dom 'http://127.0.0.1:8000/?software_renderer=1' \
+            > "${RUNNER_TEMP}/kael-browser-dom.html" \
+            2> "${RUNNER_TEMP}/kael-browser-chrome.log" \
+            || browser_status=$?
+          if [[ "${browser_status}" -ne 0 && "${browser_status}" -ne 124 ]]; then
+            echo "headless Chrome failed with status ${browser_status}" >&2
+            exit "${browser_status}"
+          fi
+          if [[ "${browser_status}" -eq 124 ]]; then
+            echo "headless Chrome reached the wall-clock limit; validating captured DOM" \
+              >> "${RUNNER_TEMP}/kael-browser-chrome.log"
+          fi
+          test -s "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-ready="true"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-text-shaper="cosmic-text"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-text-probe="passed"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-ime-probe="passed"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-clipboard-input="passed"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-clipboard-probe="passed"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-clipboard-bounds="passed"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-accessibility-probe="passed"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-accessibility-action="passed"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-print-probe="available"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-text-kerning="verified"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-virtual-table="verified"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-virtual-jump="last-row-visible"' \
+            "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-virtual-logical-rows="1000000"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -Eq 'data-kael-virtual-mounted-rows="([2-9]|[1-5][0-9]|6[0-4])"' \
+            "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -Eq 'data-kael-virtual-materialize-us="[0-9]+"' \
+            "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-virtual-scrollbar="always-visible"' \
+            "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-context-recovery="verified"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-webgl-context="restored"' "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -Eq 'data-kael-context-recovery-hash="[0-9a-f]{16}"' \
+            "${RUNNER_TEMP}/kael-browser-dom.html"
+          grep -q 'data-kael-context-differing-bytes="0"' \
+            "${RUNNER_TEMP}/kael-browser-dom.html"
 
       - name: Refuse publishing outside main
         if: inputs.publish && github.ref != 'refs/heads/main'
@@ -56,30 +241,39 @@ jobs:
           cargo test --workspace --all-targets
           --all-features
 
+      - name: Validate and simulate distribution metadata (non-strict)
+        run: |
+          cargo run -p xtask -- validate kael.dist.toml
+          cargo run -p xtask -- dry-run kael.dist.toml
+
       - name: Package audit
         run: bash scripts/publish-all.sh --preflight
 
   publish:
     name: Publish to crates.io
     if: inputs.publish && github.ref == 'refs/heads/main'
-    needs: preflight
+    needs:
+      - platform-readiness
+      - preflight
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: crates-io
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Linux dependencies
         run: bash scripts/ci/install-linux-deps.sh
 
       - name: Install Rust 1.97.1
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
         with:
           toolchain: 1.97.1
 
       - name: Publish in dependency order
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          KAEL_PUBLISH_CONFIRM: publish-kael-0.3.1
           KAEL_PUBLISH_REF: ${{ github.ref }}
-        run: bash scripts/publish-all.sh --execute
+        run: |
+          package_version="$(cargo pkgid -p kael | sed -E 's/.*[@#]//')"
+          export KAEL_PUBLISH_CONFIRM="publish-kael-${package_version}"
+          bash scripts/publish-all.sh --execute

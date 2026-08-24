@@ -1,28 +1,38 @@
 //! Local notification scheduling and event delivery.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::{
     cmp::Reverse,
-    collections::{BTreeMap, BinaryHeap, HashMap},
+    collections::BinaryHeap,
+    thread::JoinHandle,
+    time::{Duration, Instant},
+};
+use std::{
+    collections::{BTreeMap, HashMap},
     path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
-    thread::JoinHandle,
-    time::{Duration, Instant},
 };
 
 use anyhow::{Result, anyhow};
-use parking_lot::{Condvar, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
+use parking_lot::Condvar;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     action::{NotificationAction, NotificationCategory},
+    error::{NotificationError, NotificationOperationResult, NotificationPermissionStatus},
     platform::{NotificationBackend, default_backend},
     push::PushToken,
 };
 
 type EventListener = Arc<dyn Fn(NotificationEvent) + Send + Sync + 'static>;
+
+/// Stable action identifier emitted when the user activates the notification body.
+pub const DEFAULT_NOTIFICATION_ACTION_ID: &str = "__default";
 
 /// A handle that unregisters a notification callback when dropped.
 #[must_use]
@@ -234,6 +244,7 @@ pub enum NotificationEvent {
     Dismissed(NotificationPayload),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct SchedulerEntry {
     wake_at: Instant,
     id: NotificationId,
@@ -244,20 +255,24 @@ struct SchedulerEntry {
     delay: Duration,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl PartialEq for SchedulerEntry {
     fn eq(&self, other: &Self) -> bool {
         self.wake_at == other.wake_at
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Eq for SchedulerEntry {}
 
+#[cfg(not(target_arch = "wasm32"))]
 impl PartialOrd for SchedulerEntry {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Ord for SchedulerEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         Reverse(self.wake_at).cmp(&Reverse(other.wake_at))
@@ -277,8 +292,11 @@ struct NotificationCenterState {
     scheduled: Mutex<HashMap<NotificationId, ScheduledNotification>>,
     listeners: Mutex<BTreeMap<usize, EventListener>>,
     categories: Mutex<HashMap<String, NotificationCategory>>,
+    #[cfg(not(target_arch = "wasm32"))]
     scheduler_queue: Arc<(Mutex<BinaryHeap<SchedulerEntry>>, Condvar)>,
+    #[cfg(not(target_arch = "wasm32"))]
     scheduler_thread: Mutex<Option<JoinHandle<()>>>,
+    #[cfg(not(target_arch = "wasm32"))]
     scheduler_shutdown: Arc<AtomicBool>,
 }
 
@@ -305,12 +323,99 @@ impl NotificationCenter {
 
     /// Requests notification authorization from the platform backend.
     pub async fn request_authorization(&self, options: AuthorizationOptions) -> Result<bool> {
-        self.inner.backend.request_authorization(&options)
+        self.request_authorization_portable(options)
+            .await
+            .map(|status| {
+                matches!(
+                    status,
+                    NotificationPermissionStatus::Granted
+                        | NotificationPermissionStatus::PlatformManaged
+                )
+            })
+            .map_err(anyhow::Error::new)
+    }
+
+    /// Requests permission through the target's asynchronous authorization path.
+    pub async fn request_authorization_portable(
+        &self,
+        options: AuthorizationOptions,
+    ) -> NotificationOperationResult<NotificationPermissionStatus> {
+        let granted = self
+            .inner
+            .backend
+            .request_authorization_async(&options)
+            .await
+            .map_err(NotificationError::from_anyhow)?;
+        Ok(if granted {
+            #[cfg(target_arch = "wasm32")]
+            {
+                NotificationPermissionStatus::Granted
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                NotificationPermissionStatus::PlatformManaged
+            }
+        } else {
+            NotificationPermissionStatus::Denied
+        })
+    }
+
+    /// Returns the current permission state without opening a prompt.
+    pub fn permission_status(&self) -> NotificationPermissionStatus {
+        crate::platform::permission_status()
+    }
+
+    /// Requests browser permission when needed and delivers an immediate notification.
+    ///
+    /// Use this shared async entry point in portable applications. Desktop targets retain
+    /// the existing synchronous [`Self::schedule_local`] API. Browser permission prompts
+    /// must begin from a user activation, and browser targets reject durable triggers.
+    pub async fn schedule_local_async(
+        &self,
+        notification: LocalNotification,
+    ) -> NotificationOperationResult<NotificationId> {
+        validate_notification(&notification)
+            .map_err(|error| NotificationError::InvalidNotification(error.to_string()))?;
+        #[cfg(target_arch = "wasm32")]
+        {
+            validate_browser_notification(&notification)?;
+            let actions = self
+                .resolve_actions(notification.category.as_deref())
+                .map_err(NotificationError::from_anyhow)?;
+            if !actions.is_empty() {
+                return Err(NotificationError::UnsupportedFeature(
+                    "action buttons require a product service worker",
+                ));
+            }
+        }
+
+        match self.permission_status() {
+            NotificationPermissionStatus::Prompt => {
+                let status = self
+                    .request_authorization_portable(AuthorizationOptions::default())
+                    .await?;
+                if status != NotificationPermissionStatus::Granted {
+                    return Err(NotificationError::PermissionDenied);
+                }
+            }
+            NotificationPermissionStatus::Denied => {
+                return Err(NotificationError::PermissionDenied);
+            }
+            NotificationPermissionStatus::Unavailable => {
+                return Err(NotificationError::Unavailable);
+            }
+            NotificationPermissionStatus::Granted
+            | NotificationPermissionStatus::PlatformManaged => {}
+        }
+        self.schedule_local(notification)
+            .map_err(NotificationError::from_anyhow)
     }
 
     /// Schedules a local notification and returns its identifier.
     pub fn schedule_local(&self, notification: LocalNotification) -> Result<NotificationId> {
         validate_notification(&notification)?;
+        #[cfg(target_arch = "wasm32")]
+        validate_browser_notification(&notification).map_err(anyhow::Error::new)?;
         let actions = self.resolve_actions(notification.category.as_deref())?;
         let notification_id = NotificationId(
             self.inner
@@ -326,65 +431,80 @@ impl NotificationCenter {
                 Ok(notification_id)
             }
             NotificationTrigger::TimeInterval { seconds, repeats } => {
-                if repeats && seconds == 0.0 {
-                    return Err(anyhow!(
-                        "repeating notification intervals must be greater than zero"
-                    ));
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = (seconds, repeats);
+                    return Err(anyhow::Error::new(NotificationError::UnsupportedTrigger(
+                        "time intervals are not durable in a browser page",
+                    )));
                 }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    if repeats && seconds == 0.0 {
+                        return Err(anyhow!(
+                            "repeating notification intervals must be greater than zero"
+                        ));
+                    }
 
-                let delay = Duration::try_from_secs_f64(seconds)
-                    .map_err(|_| anyhow!("notification time interval is out of range"))?;
-                let _ = Instant::now()
-                    .checked_add(delay)
-                    .ok_or_else(|| anyhow!("notification time interval is too large"))?;
-                let cancelled = Arc::new(AtomicBool::new(false));
-                let payload =
-                    NotificationPayload::from_notification(notification_id, &notification);
-                let mut scheduled = self.inner.scheduled.lock();
-                anyhow::ensure!(
-                    scheduled.len() < 100_000,
-                    "notification schedule contains too many pending entries"
-                );
-                scheduled.insert(
-                    notification_id,
-                    ScheduledNotification {
-                        cancelled: cancelled.clone(),
-                        payload,
-                    },
-                );
-                drop(scheduled);
-                self.schedule_delivery(
-                    notification_id,
-                    notification,
-                    actions,
-                    cancelled,
-                    delay,
-                    repeats,
-                );
-                Ok(notification_id)
+                    let delay = Duration::try_from_secs_f64(seconds)
+                        .map_err(|_| anyhow!("notification time interval is out of range"))?;
+                    let _ = Instant::now()
+                        .checked_add(delay)
+                        .ok_or_else(|| anyhow!("notification time interval is too large"))?;
+                    let cancelled = Arc::new(AtomicBool::new(false));
+                    let payload =
+                        NotificationPayload::from_notification(notification_id, &notification);
+                    let mut scheduled = self.inner.scheduled.lock();
+                    anyhow::ensure!(
+                        scheduled.len() < 100_000,
+                        "notification schedule contains too many pending entries"
+                    );
+                    scheduled.insert(
+                        notification_id,
+                        ScheduledNotification {
+                            cancelled: cancelled.clone(),
+                            payload,
+                        },
+                    );
+                    drop(scheduled);
+                    self.schedule_delivery(
+                        notification_id,
+                        notification,
+                        actions,
+                        cancelled,
+                        delay,
+                        repeats,
+                    );
+                    Ok(notification_id)
+                }
             }
-            NotificationTrigger::Calendar { .. } => Err(anyhow!(
-                "calendar notification triggers are not implemented in kael_notifications yet"
+            NotificationTrigger::Calendar { .. } => Err(anyhow::Error::new(
+                NotificationError::UnsupportedTrigger("calendar"),
             )),
-            NotificationTrigger::Location { .. } => Err(anyhow!(
-                "location notification triggers are not implemented in kael_notifications yet"
+            NotificationTrigger::Location { .. } => Err(anyhow::Error::new(
+                NotificationError::UnsupportedTrigger("location"),
             )),
         }
     }
 
     /// Cancels a previously scheduled notification.
     pub fn cancel(&self, id: &NotificationId) {
+        self.inner.backend.cancel(*id);
         if let Some(entry) = self.inner.scheduled.lock().remove(id) {
             entry.cancelled.store(true, Ordering::Relaxed);
-            let (queue, cvar) = &*self.inner.scheduler_queue;
-            queue.lock().retain(|candidate| candidate.id != *id);
-            cvar.notify_one();
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let (queue, cvar) = &*self.inner.scheduler_queue;
+                queue.lock().retain(|candidate| candidate.id != *id);
+                cvar.notify_one();
+            }
             self.emit(NotificationEvent::Dismissed(entry.payload));
         }
     }
 
     /// Cancels all scheduled notifications and emits a dismissal for each one.
     pub fn cancel_all(&self) {
+        self.inner.backend.cancel_all();
         let entries = self
             .inner
             .scheduled
@@ -395,9 +515,12 @@ impl NotificationCenter {
         for entry in &entries {
             entry.cancelled.store(true, Ordering::Relaxed);
         }
-        let (queue, cvar) = &*self.inner.scheduler_queue;
-        queue.lock().clear();
-        cvar.notify_one();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (queue, cvar) = &*self.inner.scheduler_queue;
+            queue.lock().clear();
+            cvar.notify_one();
+        }
         for entry in entries {
             self.emit(NotificationEvent::Dismissed(entry.payload));
         }
@@ -436,6 +559,7 @@ impl NotificationCenter {
         self.inner.backend.set_badge_count(count)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn with_backend(backend: Arc<dyn NotificationBackend>) -> Self {
         let scheduler_queue: Arc<(Mutex<BinaryHeap<SchedulerEntry>>, Condvar)> =
             Arc::new((Mutex::new(BinaryHeap::new()), Condvar::new()));
@@ -536,9 +660,25 @@ impl NotificationCenter {
         Self { inner: state }
     }
 
-    /// Returns the number of background scheduler threads (always 1).
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn with_backend(backend: Arc<dyn NotificationBackend>) -> Self {
+        Self {
+            inner: Arc::new(NotificationCenterState {
+                backend,
+                next_notification_id: AtomicU64::new(1),
+                next_listener_id: AtomicUsize::new(0),
+                scheduled: Mutex::new(HashMap::new()),
+                listeners: Mutex::new(BTreeMap::new()),
+                categories: Mutex::new(HashMap::new()),
+            }),
+        }
+    }
+
+    /// Returns the number of background scheduler threads.
+    ///
+    /// Native targets use one bounded scheduler thread; browser targets use zero.
     pub fn scheduler_thread_count(&self) -> usize {
-        1
+        usize::from(!cfg!(target_arch = "wasm32"))
     }
 
     fn resolve_actions(&self, category: Option<&str>) -> Result<Vec<NotificationAction>> {
@@ -553,6 +693,7 @@ impl NotificationCenter {
             .ok_or_else(|| anyhow!("notification category {category} is not registered"))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn schedule_delivery(
         &self,
         id: NotificationId,
@@ -585,7 +726,7 @@ impl NotificationCenter {
         actions: Vec<NotificationAction>,
     ) -> Result<()> {
         let payload = NotificationPayload::from_notification(id, &notification);
-        let action_callback = if actions.is_empty() {
+        let action_callback = if self.inner.listeners.lock().is_empty() {
             None
         } else {
             let center = self.clone();
@@ -625,6 +766,7 @@ impl NotificationCenter {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for NotificationCenterState {
     fn drop(&mut self) {
         self.scheduler_shutdown.store(true, Ordering::Release);
@@ -731,6 +873,37 @@ fn validate_notification(notification: &LocalNotification) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_arch = "wasm32")]
+fn validate_browser_notification(
+    notification: &LocalNotification,
+) -> NotificationOperationResult<()> {
+    match &notification.trigger {
+        NotificationTrigger::Immediate => {}
+        NotificationTrigger::TimeInterval { .. } => {
+            return Err(NotificationError::UnsupportedTrigger(
+                "time intervals are not durable in a browser page",
+            ));
+        }
+        NotificationTrigger::Calendar { .. } => {
+            return Err(NotificationError::UnsupportedTrigger("calendar"));
+        }
+        NotificationTrigger::Location { .. } => {
+            return Err(NotificationError::UnsupportedTrigger("location"));
+        }
+    }
+    if notification.badge.is_some() {
+        return Err(NotificationError::UnsupportedFeature(
+            "application badge count",
+        ));
+    }
+    if matches!(notification.sound, Some(NotificationSound::Named(_))) {
+        return Err(NotificationError::UnsupportedFeature(
+            "named notification sounds",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_category(category: &NotificationCategory) -> Result<()> {
     validate_identifier(&category.identifier, "notification category")?;
     anyhow::ensure!(
@@ -807,7 +980,7 @@ fn validate_date_components(components: &DateComponents) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use std::{
         sync::{
@@ -826,8 +999,9 @@ mod tests {
     };
 
     use super::{
-        AuthorizationOptions, LocalNotification, NotificationAttachment, NotificationCenter,
-        NotificationEvent, NotificationPayload, NotificationTrigger,
+        AuthorizationOptions, DEFAULT_NOTIFICATION_ACTION_ID, LocalNotification,
+        NotificationAttachment, NotificationCenter, NotificationEvent, NotificationPayload,
+        NotificationTrigger,
     };
 
     #[derive(Default)]
@@ -896,6 +1070,28 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, NotificationEvent::Received(_)))
         );
+    }
+
+    #[test]
+    fn body_activation_is_delivered_without_custom_actions() {
+        let backend = Arc::new(MockBackend::default());
+        *backend.action_to_emit.lock() = Some(DEFAULT_NOTIFICATION_ACTION_ID.into());
+        let center = NotificationCenter::with_backend(backend);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let observed_events = events.clone();
+        let _subscription = center.on_received(move |event| {
+            observed_events.lock().push(event);
+        });
+
+        center
+            .schedule_local(LocalNotification::new("Hello", "Open me"))
+            .unwrap();
+
+        assert!(events.lock().iter().any(|event| matches!(
+            event,
+            NotificationEvent::ActionPerformed { action_id, .. }
+                if action_id == DEFAULT_NOTIFICATION_ACTION_ID
+        )));
     }
 
     #[test]
@@ -1189,5 +1385,34 @@ mod tests {
             return;
         }
         panic!("condition was not satisfied before timeout");
+    }
+}
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod web_tests {
+    use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
+
+    use super::{LocalNotification, NotificationCenter, NotificationTrigger};
+    use crate::NotificationError;
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    #[wasm_bindgen_test]
+    fn browser_center_uses_no_scheduler_thread() {
+        assert_eq!(NotificationCenter::new().scheduler_thread_count(), 0);
+    }
+
+    #[wasm_bindgen_test(async)]
+    async fn durable_browser_trigger_is_a_typed_error_before_permission_ui() {
+        let mut notification = LocalNotification::new("Later", "No hidden timer fallback");
+        notification.trigger = NotificationTrigger::TimeInterval {
+            seconds: 30.0,
+            repeats: false,
+        };
+        let error = NotificationCenter::new()
+            .schedule_local_async(notification)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, NotificationError::UnsupportedTrigger(_)));
     }
 }

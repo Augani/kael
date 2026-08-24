@@ -4,6 +4,14 @@ Bounded PDF document primitives for native applications built with Kael or with 
 
 The crate provides in-process PDF parsing, metadata and outline discovery, per-page text extraction and search, link discovery, atomic document saves, and a validated sidecar annotation model. It has no dependency on `kael_ui` and no native system-library requirement.
 
+Native and `wasm32-unknown-unknown` builds share the bounded byte parser. Use
+`PdfDocument::from_bytes` (or async `open_from_memory`) for browser file-picker,
+drop, IndexedDB, and download workflows. `to_bytes`, `annotations_to_bytes`, and
+`load_annotations_from_bytes` keep PDF and sidecar persistence byte-oriented.
+Native-only `open`, `save`, and `save_annotations` return a typed
+`PdfPlatformError` in browsers rather than treating a browser origin as a
+filesystem.
+
 ## Quick start
 
 ```no_run
@@ -52,7 +60,7 @@ A stale, malformed, oversized, or unsafe sidecar never prevents a valid PDF from
 - search query: 4 KiB; results per page: 10,000; and
 - links per page and outline entries: 10,000 each.
 
-Text extraction, search, links, and annotation mutations are synchronous and may do CPU work while holding the document's internal lock. Page preview generation and document open/save use the blocking worker pool. Keep these operations away from latency-sensitive render or audio callbacks.
+Text extraction, search, links, annotation mutations, and `from_bytes` are synchronous and may do CPU work while holding the document's internal lock. Native page preview generation and document open/save use the blocking worker pool; browser byte work runs in the calling context. Keep these operations away from latency-sensitive render or audio callbacks, and use a web worker for large browser documents.
 
 PDFs are complex, attacker-controlled containers. These limits constrain Kael-owned allocations and traversal, but the parser still runs in process. Applications accepting hostile documents should use operating-system sandboxing or a dedicated worker process as an additional trust boundary.
 

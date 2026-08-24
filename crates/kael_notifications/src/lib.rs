@@ -16,6 +16,8 @@
 
 /// Notification actions and categories.
 pub mod action;
+/// Typed portable failures and permission states.
+pub mod error;
 /// Local notification scheduling and event delivery.
 pub mod local;
 /// Platform metadata and delivery backends.
@@ -25,9 +27,11 @@ pub mod push;
 
 pub use action::{ActionOptions, NotificationAction, NotificationCategory};
 pub use anyhow::Result;
+pub use error::{NotificationError, NotificationOperationResult, NotificationPermissionStatus};
 pub use local::{
-    AuthorizationOptions, CircularRegion, DateComponents, LocalNotification,
-    NotificationAttachment, NotificationCenter, NotificationEvent, NotificationId,
-    NotificationPayload, NotificationSound, NotificationTrigger, Subscription,
+    AuthorizationOptions, CircularRegion, DEFAULT_NOTIFICATION_ACTION_ID, DateComponents,
+    LocalNotification, NotificationAttachment, NotificationCenter, NotificationEvent,
+    NotificationId, NotificationPayload, NotificationSound, NotificationTrigger, Subscription,
 };
+pub use platform::PlatformNotificationSupport;
 pub use push::PushToken;

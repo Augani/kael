@@ -216,7 +216,13 @@ impl PlatformTextSystem for MacTextSystem {
     }
 
     fn supports_subpixel_glyphs(&self) -> bool {
-        true
+        // Modern macOS displays are not guaranteed to share an RGB stripe
+        // layout (external panels may be BGR, scaled, or rotated). Rendering
+        // per-channel coverage into the atlas therefore makes the same window
+        // look different when it moves between displays. CoreText's grayscale
+        // coverage is display-independent and matches current AppKit text
+        // rendering more closely.
+        false
     }
 
     fn layout_line(&self, text: &str, font_size: Pixels, font_runs: &[FontRun]) -> LineLayout {
@@ -952,6 +958,11 @@ mod lenient_font_attributes {
 #[cfg(test)]
 mod tests {
     use crate::{FontRun, GlyphId, MacTextSystem, PlatformTextSystem, font, px};
+
+    #[test]
+    fn glyph_coverage_is_display_independent() {
+        assert!(!MacTextSystem::new().supports_subpixel_glyphs());
+    }
 
     #[test]
     fn test_layout_line_bom_char() {

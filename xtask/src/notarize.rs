@@ -1,4 +1,6 @@
 use anyhow::{Context as _, Result, bail};
+use std::env;
+use std::ffi::OsString;
 use std::path::Path;
 use std::process::Command;
 
@@ -26,7 +28,7 @@ fn notarize_macos(config: &DistConfig, artifact: &Path, options: &NotarizeOption
         }
     };
 
-    let team_id = match &signing.macos_team_id {
+    let _team_id = match &signing.macos_team_id {
         Some(id) => id,
         None => {
             println!("notarization: no macOS team ID configured, skipping");
@@ -34,12 +36,26 @@ fn notarize_macos(config: &DistConfig, artifact: &Path, options: &NotarizeOption
         }
     };
 
+    let configured_profile = env::var("KAEL_NOTARY_PROFILE")
+        .ok()
+        .filter(|profile| !profile.trim().is_empty());
+    let profile = match configured_profile.as_deref() {
+        Some(profile) => profile,
+        None if options.dry_run => "<KAEL_NOTARY_PROFILE>",
+        None => {
+            bail!(
+                "KAEL_NOTARY_PROFILE is required for non-interactive macOS notarization; create it with `xcrun notarytool store-credentials`"
+            )
+        }
+    };
+
     let mut submit_cmd = Command::new("xcrun");
-    submit_cmd
-        .args(["notarytool", "submit", "--wait", "--team-id", team_id])
-        .arg(artifact);
+    submit_cmd.args(notarytool_submit_args(artifact, profile));
 
     if options.dry_run {
+        if configured_profile.is_none() {
+            println!("dry-run: KAEL_NOTARY_PROFILE must be configured before notarization");
+        }
         println!("dry-run: would run {:?}", submit_cmd);
         println!("dry-run: would run stapler staple {}", artifact.display());
         return Ok(());
@@ -66,4 +82,38 @@ fn notarize_macos(config: &DistConfig, artifact: &Path, options: &NotarizeOption
 
     println!("notarized and stapled: {}", artifact.display());
     Ok(())
+}
+
+fn notarytool_submit_args(artifact: &Path, profile: &str) -> Vec<OsString> {
+    vec![
+        OsString::from("notarytool"),
+        OsString::from("submit"),
+        artifact.as_os_str().to_owned(),
+        OsString::from("--keychain-profile"),
+        OsString::from(profile),
+        OsString::from("--wait"),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notarization_uses_the_non_interactive_keychain_profile() {
+        let args = notarytool_submit_args(Path::new("Kael.dmg"), "kael-notary");
+
+        assert_eq!(
+            args,
+            [
+                "notarytool",
+                "submit",
+                "Kael.dmg",
+                "--keychain-profile",
+                "kael-notary",
+                "--wait",
+            ]
+            .map(OsString::from)
+        );
+    }
 }

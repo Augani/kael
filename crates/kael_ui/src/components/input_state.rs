@@ -157,7 +157,7 @@ pub struct InputState {
     last_layout: Option<kael::ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
-    last_click_time: Option<std::time::Instant>,
+    last_click_time: Option<web_time::Instant>,
     last_click_position: Option<Point<Pixels>>,
 
     // Enhanced features
@@ -825,7 +825,7 @@ impl InputState {
         }
         self.is_selecting = true;
 
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
         let is_double_click = if let (Some(last_time), Some(last_pos)) =
             (self.last_click_time, self.last_click_position)
         {

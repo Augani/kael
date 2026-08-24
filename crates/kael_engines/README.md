@@ -21,6 +21,10 @@ of its modules depend on Kael's renderer or UI crate.
 - `dashboard`: chart/query state, a capacity-bounded query lifecycle model,
   and a bounded single-record CSV parser. Applications still execute queries
   and remove state they no longer need.
+- `game_loop`: deterministic fixed-timestep frame scheduling with interpolation,
+  display-delta clamping, bounded catch-up work, pause/reset controls, and
+  dropped-time telemetry. Its monotonic clock works in native and WebAssembly
+  builds.
 - `ide`: deterministic in-memory project/search models and language-server
   lifecycle state. Limited search keeps its result buffer bounded. The
   application still owns file watching, durable indexing, and operating-system
@@ -39,6 +43,39 @@ assert_eq!(document.current(), "draft one two");
 assert!(document.undo());
 assert_eq!(document.current(), "draft one");
 ```
+
+## Fixed-timestep game loop
+
+Keep simulation updates deterministic even when display refresh rates vary. The
+clock returns a bounded update count and an interpolation value for rendering;
+it never executes application code itself.
+
+```rust
+use std::time::Duration;
+
+use kael_engines::game_loop::{FixedFrameClock, FixedFrameClockConfig};
+
+let config = FixedFrameClockConfig::from_updates_per_second(60)?
+    .with_max_frame_delta(Duration::from_millis(250))
+    .with_max_catch_up_steps(8);
+let mut clock = FixedFrameClock::new(config)?;
+
+let frame = clock.advance_by(Duration::from_millis(17));
+for _ in frame.updates() {
+    // update_simulation(frame.fixed_timestep());
+}
+let _render_alpha = frame.interpolation_alpha();
+assert!(frame.update_steps() <= 8);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+In a Kael `Render` implementation, call `clock.tick()`, run the returned fixed
+updates, interpolate the rendered state, and call
+`window.request_animation_frame()` while the simulation is active. Stop
+requesting frames when paused. `tick()` uses a browser-compatible monotonic
+clock; `advance_by(Duration)` is the deterministic path for replays and tests.
+Monitor `FrameAdvance::dropped_time()` or
+`FixedFrameClock::total_dropped_time()` to detect stalls and sustained overload.
 
 Caches, schedulers, result buffers, and parsers provided by this crate have
 explicit or conservative limits. Collections that represent application-owned

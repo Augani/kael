@@ -9,8 +9,8 @@ use std::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
-    time::Instant,
 };
+use web_time::Instant;
 
 static NEXT_THREAD_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_EXPORT_ID: AtomicU64 = AtomicU64::new(1);

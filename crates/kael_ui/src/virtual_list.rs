@@ -53,13 +53,27 @@ impl UniformVirtualList {
                 .collect::<SmallVec<[AnyElement; 64]>>()
         };
 
+        let base = if axis.is_horizontal() {
+            div()
+                .id(id.clone())
+                .size_full()
+                .overflow_x_scroll()
+                .overflow_y_hidden()
+        } else {
+            div()
+                .id(id.clone())
+                .size_full()
+                .overflow_x_hidden()
+                .overflow_y_scroll()
+        };
+
         Self {
             id: id.clone(),
             axis,
             item_count,
             item_extent,
             overscan: 5,
-            base: div().id(id).size_full().overflow_scroll(),
+            base,
             scroll_handle: kael::ScrollHandle::new(),
             sizing_behavior: ListSizingBehavior::Auto,
             renderer: Box::new(renderer_boxed),
@@ -555,11 +569,25 @@ impl<P: ItemExtentProvider + 'static> VariableVirtualList<P> {
         let mut engine = ChunkedExtents::new(provider, item_count);
         engine.initialize_totals();
 
+        let base = if axis.is_horizontal() {
+            div()
+                .id(id.clone())
+                .size_full()
+                .overflow_x_scroll()
+                .overflow_y_hidden()
+        } else {
+            div()
+                .id(id.clone())
+                .size_full()
+                .overflow_x_hidden()
+                .overflow_y_scroll()
+        };
+
         Self {
             id: id.clone(),
             axis,
             overscan: 5,
-            base: div().id(id).size_full().overflow_scroll(),
+            base,
             scroll_handle: kael::ScrollHandle::new(),
             sizing_behavior: ListSizingBehavior::Auto,
             engine,
@@ -831,6 +859,7 @@ impl<P: ItemExtentProvider + 'static> Element for VariableVirtualList<P> {
             |_style, _, hitbox, window, cx| {
                 for (mut item, ix) in items.into_iter().zip(visible) {
                     let origin_along = self.engine.item_origin(ix);
+                    let item_extent = self.engine.provider.extent(ix);
                     let item_origin = match self.axis {
                         Axis::Horizontal => {
                             content_bounds.origin + point(origin_along + offset.x, offset.y)
@@ -842,12 +871,12 @@ impl<P: ItemExtentProvider + 'static> Element for VariableVirtualList<P> {
 
                     let available = match self.axis {
                         Axis::Horizontal => size(
-                            AvailableSpace::Definite(px(CHUNK_SIZE as f32)),
+                            AvailableSpace::Definite(item_extent),
                             AvailableSpace::Definite(content_bounds.size.height),
                         ),
                         Axis::Vertical => size(
                             AvailableSpace::Definite(content_bounds.size.width),
-                            AvailableSpace::Definite(px(CHUNK_SIZE as f32)),
+                            AvailableSpace::Definite(item_extent),
                         ),
                     };
 
@@ -954,4 +983,89 @@ where
                 .collect::<Vec<_>>()
         },
     )
+}
+
+/// Creates a horizontally virtualized variable-width list whose renderer can
+/// update a retained view.
+///
+/// Tables can give their header and every mounted row the same scroll handle;
+/// only the intersecting columns are then materialized during prepaint.
+pub fn hlist_variable_view<R, V, P>(
+    view: Entity<V>,
+    id: impl Into<ElementId>,
+    item_count: usize,
+    provider: P,
+    f: impl 'static + Fn(&mut V, Range<usize>, &mut Window, &mut Context<V>) -> Vec<R>,
+) -> VariableVirtualList<P>
+where
+    R: IntoElement,
+    V: Render,
+    P: ItemExtentProvider + 'static,
+{
+    let id: ElementId = id.into();
+    let render_range = move |visible_range: Range<usize>, window: &mut Window, cx: &mut App| {
+        view.update(cx, |this, cx| {
+            f(this, visible_range, window, cx)
+                .into_iter()
+                .map(|component| component.into_any_element())
+                .collect::<SmallVec<[AnyElement; 64]>>()
+        })
+    };
+
+    VariableVirtualList::new(
+        id,
+        Axis::Horizontal,
+        item_count,
+        provider,
+        move |range, window, cx| {
+            render_range(range, window, cx)
+                .into_iter()
+                .collect::<Vec<_>>()
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Extents(Vec<Pixels>);
+
+    impl ItemExtentProvider for Extents {
+        fn extent(&self, index: usize) -> Pixels {
+            self.0[index]
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn variable_extents_preserve_exact_origins_and_lookup() {
+        let mut engine =
+            ChunkedExtents::new(Extents(vec![px(80.0), px(240.0), px(120.0), px(60.0)]), 4);
+        engine.initialize_totals();
+
+        assert_eq!(engine.total_extent(), px(500.0));
+        assert_eq!(engine.item_origin(0), px(0.0));
+        assert_eq!(engine.item_origin(1), px(80.0));
+        assert_eq!(engine.item_origin(2), px(320.0));
+        assert_eq!(engine.item_origin(3), px(440.0));
+        assert_eq!(engine.find_index_for_offset(px(319.0)), 1);
+        assert_eq!(engine.find_index_for_offset(px(320.0)), 2);
+        assert_eq!(engine.find_index_for_offset(px(499.0)), 3);
+    }
+
+    #[::core::prelude::v1::test]
+    fn million_item_uniform_ranges_are_constant_space() {
+        let item_count = 1_000_000usize;
+        let extent = 32.0f32;
+        let scroll_offset = 999_900.0f32 * extent;
+        let viewport = 640.0f32;
+        let overscan = 8usize;
+        let first = (scroll_offset / extent).floor() as usize;
+        let last = ((scroll_offset + viewport) / extent).ceil() as usize;
+        let mounted =
+            last.saturating_add(overscan).min(item_count) - first.saturating_sub(overscan);
+
+        assert!(mounted <= (viewport / extent).ceil() as usize + overscan * 2);
+        assert!(mounted < 64);
+    }
 }

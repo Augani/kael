@@ -88,6 +88,8 @@ impl RenderOnce for OverflowList {
         let is_open = *open_state.read(cx);
         let open_for_toggle = open_state.clone();
         let open_for_menu = open_state.clone();
+        let viewport = window.viewport_size();
+        let badge_focus_for_menu = badge_focus.clone();
         let badge_bounds = window.use_keyed_state(
             ElementId::NamedChild(Box::new(self.id.clone()), "bounds".into()),
             cx,
@@ -159,12 +161,12 @@ impl RenderOnce for OverflowList {
                                         .key
                                         .as_str()
                                     {
-                                        "enter" | "space" => {
-                                            open_for_keys.update(cx, |open, cx| {
-                                                *open = !*open;
-                                                cx.notify();
-                                            });
-                                            window.refresh();
+                                        "enter" | "space"
+                                            if !event.keystroke.modifiers.modified() =>
+                                        {
+                                            // Div emits the click on key-up;
+                                            // only suppress native scrolling
+                                            // on key-down.
                                             cx.stop_propagation();
                                             window.prevent_default();
                                         }
@@ -195,50 +197,81 @@ impl RenderOnce for OverflowList {
                 )
                 .when(is_open, |this| {
                     this.when_some(measured_bounds, |this, badge_bounds| {
-                        let close_bounds = badge_bounds;
+                        let open_for_backdrop = open_for_menu.clone();
+                        let open_for_escape = open_for_menu.clone();
+                        let focus_after_backdrop = badge_focus_for_menu.clone();
+                        let focus_after_escape = badge_focus_for_menu.clone();
                         this.child(deferred(
-                            div()
-                                .absolute()
-                                .inset_0()
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                    let _ = &close_bounds;
-                                    open_for_menu.update(cx, |open, cx| {
-                                        *open = false;
-                                        cx.notify();
-                                    });
-                                    window.refresh();
-                                })
+                            anchored()
+                                .snap_to_window()
+                                .position(Point::default())
                                 .child(
-                                    anchored()
-                                        .snap_to_window()
-                                        .position(point(
-                                            badge_bounds.left(),
-                                            badge_bounds.bottom() + px(4.0),
-                                        ))
+                                    // The deferred backdrop must cover the
+                                    // viewport, not merely the compact row's
+                                    // layout bounds, so a click anywhere
+                                    // outside the reveal reliably dismisses it.
+                                    div()
+                                        .w(viewport.width)
+                                        .h(viewport.height)
+                                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                            open_for_backdrop.update(cx, |open, cx| {
+                                                *open = false;
+                                                cx.notify();
+                                            });
+                                            window.focus(&focus_after_backdrop);
+                                            window.refresh();
+                                            cx.stop_propagation();
+                                            window.prevent_default();
+                                        })
+                                        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                                            if event.keystroke.key == "escape"
+                                                && !event.keystroke.modifiers.modified()
+                                            {
+                                                open_for_escape.update(cx, |open, cx| {
+                                                    *open = false;
+                                                    cx.notify();
+                                                });
+                                                window.focus(&focus_after_escape);
+                                                window.refresh();
+                                                cx.stop_propagation();
+                                                window.prevent_default();
+                                            }
+                                        })
                                         .child(
-                                            div()
-                                                .id("overflow-list-menu")
-                                                .accessibility(
-                                                    AccessibilityAttributes::new(
-                                                        AccessibilityRole::List,
-                                                    )
-                                                    .label("Overflowed items"),
-                                                )
-                                                .occlude()
-                                                .flex()
-                                                .flex_col()
-                                                .gap(px(4.0))
-                                                .p(px(8.0))
-                                                .max_h(px(300.0))
-                                                .overflow_y_scroll()
-                                                .bg(theme.tokens.popover)
-                                                .text_color(theme.tokens.popover_foreground)
-                                                .rounded(theme.tokens.radius_lg)
-                                                .shadow(theme.tokens.shadow_md.to_vec())
-                                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                                    cx.stop_propagation();
-                                                })
-                                                .children(overflowed_items),
+                                            anchored()
+                                                .snap_to_window()
+                                                .position(point(
+                                                    badge_bounds.left(),
+                                                    badge_bounds.bottom() + px(4.0),
+                                                ))
+                                                .child(
+                                                    div()
+                                                        .id("overflow-list-menu")
+                                                        .accessibility(
+                                                            AccessibilityAttributes::new(
+                                                                AccessibilityRole::List,
+                                                            )
+                                                            .label("Overflowed items"),
+                                                        )
+                                                        .occlude()
+                                                        .flex()
+                                                        .flex_col()
+                                                        .gap(px(4.0))
+                                                        .p(px(8.0))
+                                                        .max_h(px(300.0))
+                                                        .overflow_y_scroll()
+                                                        .bg(theme.tokens.popover)
+                                                        .text_color(theme.tokens.popover_foreground)
+                                                        .rounded(theme.tokens.radius_lg)
+                                                        .shadow(theme.tokens.shadow_md.to_vec())
+                                                        .on_mouse_down(
+                                                            MouseButton::Left,
+                                                            |_, _, cx| {
+                                                                cx.stop_propagation();
+                                                            },
+                                                        )
+                                                        .children(overflowed_items),
+                                                ),
                                         ),
                                 ),
                         ))
@@ -330,6 +363,21 @@ mod tests {
         // Keyboard: Tab reaches the badge, Enter opens the reveal.
         window.simulate_keystrokes("tab");
         window.simulate_keystrokes("enter");
+        // Key-down is consumed for native scrolling, but activation belongs
+        // to the framework's standard key-up click path.
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(
+                !window
+                    .accessibility_tree()
+                    .nodes
+                    .values()
+                    .any(|node| node.label.as_deref() == Some("Activate item 4"))
+            );
+        });
+        window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").expect("valid keystroke"),
+        });
         window.update(|window, cx| {
             window.draw(cx).clear();
             window.draw(cx).clear();
@@ -346,6 +394,38 @@ mod tests {
                 .find(|node| node.label.as_deref() == Some("Show 3 more items"))
                 .expect("badge present");
             assert!(badge.states.contains(AccessibilityState::EXPANDED));
+        });
+
+        // Click-away dismissal must cover the full viewport, not just the
+        // compact list row. It also restores focus to the reveal button.
+        window.simulate_click(point(px(700.0), px(500.0)), Modifiers::default());
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            assert!(
+                !tree
+                    .nodes
+                    .values()
+                    .any(|node| node.label.as_deref() == Some("Activate item 4")),
+                "a distant backdrop click must dismiss the reveal"
+            );
+            let badge = tree
+                .nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some("Show 3 more items"))
+                .expect("badge present");
+            assert!(badge.states.contains(AccessibilityState::COLLAPSED));
+            assert!(badge.states.contains(AccessibilityState::FOCUSED));
+        });
+
+        // Reopen for the pointer activation check below.
+        window.simulate_keystrokes("enter");
+        window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").expect("valid keystroke"),
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.draw(cx).clear();
         });
 
         // Pointer: click an overflowed item through the reveal.

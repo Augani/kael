@@ -7,8 +7,10 @@ with Kael primitives or another UI stack.
 The crate has two playback layers. `AudioPlayer` is a thread-local convenience
 API for file, credential-free HTTPS, and bounded in-memory media. `Mixer` and
 `AudioEngine` accept caller-defined sample sources and expose a device-frame
-master clock for A/V synchronization. The clonable `AudioEngineHandle` provides
-cross-thread control while the host stream remains on its creation thread.
+master clock for A/V synchronization. Native `AudioEngineHandle` values provide
+cross-thread control while the host stream remains on its creation thread. A
+browser handle is deliberately main-thread and weak, so it cannot keep an
+`AudioContext` alive after its owning engine is dropped.
 
 ## Device-free mixing
 
@@ -90,6 +92,78 @@ them registered.
 For policy-controlled downloads, fetch remote media with Kael's networking
 battery and play a local file or bounded memory source. Direct player URLs are
 restricted to credential-free HTTPS.
+
+## Browser builds
+
+On `wasm32-unknown-unknown`, `AudioPlayer` uses `HTMLAudioElement` for
+credential-free HTTPS and bounded in-memory media. Live sample mixing uses the
+same Rust `Mixer`/DSP sources as desktop through a bounded, pull-driven
+`AudioWorklet`; microphone capture uses `getUserMedia` and a credit-bounded
+capture worklet. Device enumeration, graph construction, and permission are
+explicitly asynchronous:
+
+```rust,ignore
+use kael_audio::{
+    AudioEngine, AudioInputStream, BrowserAudioEngineConfig, SineSource,
+    input_devices_async, output_devices_async,
+};
+
+let (outputs, inputs) = (output_devices_async().await?, input_devices_async().await?);
+let engine = AudioEngine::new_async_with_config(
+    BrowserAudioEngineConfig::new(2, 256, 4)?,
+).await?;
+engine.play_source(
+    Box::new(SineSource::new(440.0, engine.sample_rate(), 0.2)),
+    1.0,
+)?;
+
+// Call directly from a click/key activation when browser autoplay policy
+// requires it.
+engine.resume_async().await?;
+
+// Request directly from a user activation. The callback is delivered through
+// bounded MessagePort credits on the browser main thread.
+let input = AudioInputStream::new_async(|samples, format| {
+    consume_promptly(samples, format);
+}).await?;
+# let _ = (outputs, inputs, input);
+```
+
+The synchronous device, capture, and live-engine constructors still return an
+explicit browser error; native signatures are unchanged. Browser device labels
+may remain privacy-hidden until permission is granted. Only the default output
+route is portable today: selecting another enumerated sink returns
+`OutputRoutingUnsupported` rather than silently using the wrong speaker.
+
+The default output window is four 256-frame chunks (1,024 frames, about 21.3 ms
+at 48 kHz) plus the browser/device latency. Bounds are 1–8 channels,
+128–4,096 frames per chunk in 128-frame increments, and 2–32 pending chunks.
+This caps transferred audio at 1,048,576 `f32` samples (4 MiB) per bridge window,
+with one additional chunk-sized assembly scratch buffer. Live output accepts at
+most 1,024 voices, lifecycle/pressure events are bounded, and device enumeration
+retains at most 1,024 descriptors with 1,024 bytes per browser string.
+
+Kael does not require `SharedArrayBuffer` or cross-origin isolation. The
+AudioWorklet owns real-time rendering/capture, but Rust source mixing and input
+callbacks run on browser message turns; a blocked main thread can therefore
+produce an `OutputUnderrun` or `CaptureOverflow`. The bridge is event-driven and
+has no main-thread polling loop. Products requiring worklet-owned Wasm DSP,
+sub-10-ms synthesis, HRTF/room processing, or very large game-audio graphs need
+a specialized isolated audio backend; this adapter does not claim native
+callback parity for those workloads.
+
+`AudioWorklet` and microphone capture require a secure context (`localhost`
+qualifies). A strict Content Security Policy must permit Kael's temporary
+`blob:` worklet module. Resume and permission prompts should begin inside a
+transient user activation. Browsers expose no portable way to cancel a pending
+`getUserMedia` permission prompt; once it resolves, Kael stops granted tracks on
+every later setup failure, cancellation, explicit close, or drop.
+
+Browser filesystem paths remain explicitly unsupported. Device-free `Mixer`,
+DSP, resampling, playlists, session state, and lightweight equal-power stereo
+spatial processing remain available. See the
+[browser audio guide](https://augani.github.io/kael/browser-audio.html) for the
+full boundary and release probe.
 
 The API reference is available on [docs.rs](https://docs.rs/kael_audio). See the
 [Kael repository](https://github.com/Augani/kael) for workspace architecture and

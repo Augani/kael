@@ -7,7 +7,7 @@ version.workspace = true
 authors.workspace = true
 build = "build.rs"
 publish = true
-description = "Resource-efficient native application framework for Rust with retained UI, GPU rendering, and desktop capabilities"
+description = "Resource-efficient Rust application framework with retained GPU UI for desktop and WebAssembly"
 documentation = "https://docs.rs/kael"
 homepage.workspace = true
 readme = "README.md"
@@ -16,7 +16,7 @@ keywords = [
     "desktop",
     "gpu",
     "ui-framework",
-    "native",
+    "wasm",
 ]
 categories = ["gui", "rendering::graphics-api"]
 license.workspace = true
@@ -48,6 +48,29 @@ name = "webview_smoke"
 path = "examples/webview_smoke.rs"
 required-features = ["webview"]
 
+[[example]]
+name = "webview_gtk4_platform_smoke"
+path = "examples/webview_gtk4_platform_smoke.rs"
+required-features = ["webview-wayland-gtk4"]
+
+[[example]]
+name = "webview_wayland_gtk4_smoke"
+path = "examples/webview_wayland_gtk4_smoke.rs"
+required-features = ["webview-wayland-gtk4"]
+
+[[example]]
+name = "scene_graph_move_query_probe"
+path = "examples/scene_graph_move_query_probe.rs"
+
+[[example]]
+name = "native_pointer_lock_smoke"
+path = "examples/native_pointer_lock_smoke.rs"
+
+[[example]]
+name = "native_renderer_smoke"
+path = "examples/native_renderer_smoke.rs"
+required-features = ["font-kit"]
+
 [features]
 default = [
     "font-kit",
@@ -55,6 +78,41 @@ default = [
     "x11",
     "windows-manifest",
 ]
+browser = [
+    "dep:cosmic-text",
+    "dep:ttf-parser",
+    "uuid/js",
+]
+# Product batteries whose public graphs are kept build-portable across native
+# and browser targets. Runtime availability remains explicit through Kael's
+# capability reports (for example native installers and OS signal capture are
+# intentionally unavailable inside the browser sandbox).
+portable-services = [
+    "agent-tools",
+    "auto-update",
+    "inspector",
+    "lottie",
+    "runtime_shaders",
+    "http-client",
+    "webview",
+    "devtools",
+    "media",
+    "storage",
+    "icons",
+    "diagnostics",
+    "document",
+    "audio",
+    "pdf",
+    "office",
+    "notifications-full",
+    "share",
+    "image-avif",
+    "image-exr",
+    "screen-capture",
+    "game-input",
+]
+# Convenient maximum browser consumer graph for suite-class applications.
+browser-full = ["browser", "portable-services"]
 agent-tools = []
 auto-update = [
     "dep:ed25519-dalek",
@@ -66,25 +124,54 @@ inspector = ["kael_macros/inspector"]
 leak-detection = ["backtrace"]
 lottie = ["dep:rasterlottie"]
 macos-blade = [
-    "blade-graphics",
-    "blade-macros",
-    "blade-util",
-    "bytemuck",
+    "dep:blade-graphics",
+    "dep:blade-macros",
+    "dep:blade-util",
+    "dep:bytemuck",
     "objc2-metal",
 ]
 runtime_shaders = []
 http-client = ["http_client/reqwest"]
-webview = ["dep:gtk", "dep:wry"]
-media = ["kael_media"]
+webview = [
+    "dep:webview2-com",
+    "dep:windows-core-webview2",
+    "dep:wry",
+    "webview-wayland-gtk4",
+]
+# Maintained Linux production host for native Wayland, X11, and XWayland. GTK
+# owns the top-level surface; Kael's retained scene is presented through GSK
+# and WebKitGTK 6 views are native siblings in the same widget hierarchy. The
+# portable `webview` feature selects this implementation on Linux.
+webview-wayland-gtk4 = [
+    "dep:gdk4-x11",
+    "dep:gdk4-wayland",
+    "dep:gtk4",
+    "dep:webkit6",
+    "linux-platform",
+    "linux-wayland-protocols",
+    "linux-x11-protocols",
+]
+# Platform-neutral name for new applications. The old feature stays as the
+# implementation feature and compatibility spelling so existing manifests do
+# not need to change.
+webview-gtk4 = ["webview-wayland-gtk4"]
+# Deprecated pre-release compatibility spelling. It resolves to the maintained
+# GTK4/WebKitGTK 6 host so no manifest can opt back into the archived GTK3 ABI.
+webview-legacy-gtk3 = ["webview-wayland-gtk4"]
+devtools = ["wry?/devtools"]
+media = ["dep:kael_media", "kael_media/native-media"]
 storage = ["dep:kael_storage"]
 icons = ["dep:kael_icons"]
 diagnostics = ["dep:kael_diagnostics"]
 document = ["dep:kael_document"]
 audio = ["dep:kael_audio"]
 pdf = ["dep:kael_pdf"]
+office = ["dep:kael_office"]
 notifications-full = ["dep:kael_notifications"]
 share = ["dep:kael_share"]
-image-avif = ["image/avif-native"]
+# `kael-media` owns the target-specific codec edge so native builds enable image's dav1d-backed
+# decoder without adding dav1d to wasm32 dependency graphs.
+image-avif = ["dep:kael_media", "kael_media/image-avif-native"]
 image-exr = ["image/exr"]
 platform-foundation = [
     "storage",
@@ -92,6 +179,10 @@ platform-foundation = [
     "diagnostics",
 ]
 screen-capture = ["scap"]
+# Native controller discovery/state through gilrs. Browser builds use the
+# platform Gamepad API directly, while retaining the same public Window API.
+game-input = ["dep:gilrs"]
+font-kit = ["dep:font-kit"]
 test-support = [
     "leak-detection",
     "collections/test-support",
@@ -105,41 +196,44 @@ test-support = [
 # windowing crates. Linux CI that exercises real-window rendering under tests can
 # opt in with `--features test-support,test-support-linux-windowing`.
 test-support-linux-windowing = ["test-support", "wayland", "x11"]
-wayland = [
-    "blade-graphics",
-    "blade-macros",
-    "blade-util",
-    "bytemuck",
-    "ashpd/wayland",
-    "cosmic-text",
+linux-platform = [
+    "dep:ashpd",
+    "dep:cosmic-text",
+    "dep:filedescriptor",
     "font-kit",
+    "dep:open",
+    "dep:xkbcommon",
+]
+linux-wayland-protocols = [
+    "ashpd/wayland",
+    "dep:wayland-backend",
+    "dep:wayland-client",
+    "dep:wayland-protocols",
+]
+linux-x11-protocols = ["dep:x11rb"]
+wayland = [
+    "linux-platform",
+    "linux-wayland-protocols",
+    "dep:blade-graphics",
+    "dep:blade-macros",
+    "dep:blade-util",
+    "dep:bytemuck",
     "calloop-wayland-source",
-    "wayland-backend",
-    "wayland-client",
     "wayland-cursor",
-    "wayland-protocols",
     "wayland-protocols-plasma",
     "wayland-protocols-wlr",
-    "filedescriptor",
-    "xkbcommon",
-    "open",
 ]
 windows-manifest = []
 x11 = [
-    "blade-graphics",
-    "blade-macros",
-    "blade-util",
-    "bytemuck",
-    "ashpd",
-    "cosmic-text",
-    "font-kit",
+    "linux-platform",
+    "linux-x11-protocols",
+    "dep:blade-graphics",
+    "dep:blade-macros",
+    "dep:blade-util",
+    "dep:bytemuck",
     "as-raw-xcb-connection",
-    "x11rb",
-    "xkbcommon",
     "xim",
     "x11-clipboard",
-    "filedescriptor",
-    "open",
     "scap?/x11",
 ]
 
@@ -196,13 +290,18 @@ optional = true
 [dependencies.kael_release]
 path = "../kael_release"
 package = "kael_release"
-version = "0.3.1"
+version = "0.4.0"
 optional = true
 
 [dependencies.kael_gpu_budget]
 path = "../kael_gpu_budget"
 package = "kael_gpu_budget"
-version = "0.3.1"
+version = "0.4.0"
+
+[dependencies.kael_net]
+path = "../kael_net"
+package = "kael_net"
+version = "0.4.0"
 
 [dependencies.accesskit]
 version = "0.24.1"
@@ -226,7 +325,7 @@ optional = true
 [dependencies.collections]
 path = "../collections"
 package = "kael_collections"
-version = "0.3.1"
+version = "0.4.0"
 
 [dependencies.ctor]
 version = "1"
@@ -247,66 +346,73 @@ version = "0.2"
 [dependencies.kael_macros]
 path = "../kael-macros"
 package = "kael-macros"
-version = "0.3.1"
+version = "0.4.0"
 
 [dependencies.kael_media]
 path = "../kael-media"
 package = "kael-media"
-version = "0.3.1"
+version = "0.4.0"
 optional = true
+default-features = false
 
 [dependencies.kael_storage]
 path = "../kael_storage"
 package = "kael_storage"
-version = "0.3.1"
+version = "0.4.0"
 optional = true
 
 [dependencies.kael_icons]
 path = "../kael_icons"
 package = "kael_icons"
-version = "0.3.1"
+version = "0.4.0"
 optional = true
 
 [dependencies.kael_diagnostics]
 path = "../kael_diagnostics"
 package = "kael_diagnostics"
-version = "0.3.1"
+version = "0.4.0"
 optional = true
 
 [dependencies.kael_document]
 path = "../kael_document"
 package = "kael_document"
-version = "0.3.1"
+version = "0.4.0"
 optional = true
 
 [dependencies.kael_audio]
 path = "../kael_audio"
 package = "kael_audio"
-version = "0.3.1"
+version = "0.4.0"
 optional = true
 
 [dependencies.kael_pdf]
 path = "../kael_pdf"
 package = "kael_pdf"
-version = "0.3.1"
+version = "0.4.0"
+optional = true
+
+[dependencies.kael_office]
+path = "../kael_office"
+package = "kael_office"
+version = "0.4.0"
 optional = true
 
 [dependencies.kael_notifications]
 path = "../kael_notifications"
 package = "kael_notifications"
-version = "0.3.1"
+version = "0.4.0"
 optional = true
 
 [dependencies.kael_share]
 path = "../kael_share"
 package = "kael_share"
-version = "0.3.1"
+version = "0.4.0"
 optional = true
 
 [dependencies.http_client]
 path = "../http_client"
 package = "kael_http_client"
-version = "0.3.1"
+version = "0.4.0"
 default-features = false
 
 [dependencies.image]
@@ -350,9 +456,6 @@ version = "1.0"
 [dependencies.num_cpus]
 version = "1.13"
 
-[dependencies.notify]
-version = "8.2.0"
-
 [dependencies.parking]
 version = "2.0.0"
 
@@ -378,11 +481,12 @@ optional = true
 
 [dependencies.raw-window-handle]
 version = "0.6"
+features = ["wasm-bindgen-0-2"]
 
 [dependencies.refineable]
 path = "../refineable"
 package = "kael_refineable"
-version = "0.3.1"
+version = "0.4.0"
 
 [dependencies.resvg]
 version = "0.48.1"
@@ -406,7 +510,7 @@ version = "4.1"
 [dependencies.semantic_version]
 path = "../semantic_version"
 package = "kael_semantic_version"
-version = "0.3.1"
+version = "0.4.0"
 
 [dependencies.serde]
 workspace = true
@@ -432,11 +536,12 @@ version = "1.0.6"
 workspace = true
 features = ["union", "serde"]
 
-[dependencies.smol]
-workspace = true
-
 [dependencies.stacksafe]
 version = "1.0"
+
+[dependencies.ttf-parser]
+version = "0.25"
+optional = true
 
 [dependencies.strum]
 version = "0.28"
@@ -445,7 +550,7 @@ features = ["derive"]
 [dependencies.sum_tree]
 path = "../sum_tree"
 package = "kael_sum_tree"
-version = "0.3.1"
+version = "0.4.0"
 
 [dependencies.taffy]
 version = "=0.9.0"
@@ -463,12 +568,12 @@ default-features = false
 [dependencies.util]
 path = "../util"
 package = "kael_util"
-version = "0.3.1"
+version = "0.4.0"
 
 [dependencies.util_macros]
 path = "../util_macros"
 package = "kael_util_macros"
-version = "0.3.1"
+version = "0.4.0"
 
 [dependencies.uuid]
 version = "1.1.2"
@@ -481,6 +586,9 @@ features = [
 
 [dependencies.waker-fn]
 version = "1.2.0"
+
+[dependencies.web-time]
+version = "1.1"
 
 
 [dev-dependencies.backtrace]
@@ -497,7 +605,7 @@ version = "1"
 path = "../collections"
 features = ["test-support"]
 package = "kael_collections"
-version = "0.3.1"
+version = "0.4.0"
 
 [dev-dependencies.env_logger]
 version = "0.11"
@@ -506,7 +614,7 @@ version = "0.11"
 path = "../http_client"
 features = ["test-support"]
 package = "kael_http_client"
-version = "0.3.1"
+version = "0.4.0"
 default-features = false
 
 [dev-dependencies.lyon]
@@ -527,7 +635,7 @@ workspace = true
 path = "../util"
 features = ["test-support"]
 package = "kael_util"
-version = "0.3.1"
+version = "0.4.0"
 
 [build-dependencies.resvg]
 version = "0.48.1"
@@ -547,7 +655,7 @@ optional = true
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.ashpd]
 version = "0.13"
 default-features = false
-features = ["async-io", "file_chooser", "global_shortcuts", "open_uri", "settings"]
+features = ["async-io", "file_chooser", "global_shortcuts", "open_uri", "print", "settings"]
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.async-channel]
@@ -581,12 +689,30 @@ optional = true
 version = "0.19"
 optional = true
 
+[target.'cfg(target_arch = "wasm32")'.dependencies.cosmic-text]
+version = "0.19"
+default-features = false
+features = ["std", "swash", "wasm-web"]
+optional = true
+
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.filedescriptor]
 version = "0.8.2"
 optional = true
 
-[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.gtk]
-version = "0.18.2"
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.gtk4]
+version = "0.11.4"
+features = ["v4_14"]
+optional = true
+package = "gtk4"
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.gdk4-wayland]
+version = "0.11.4"
+features = ["wayland_crate"]
+optional = true
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.gdk4-x11]
+version = "0.11.4"
+features = ["xlib"]
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.crossbeam-channel]
@@ -606,10 +732,9 @@ features = ["rt-async-io-crypto-rust"]
 version = "5.2.0"
 optional = true
 
-[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wry]
-version = "0.56.0"
-default-features = false
-features = ["os-webview", "x11"]
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.webkit6]
+version = "0.6.1"
+features = ["v2_44"]
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wayland-backend]
@@ -702,6 +827,102 @@ features = ["wgsl-in"]
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))'.dependencies.pathfinder_geometry]
 version = "0.5"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.notify]
+version = "8.2.0"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.gilrs]
+version = "0.11.2"
+optional = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.smol]
+workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.js-sys]
+version = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.console_error_panic_hook]
+version = "0.1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.wasm-bindgen]
+version = "=0.2.122"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.wasm-bindgen-futures]
+version = "0.4"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3"
+features = [
+    "Blob",
+    "BlobPropertyBag",
+    "CanvasRenderingContext2d",
+    "Clipboard",
+    "ClipboardEvent",
+    "ClipboardItem",
+    "CompositionEvent",
+    "CssStyleDeclaration",
+    "DataTransfer",
+    "DataTransferItemList",
+    "DedicatedWorkerGlobalScope",
+    "Document",
+    "DocumentTimeline",
+    "DomRect",
+    "DragEvent",
+    "Element",
+    "ErrorEvent",
+    "Event",
+    "EventTarget",
+    "File",
+    "FileList",
+    "FontFace",
+    "FontFaceSet",
+    "FocusEvent",
+    "Gamepad",
+    "GamepadButton",
+    "GamepadMappingType",
+    "History",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlIFrameElement",
+    "HtmlInputElement",
+    "ImageData",
+    "InputEvent",
+    "KeyboardEvent",
+    "Location",
+    "HtmlMediaElement",
+    "HtmlVideoElement",
+    "MediaDevices",
+    "MediaQueryList",
+    "MediaStream",
+    "MediaStreamConstraints",
+    "MediaStreamTrack",
+    "MessageEvent",
+    "MouseEvent",
+    "Navigator",
+    "Node",
+    "NodeList",
+    "Performance",
+    "PointerEvent",
+    "ResizeObserver",
+    "ResizeObserverEntry",
+    "TextMetrics",
+    "Url",
+    "VisibilityState",
+    "WebGl2RenderingContext",
+    "WebGlBuffer",
+    "WebGlFramebuffer",
+    "WebGlProgram",
+    "WebGlShader",
+    "WebGlTexture",
+    "WebGlUniformLocation",
+    "WebGlVertexArrayObject",
+    "WheelEvent",
+    "Window",
+    "Worker",
+    "WorkerGlobalScope",
+    "WorkerOptions",
+    "WorkerType",
+]
+
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))'.dependencies.scap]
 version = "0.1.0-beta.1"
 optional = true
@@ -751,7 +972,7 @@ features = [
 [target.'cfg(target_os = "macos")'.dependencies.media]
 path = "../media"
 package = "kael_media_sys"
-version = "0.3.1"
+version = "0.4.0"
 
 [target.'cfg(target_os = "macos")'.dependencies.metal]
 version = "0.29"
@@ -811,12 +1032,14 @@ features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Imaging",
+    "Win32_Graphics_Printing",
     "Win32_Graphics_Hlsl",
     "Win32_Networking_WinSock",
     "Win32_Security",
     "Win32_Security_Credentials",
     "Win32_Security_Cryptography",
     "Win32_Storage_FileSystem",
+    "Win32_Storage_Xps",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Console",
@@ -834,9 +1057,12 @@ features = [
     "Win32_System_Variant",
     "Win32_System_WinRT",
     "Win32_UI_Controls",
+    "Win32_UI_Controls_Dialogs",
     "Win32_UI_HiDpi",
+    "Win32_UI_Input",
     "Win32_UI_Input_Ime",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Input_Pointer",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_UI_Shell_PropertiesSystem",
@@ -857,6 +1083,15 @@ features = [
 
 [target.'cfg(target_os = "windows")'.dependencies.windows-core]
 version = "0.62"
+
+[target.'cfg(target_os = "windows")'.dependencies.windows-core-webview2]
+package = "windows-core"
+version = "0.61.2"
+optional = true
+
+[target.'cfg(target_os = "windows")'.dependencies.webview2-com]
+version = "0.38.2"
+optional = true
 
 [target.'cfg(target_os = "windows")'.dependencies.wry]
 version = "0.56.0"

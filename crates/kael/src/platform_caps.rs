@@ -82,6 +82,8 @@ pub enum PlatformFeature {
     WindowTabbing,
     /// High-precision pointer devices such as mice and trackpads.
     PrecisionPointerInput,
+    /// Mapped game-controller state sampled at display-frame boundaries.
+    GamepadInput,
     /// Direct touch input streams from touchscreens.
     TouchInput,
     /// Pen/stylus input streams with tablet-specific metadata.
@@ -390,7 +392,11 @@ impl CapabilityReport {
     /// Generate a report for the current platform.
     pub fn current() -> Self {
         let mut report = Self {
-            os: std::env::consts::OS.to_string(),
+            os: if cfg!(target_arch = "wasm32") {
+                "browser".to_string()
+            } else {
+                std::env::consts::OS.to_string()
+            },
             os_version: String::new(),
             features: Vec::new(),
         };
@@ -621,12 +627,240 @@ impl CapabilityReport {
     }
 
     fn populate_features(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        self.populate_browser();
         #[cfg(target_os = "macos")]
         self.populate_macos();
         #[cfg(target_os = "windows")]
         self.populate_windows();
         #[cfg(target_os = "linux")]
         self.populate_linux();
+    }
+
+    #[cfg(any(target_arch = "wasm32", all(test, feature = "agent-tools")))]
+    fn populate_browser(&mut self) {
+        let unsupported = [
+            PlatformFeature::SystemAudioLoopback,
+            PlatformFeature::GlobalHotkeys,
+            PlatformFeature::StatusBarItem,
+            PlatformFeature::ProgressIndicator,
+            PlatformFeature::Biometrics,
+            PlatformFeature::SecureKeychain,
+            PlatformFeature::FileBookmarks,
+            PlatformFeature::FileExportDrag,
+            PlatformFeature::PowerMonitor,
+            PlatformFeature::SystemIdle,
+            PlatformFeature::AuxiliaryExecutable,
+            PlatformFeature::AutoUpdate,
+            PlatformFeature::HardenedRuntime,
+            PlatformFeature::AlwaysOnTopWindows,
+            PlatformFeature::WindowTabbing,
+            PlatformFeature::SpellChecking,
+            PlatformFeature::Geolocation,
+            PlatformFeature::UsbDevices,
+            PlatformFeature::HidDevices,
+            PlatformFeature::SerialPorts,
+            PlatformFeature::BluetoothDevices,
+        ];
+        for feature in unsupported {
+            self.add(
+                feature,
+                SupportLevel::Unsupported,
+                Some("The browser sandbox or host platform does not expose this capability"),
+            );
+        }
+
+        self.add(
+            PlatformFeature::ScreenCapture,
+            if cfg!(feature = "screen-capture") {
+                SupportLevel::RequiresInit
+            } else {
+                SupportLevel::Unsupported
+            },
+            Some(if cfg!(feature = "screen-capture") {
+                "getDisplayMedia provides bounded RGBA display/window/tab frames after a trusted user gesture and browser-owned source picker; sources cannot be pre-enumerated and capture audio remains separate"
+            } else {
+                "Enable `screen-capture` for permission-gated browser display capture"
+            }),
+        );
+
+        self.add(
+            PlatformFeature::MicrophoneCapture,
+            if cfg!(feature = "audio") {
+                SupportLevel::RequiresInit
+            } else {
+                SupportLevel::Unsupported
+            },
+            Some(if cfg!(feature = "audio") {
+                "kael_audio provides async getUserMedia capture through a credit-bounded AudioWorklet; a secure context, microphone permission, and user-activation-safe AudioContext resume are required"
+            } else {
+                "Enable `audio` for permission-gated browser microphone capture"
+            }),
+        );
+
+        let (spatial_support, spatial_note) = portable_spatial_audio_support();
+        self.add(
+            PlatformFeature::SpatialAudio,
+            spatial_support,
+            Some(spatial_note),
+        );
+
+        self.add(
+            PlatformFeature::Notifications,
+            if cfg!(feature = "notifications-full") {
+                SupportLevel::RequiresInit
+            } else {
+                SupportLevel::Unsupported
+            },
+            Some(if cfg!(feature = "notifications-full") {
+                "The Notification API supports bounded immediate delivery after an asynchronous user permission decision; durable interval/calendar/location triggers, app badge counts, named sounds, and service-worker delivery are explicit unsupported paths"
+            } else {
+                "Enable `notifications-full` for the permission-gated browser Notification API"
+            }),
+        );
+        self.add(
+            PlatformFeature::NotificationActions,
+            SupportLevel::Unsupported,
+            Some(
+                "Browser action buttons require a product-owned service worker; the Kael browser backend exposes notification-body activation only",
+            ),
+        );
+        self.add(
+            PlatformFeature::PushNotifications,
+            SupportLevel::Unsupported,
+            Some(
+                "Web Push requires product VAPID credentials, a service worker, and server integration",
+            ),
+        );
+        self.add(
+            PlatformFeature::ShareSheet,
+            if cfg!(feature = "share") {
+                SupportLevel::Partial
+            } else {
+                SupportLevel::Unsupported
+            },
+            Some(if cfg!(feature = "share") {
+                "The Web Share API supports bounded text, URL, in-memory files, and images when navigator.share/canShare allow them and a transient user activation is active; destination filtering and share-target registration are unavailable"
+            } else {
+                "Enable `share` for the user-activation-gated Web Share API"
+            }),
+        );
+
+        self.add(
+            PlatformFeature::DeveloperDiagnostics,
+            SupportLevel::Partial,
+            Some("Kael frame diagnostics remain available; browser developer tools are browser-owned"),
+        );
+        self.add(
+            PlatformFeature::AppStorage,
+            SupportLevel::Partial,
+            Some(
+                "Bounded key/value settings use localStorage and binary/document persistence uses atomic IndexedDB transactions; browser quotas and origin isolation replace native paths, app directories, and SQL",
+            ),
+        );
+        self.add(
+            PlatformFeature::NetworkAccess,
+            SupportLevel::Partial,
+            Some(
+                "Fetch supports bounded streaming bodies, cancellation, and typed errors, and kael_net provides the same bounded WebSocket client for browser and native apps with subprotocols, backpressure, ordered events, and reconnect bounds; browser CORS/CSP, forbidden WebSocket headers, and the descriptor-only SSE boundary remain explicit",
+            ),
+        );
+        self.add(
+            PlatformFeature::IpcMessaging,
+            SupportLevel::Partial,
+            Some(
+                "Authenticated iframe messaging and the versioned typed Web Worker protocol are available; native process pipes, environment, and arbitrary cross-origin channels are unavailable",
+            ),
+        );
+        self.add(
+            PlatformFeature::TextInputIme,
+            SupportLevel::Partial,
+            Some(
+                "A caret-positioned hidden DOM input supports composition, marked text, committed Unicode, dead keys, and ordinary input; the browser owns candidate UI and keyboard-layout enumeration",
+            ),
+        );
+        self.add(
+            PlatformFeature::Printing,
+            SupportLevel::Partial,
+            Some(
+                "Kael PrintJob pages and hosted iframe documents use the browser print dialog; browsers do not permit silent printer dispatch or application-owned print settings",
+            ),
+        );
+        self.add(
+            PlatformFeature::WebView,
+            SupportLevel::Partial,
+            Some(
+                "Iframe-backed hosted surfaces support layout, focus, inline/same-origin bridges, and explicit sandbox/permission policy; browser origin rules limit cross-origin scripting, cookies, headers, profiles, and devtools control",
+            ),
+        );
+        self.add(
+            PlatformFeature::GpuRendering,
+            SupportLevel::Full,
+            Some("The Kael Scene renderer runs through its dedicated WebGL2 backend"),
+        );
+        self.add(
+            PlatformFeature::AppActivation,
+            SupportLevel::Partial,
+            Some("Canvas focus, visibility, and page activation replace native application activation"),
+        );
+        self.add(
+            PlatformFeature::DisplayTopology,
+            SupportLevel::Partial,
+            Some("All in-page retained surfaces share the browser page viewport and device-pixel ratio; native monitor enumeration and per-window display placement are unavailable"),
+        );
+        self.add(
+            PlatformFeature::AppLifecycle,
+            SupportLevel::Partial,
+            Some("Launch, hide, quit, reload, routes, page restoration, and independent in-page retained window surfaces are supported; detached OS windows, native restart, and process-level single-instance policy are unavailable"),
+        );
+        self.add(
+            PlatformFeature::NativeTheme,
+            SupportLevel::Partial,
+            Some("Color-scheme and reduced-motion media queries are supported"),
+        );
+        self.add(
+            PlatformFeature::Sandboxing,
+            SupportLevel::Full,
+            Some("The application runs inside the browser's origin sandbox"),
+        );
+        self.add(
+            PlatformFeature::PrecisionPointerInput,
+            SupportLevel::Partial,
+            Some("Pointer identity, type, buttons, contact geometry, analog metadata, bounded coalesced samples, high-resolution wheel events, browser pointer lock, and relative movement are exposed; lock requests require trusted activation"),
+        );
+        self.add(
+            PlatformFeature::GamepadInput,
+            if cfg!(feature = "game-input") {
+                SupportLevel::RequiresInit
+            } else {
+                SupportLevel::Disabled
+            },
+            Some(if cfg!(feature = "game-input") {
+                "The browser Gamepad API is exposed through bounded Window snapshots and display-frame polling; controller visibility, mapping, and connection state remain browser/device controlled"
+            } else {
+                "Enable `game-input` for bounded browser Gamepad snapshots and display-frame polling"
+            }),
+        );
+        self.add(
+            PlatformFeature::TouchInput,
+            SupportLevel::Full,
+            Some("Pointer identifiers, cancellation, primary state, contact geometry, pressure, capture, and simultaneous touch contacts are exposed through on_pointer_event"),
+        );
+        self.add(
+            PlatformFeature::PenInput,
+            SupportLevel::Full,
+            Some("Browser pen streams expose pressure, tangential pressure, tilt, twist, contact geometry, buttons, and bounded coalesced samples when the device reports them"),
+        );
+        self.add(
+            PlatformFeature::GestureInput,
+            SupportLevel::Partial,
+            Some("Wheel gestures and simultaneous pointer contacts are available; built-in browser pinch/rotate gesture synthesis is not yet exposed"),
+        );
+        self.add(
+            PlatformFeature::AppWindowCapture,
+            SupportLevel::Partial,
+            Some("export_frame_png captures the Kael WebGL scene at device-pixel resolution and honors content protection; WebView DOM overlays, live surfaces, browser chrome, and the system cursor are explicitly excluded"),
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -685,10 +919,12 @@ impl CapabilityReport {
         );
         self.add(
             PlatformFeature::AppWindowCapture,
-            SupportLevel::Unsupported,
-            Some(
-                "Checked descriptors exist, but an app-window snapshot backend is not implemented",
-            ),
+            SupportLevel::Partial,
+            Some(if cfg!(feature = "macos-blade") {
+                "export_frame_png performs a bounded Blade GPU readback from an app-owned render target at device-pixel resolution and honors content protection; WebViews, live surfaces, OS chrome, and the system cursor are explicitly excluded"
+            } else {
+                "export_frame_png captures the Kael Metal scene at device-pixel resolution and honors content protection; WebViews, live surfaces, OS chrome, and the system cursor are explicitly excluded"
+            }),
         );
         self.add(
             PlatformFeature::WebView,
@@ -708,12 +944,19 @@ impl CapabilityReport {
             SupportLevel::Full,
             None,
         );
-        self.add(PlatformFeature::NetworkAccess, SupportLevel::Full, None);
+        self.add(
+            PlatformFeature::NetworkAccess,
+            SupportLevel::Partial,
+            Some(
+                "Bounded HTTP and TLS WebSocket clients are implemented; server-sent events remain a checked descriptor without a shared live transport",
+            ),
+        );
         self.add(PlatformFeature::GpuRendering, SupportLevel::Full, None);
+        let (spatial_support, spatial_note) = portable_spatial_audio_support();
         self.add(
             PlatformFeature::SpatialAudio,
-            SupportLevel::Unsupported,
-            Some("Kael does not expose a native spatial-audio backend yet"),
+            spatial_support,
+            Some(spatial_note),
         );
         self.add(PlatformFeature::AppActivation, SupportLevel::Full, None);
         self.add(PlatformFeature::DisplayTopology, SupportLevel::Full, None);
@@ -739,7 +982,20 @@ impl CapabilityReport {
         self.add(
             PlatformFeature::PrecisionPointerInput,
             SupportLevel::Full,
-            Some("Mouse, trackpad, precise scroll, and magnify gesture events"),
+            Some("Mouse, trackpad, precise scroll, magnify gestures, and reversible CoreGraphics pointer lock with unbounded relative movement"),
+        );
+        self.add(
+            PlatformFeature::GamepadInput,
+            if cfg!(feature = "game-input") {
+                SupportLevel::Full
+            } else {
+                SupportLevel::Disabled
+            },
+            Some(if cfg!(feature = "game-input") {
+                "gilrs provides mapped, bounded controller snapshots through Window display-frame polling"
+            } else {
+                "Enable `game-input` for native mapped controllers"
+            }),
         );
         self.add(
             PlatformFeature::TouchInput,
@@ -748,8 +1004,8 @@ impl CapabilityReport {
         );
         self.add(
             PlatformFeature::PenInput,
-            SupportLevel::Partial,
-            Some("Tablet devices may appear as pointer input; pressure/tilt streams are not exposed yet"),
+            SupportLevel::Full,
+            Some("AppKit tablet-point and proximity streams expose stable identity, pressure, tangential pressure, tilt, rotation, buttons, and timestamps; AppKit does not provide a contact ellipse or pointer-history API"),
         );
         self.add(
             PlatformFeature::GestureInput,
@@ -836,7 +1092,11 @@ impl CapabilityReport {
         );
         self.add(PlatformFeature::GlobalHotkeys, SupportLevel::Full, None);
         self.add(PlatformFeature::StatusBarItem, SupportLevel::Full, None);
-        self.add(PlatformFeature::Printing, SupportLevel::Full, None);
+        self.add(
+            PlatformFeature::Printing,
+            SupportLevel::Full,
+            Some("Every PrintCommand is rendered through a bounded portable raster path; silent jobs use the default printer and dialog jobs use the native Windows print dialog before spooling through GDI"),
+        );
         self.add(PlatformFeature::ProgressIndicator, SupportLevel::Full, None);
         self.add(
             PlatformFeature::Biometrics,
@@ -857,8 +1117,8 @@ impl CapabilityReport {
         );
         self.add(
             PlatformFeature::AppWindowCapture,
-            SupportLevel::Unsupported,
-            Some("Checked descriptors exist, but an HWND snapshot backend is not implemented"),
+            SupportLevel::Partial,
+            Some("export_frame_png performs bounded Direct3D render-target readback at device-pixel resolution and honors content protection; WebViews, live surfaces, OS chrome, and the system cursor are explicitly excluded"),
         );
         self.add(
             PlatformFeature::WebView,
@@ -878,12 +1138,19 @@ impl CapabilityReport {
             SupportLevel::Full,
             None,
         );
-        self.add(PlatformFeature::NetworkAccess, SupportLevel::Full, None);
+        self.add(
+            PlatformFeature::NetworkAccess,
+            SupportLevel::Partial,
+            Some(
+                "Bounded HTTP and TLS WebSocket clients are implemented; server-sent events remain a checked descriptor without a shared live transport",
+            ),
+        );
         self.add(PlatformFeature::GpuRendering, SupportLevel::Full, None);
+        let (spatial_support, spatial_note) = portable_spatial_audio_support();
         self.add(
             PlatformFeature::SpatialAudio,
-            SupportLevel::Unsupported,
-            Some("Kael does not expose a Windows spatial-audio backend yet"),
+            spatial_support,
+            Some(spatial_note),
         );
         self.add(PlatformFeature::AppActivation, SupportLevel::Full, None);
         self.add(PlatformFeature::DisplayTopology, SupportLevel::Full, None);
@@ -921,17 +1188,30 @@ impl CapabilityReport {
         self.add(
             PlatformFeature::PrecisionPointerInput,
             SupportLevel::Full,
-            Some("Mouse, touchpad, and high-resolution wheel input"),
+            Some("Mouse, touchpad, high-resolution wheel input, and reversible Raw Input pointer lock with client-area confinement and unbounded relative movement"),
+        );
+        self.add(
+            PlatformFeature::GamepadInput,
+            if cfg!(feature = "game-input") {
+                SupportLevel::Full
+            } else {
+                SupportLevel::Disabled
+            },
+            Some(if cfg!(feature = "game-input") {
+                "gilrs provides mapped, bounded controller snapshots through Window display-frame polling"
+            } else {
+                "Enable `game-input` for native mapped controllers"
+            }),
         );
         self.add(
             PlatformFeature::TouchInput,
-            SupportLevel::Partial,
-            Some("Windows supports touch, but Kael does not expose raw touch contacts yet"),
+            SupportLevel::Full,
+            Some("WM_POINTER exposes simultaneous raw touch contacts, identity, cancellation, primary state, pressure/contact geometry when present, and a bounded chronological history"),
         );
         self.add(
             PlatformFeature::PenInput,
-            SupportLevel::Partial,
-            Some("Windows Pointer/Ink APIs exist, but Kael does not expose pressure/tilt streams yet"),
+            SupportLevel::Full,
+            Some("WM_POINTER exposes pen identity, pressure, tilt, rotation, barrel/eraser buttons, cancellation, and a bounded chronological history"),
         );
         self.add(
             PlatformFeature::GestureInput,
@@ -1036,7 +1316,11 @@ impl CapabilityReport {
             SupportLevel::Partial,
             Some("Requires libappindicator or SNI"),
         );
-        self.add(PlatformFeature::Printing, SupportLevel::Full, None);
+        self.add(
+            PlatformFeature::Printing,
+            SupportLevel::Partial,
+            Some("Every PrintCommand is rendered into a bounded portable PDF; dialog jobs require an XDG desktop Print portal backend, while silent jobs require the CUPS lp or lpr client and a configured default printer"),
+        );
         self.add(
             PlatformFeature::ProgressIndicator,
             SupportLevel::Partial,
@@ -1063,33 +1347,36 @@ impl CapabilityReport {
         );
         self.add(
             PlatformFeature::AppWindowCapture,
-            SupportLevel::Unsupported,
-            Some("Checked descriptors exist, but a compositor app-window snapshot backend is not implemented"),
+            SupportLevel::Partial,
+            Some("export_frame_png performs bounded Blade GPU readback from an app-owned render target at device-pixel resolution and honors content protection; WebViews, live surfaces, compositor chrome, and the system cursor are explicitly excluded"),
+        );
+        let (webview_support, webview_note) = linux_webview_support_for_backend(
+            cfg!(feature = "webview-wayland-gtk4"),
+            crate::platform::guess_compositor(),
         );
         self.add(
             PlatformFeature::WebView,
-            if cfg!(feature = "webview") {
-                SupportLevel::Partial
-            } else {
-                SupportLevel::Disabled
-            },
-            Some(if cfg!(feature = "webview") {
-                "Native WebKitGTK island; non-translation transforms are hidden and Wayland uses a compositor-managed GTK overlay window"
-            } else {
-                "Enable the `webview` feature"
-            }),
+            webview_support,
+            Some(webview_note),
         );
         self.add(
             PlatformFeature::DeveloperDiagnostics,
             SupportLevel::Full,
             None,
         );
-        self.add(PlatformFeature::NetworkAccess, SupportLevel::Full, None);
+        self.add(
+            PlatformFeature::NetworkAccess,
+            SupportLevel::Partial,
+            Some(
+                "Bounded HTTP and TLS WebSocket clients are implemented; server-sent events remain a checked descriptor without a shared live transport",
+            ),
+        );
         self.add(PlatformFeature::GpuRendering, SupportLevel::Full, None);
+        let (spatial_support, spatial_note) = portable_spatial_audio_support();
         self.add(
             PlatformFeature::SpatialAudio,
-            SupportLevel::Unsupported,
-            None,
+            spatial_support,
+            Some(spatial_note),
         );
         self.add(
             PlatformFeature::AppActivation,
@@ -1143,20 +1430,33 @@ impl CapabilityReport {
         );
         self.add(
             PlatformFeature::PrecisionPointerInput,
-            SupportLevel::Full,
-            Some("Mouse, touchpad, and wheel input through X11/Wayland backends"),
+            SupportLevel::Partial,
+            Some("Mouse, touchpad, and wheel input are available through X11/Wayland. X11 adds XI2 raw-motion pointer lock with reversible grab/confinement; Wayland pointer lock is available only when the active seat and compositor expose both pointer-constraints-v1 and relative-pointer-v1, and the compositor may defer or revoke it"),
+        );
+        self.add(
+            PlatformFeature::GamepadInput,
+            if cfg!(feature = "game-input") {
+                SupportLevel::Full
+            } else {
+                SupportLevel::Disabled
+            },
+            Some(if cfg!(feature = "game-input") {
+                "gilrs provides mapped, bounded controller snapshots through Window display-frame polling"
+            } else {
+                "Enable `game-input` for native mapped controllers"
+            }),
         );
         self.add(
             PlatformFeature::TouchInput,
             SupportLevel::Partial,
             Some(
-                "Compositors may expose touch, but Kael currently routes pointer-style input only",
+                "Wayland wl_touch and X11 XI2.2 expose simultaneous contacts, stable sequence identity, cancellation, and timestamps; Wayland also exposes oriented contact geometry, while core XI2 touch has no portable pressure/contact-axis contract",
             ),
         );
         self.add(
             PlatformFeature::PenInput,
             SupportLevel::Partial,
-            Some("Tablet devices depend on compositor/libinput support; pressure/tilt streams are not exposed yet"),
+            Some("X11 and Wayland retain tablet pointer compatibility, but compositor/device-specific pressure and tilt remain unavailable until a tablet-v2 or labeled-XI2 valuator is present"),
         );
         self.add(
             PlatformFeature::GestureInput,
@@ -1208,6 +1508,52 @@ impl CapabilityReport {
             support,
             note: note.map(|s| s.to_string()),
         });
+    }
+}
+
+fn portable_spatial_audio_support() -> (SupportLevel, &'static str) {
+    if cfg!(feature = "audio") {
+        (
+            SupportLevel::Partial,
+            "kael_audio provides bounded equal-power stereo panning with inverse-distance attenuation; native/browser HRTF, room acoustics, and multichannel device spatialization are not implemented",
+        )
+    } else {
+        (
+            SupportLevel::Disabled,
+            "Enable `audio` for Kael's lightweight stereo spatial scene processor",
+        )
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_webview_support_for_backend(
+    feature_enabled: bool,
+    backend: &str,
+) -> (SupportLevel, &'static str) {
+    if !feature_enabled {
+        return (
+            SupportLevel::Disabled,
+            "Enable the portable `webview` feature",
+        );
+    }
+
+    match backend {
+        "X11" => (
+            SupportLevel::Partial,
+            "Maintained GTK4/GSK + WebKitGTK 6 native child host on X11/XWayland; non-translation transforms are hidden",
+        ),
+        "Wayland" => (
+            SupportLevel::Partial,
+            "Maintained GTK4/GSK + WebKitGTK 6 native child host on Wayland; non-translation transforms are hidden",
+        ),
+        "Headless" => (
+            SupportLevel::Unsupported,
+            "WebViews require a graphical Wayland, X11, or XWayland display",
+        ),
+        _ => (
+            SupportLevel::Unsupported,
+            "WebViews are unavailable because KAEL_LINUX_BACKEND does not select a valid graphical backend",
+        ),
     }
 }
 
@@ -16705,13 +17051,18 @@ mod agent_tools {
                     "ImeCompositionSummary",
                     "PointerInputPolicyBuilder",
                     "GestureInputPolicyBuilder",
+                    "GameInputCapabilities",
+                    "GamepadSnapshot",
+                    "GamepadFrameSubscription",
+                    "PointerLockStatus",
                     "FocusTraversalPlanBuilder",
                     "EditCommandStateSnapshot",
                     "TextCheckingRequestBuilder",
                 ],
                 &[
-                    "build AdvancedInputHandoffBuilder with capability reports pointer policy gesture policy touch surfaces stylus surfaces hosted input islands and gamepad MIDI or raw-input roadmap work before generated games or creative tools choose an input route",
+                    "build AdvancedInputHandoffBuilder with capability reports pointer policy gesture policy touch surfaces stylus surfaces hosted input islands and MIDI or raw-input roadmap work before generated games or creative tools choose an input route",
                     "inspect AdvancedInputNextAction so generated apps check input capabilities configure pointer or gesture policy prepare touch or stylus surfaces use hosted input islands or track advanced input roadmap work",
+                    "use GameInputCapabilities GamepadSnapshot GamepadFrameSubscription and PointerLockStatus for bounded display-frame controller polling and activation-gated browser/native pointer lock",
                     "wrap app keybindings global hotkeys hotkey cleanup keybinding cleanup keyboard-layout snapshots hosted shortcut islands and shortcut roadmap work in ShortcutInputHandoffBuilder before side effects",
                     "inspect ShortcutInputNextAction so generated apps install app accelerators register or unregister global shortcuts clear keymaps snapshot keyboard layouts use hosted keyboard islands or track shortcut roadmap work",
                     "build KeyBindingSetBuilder and KeyBindingSetPlan before installing generated app shortcuts or plugin keymaps",
@@ -16732,11 +17083,11 @@ mod agent_tools {
                     "avoid logging shortcut text typed text selected text composition payloads candidate strings pointer coordinates focus ids selectors or labels",
                 ],
                 &[
-                    "browser-only keyboard event semantics raw DOM beforeinput/input/composition events or gamepad APIs are required",
+                    "browser-only keyboard event semantics or raw DOM beforeinput/input/composition events are required",
                 ],
                 &[
                     "richer raw touch and pen streams",
-                    "native gamepad/controller input API",
+                    "Wayland pointer-lock coverage on compositors without pointer-constraints-v1 and relative-pointer-v1",
                     "more cross-platform IME composition event fixtures",
                 ],
             ),
@@ -18793,7 +19144,7 @@ mod agent_tools {
                     &[
                         "replaces generated game creative and canvas input assumptions with AdvancedInputHandoffBuilder before browser input islands are considered",
                         "replaces browser-engine keyboard pointer beforeinput composition focus and shortcut behavior with native checked input policies",
-                        "keeps browser-only raw DOM input events gamepad MIDI or raw tablet streams as explicit hosted islands or roadmap work",
+                        "uses portable display-frame gamepad snapshots while keeping browser-only raw DOM input events MIDI or raw tablet streams as explicit hosted islands or roadmap work",
                         "audits keyboard-only navigation IME composition edit commands and shortcut conflict behavior before readiness decisions",
                     ],
                     &[
@@ -19606,15 +19957,19 @@ mod agent_tools {
                         "ImeCompositionSummary",
                         "PointerInputPolicyBuilder",
                         "GestureInputPolicyBuilder",
+                        "GameInputCapabilities",
+                        "GamepadSnapshot",
+                        "GamepadFrameSubscription",
+                        "PointerLockStatus",
                         "FocusTraversalPlanBuilder",
                         "EditCommandStateSnapshot",
                     ],
                     &[
-                        "browser-only raw DOM input, beforeinput/composition, or gamepad semantics are required",
+                        "browser-only raw DOM input or beforeinput/composition semantics are required",
                     ],
                     &[
                         "richer raw touch and pen streams",
-                        "native gamepad/controller input API",
+                        "Wayland pointer-lock coverage on compositors without pointer-constraints-v1 and relative-pointer-v1",
                         "cross-platform IME composition fixtures",
                     ],
                 ),
@@ -20225,6 +20580,124 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
+    #[test]
+    fn browser_capability_report_is_complete_and_truthful() {
+        let mut report = CapabilityReport {
+            os: "browser".into(),
+            os_version: String::new(),
+            features: Vec::new(),
+        };
+        report.populate_browser();
+
+        assert_eq!(report.feature_count(), 47);
+        assert_eq!(
+            report
+                .features
+                .iter()
+                .map(|feature| feature.feature)
+                .collect::<HashSet<_>>()
+                .len(),
+            report.feature_count(),
+            "each browser capability must be reported exactly once"
+        );
+        assert_eq!(
+            report.support_for(PlatformFeature::GpuRendering),
+            SupportLevel::Full
+        );
+        assert_eq!(
+            report.support_for(PlatformFeature::AppLifecycle),
+            SupportLevel::Partial
+        );
+        assert_eq!(
+            report.support_for(PlatformFeature::Printing),
+            SupportLevel::Partial
+        );
+        assert_eq!(
+            report.support_for(PlatformFeature::AppStorage),
+            SupportLevel::Partial
+        );
+        assert_eq!(
+            report.support_for(PlatformFeature::NetworkAccess),
+            SupportLevel::Partial
+        );
+        assert_eq!(
+            report.support_for(PlatformFeature::IpcMessaging),
+            SupportLevel::Partial
+        );
+        assert_eq!(
+            report.support_for(PlatformFeature::TextInputIme),
+            SupportLevel::Partial
+        );
+        assert_eq!(
+            report.support_for(PlatformFeature::TouchInput),
+            SupportLevel::Full
+        );
+        assert_eq!(
+            report.support_for(PlatformFeature::GamepadInput),
+            if cfg!(feature = "game-input") {
+                SupportLevel::RequiresInit
+            } else {
+                SupportLevel::Disabled
+            }
+        );
+        let pointer_note = report
+            .feature_report(PlatformFeature::PrecisionPointerInput)
+            .and_then(|feature| feature.note.as_deref())
+            .expect("browser precision-pointer report should explain its boundary");
+        assert!(pointer_note.contains("pointer lock"));
+        assert!(pointer_note.contains("relative movement"));
+        assert_eq!(
+            report.support_for(PlatformFeature::PenInput),
+            SupportLevel::Full
+        );
+        assert_eq!(
+            report.support_for(PlatformFeature::AppWindowCapture),
+            SupportLevel::Partial
+        );
+        assert_eq!(
+            report.support_for(PlatformFeature::SecureKeychain),
+            SupportLevel::Unsupported
+        );
+        assert_eq!(
+            report.support_for(PlatformFeature::MicrophoneCapture),
+            if cfg!(feature = "audio") {
+                SupportLevel::RequiresInit
+            } else {
+                SupportLevel::Unsupported
+            }
+        );
+        assert_eq!(
+            report.support_for(PlatformFeature::ScreenCapture),
+            if cfg!(feature = "screen-capture") {
+                SupportLevel::RequiresInit
+            } else {
+                SupportLevel::Unsupported
+            }
+        );
+        assert_eq!(
+            report.support_for(PlatformFeature::SpatialAudio),
+            if cfg!(feature = "audio") {
+                SupportLevel::Partial
+            } else {
+                SupportLevel::Disabled
+            }
+        );
+    }
+
+    #[test]
+    fn portable_spatial_audio_capability_tracks_the_audio_feature() {
+        let (support, note) = portable_spatial_audio_support();
+        assert_eq!(
+            support,
+            if cfg!(feature = "audio") {
+                SupportLevel::Partial
+            } else {
+                SupportLevel::Disabled
+            }
+        );
+        assert!(note.contains("stereo spatial scene") || note.contains("stereo panning"));
+    }
+
     fn full_feature_report(feature: PlatformFeature) -> FeatureReport {
         FeatureReport {
             feature,
@@ -20544,9 +21017,45 @@ mod tests {
             .feature_report(PlatformFeature::WebView)
             .expect("WebView should be present in the current report");
 
-        assert_eq!(webview.support, SupportLevel::Partial);
+        #[cfg(target_os = "linux")]
+        let expected_support = linux_webview_support_for_backend(
+            cfg!(feature = "webview-wayland-gtk4"),
+            crate::platform::guess_compositor(),
+        )
+        .0;
+        #[cfg(not(target_os = "linux"))]
+        let expected_support = SupportLevel::Partial;
+
+        assert_eq!(webview.support, expected_support);
         assert!(!webview.is_full());
-        assert!(report.is_available(PlatformFeature::WebView));
+        assert_eq!(
+            report.is_available(PlatformFeature::WebView),
+            !matches!(
+                expected_support,
+                SupportLevel::Unsupported | SupportLevel::Disabled
+            )
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_webview_capability_tracks_the_selected_backend() {
+        assert_eq!(
+            linux_webview_support_for_backend(true, "X11").0,
+            SupportLevel::Partial
+        );
+        assert_eq!(
+            linux_webview_support_for_backend(true, "Wayland").0,
+            SupportLevel::Partial
+        );
+        assert_eq!(
+            linux_webview_support_for_backend(true, "Headless").0,
+            SupportLevel::Unsupported
+        );
+        assert_eq!(
+            linux_webview_support_for_backend(false, "X11").0,
+            SupportLevel::Disabled
+        );
     }
 
     #[test]
@@ -20554,6 +21063,7 @@ mod tests {
         let report = CapabilityReport::current();
         for feature in [
             PlatformFeature::PrecisionPointerInput,
+            PlatformFeature::GamepadInput,
             PlatformFeature::TouchInput,
             PlatformFeature::PenInput,
             PlatformFeature::GestureInput,

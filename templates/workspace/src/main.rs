@@ -145,8 +145,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-kael = "0.3"
-kael_ui = "0.3"
+kael = "0.4"
+kael_ui = "0.4"
 "#;
 
 const SAMPLE_README: &str = "# Kael App\n\nA desktop workspace built with Kael.\n";

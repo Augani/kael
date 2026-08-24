@@ -443,16 +443,23 @@ fn paint_line(
 
                 let content_mask = window.content_mask();
                 if max_glyph_bounds.intersects(&content_mask.bounds) {
+                    let baseline_origin = glyph_origin + baseline_offset;
+                    let baseline_origin = point(
+                        baseline_origin.x,
+                        px(window
+                            .pixel_snap_policy()
+                            .snap_baseline(f32::from(baseline_origin.y))),
+                    );
                     if glyph.is_emoji {
                         window.paint_emoji(
-                            glyph_origin + baseline_offset,
+                            baseline_origin,
                             run.font_id,
                             glyph.id,
                             layout.font_size,
                         )?;
                     } else {
                         window.paint_glyph(
-                            glyph_origin + baseline_offset,
+                            baseline_origin,
                             run.font_id,
                             glyph.id,
                             layout.font_size,

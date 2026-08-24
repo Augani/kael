@@ -1,7 +1,7 @@
 use anyhow::{Context as _, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use crate::DistConfig;
 
@@ -10,8 +10,31 @@ pub struct BundleOptions {
     pub binary: Option<PathBuf>,
 }
 
-pub fn run(config: &DistConfig, output: &Path, options: &BundleOptions) -> Result<Vec<PathBuf>> {
-    fs::create_dir_all(output)?;
+/// File artifacts that can be uploaded, plus the one package suitable for the
+/// built-in auto-updater on the current platform.
+///
+/// Staging directories such as `.app`, Windows bundle directories, and
+/// AppDirs intentionally never leave this module as release artifacts. They
+/// cannot be hashed, downloaded, or uploaded as regular files.
+#[derive(Debug, Default, Eq, PartialEq)]
+pub(crate) struct BundleArtifacts {
+    pub(crate) uploadable: Vec<PathBuf>,
+    pub(crate) update: Option<PathBuf>,
+}
+
+impl BundleArtifacts {
+    fn update_package(path: PathBuf) -> Self {
+        Self {
+            uploadable: vec![path.clone()],
+            update: Some(path),
+        }
+    }
+}
+
+pub fn run(config: &DistConfig, output: &Path, options: &BundleOptions) -> Result<BundleArtifacts> {
+    if !options.dry_run {
+        fs::create_dir_all(output)?;
+    }
 
     let binary_path = resolve_binary(config, options)?;
     let artifacts = if cfg!(target_os = "macos") {
@@ -59,7 +82,7 @@ fn bundle_macos(
     output: &Path,
     binary: Option<&Path>,
     options: &BundleOptions,
-) -> Result<Vec<PathBuf>> {
+) -> Result<BundleArtifacts> {
     let app_name = &config.name;
     let app_name_slug = config.name.to_lowercase().replace(' ', "-");
     let bundle_name = format!("{}.app", app_name);
@@ -103,17 +126,29 @@ fn bundle_macos(
         }
     }
 
-    println!("macOS bundle created: {}", bundle_dir.display());
+    if options.dry_run {
+        println!("dry-run: would stage macOS app at {}", bundle_dir.display());
+    } else {
+        println!("macOS bundle created: {}", bundle_dir.display());
+    }
 
-    let artifacts = vec![bundle_dir.clone()];
+    let dmg_path = output.join(format!("{app_name_slug}.dmg"));
+    if options.dry_run {
+        println!("dry-run: would create macOS .dmg at {}", dmg_path.display());
+        return Ok(BundleArtifacts::update_package(dmg_path));
+    }
+
     #[cfg(target_os = "macos")]
-    let mut artifacts = artifacts;
-    #[cfg(target_os = "macos")]
-    if !options.dry_run && binary.is_some() {
-        let identity = config
-            .signing
-            .as_ref()
-            .and_then(|signing| signing.macos_certificate.as_deref());
+    if binary.is_some() {
+        let environment_identity = std::env::var("KAEL_MACOS_SIGNING_IDENTITY")
+            .ok()
+            .filter(|identity| !identity.trim().is_empty());
+        let identity = environment_identity.as_deref().or_else(|| {
+            config
+                .signing
+                .as_ref()
+                .and_then(|signing| signing.macos_certificate.as_deref())
+        });
         match identity {
             Some(identity) => {
                 codesign_app(&bundle_dir, identity).context("failed to codesign .app")?;
@@ -127,51 +162,62 @@ fn bundle_macos(
             ),
         }
 
-        let dmg_path = output.join(format!("{app_name_slug}.dmg"));
         let dmg =
             create_dmg(&bundle_dir, &dmg_path, app_name).context("failed to create macOS .dmg")?;
         println!("macOS .dmg created: {}", dmg.display());
-
-        if identity.is_some() {
-            match std::env::var("KAEL_NOTARY_PROFILE").ok() {
-                Some(profile) if !profile.is_empty() => {
-                    notarize_and_staple(&dmg, &profile).context("failed to notarize macOS .dmg")?;
-                    println!("notarized and stapled {}", dmg.display());
-                }
-                _ => println!(
-                    "note: KAEL_NOTARY_PROFILE not set — skipping notarization of {}",
-                    dmg.display()
-                ),
-            }
-        }
-        artifacts.push(dmg);
+        return Ok(BundleArtifacts::update_package(dmg));
     }
-    Ok(artifacts)
+
+    Ok(BundleArtifacts::default())
 }
 
-/// Build a compressed `.dmg` disk image containing `app_bundle` using `hdiutil`.
+/// Build a compressed `.dmg` disk image containing `app_bundle`.
 ///
-/// This produces the installer container; code-signing and notarization (which
-/// require an Apple Developer certificate) are a separate downstream step.
+/// Current macOS uses `diskutil image create`; older supported releases fall
+/// back to `hdiutil create`. This produces the installer container; signing the
+/// DMG and notarization are separate downstream steps.
 #[cfg(target_os = "macos")]
 fn create_dmg(app_bundle: &Path, dmg_path: &Path, volume_name: &str) -> Result<PathBuf> {
     if dmg_path.exists() {
         fs::remove_file(dmg_path)?;
     }
-    let status = Command::new("hdiutil")
-        .arg("create")
-        .arg("-volname")
-        .arg(volume_name)
-        .arg("-srcfolder")
-        .arg(app_bundle)
-        .arg("-ov")
-        .arg("-format")
-        .arg("UDZO")
-        .arg(dmg_path)
+    let modern_diskutil = Command::new("diskutil")
+        .args(["image", "create", "from", "--help"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
-        .context("failed to run hdiutil create")?;
+        .is_ok_and(|status| status.success());
+    let (status, tool) = if modern_diskutil {
+        (
+            Command::new("diskutil")
+                .args(["image", "create", "from", "--format", "UDZO"])
+                .arg("--volumeName")
+                .arg(volume_name)
+                .arg(app_bundle)
+                .arg(dmg_path)
+                .status()
+                .context("failed to run diskutil image create")?,
+            "diskutil image create",
+        )
+    } else {
+        (
+            Command::new("hdiutil")
+                .arg("create")
+                .arg("-volname")
+                .arg(volume_name)
+                .arg("-srcfolder")
+                .arg(app_bundle)
+                .arg("-ov")
+                .arg("-format")
+                .arg("UDZO")
+                .arg(dmg_path)
+                .status()
+                .context("failed to run hdiutil create")?,
+            "hdiutil create",
+        )
+    };
     if !status.success() {
-        bail!("hdiutil create failed with status {status}");
+        bail!("{tool} failed with status {status}");
     }
     Ok(dmg_path.to_path_buf())
 }
@@ -195,32 +241,6 @@ fn codesign_app(app_bundle: &Path, identity: &str) -> Result<()> {
     Ok(())
 }
 
-/// Submit a `.dmg` to Apple's notary service and staple the resulting ticket.
-///
-/// `keychain_profile` is a profile name previously stored with
-/// `xcrun notarytool store-credentials`. Blocks until notarization completes.
-#[cfg(target_os = "macos")]
-fn notarize_and_staple(dmg: &Path, keychain_profile: &str) -> Result<()> {
-    let submit = Command::new("xcrun")
-        .args(["notarytool", "submit"])
-        .arg(dmg)
-        .args(["--keychain-profile", keychain_profile, "--wait"])
-        .status()
-        .context("failed to run xcrun notarytool submit")?;
-    if !submit.success() {
-        bail!("notarytool submit failed with status {submit}");
-    }
-    let staple = Command::new("xcrun")
-        .args(["stapler", "staple"])
-        .arg(dmg)
-        .status()
-        .context("failed to run xcrun stapler")?;
-    if !staple.success() {
-        bail!("stapler staple failed with status {staple}");
-    }
-    Ok(())
-}
-
 fn generate_info_plist(config: &DistConfig, executable_name: &str) -> String {
     let bundle_id = &config.app_id;
     let bundle_name = &config.name;
@@ -232,6 +252,15 @@ fn generate_info_plist(config: &DistConfig, executable_name: &str) -> String {
         .minimum_system_version
         .as_deref()
         .unwrap_or("");
+    let icon_block = config
+        .icons
+        .macos
+        .as_ref()
+        .and_then(|path| path.file_name())
+        .and_then(|name| name.to_str())
+        .map(xml_escape)
+        .map(|icon| format!("    <key>CFBundleIconFile</key>\n    <string>{icon}</string>\n"))
+        .unwrap_or_default();
 
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -252,6 +281,8 @@ fn generate_info_plist(config: &DistConfig, executable_name: &str) -> String {
     <string>APPL</string>
     <key>CFBundleExecutable</key>
     <string>{executable_name}</string>
+{icon_block}    <key>NSHighResolutionCapable</key>
+    <true/>
     <key>LSMinimumSystemVersion</key>
     <string>{min_version}</string>
     <key>NSHumanReadableCopyright</key>
@@ -268,7 +299,7 @@ fn bundle_windows(
     output: &Path,
     binary: Option<&Path>,
     options: &BundleOptions,
-) -> Result<Vec<PathBuf>> {
+) -> Result<BundleArtifacts> {
     let app_name = config.name.replace(' ', "-");
     let bundle_dir = output.join(&app_name);
 
@@ -311,14 +342,19 @@ fn bundle_windows(
         }
     }
 
-    println!("Windows bundle created: {}", bundle_dir.display());
-
-    let mut artifacts = vec![bundle_dir.clone()];
+    if options.dry_run {
+        println!(
+            "dry-run: would stage Windows installer inputs at {}",
+            bundle_dir.display()
+        );
+    } else {
+        println!("Windows bundle created: {}", bundle_dir.display());
+    }
 
     let msi_path = output.join(format!("{app_name}.msi"));
     if options.dry_run {
         println!("dry-run: would build MSI at {}", msi_path.display());
-        return Ok(artifacts);
+        return Ok(BundleArtifacts::update_package(msi_path));
     }
 
     match find_wix() {
@@ -326,14 +362,26 @@ fn bundle_windows(
             let built = build_msi(&wix, &wix_path, &msi_path)?;
             println!("Windows .msi created: {}", built.display());
 
-            if let Some(signing) = config.signing.as_ref()
-                && let Some(certificate) = signing.windows_certificate.as_deref()
-            {
-                sign_msi(
-                    &built,
-                    certificate,
-                    signing.windows_certificate_password.as_deref(),
-                )?;
+            let environment_certificate = std::env::var_os("KAEL_WINDOWS_CERTIFICATE")
+                .filter(|certificate| !certificate.is_empty())
+                .map(PathBuf::from);
+            let certificate = environment_certificate.as_deref().or_else(|| {
+                config
+                    .signing
+                    .as_ref()
+                    .and_then(|signing| signing.windows_certificate.as_deref())
+            });
+            if let Some(certificate) = certificate {
+                let environment_password = std::env::var("KAEL_WINDOWS_CERTIFICATE_PASSWORD")
+                    .ok()
+                    .filter(|password| !password.is_empty());
+                let password = environment_password.as_deref().or_else(|| {
+                    config
+                        .signing
+                        .as_ref()
+                        .and_then(|signing| signing.windows_certificate_password.as_deref())
+                });
+                sign_msi(&built, certificate, password)?;
                 println!("signed {}", built.display());
             } else {
                 println!(
@@ -341,7 +389,7 @@ fn bundle_windows(
                 );
             }
 
-            artifacts.push(built);
+            return Ok(BundleArtifacts::update_package(built));
         }
         None => {
             eprintln!(
@@ -352,7 +400,7 @@ fn bundle_windows(
         }
     }
 
-    Ok(artifacts)
+    Ok(BundleArtifacts::default())
 }
 
 /// Locate the WiX v4 CLI (`wix`), mirroring the `fxc` locator in
@@ -404,21 +452,37 @@ fn find_wix() -> Option<PathBuf> {
 ///
 /// Split out so the command construction can be unit-tested without invoking
 /// the toolset (which is not present on non-Windows hosts).
-fn wix_build_args(wxs: &Path, msi: &Path) -> Vec<String> {
+fn wix_build_args(wxs: &Path, msi: &Path, architecture: &str) -> Vec<String> {
+    let bind_path = wxs.parent().unwrap_or_else(|| Path::new("."));
     vec![
         "build".to_string(),
         wxs.to_string_lossy().into_owned(),
+        "-arch".to_string(),
+        architecture.to_string(),
+        "-bindpath".to_string(),
+        bind_path.to_string_lossy().into_owned(),
         "-o".to_string(),
         msi.to_string_lossy().into_owned(),
     ]
+}
+
+fn windows_installer_architecture() -> Result<&'static str> {
+    match std::env::consts::ARCH {
+        "x86_64" => Ok("x64"),
+        "aarch64" => Ok("arm64"),
+        architecture => bail!(
+            "Windows MSI bundling supports x86_64 and aarch64 binaries; unsupported host architecture {architecture}"
+        ),
+    }
 }
 
 /// Compile a `.wxs` source into an `.msi` using the WiX v4 `wix build` command.
 ///
 /// WiX v4 only — there is no candle/light (WiX v3) fallback by design.
 fn build_msi(wix: &Path, wxs: &Path, msi: &Path) -> Result<PathBuf> {
+    let architecture = windows_installer_architecture()?;
     let status = Command::new(wix)
-        .args(wix_build_args(wxs, msi))
+        .args(wix_build_args(wxs, msi, architecture))
         .status()
         .with_context(|| format!("failed to run {}", wix.display()))?;
     if !status.success() {
@@ -471,7 +535,7 @@ fn bundle_linux(
     output: &Path,
     binary: Option<&Path>,
     options: &BundleOptions,
-) -> Result<Vec<PathBuf>> {
+) -> Result<BundleArtifacts> {
     let app_name = config.name.to_lowercase().replace(' ', "-");
     let app_dir = output.join(format!("{}.AppDir", app_name));
 
@@ -528,32 +592,41 @@ fn bundle_linux(
         }
     }
 
-    println!("Linux AppDir created: {}", app_dir.display());
-
-    let mut artifacts = vec![app_dir.clone()];
-
     if options.dry_run {
-        println!(
-            "dry-run: would build .deb at {}",
-            output
-                .join(format!("{app_name}_{}_amd64.deb", config.version))
-                .display()
-        );
-        println!("dry-run: would build AppImage from {}", app_dir.display());
-        return Ok(artifacts);
+        println!("dry-run: would stage Linux AppDir at {}", app_dir.display());
+    } else {
+        println!("Linux AppDir created: {}", app_dir.display());
     }
 
     let deb_path = output.join(format!("{app_name}_{}_amd64.deb", config.version));
+    let appimage_path = output.join(format!("{app_name}-{}-x86_64.AppImage", config.version));
+
+    if options.dry_run {
+        println!("dry-run: would build .deb at {}", deb_path.display());
+        println!(
+            "dry-run: would build AppImage at {} from {}",
+            appimage_path.display(),
+            app_dir.display()
+        );
+        return Ok(BundleArtifacts {
+            uploadable: vec![deb_path, appimage_path.clone()],
+            update: Some(appimage_path),
+        });
+    }
+
     build_deb(config, &app_name, binary, &deb_path).context("failed to build .deb package")?;
     println!("Linux .deb created: {}", deb_path.display());
-    artifacts.push(deb_path);
+    let mut artifacts = BundleArtifacts {
+        uploadable: vec![deb_path],
+        update: None,
+    };
 
-    let appimage_path = output.join(format!("{app_name}-{}-x86_64.AppImage", config.version));
     match find_appimagetool() {
         Some(tool) => {
             let built = build_appimage(&tool, &app_dir, &appimage_path)?;
             println!("Linux AppImage created: {}", built.display());
-            artifacts.push(built);
+            artifacts.uploadable.push(built.clone());
+            artifacts.update = Some(built);
         }
         None => {
             eprintln!(
@@ -960,6 +1033,16 @@ mod tests {
     }
 
     #[test]
+    fn macos_plist_registers_configured_icon_and_retina_rendering() {
+        let mut config = sample_config();
+        config.icons.macos = Some(PathBuf::from("assets/kael-demo.icns"));
+        let plist = generate_info_plist(&config, "kael-demo");
+        assert!(plist.contains("<key>CFBundleIconFile</key>"));
+        assert!(plist.contains("<string>kael-demo.icns</string>"));
+        assert!(plist.contains("<key>NSHighResolutionCapable</key>\n    <true/>"));
+    }
+
+    #[test]
     fn wix_upgrade_code_is_deterministic_and_valid_guid() {
         let first = generate_wix_source(&sample_config(), "kael-demo");
         let second = generate_wix_source(&sample_config(), "kael-demo");
@@ -989,16 +1072,35 @@ mod tests {
 
     #[test]
     fn wix_build_args_target_msi_output() {
-        let args = wix_build_args(Path::new("dist/Kael/Kael.wxs"), Path::new("dist/Kael.msi"));
+        let args = wix_build_args(
+            Path::new("dist/Kael/Kael.wxs"),
+            Path::new("dist/Kael.msi"),
+            "x64",
+        );
         assert_eq!(
             args,
             vec![
                 "build".to_string(),
                 "dist/Kael/Kael.wxs".to_string(),
+                "-arch".to_string(),
+                "x64".to_string(),
+                "-bindpath".to_string(),
+                "dist/Kael".to_string(),
                 "-o".to_string(),
                 "dist/Kael.msi".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn wix_build_args_preserve_arm64_architecture() {
+        let args = wix_build_args(
+            Path::new("dist/Kael/Kael.wxs"),
+            Path::new("dist/Kael-arm64.msi"),
+            "arm64",
+        );
+        assert_eq!(&args[2..4], &["-arch", "arm64"]);
+        assert_eq!(&args[4..6], &["-bindpath", "dist/Kael"]);
     }
 
     #[test]
@@ -1245,13 +1347,113 @@ mod tests {
         );
 
         assert!(
-            artifacts.contains(&app_dir),
-            "AppDir should be reported as an artifact"
+            !artifacts.uploadable.contains(&app_dir),
+            "staging AppDir must not be reported as an uploadable artifact"
         );
         assert!(
-            artifacts.contains(&deb),
+            artifacts.uploadable.contains(&deb),
             ".deb should be reported as an artifact"
         );
+        assert!(
+            artifacts
+                .uploadable
+                .iter()
+                .all(|artifact| artifact.is_file()),
+            "every reported real bundle artifact must be a regular file"
+        );
+        if let Some(update) = artifacts.update {
+            assert!(
+                update.is_file(),
+                "the updater package must be a regular file"
+            );
+            assert_eq!(
+                update.extension().and_then(|extension| extension.to_str()),
+                Some("AppImage")
+            );
+        }
+    }
+
+    #[test]
+    fn linux_dry_run_reports_only_uploadable_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("dist");
+        let config = linux_config();
+        let options = BundleOptions {
+            dry_run: true,
+            binary: None,
+        };
+
+        let artifacts = bundle_linux(&config, &output, None, &options).unwrap();
+        assert_eq!(artifacts.uploadable.len(), 2);
+        assert!(artifacts.uploadable.iter().all(|path| {
+            matches!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("deb" | "AppImage")
+            )
+        }));
+        assert_eq!(
+            artifacts.update,
+            artifacts
+                .uploadable
+                .iter()
+                .find(
+                    |path| path.extension().and_then(|extension| extension.to_str())
+                        == Some("AppImage")
+                )
+                .cloned()
+        );
+        assert!(
+            !output.exists(),
+            "metadata simulation must not create staging directories"
+        );
+    }
+
+    #[test]
+    fn macos_dry_run_exposes_dmg_instead_of_app_staging_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("dist");
+        let config = linux_config();
+        let options = BundleOptions {
+            dry_run: true,
+            binary: None,
+        };
+
+        let artifacts = bundle_macos(&config, &output, None, &options).unwrap();
+        let dmg = output.join("kael-demo.dmg");
+        assert_eq!(artifacts, BundleArtifacts::update_package(dmg));
+        assert!(
+            artifacts
+                .uploadable
+                .iter()
+                .all(
+                    |path| path.extension().and_then(|extension| extension.to_str()) == Some("dmg")
+                )
+        );
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn windows_dry_run_exposes_msi_instead_of_staging_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("dist");
+        let config = linux_config();
+        let options = BundleOptions {
+            dry_run: true,
+            binary: None,
+        };
+
+        let artifacts = bundle_windows(&config, &output, None, &options).unwrap();
+        let msi = output.join("Kael-Demo.msi");
+        assert_eq!(artifacts, BundleArtifacts::update_package(msi));
+        assert!(
+            artifacts
+                .uploadable
+                .iter()
+                .all(
+                    |path| path.extension().and_then(|extension| extension.to_str()) == Some("msi")
+                )
+        );
+        assert!(!output.exists());
     }
 }
 
@@ -1269,7 +1471,7 @@ mod dmg_tests {
         fs::write(app.join("Contents/MacOS/demo"), b"#!/bin/sh\n").unwrap();
 
         let dmg_path = scratch.join("demo.dmg");
-        let dmg = create_dmg(&app, &dmg_path, "Demo").expect("hdiutil create");
+        let dmg = create_dmg(&app, &dmg_path, "Demo").expect("create disk image");
 
         assert!(dmg.exists(), "dmg should exist");
         assert!(dmg.metadata().unwrap().len() > 0, "dmg should be non-empty");

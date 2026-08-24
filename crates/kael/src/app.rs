@@ -11,8 +11,9 @@ use std::{
     path::{Component, Path, PathBuf},
     rc::{Rc, Weak},
     sync::{Arc, atomic::Ordering::SeqCst},
-    time::{Duration, Instant},
+    time::Duration,
 };
+use web_time::Instant;
 
 use anyhow::{Context as _, Result, anyhow};
 use derive_more::{Deref, DerefMut};
@@ -47,7 +48,7 @@ use crate::{
     CommandIpcHandoff, CommandIpcHandoffBuilder, CommandRegistry, CrashReport, CrashReporter,
     CrashReporterBuilder, CursorStyle, DialogOptions, DispatchPhase, DisplayId, DockMenuBuilder,
     DocumentOutputHandoff, DocumentOutputHandoffBuilder, Easing, EventEmitter, ExternalDropData,
-    FileAccessBookmark, FileAccessBookmarkBuilder, FileDropFilter, FileWatchOptions,
+    ExternalFile, FileAccessBookmark, FileAccessBookmarkBuilder, FileDropFilter, FileWatchOptions,
     FileWatchOptionsBuilder, FileWatchSet, FileWatchSetBuilder, FileWatcher, FocusHandle, FocusMap,
     FocusedWindowInfo, FocusedWindowQueryBuilder, ForegroundExecutor, Global, GlobalHotkeyBuilder,
     GlobalHotkeySet, GlobalHotkeyUnregistration, HelperPluginHandoff, HelperPluginHandoffBuilder,
@@ -15510,7 +15511,7 @@ pub enum AdvancedInputRequest {
         /// App-owned hosted surface id.
         surface_id: String,
     },
-    /// Track native gamepad/controller API work.
+    /// Track controller work beyond Kael's portable mapped gamepad API.
     RoadmapGamepad {
         /// Content-safe reason for the roadmap item.
         reason: String,
@@ -15810,7 +15811,7 @@ impl AdvancedInputHandoffBuilder {
         self
     }
 
-    /// Track native gamepad/controller roadmap work.
+    /// Track controller roadmap work beyond portable mapped gamepads.
     pub fn roadmap_gamepad(mut self, reason: impl Into<String>) -> Self {
         self.requests.push(AdvancedInputRequest::RoadmapGamepad {
             reason: reason.into(),
@@ -34519,14 +34520,49 @@ impl App {
         });
 
         let weak_app = Rc::downgrade(&app);
+        let foreground_executor = platform.foreground_executor();
+        let retry_executor = platform.background_executor();
         platform.on_open_urls(Box::new(move |urls| {
             let Some(app) = weak_app.upgrade() else {
                 return;
             };
 
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                app.borrow_mut().handle_open_urls(urls);
-            }));
+            if let Ok(mut app) = app.try_borrow_mut() {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    app.handle_open_urls(urls);
+                }));
+            } else {
+                // Browser history events and native deep-link callbacks can
+                // arrive while another platform callback is still updating
+                // `App`. Cross the foreground task boundary instead of
+                // re-entering the RefCell and dropping the route on a panic.
+                let weak_app = Rc::downgrade(&app);
+                let retry_executor = retry_executor.clone();
+                foreground_executor
+                    .spawn(async move {
+                        const MAX_BORROW_RETRIES: usize = 8;
+                        for _ in 0..MAX_BORROW_RETRIES {
+                            // A foreground executor wake may be a JavaScript
+                            // microtask and can still run before the outer
+                            // platform callback releases its App borrow. A
+                            // timer crosses an actual browser event-loop turn.
+                            retry_executor.timer(Duration::from_millis(1)).await;
+                            let Some(app) = weak_app.upgrade() else {
+                                return;
+                            };
+                            if let Ok(mut app) = app.try_borrow_mut() {
+                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                    || app.handle_open_urls(urls),
+                                ));
+                                return;
+                            }
+                        }
+                        log::error!(
+                            "dropping platform open-URL delivery after {MAX_BORROW_RETRIES} contended event-loop turns"
+                        );
+                    })
+                    .detach();
+            }
         }));
 
         init_app_menus(platform.as_ref(), &app.borrow());
@@ -35424,6 +35460,85 @@ impl App {
         self.show_notification(&title, &body)
     }
 
+    /// Returns granular support for the optional portable notification service.
+    #[cfg(feature = "notifications-full")]
+    pub fn notification_service_support(
+        &self,
+    ) -> kael_notifications::platform::PlatformNotificationSupport {
+        kael_notifications::platform::support()
+    }
+
+    /// Returns the current notification permission state without opening a prompt.
+    #[cfg(feature = "notifications-full")]
+    pub fn notification_permission_status(
+        &self,
+    ) -> kael_notifications::NotificationPermissionStatus {
+        kael_notifications::platform::permission_status()
+    }
+
+    /// Request notification authorization through the portable asynchronous API.
+    #[cfg(feature = "notifications-full")]
+    pub async fn request_notification_authorization(
+        &self,
+        options: kael_notifications::AuthorizationOptions,
+    ) -> kael_notifications::NotificationOperationResult<
+        kael_notifications::NotificationPermissionStatus,
+    > {
+        match self
+            .permission_broker
+            .check(self.current_process_id, &Capability::Notification)
+        {
+            PermissionResult::Granted => {
+                kael_notifications::NotificationCenter::new()
+                    .request_authorization_portable(options)
+                    .await
+            }
+            PermissionResult::Denied => {
+                Err(kael_notifications::NotificationError::PermissionDenied)
+            }
+            PermissionResult::Prompt => {
+                Err(kael_notifications::NotificationError::PermissionPromptRequired)
+            }
+        }
+    }
+
+    /// Validate, authorize when required, and deliver an immediate notification through one
+    /// desktop/browser call.
+    ///
+    /// Keep an application-owned [`kael_notifications::NotificationCenter`] alive when desktop
+    /// code needs interval scheduling; a one-shot `App` convenience call cannot own that
+    /// scheduler for the requested lifetime.
+    #[cfg(feature = "notifications-full")]
+    pub async fn show_local_notification_portable(
+        &self,
+        notification: kael_notifications::LocalNotification,
+    ) -> kael_notifications::NotificationOperationResult<kael_notifications::NotificationId> {
+        if !matches!(
+            notification.trigger,
+            kael_notifications::NotificationTrigger::Immediate
+        ) {
+            return Err(kael_notifications::NotificationError::UnsupportedTrigger(
+                "the App one-shot adapter only supports immediate delivery; keep a NotificationCenter alive for native interval scheduling",
+            ));
+        }
+        match self
+            .permission_broker
+            .check(self.current_process_id, &Capability::Notification)
+        {
+            PermissionResult::Granted => {
+                kael_notifications::NotificationCenter::new()
+                    .schedule_local_async(notification)
+                    .await
+            }
+            PermissionResult::Denied => {
+                Err(kael_notifications::NotificationError::PermissionDenied)
+            }
+            PermissionResult::Prompt => {
+                Err(kael_notifications::NotificationError::PermissionPromptRequired)
+            }
+        }
+    }
+
     /// Show an OS notification with action buttons.
     pub fn show_notification_with_actions(
         &self,
@@ -36263,6 +36378,15 @@ impl App {
     ) -> Result<kael_share::ShareResult> {
         sheet.validate()?;
         sheet.show().await
+    }
+
+    /// Validate and launch the desktop or browser share picker with typed errors.
+    #[cfg(feature = "share")]
+    pub async fn show_share_sheet_portable(
+        &self,
+        sheet: kael_share::ShareSheet,
+    ) -> kael_share::ShareOperationResult<kael_share::ShareResult> {
+        sheet.show_portable().await
     }
 
     /// Validate and launch a native share sheet from a checked builder.
@@ -37501,6 +37625,53 @@ impl App {
         }
     }
 
+    /// Display a file picker and return portable file bytes.
+    ///
+    /// This is the shared desktop/browser contract. Desktop backends adapt
+    /// selected paths into bytes off the UI thread; browsers use their native
+    /// file picker without inventing unusable `PathBuf` values.
+    pub fn prompt_for_files(
+        &self,
+        options: PathPromptOptions,
+    ) -> oneshot::Receiver<Result<Option<Vec<ExternalFile>>>> {
+        match self.permission_broker.check(
+            self.current_process_id,
+            &Capability::FilesystemRead {
+                scope: PathScope::UserSelected,
+            },
+        ) {
+            PermissionResult::Granted => self.platform.prompt_for_files(options),
+            PermissionResult::Denied => {
+                let (tx, rx) = oneshot::channel();
+                tx.send(Err(anyhow!("capability denied: FilesystemRead")))
+                    .ok();
+                rx
+            }
+            PermissionResult::Prompt => {
+                let (tx, rx) = oneshot::channel();
+                tx.send(Err(anyhow!("capability prompt required: FilesystemRead")))
+                    .ok();
+                rx
+            }
+        }
+    }
+
+    /// Show an open dialog that returns portable byte-backed files.
+    pub fn show_open_files(
+        &self,
+        dialog: OpenDialogBuilder,
+    ) -> oneshot::Receiver<Result<Option<Vec<ExternalFile>>>> {
+        let plan = match self.open_dialog_checked(dialog) {
+            Ok(plan) => plan,
+            Err(error) => {
+                let (tx, rx) = oneshot::channel();
+                tx.send(Err(error)).ok();
+                return rx;
+            }
+        };
+        self.prompt_for_files(plan.into_options())
+    }
+
     /// Shows a native open dialog using the builder-friendly API.
     pub fn show_open_dialog(
         &self,
@@ -37582,6 +37753,44 @@ impl App {
         };
         let (directory, suggested_name) = plan.into_parts();
         self.prompt_for_new_path(&directory, suggested_name.as_deref())
+    }
+
+    /// Save encoded file bytes through one desktop/browser API.
+    ///
+    /// Desktop backends show the native Save As dialog and report `true` after
+    /// the write completes. Browser backends synchronously initiate a Blob
+    /// download and report `true`; cancellation is represented as `false` on
+    /// platforms whose save dialog exposes it.
+    pub fn save_file_bytes(
+        &self,
+        dialog: SaveDialogBuilder,
+        bytes: impl Into<Vec<u8>>,
+        mime_type: impl Into<String>,
+    ) -> oneshot::Receiver<Result<bool>> {
+        let plan = match self.save_dialog_checked(dialog) {
+            Ok(plan) => plan,
+            Err(error) => {
+                let (tx, rx) = oneshot::channel();
+                tx.send(Err(error)).ok();
+                return rx;
+            }
+        };
+        let mime_type = mime_type.into();
+        if mime_type.len() > 255
+            || !mime_type.contains('/')
+            || mime_type.chars().any(char::is_control)
+        {
+            let (tx, rx) = oneshot::channel();
+            tx.send(Err(anyhow!("invalid export MIME type"))).ok();
+            return rx;
+        }
+        let (directory, suggested_name) = plan.into_parts();
+        self.platform.save_file_bytes(
+            directory,
+            suggested_name,
+            mime_type,
+            Arc::from(bytes.into()),
+        )
     }
 
     /// Validate a native save dialog and required capability without showing it.
@@ -41211,6 +41420,47 @@ mod test {
     }
 
     #[test]
+    fn reentrant_platform_open_urls_are_deferred_without_being_dropped() {
+        let mut cx = TestAppContext::single();
+        let delivered = Rc::new(RefCell::new(Vec::new()));
+        cx.app.on_open_urls({
+            let delivered = delivered.clone();
+            move |urls| delivered.borrow_mut().extend(urls)
+        });
+
+        let platform_event = cx.clone();
+        cx.update(|_| {
+            // The platform callback runs while the application's RefCell is
+            // deliberately borrowed by `update`, matching browser event
+            // reentrancy during a retained UI callback.
+            platform_event.simulate_open_urls(&["https://example.com/deferred"]);
+        });
+        assert!(delivered.borrow().is_empty());
+
+        cx.run_until_parked();
+        assert!(delivered.borrow().is_empty());
+        cx.executor().advance_clock(Duration::from_millis(1));
+        cx.run_until_parked();
+        assert_eq!(
+            delivered.borrow().as_slice(),
+            ["https://example.com/deferred"]
+        );
+    }
+
+    #[test]
+    fn async_app_update_reports_reentrant_borrows_without_panicking() {
+        let cx = TestAppContext::single();
+        let async_cx = cx.update(|cx| cx.to_async());
+
+        cx.update(|_| {
+            let error = async_cx
+                .update(|_| ())
+                .expect_err("a reentrant async app update must remain fallible");
+            assert!(error.to_string().contains("already borrowed"));
+        });
+    }
+
+    #[test]
     fn panicking_open_observers_are_restored_and_do_not_block_peers() {
         let cx = TestAppContext::single();
         let counts = Rc::new(RefCell::new([0usize; 5]));
@@ -44645,6 +44895,14 @@ mod test {
     #[test]
     fn file_export_drag_checked_preflights_existing_file_capability() {
         let cx = TestAppContext::single();
+        cx.update(|app| {
+            app.configure_permission_broker_checked(
+                PermissionBrokerInstallBuilder::new()
+                    .threat_model(ThreatModel::default())
+                    .deny_ungranted(),
+            )
+        })
+        .unwrap();
         let root = std::env::temp_dir().join(format!(
             "kael_file_export_capability_{}",
             std::process::id()
@@ -47610,13 +47868,13 @@ mod test {
             .unwrap();
 
         assert!(report.grants(&Capability::ShellExecute));
-        assert_eq!(report.default_capability_count(), 4);
-        assert_eq!(report.granted_capability_count(), 5);
+        assert_eq!(report.default_capability_count(), 6);
+        assert_eq!(report.granted_capability_count(), 7);
         assert!(report.has_prompt_policy());
         assert_eq!(
             report.to_text(),
             format!(
-                "permission broker process {} Ui: 4 default capabilities, 5 granted capabilities, prompt policy Denied",
+                "permission broker process {} Ui: 6 default capabilities, 7 granted capabilities, prompt policy Denied",
                 process_id.0
             )
         );

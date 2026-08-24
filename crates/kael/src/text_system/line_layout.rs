@@ -425,6 +425,12 @@ impl GlobalLineLayoutCache {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn clear(&self) {
+        self.lines.write().clear();
+        self.wrapped_lines.write().clear();
+    }
+
     fn get_line(&self, key: &dyn AsCacheKeyRef) -> Option<Arc<LineLayout>> {
         let lines = self.lines.read();
         if let Some(entry) = lines.get(key) {
@@ -537,6 +543,13 @@ impl LineLayoutCache {
             platform_text_system,
             global_cache,
         }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn clear(&self) {
+        *self.previous_frame.lock() = FrameCache::default();
+        *self.current_frame.write() = FrameCache::default();
+        self.global_cache.clear();
     }
 
     pub fn layout_index(&self) -> LineLayoutIndex {

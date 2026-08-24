@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en" data-kael-suite-workloads="pending">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <meta name="color-scheme" content="dark light" />
+    <title>Kael suite-scale parity smoke</title>
+    <style>
+      html,
+      body,
+      #blade {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        overflow: hidden;
+        background: #111827;
+      }
+      #blade {
+        display: block;
+        touch-action: none;
+      }
+      #failure {
+        position: fixed;
+        inset: 1rem;
+        z-index: 1000;
+        overflow: auto;
+        padding: 1rem;
+        border: 1px solid #f87171;
+        border-radius: 0.75rem;
+        background: rgb(17 24 39 / 96%);
+        color: #fecaca;
+        font: 13px/1.5 ui-monospace, monospace;
+        white-space: pre-wrap;
+      }
+      #failure:empty {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas
+      id="blade"
+      aria-label="Kael suite-scale application"
+      data-kael-verify-pixels="true"
+    ></canvas>
+    <pre id="failure" role="alert"></pre>
+    <script type="module">
+      import init from "./suite_scale_smoke.js";
+
+      const requestPixelEvidence = () => {
+        for (const canvas of document.querySelectorAll("canvas")) {
+          if (!canvas.dataset.kaelPixelReadback) {
+            canvas.dataset.kaelVerifyPixels = "true";
+          }
+        }
+      };
+      const canvasObserver = new MutationObserver(requestPixelEvidence);
+      canvasObserver.observe(document.body, { childList: true, subtree: true });
+      requestPixelEvidence();
+
+      const nextFrame = () =>
+        new Promise((resolve) => requestAnimationFrame(resolve));
+      const nextTask = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+      async function waitFor(predicate, description, milliseconds = 20_000) {
+        const deadline = performance.now() + milliseconds;
+        while (performance.now() < deadline) {
+          if (predicate()) return;
+          await nextFrame();
+        }
+        throw new Error(`Timed out waiting for ${description}`);
+      }
+
+      function number(name) {
+        return Number(document.documentElement.dataset[name]);
+      }
+
+      async function mountResponsiveOffscreenWorkloads(canvas) {
+        const root = document.documentElement.dataset;
+        await waitFor(
+          () =>
+            root.kaelSuiteWorkloads === "passed" &&
+            root.kaelSuiteSheetCache === "passed" &&
+            canvas.dataset.kaelFrame === "presented",
+          "initial retained suite frame",
+        );
+        if (root.kaelSuiteSlidesVirtual === "passed") return;
+
+        const bounds = canvas.getBoundingClientRect();
+        const wheel = (deltaY) =>
+          canvas.dispatchEvent(
+            new WheelEvent("wheel", {
+              bubbles: true,
+              cancelable: true,
+              deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+              deltaY,
+              // Stay in the retained root's right padding so nested sheet,
+              // document, or thumbnail scrollers do not consume this wheel.
+              clientX: bounds.right - 2,
+              clientY: bounds.top + bounds.height / 2,
+            }),
+          );
+        for (let step = 0; step < 8 && root.kaelSuiteSlidesVirtual !== "passed"; step += 1) {
+          wheel(420);
+          await nextFrame();
+          await nextFrame();
+        }
+        await waitFor(
+          () => root.kaelSuiteSlidesVirtual === "passed",
+          "responsive offscreen slide mounting",
+        );
+
+        wheel(-10_000);
+        await waitFor(() => {
+          const target = document.querySelector(
+            '#kael-accessibility-layer [role="group"]' +
+              '[aria-label="Suite rich pointer CI target"]',
+          );
+          const targetBounds = target?.getBoundingClientRect();
+          return targetBounds && targetBounds.top >= 0 && targetBounds.bottom <= bounds.bottom;
+        }, "responsive suite scroll restoration");
+        root.kaelSuiteResponsiveMount = "passed";
+      }
+
+      async function verifySecondaryWindowInitialFocus() {
+        await waitFor(() => {
+          const canvases = [...document.querySelectorAll(
+            'canvas[data-kael-window-surface-id]',
+          )];
+          const secondary = canvases.find(
+            (canvas) => canvas.dataset.kaelWindowPrimary === "false",
+          );
+          return (
+            number("kaelWindowCount") === 2 &&
+            number("kaelSecondaryWindowCount") === 1 &&
+            canvases.length === 2 &&
+            secondary &&
+            document.documentElement.dataset.kaelActiveWindow ===
+              secondary.dataset.kaelWindowSurfaceId
+          );
+        }, "focused secondary browser window");
+        document.documentElement.dataset.kaelSuiteSecondaryInitialFocus = "passed";
+      }
+
+      async function exerciseSecondaryWindowLifecycle() {
+        await waitFor(() => {
+          const canvases = [...document.querySelectorAll(
+            'canvas[data-kael-window-surface-id]',
+          )];
+          const ids = new Set(
+            canvases.map((canvas) => canvas.dataset.kaelWindowSurfaceId),
+          );
+          return (
+            document.documentElement.dataset.kaelSuiteSecondaryRendered === "true" &&
+            number("kaelWindowCount") === 2 &&
+            number("kaelSecondaryWindowCount") === 1 &&
+            canvases.length === 2 &&
+            ids.size === 2 &&
+            canvases.every(
+              (canvas) =>
+                canvas.dataset.kaelFrame === "presented" &&
+                canvas.dataset.kaelPixelReadback === "verified",
+            )
+          );
+        }, "two independent retained browser window surfaces");
+
+        const activeSurface = document.documentElement.dataset.kaelActiveWindow;
+        const primary = document.querySelector(
+          'canvas[data-kael-window-primary="true"]',
+        );
+        const secondary = document.querySelector(
+          'canvas[data-kael-window-primary="false"]',
+        );
+        if (
+          !primary ||
+          !secondary
+        ) {
+          throw new Error("Independent retained window surfaces disappeared");
+        }
+        if (activeSurface !== secondary.dataset.kaelWindowSurfaceId) {
+          secondary.focus();
+          await waitFor(
+            () =>
+              document.documentElement.dataset.kaelActiveWindow ===
+              secondary.dataset.kaelWindowSurfaceId,
+            "secondary window refocus before semantic close",
+          );
+        }
+
+        let closeButton;
+        await waitFor(() => {
+          closeButton = [...document.querySelectorAll(
+            '#kael-accessibility-layer-2 [role="button"], ' +
+              '#kael-accessibility-layer-1 [role="button"], ' +
+              '[id^="kael-accessibility-layer-"] [role="button"]',
+          )].find((button) => button.getAttribute("aria-label") === "Close parity window");
+          return Boolean(closeButton);
+        }, "secondary window semantic close action");
+        closeButton.click();
+
+        await waitFor(() => {
+          const canvases = [...document.querySelectorAll(
+            'canvas[data-kael-window-surface-id]',
+          )];
+          const primary = canvases.find(
+            (canvas) => canvas.dataset.kaelWindowPrimary === "true",
+          );
+          return (
+            number("kaelWindowCount") === 1 &&
+            number("kaelSecondaryWindowCount") === 0 &&
+            canvases.length === 1 &&
+            primary &&
+            document.documentElement.dataset.kaelActiveWindow ===
+              primary.dataset.kaelWindowSurfaceId &&
+            document.querySelectorAll('[data-kael-window-host="true"]').length === 0
+          );
+        }, "secondary retained window cleanup");
+        document.documentElement.dataset.kaelSuiteMultiWindow = "passed";
+      }
+
+      async function exerciseRouteLifecycle() {
+        const root = document.documentElement.dataset;
+        if (
+          root.kaelSuiteRouteHook !== "registered" ||
+          root.kaelSuiteReopenHook !== "registered"
+        ) {
+          throw new Error("App URL/reopen hooks were not registered");
+        }
+
+        const navigationEntries = performance.getEntriesByType("navigation").length;
+        const timeOrigin = performance.timeOrigin;
+
+        // URL hooks can mutate application state, so begin routing from a fresh
+        // browser task rather than from the microtask that observed a frame.
+        await nextTask();
+        location.hash = "kael-suite-bootstrap-route";
+        const bootstrapHref = location.href;
+        await waitFor(
+          () =>
+            number("kaelSuiteRouteEventCount") > 0 &&
+            root.kaelSuiteRouteUrl === bootstrapHref,
+          "bootstrap current URL delivery",
+        );
+        const initialCount = number("kaelSuiteRouteEventCount");
+
+        await nextTask();
+        location.hash = "kael-suite-hash-route";
+        const hashHref = location.href;
+        await waitFor(
+          () =>
+            number("kaelSuiteRouteEventCount") > initialCount &&
+            root.kaelSuiteRouteUrl === hashHref,
+          "hashchange route delivery",
+        );
+        root.kaelSuiteHashRoute = "passed";
+
+        history.pushState(
+          { kaelSuiteRoute: "pushed" },
+          "",
+          "?__kael_suite_route__=push#kael-suite-pop-route",
+        );
+        const pushedHref = location.href;
+        const beforeBack = number("kaelSuiteRouteEventCount");
+        history.back();
+        await waitFor(
+          () =>
+            location.href === hashHref &&
+            number("kaelSuiteRouteEventCount") > beforeBack &&
+            root.kaelSuiteRouteUrl === hashHref,
+          "same-document history back route delivery",
+        );
+
+        const beforeForward = number("kaelSuiteRouteEventCount");
+        history.forward();
+        await waitFor(
+          () =>
+            location.href === pushedHref &&
+            number("kaelSuiteRouteEventCount") > beforeForward &&
+            root.kaelSuiteRouteUrl === pushedHref,
+          "same-document popstate route delivery",
+        );
+
+        if (
+          performance.timeOrigin !== timeOrigin ||
+          performance.getEntriesByType("navigation").length !== navigationEntries
+        ) {
+          throw new Error("Same-document routing unexpectedly reloaded the application");
+        }
+        root.kaelSuitePopstateRoute = "passed";
+        root.kaelSuiteCurrentUrl = "passed";
+        root.kaelSuiteNoReload = "passed";
+        root.kaelSuiteRouteLifecycle = "passed";
+      }
+
+      async function exerciseRichPointer(canvas) {
+        let surface;
+        await waitFor(() => {
+          surface = document.querySelector(
+            '#kael-accessibility-layer [role="group"]' +
+              '[aria-label="Suite rich pointer CI target"]',
+          );
+          return Boolean(surface);
+        }, "rich pointer semantic target");
+        const bounds = surface.getBoundingClientRect();
+        if (bounds.width <= 0 || bounds.height <= 0) {
+          throw new Error("Whiteboard pointer surface has no retained bounds");
+        }
+        const clientX = bounds.left + Math.min(bounds.width / 2, 40);
+        const clientY = bounds.top + Math.min(bounds.height / 2, 40);
+        const canvasBounds = canvas.getBoundingClientRect();
+        const root = document.documentElement.dataset;
+        root.kaelSuitePointerCanvasRect = [
+          canvasBounds.left,
+          canvasBounds.top,
+          canvasBounds.width,
+          canvasBounds.height,
+        ].join(",");
+        root.kaelSuitePointerCanvasBuffer = `${canvas.width},${canvas.height}`;
+        root.kaelSuitePointerDevicePixelRatio = String(devicePixelRatio);
+        root.kaelSuitePointerTargetRect = [
+          bounds.left,
+          bounds.top,
+          bounds.width,
+          bounds.height,
+        ].join(",");
+        root.kaelSuitePointerCoordinates = `${clientX},${clientY}`;
+        let domPointerEvents = 0;
+        const observeDomPointer = () => {
+          domPointerEvents += 1;
+          root.kaelSuiteDomPointerEvents = String(domPointerEvents);
+        };
+        canvas.addEventListener("pointerdown", observeDomPointer, { once: true });
+        canvas.addEventListener("pointermove", observeDomPointer, { once: true });
+        canvas.addEventListener("pointerup", observeDomPointer, { once: true });
+        canvas.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            bubbles: true,
+            cancelable: true,
+            pointerId: 71,
+            pointerType: "pen",
+            isPrimary: true,
+            buttons: 1,
+            button: 0,
+            pressure: 0.7,
+            clientX,
+            clientY,
+          }),
+        );
+        canvas.dispatchEvent(
+          new PointerEvent("pointermove", {
+            bubbles: true,
+            cancelable: true,
+            pointerId: 71,
+            pointerType: "pen",
+            isPrimary: true,
+            buttons: 1,
+            pressure: 0.8,
+            clientX: clientX + 8,
+            clientY: clientY + 4,
+          }),
+        );
+        canvas.dispatchEvent(
+          new PointerEvent("pointerup", {
+            bubbles: true,
+            cancelable: true,
+            pointerId: 71,
+            pointerType: "pen",
+            isPrimary: true,
+            buttons: 0,
+            button: 0,
+            pressure: 0,
+            clientX: clientX + 8,
+            clientY: clientY + 4,
+          }),
+        );
+        await waitFor(
+          () => document.documentElement.dataset.kaelSuitePointer === "passed",
+          "rich pointer completion",
+        );
+      }
+
+      function publishLiveTableMounts() {
+        const grid = document.querySelector(
+          '[role="grid"][aria-label="Spreadsheet grid"]',
+        );
+        const rowNodes = [...(grid?.querySelectorAll('[role="row"]') ?? [])]
+          .filter((row) => row.querySelector('[role="cell"]'));
+        const cellNodes = [...(grid?.querySelectorAll('[role="cell"]') ?? [])];
+        const mountedRows = rowNodes.length;
+        const mountedColumns = rowNodes.reduce(
+          (maximum, row) =>
+            Math.max(maximum, row.querySelectorAll('[role="cell"]').length),
+          0,
+        );
+        const root = document.documentElement.dataset;
+        root.kaelSuiteSheetLiveMountedRows = String(mountedRows);
+        root.kaelSuiteSheetLiveMountedColumns = String(mountedColumns);
+        root.kaelSuiteSheetLiveMountedCells = String(cellNodes.length);
+        if (
+          mountedRows > 0 &&
+          mountedRows <= 64 &&
+          mountedColumns > 0 &&
+          mountedColumns <= 16 &&
+          cellNodes.length > 0 &&
+          cellNodes.length <= 1_024
+        ) {
+          root.kaelSuiteSheetLiveMounts = "passed";
+        }
+      }
+
+      function validateProbe() {
+        const root = document.documentElement.dataset;
+        const failures = [];
+        const primaryCanvas = document.querySelector(
+          'canvas[data-kael-window-primary="true"]',
+        );
+        publishLiveTableMounts();
+        if (root.kaelSuiteWorkloads !== "passed") failures.push("model probe");
+        if (number("kaelSuiteSheetRows") !== 1_000_000) failures.push("sheet rows");
+        if (number("kaelSuiteSheetColumns") !== 16_384) failures.push("sheet columns");
+        if (number("kaelSuiteSheetMountedCells") > 2_048) failures.push("sheet mount");
+        if (root.kaelSuiteSheetCache !== "passed") failures.push("sheet page cache");
+        if (number("kaelSuiteSheetCachedPages") > number("kaelSuiteSheetMaxPages")) {
+          failures.push("sheet cache bound");
+        }
+        if (
+          number("kaelSuiteSheetCachedRows") >
+          number("kaelSuiteSheetMaxPages") * 4_096
+        ) {
+          failures.push("sheet cached cells");
+        }
+        if (number("kaelSuiteSheetRenderColumns") !== 16_384) failures.push("2-axis table");
+        if (root.kaelSuiteSheetLiveMounts !== "passed") failures.push("live 2-axis mounts");
+        if (root.kaelSuiteSheetSelection !== "passed") failures.push("compressed selection");
+        if (root.kaelSuiteSheetSelectionRepresentation !== "anchor_focus") {
+          failures.push("selection representation");
+        }
+        if (number("kaelSuiteSheetSelectionStored") !== 2) failures.push("selection storage");
+        if (number("kaelSuiteSheetSelectionCount") !== 16_384_000_000) {
+          failures.push("selection count");
+        }
+        if (number("kaelSuiteDocumentBlocks") !== 250_000) failures.push("document blocks");
+        if (root.kaelSuiteDocumentVirtual !== "passed") failures.push("document mounting");
+        if (number("kaelSuiteDocumentMountedPages") > 8) failures.push("document mount bound");
+        if (number("kaelSuiteSlides") !== 10_000) failures.push("slides");
+        if (root.kaelSuiteSlidesVirtual !== "passed") failures.push("thumbnail mounting");
+        if (number("kaelSuiteSlidesMounted") > 16) failures.push("thumbnail bound");
+        if (number("kaelSuiteWhiteboardShapes") !== 100_000) failures.push("whiteboard shapes");
+        if (root.kaelSuiteWhiteboardRender !== "passed") failures.push("whiteboard render");
+        if (number("kaelSuiteWhiteboardRendered") > 512) failures.push("shape culling");
+        if (number("kaelSuiteWhiteboardRenderCandidates") > 1_024) {
+          failures.push("spatial candidates");
+        }
+        if (number("kaelSuiteWhiteboardTileBytes") > 524_288) failures.push("tile cache");
+        if (number("kaelSuiteFrameUpdates") > 8) failures.push("frame catch-up");
+        if (root.kaelSuiteFrameExport !== "passed") failures.push("PNG frame export");
+        if (number("kaelSuiteFrameExportBytes") <= 1_024) failures.push("PNG export bytes");
+        if (root.kaelSuiteMultiWindow !== "passed") failures.push("multi-window lifecycle");
+        if (root.kaelSuiteSecondaryInitialFocus !== "passed") {
+          failures.push("secondary initial focus");
+        }
+        if (number("kaelWindowCount") !== 1 || number("kaelSecondaryWindowCount") !== 0) {
+          failures.push("multi-window cleanup");
+        }
+        if (root.kaelSuitePointer !== "passed") failures.push("rich pointer");
+        if (root.kaelSuitePointerDispatch !== "up") {
+          failures.push("rich pointer dispatch phases");
+        }
+        if (number("kaelSuiteDomPointerEvents") !== 3) {
+          failures.push("browser DOM pointer sequence");
+        }
+        if (root.kaelSuiteLegacyMouseDispatch !== "passed") {
+          failures.push("pointer compatibility mouse dispatch");
+        }
+        if (number("kaelSuiteActivePointers") !== 0) failures.push("pointer cleanup");
+        if (root.kaelSuiteRouteLifecycle !== "passed") failures.push("route lifecycle");
+        if (root.kaelSuiteHashRoute !== "passed") failures.push("hashchange route");
+        if (root.kaelSuitePopstateRoute !== "passed") failures.push("popstate route");
+        if (root.kaelSuiteCurrentUrl !== "passed") failures.push("current URL delivery");
+        if (root.kaelSuiteNoReload !== "passed") failures.push("same-document routing");
+        if (root.kaelSuiteReopenHook !== "registered") failures.push("reopen hook");
+        const semanticNodes = Number(primaryCanvas?.dataset.kaelAccessibilityNodes);
+        if (!Number.isFinite(semanticNodes) || semanticNodes <= 0 || semanticNodes > 768) {
+          failures.push("bounded retained/semantic mounts");
+        } else {
+          root.kaelSuiteBoundedMounts = "passed";
+          root.kaelSuiteSemanticNodes = String(semanticNodes);
+        }
+        if (failures.length) {
+          throw new Error(`Suite-scale checks failed: ${failures.join(", ")}`);
+        }
+        root.kaelSuiteInputParity = "passed";
+      }
+
+      try {
+        await init({ module_or_path: "./suite_scale_smoke_bg.wasm" });
+        const canvas = document.querySelector("#blade");
+        await mountResponsiveOffscreenWorkloads(canvas);
+        try {
+          await waitFor(
+            () =>
+              document.documentElement.dataset.kaelSuiteWorkloads === "passed" &&
+              document.documentElement.dataset.kaelSuiteSheetCache === "passed" &&
+              document.documentElement.dataset.kaelSuiteSheetSelection === "passed" &&
+              document.documentElement.dataset.kaelSuiteDocumentVirtual === "passed" &&
+              document.documentElement.dataset.kaelSuiteSlidesVirtual === "passed" &&
+              document.documentElement.dataset.kaelSuiteWhiteboardRender === "passed" &&
+              document.documentElement.dataset.kaelSuiteFrameExport === "passed" &&
+              canvas.dataset.kaelFrame === "presented" &&
+              canvas.dataset.kaelPixelReadback === "verified",
+            "suite renderer evidence",
+          );
+        } catch (error) {
+          const root = document.documentElement.dataset;
+          throw new Error(
+            `Suite renderer evidence incomplete: ${JSON.stringify({
+              workloads: root.kaelSuiteWorkloads,
+              sheetCache: root.kaelSuiteSheetCache,
+              sheetSelection: root.kaelSuiteSheetSelection,
+              documentVirtual: root.kaelSuiteDocumentVirtual,
+              slidesVirtual: root.kaelSuiteSlidesVirtual,
+              whiteboardRender: root.kaelSuiteWhiteboardRender,
+              frameExport: root.kaelSuiteFrameExport,
+              frameExportError: root.kaelSuiteFrameExportError,
+              frame: canvas.dataset.kaelFrame,
+              pixels: canvas.dataset.kaelPixelReadback,
+            })}; ${error.message}`,
+          );
+        }
+        await verifySecondaryWindowInitialFocus();
+        await exerciseRouteLifecycle();
+        await exerciseSecondaryWindowLifecycle();
+        await exerciseRichPointer(canvas);
+        validateProbe();
+        document.documentElement.dataset.kaelSuiteReady = "true";
+        await fetch(
+            "/?__kael_suite_pass__=1&rows=1000000&columns=16384&blocks=250000" +
+            "&slides=10000&shapes=100000&selection=anchor_focus&pointer=passed" +
+            "&windows=passed&routes=passed&mounts=bounded&export=png",
+          { cache: "no-store" },
+        );
+        if (document.documentElement.dataset.kaelSuiteResponsiveMount === "passed") {
+          await fetch(
+            "/?__kael_suite_compact_pass__=1&layout=compact&mounts=bounded",
+            { cache: "no-store" },
+          );
+        }
+      } catch (error) {
+        document.documentElement.dataset.kaelSuiteReady = "false";
+        document.querySelector("#failure").textContent =
+          `Kael suite smoke failed:\n${error?.stack ?? error}`;
+        await fetch(
+          `/?__kael_suite_failed__=1&message=${encodeURIComponent(String(error))}`,
+          { cache: "no-store" },
+        ).catch(() => {});
+        throw error;
+      }
+    </script>
+  </body>
+</html>

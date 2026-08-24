@@ -14,6 +14,43 @@ use media::core_video::CVMetalTextureCache;
 use std::sync::Arc;
 
 const MAX_FRAME_TIME_MS: u32 = 10000;
+const MAX_SCENE_READBACK_BYTES: usize = 256 * 1024 * 1024;
+const SCENE_READBACK_ROW_ALIGNMENT: usize = 256;
+
+pub struct BladeSceneReadback {
+    pub width: u32,
+    pub height: u32,
+    /// Pixels normalized to premultiplied BGRA byte order.
+    pub bgra: Vec<u8>,
+    pub premultiplied_alpha: bool,
+}
+
+#[derive(Clone, Copy)]
+struct BladeReadbackTarget {
+    texture: gpu::Texture,
+    view: gpu::TextureView,
+}
+
+#[derive(Clone, Copy)]
+struct BladeReadbackLayout {
+    width: u32,
+    height: u32,
+    padded_row_bytes: u32,
+    row_bytes: usize,
+    allocation_bytes: u64,
+    format: gpu::TextureFormat,
+}
+
+struct PendingBladeReadback {
+    buffer: gpu::Buffer,
+    target: BladeReadbackTarget,
+    width: u32,
+    height: u32,
+    padded_row_bytes: usize,
+    row_bytes: usize,
+    format: gpu::TextureFormat,
+    premultiplied_alpha: bool,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -410,6 +447,10 @@ pub struct BladeRenderer {
     surface_config: gpu::SurfaceConfig,
     command_encoder: gpu::CommandEncoder,
     last_sync_point: Option<gpu::SyncPoint>,
+    /// Readback buffers whose copy submission did not complete within the
+    /// synchronous export deadline. They remain alive until the queue's
+    /// tracked sync point completes (or the device reports a terminal error).
+    deferred_readbacks: Vec<PendingBladeReadback>,
     pipelines: BladePipelines,
     instance_belt: BufferBelt,
     atlas: Arc<BladeAtlas>,
@@ -526,6 +567,7 @@ impl BladeRenderer {
             surface_config,
             command_encoder,
             last_sync_point: None,
+            deferred_readbacks: Vec::new(),
             pipelines,
             instance_belt,
             atlas,
@@ -548,31 +590,51 @@ impl BladeRenderer {
     }
 
     fn wait_for_gpu(&mut self) {
-        if let Some(last_sp) = self.last_sync_point.take()
-            && !self
+        let waited_for_submission = if let Some(last_sp) = self.last_sync_point.take() {
+            if !self
                 .gpu
                 .wait_for(&last_sp, MAX_FRAME_TIME_MS)
                 .unwrap_or(true)
-        {
-            log::error!("GPU hung");
-            #[cfg(target_os = "linux")]
-            if self.gpu.device_information().driver_name == "radv" {
+            {
+                log::error!("GPU hung");
+                #[cfg(target_os = "linux")]
+                if self.gpu.device_information().driver_name == "radv" {
+                    log::error!(
+                        "there's a known bug with amdgpu/radv, try setting KAEL_PATH_SAMPLE_COUNT=0 as a workaround"
+                    );
+                    log::error!(
+                        "if that helps you're running into a known amdgpu/radv rendering issue"
+                    );
+                }
                 log::error!(
-                    "there's a known bug with amdgpu/radv, try setting KAEL_PATH_SAMPLE_COUNT=0 as a workaround"
+                    "your device information is: {:?}",
+                    self.gpu.device_information()
                 );
-                log::error!(
-                    "if that helps you're running into a known amdgpu/radv rendering issue"
-                );
+                while !self
+                    .gpu
+                    .wait_for(&last_sp, MAX_FRAME_TIME_MS)
+                    .unwrap_or(true)
+                {}
             }
-            log::error!(
-                "your device information is: {:?}",
-                self.gpu.device_information()
+            true
+        } else {
+            false
+        };
+
+        if waited_for_submission {
+            // Blade's Vulkan backend frees memory immediately in
+            // destroy_buffer, so these must never be released before the copy
+            // submission is complete. A wait error is terminal for the device
+            // and therefore also ends use of its queued resources.
+            let deferred = std::mem::take(&mut self.deferred_readbacks);
+            for pending in deferred {
+                self.destroy_scene_readback_resources(pending);
+            }
+        } else {
+            debug_assert!(
+                self.deferred_readbacks.is_empty(),
+                "deferred Blade readback buffers require a tracked sync point"
             );
-            while !self
-                .gpu
-                .wait_for(&last_sp, MAX_FRAME_TIME_MS)
-                .unwrap_or(true)
-            {}
         }
     }
 
@@ -805,20 +867,55 @@ impl BladeRenderer {
     }
 
     pub fn draw(&mut self, scene: &Scene) {
+        if let Err(error) = self.draw_internal(scene, false) {
+            log::error!("Blade scene rendering failed: {error:#}");
+        }
+    }
+
+    pub fn render_scene_to_bgra(&mut self, scene: &Scene) -> anyhow::Result<BladeSceneReadback> {
+        self.draw_internal(scene, true)?
+            .ok_or_else(|| anyhow::anyhow!("Blade scene readback was not produced"))
+    }
+
+    fn draw_internal(
+        &mut self,
+        scene: &Scene,
+        capture: bool,
+    ) -> anyhow::Result<Option<BladeSceneReadback>> {
+        if !self.deferred_readbacks.is_empty() {
+            self.wait_for_gpu();
+        }
+        let readback_layout = capture.then(|| self.scene_readback_layout()).transpose()?;
         self.command_encoder.start();
         self.atlas.before_frame(&mut self.command_encoder);
 
-        let frame = {
+        let frame = if capture {
+            None
+        } else {
             profiling::scope!("acquire frame");
-            self.surface.acquire_frame()
+            Some(self.surface.acquire_frame())
         };
-        self.command_encoder.init_texture(frame.texture());
+        let readback_target =
+            readback_layout.map(|layout| self.create_scene_readback_target(layout.format));
+        let (target_texture, target_view) = if let Some(target) = readback_target {
+            (target.texture, target.view)
+        } else {
+            let frame = frame
+                .as_ref()
+                .expect("a non-capture Blade draw must acquire a surface frame");
+            (frame.texture(), frame.texture_view())
+        };
+        self.command_encoder.init_texture(target_texture);
 
         let globals = GlobalParams {
             viewport_size: [
                 self.surface_config.size.width as f32,
                 self.surface_config.size.height as f32,
             ],
+            // Reuse the surface pipeline's matching shader/blend contract.
+            // Both contracts leave premultiplied pixels in the render target:
+            // straight shader output is multiplied by ALPHA_BLENDING, while
+            // premultiplied shader output uses PREMULTIPLIED_ALPHA_BLENDING.
             premultiplied_alpha: match self.surface.info().alpha {
                 gpu::AlphaMode::Ignored | gpu::AlphaMode::PostMultiplied => 0,
                 gpu::AlphaMode::PreMultiplied => 1,
@@ -830,7 +927,7 @@ impl BladeRenderer {
             "main",
             gpu::RenderTargetSet {
                 colors: &[gpu::RenderTarget {
-                    view: frame.texture_view(),
+                    view: target_view,
                     init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
                     finish_op: gpu::FinishOp::Store,
                 }],
@@ -843,17 +940,12 @@ impl BladeRenderer {
             match batch {
                 PrimitiveBatch::BlurRects(blur_rects) => {
                     drop(pass);
-                    self.draw_blur_rects(
-                        blur_rects,
-                        frame.texture(),
-                        frame.texture_view(),
-                        globals,
-                    );
+                    self.draw_blur_rects(blur_rects, target_texture, target_view, globals);
                     pass = self.command_encoder.render(
                         "main",
                         gpu::RenderTargetSet {
                             colors: &[gpu::RenderTarget {
-                                view: frame.texture_view(),
+                                view: target_view,
                                 init_op: gpu::InitOp::Load,
                                 finish_op: gpu::FinishOp::Store,
                             }],
@@ -900,7 +992,7 @@ impl BladeRenderer {
                         "main",
                         gpu::RenderTargetSet {
                             colors: &[gpu::RenderTarget {
-                                view: frame.texture_view(),
+                                view: target_view,
                                 init_op: gpu::InitOp::Load,
                                 finish_op: gpu::FinishOp::Store,
                             }],
@@ -1106,7 +1198,13 @@ impl BladeRenderer {
 
         self.draw_cached_surface_snapshots(scene);
 
-        self.command_encoder.present(frame);
+        let pending_readback = readback_target
+            .zip(readback_layout)
+            .map(|(target, layout)| self.enqueue_scene_readback(target, layout));
+
+        if let Some(frame) = frame {
+            self.command_encoder.present(frame);
+        }
         let sync_point = self.gpu.submit(&mut self.command_encoder);
 
         profiling::scope!("finish");
@@ -1121,8 +1219,205 @@ impl BladeRenderer {
         }
         self.atlas.advance_frame();
 
+        let readback = if let Some(pending) = pending_readback {
+            let wait_result = self.gpu.wait_for(&sync_point, MAX_FRAME_TIME_MS);
+            match wait_result {
+                Ok(true) => Some(self.finish_scene_readback(pending)?),
+                Ok(false) => {
+                    // Keep the in-flight resource alive. The current queue
+                    // sync point covers this copy and all earlier work.
+                    self.deferred_readbacks.push(pending);
+                    self.last_sync_point = Some(sync_point);
+                    anyhow::bail!("Blade scene readback timed out waiting for the GPU");
+                }
+                Err(error) => {
+                    self.deferred_readbacks.push(pending);
+                    self.last_sync_point = Some(sync_point);
+                    return Err(anyhow::anyhow!(
+                        "Blade scene readback GPU wait failed: {error:?}"
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
         self.wait_for_gpu();
         self.last_sync_point = Some(sync_point);
+        Ok(readback)
+    }
+
+    fn create_scene_readback_target(&self, format: gpu::TextureFormat) -> BladeReadbackTarget {
+        let texture = self.gpu.create_texture(gpu::TextureDesc {
+            name: "Kael scene readback target",
+            format,
+            size: self.surface_config.size,
+            array_layer_count: 1,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: gpu::TextureDimension::D2,
+            usage: gpu::TextureUsage::TARGET | gpu::TextureUsage::COPY,
+            external: None,
+        });
+        let view = self.gpu.create_texture_view(
+            texture,
+            gpu::TextureViewDesc {
+                name: "Kael scene readback target view",
+                format,
+                dimension: gpu::ViewDimension::D2,
+                subresources: &Default::default(),
+            },
+        );
+        BladeReadbackTarget { texture, view }
+    }
+
+    fn scene_readback_layout(&self) -> anyhow::Result<BladeReadbackLayout> {
+        let width = self.surface_config.size.width;
+        let height = self.surface_config.size.height;
+        anyhow::ensure!(
+            width > 0 && height > 0,
+            "Blade scene readback target is empty"
+        );
+        let format = self.surface.info().format;
+        anyhow::ensure!(
+            matches!(
+                format,
+                gpu::TextureFormat::Bgra8Unorm
+                    | gpu::TextureFormat::Bgra8UnormSrgb
+                    | gpu::TextureFormat::Rgba8Unorm
+                    | gpu::TextureFormat::Rgba8UnormSrgb
+            ),
+            "Blade scene readback does not support surface format {format:?}"
+        );
+        let row_bytes = usize::try_from(width)
+            .ok()
+            .and_then(|width| width.checked_mul(4))
+            .ok_or_else(|| anyhow::anyhow!("Blade scene readback row byte count overflowed"))?;
+        let padded_row_bytes = row_bytes
+            .checked_add(SCENE_READBACK_ROW_ALIGNMENT - 1)
+            .map(|value| value & !(SCENE_READBACK_ROW_ALIGNMENT - 1))
+            .ok_or_else(|| anyhow::anyhow!("Blade scene readback row alignment overflowed"))?;
+        let allocation_bytes = usize::try_from(height)
+            .ok()
+            .and_then(|height| height.checked_mul(padded_row_bytes))
+            .ok_or_else(|| anyhow::anyhow!("Blade scene readback byte count overflowed"))?;
+        anyhow::ensure!(
+            allocation_bytes <= MAX_SCENE_READBACK_BYTES,
+            "Blade scene readback exceeds the {MAX_SCENE_READBACK_BYTES}-byte safety limit"
+        );
+        let padded_row_bytes = u32::try_from(padded_row_bytes)
+            .map_err(|_| anyhow::anyhow!("Blade scene readback row pitch exceeds u32"))?;
+        Ok(BladeReadbackLayout {
+            width,
+            height,
+            padded_row_bytes,
+            row_bytes,
+            allocation_bytes: u64::try_from(allocation_bytes)
+                .map_err(|_| anyhow::anyhow!("Blade scene readback size does not fit u64"))?,
+            format,
+        })
+    }
+
+    fn enqueue_scene_readback(
+        &mut self,
+        target: BladeReadbackTarget,
+        layout: BladeReadbackLayout,
+    ) -> PendingBladeReadback {
+        let buffer = self.gpu.create_buffer(gpu::BufferDesc {
+            name: "Kael scene readback",
+            size: layout.allocation_bytes,
+            memory: gpu::Memory::Shared,
+        });
+        let mut transfer = self.command_encoder.transfer("scene readback");
+        transfer.copy_texture_to_buffer(
+            target.texture.into(),
+            buffer.into(),
+            layout.padded_row_bytes,
+            self.surface_config.size,
+        );
+        drop(transfer);
+        PendingBladeReadback {
+            buffer,
+            target,
+            width: layout.width,
+            height: layout.height,
+            padded_row_bytes: layout.padded_row_bytes as usize,
+            row_bytes: layout.row_bytes,
+            format: layout.format,
+            // Every current pipeline stores a premultiplied composited target:
+            // PreMultiplied emits premultiplied RGB with OVER blending, while
+            // Ignored/PostMultiplied emits straight RGB that ALPHA_BLENDING
+            // multiplies by source alpha as it writes the transparent target.
+            premultiplied_alpha: true,
+        }
+    }
+
+    fn finish_scene_readback(
+        &self,
+        pending: PendingBladeReadback,
+    ) -> anyhow::Result<BladeSceneReadback> {
+        // Keep cleanup outside the fallible copy closure so every allocation,
+        // pointer, and arithmetic error releases the GPU buffer exactly once.
+        let copy_result = (|| -> anyhow::Result<Vec<u8>> {
+            let row_count = usize::try_from(pending.height)
+                .map_err(|_| anyhow::anyhow!("Blade scene readback height does not fit usize"))?;
+            let output_len = row_count
+                .checked_mul(pending.row_bytes)
+                .ok_or_else(|| anyhow::anyhow!("Blade scene readback output size overflowed"))?;
+            let source = pending.buffer.data();
+            anyhow::ensure!(
+                !source.is_null(),
+                "Blade scene readback buffer is not host-visible"
+            );
+            let mut bgra = Vec::new();
+            bgra.try_reserve_exact(output_len).map_err(|error| {
+                anyhow::anyhow!("allocating Blade scene readback buffer: {error}")
+            })?;
+            bgra.resize(output_len, 0);
+            for row in 0..row_count {
+                let source_offset = row
+                    .checked_mul(pending.padded_row_bytes)
+                    .ok_or_else(|| anyhow::anyhow!("Blade source row offset overflowed"))?;
+                let destination_offset = row
+                    .checked_mul(pending.row_bytes)
+                    .ok_or_else(|| anyhow::anyhow!("Blade destination row offset overflowed"))?;
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        source.add(source_offset),
+                        bgra.as_mut_ptr().add(destination_offset),
+                        pending.row_bytes,
+                    );
+                }
+            }
+            Ok(bgra)
+        })();
+        let format = pending.format;
+        let width = pending.width;
+        let height = pending.height;
+        let premultiplied_alpha = pending.premultiplied_alpha;
+        self.destroy_scene_readback_resources(pending);
+        let mut bgra = copy_result?;
+
+        if matches!(
+            format,
+            gpu::TextureFormat::Rgba8Unorm | gpu::TextureFormat::Rgba8UnormSrgb
+        ) {
+            for pixel in bgra.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+            }
+        }
+        Ok(BladeSceneReadback {
+            width,
+            height,
+            bgra,
+            premultiplied_alpha,
+        })
+    }
+
+    fn destroy_scene_readback_resources(&self, pending: PendingBladeReadback) {
+        self.gpu.destroy_buffer(pending.buffer);
+        self.gpu.destroy_texture_view(pending.target.view);
+        self.gpu.destroy_texture(pending.target.texture);
     }
 
     fn draw_cached_surface_snapshots(&mut self, scene: &Scene) {

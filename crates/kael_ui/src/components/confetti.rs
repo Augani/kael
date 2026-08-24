@@ -1,7 +1,8 @@
 //! Pre-configured celebration particle burst.
 
 use kael::{prelude::FluentBuilder as _, *};
-use std::time::Duration;
+
+use crate::animations::DisplayFrameClock;
 
 const DEFAULT_CONFETTI_COLORS: [u32; 6] =
     [0xFF6B6B, 0x4ECDC4, 0x45B7D1, 0xFFA07A, 0x98D8C8, 0xF7DC6F];
@@ -27,6 +28,7 @@ pub struct ConfettiState {
     gravity: f32,
     origin: Point<f32>,
     spread: f32,
+    frame_clock: DisplayFrameClock,
 }
 
 impl ConfettiState {
@@ -45,6 +47,7 @@ impl ConfettiState {
             gravity: 120.0,
             origin: Point { x: 0.5, y: 0.5 },
             spread: 300.0,
+            frame_clock: DisplayFrameClock::default(),
         }
     }
 
@@ -88,6 +91,7 @@ impl ConfettiState {
 
         if cx.reduce_motion() || self.particle_count == 0 {
             self.is_active = false;
+            self.frame_clock.stop();
             cx.notify();
             return;
         }
@@ -125,7 +129,7 @@ impl ConfettiState {
             });
         }
 
-        self.schedule_tick(cx);
+        self.frame_clock.restart();
         cx.notify();
     }
 
@@ -137,7 +141,8 @@ impl ConfettiState {
             // Positions are normalized to the canvas. Keep the physics values in
             // familiar pixel-like units while converting displacement once here.
             particle.velocity.y += gravity * dt;
-            particle.velocity.x *= 0.99;
+            // Keep damping stable across 60/90/120/144 Hz displays.
+            particle.velocity.x *= 0.99_f32.powf(dt * 60.0);
             particle.position.x += particle.velocity.x * dt / SIMULATION_REFERENCE_SIZE;
             particle.position.y += particle.velocity.y * dt / SIMULATION_REFERENCE_SIZE;
         }
@@ -152,37 +157,40 @@ impl ConfettiState {
     pub fn particles(&self) -> &[ConfettiParticle] {
         &self.particles
     }
+}
 
-    fn schedule_tick(&self, cx: &mut Context<Self>) {
-        if !self.is_active {
-            return;
-        }
+fn schedule_confetti_frame(state: &Entity<ConfettiState>, window: &Window, cx: &mut App) {
+    let generation = state.update(cx, |state, _| {
+        state
+            .is_active
+            .then(|| state.frame_clock.try_arm())
+            .flatten()
+    });
+    let Some(generation) = generation else {
+        return;
+    };
 
-        cx.spawn(async |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(16))
-                .await;
-
-            _ = this.update(cx, |state, cx| {
-                if !state.is_active || cx.reduce_motion() {
-                    state.is_active = false;
-                    state.particles.clear();
-                    cx.notify();
-                    return;
-                }
-
-                let dt = 1.0 / 60.0;
-                state.update_particles(dt);
-
-                if state.is_active {
-                    state.schedule_tick(cx);
-                }
-
+    let state = state.downgrade();
+    window.on_next_frame(move |window, cx| {
+        _ = state.update(cx, |state, cx| {
+            let Some(dt) = state.frame_clock.sample(generation) else {
+                return;
+            };
+            if !state.is_active || !window.animations_enabled() {
+                state.is_active = false;
+                state.particles.clear();
+                state.frame_clock.stop();
                 cx.notify();
-            });
-        })
-        .detach();
-    }
+                return;
+            }
+
+            state.update_particles(dt);
+            if !state.is_active {
+                state.frame_clock.stop();
+            }
+            cx.notify();
+        });
+    });
 }
 
 impl Render for ConfettiState {
@@ -239,8 +247,9 @@ impl Styled for Confetti {
 }
 
 impl RenderOnce for Confetti {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let user_style = self.style;
+        schedule_confetti_frame(&self.state, window, cx);
         let state = self.state.read(cx);
         let paint_data = ConfettiPaintData {
             particles: state.particles().to_vec(),

@@ -1,8 +1,11 @@
 use std::path::Path;
 
-use anyhow::{Context as _, Result};
+#[cfg(any(unix, windows))]
+use anyhow::Context as _;
+use anyhow::Result;
 use collections::HashMap;
 
+#[cfg(any(unix, windows))]
 use crate::shell::ShellKind;
 
 /// Prints the current process environment as formatted JSON and exits on serialization failure.
@@ -16,6 +19,7 @@ pub fn print_env() {
 }
 
 /// Capture all environment variables from the login shell in the given directory.
+#[cfg(any(unix, windows))]
 pub async fn capture(
     shell_path: impl AsRef<Path>,
     args: &[String],
@@ -25,6 +29,16 @@ pub async fn capture(
     return capture_windows(shell_path.as_ref(), args, directory.as_ref()).await;
     #[cfg(unix)]
     return capture_unix(shell_path.as_ref(), args, directory.as_ref()).await;
+}
+
+/// Browser builds cannot launch a login shell.
+#[cfg(not(any(unix, windows)))]
+pub async fn capture(
+    _shell_path: impl AsRef<Path>,
+    _args: &[String],
+    _directory: impl AsRef<Path>,
+) -> Result<collections::HashMap<String, String>> {
+    anyhow::bail!("login-shell environment capture is not supported on this platform");
 }
 
 #[cfg(unix)]

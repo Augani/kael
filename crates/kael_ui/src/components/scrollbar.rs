@@ -1,12 +1,15 @@
 //! Scrollbar component - Scrollbar control for scrollable containers.
 
-use std::{cell::Cell, rc::Rc, time::Instant};
+use std::{cell::Cell, rc::Rc};
+use web_time::Instant;
 
 use kael::{
-    App, Axis, Bounds, ContentMask, Corner, CursorStyle, Element, GlobalElementId, Hitbox,
-    HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Position, ScrollHandle, ScrollWheelEvent, Size,
-    Style, Window, fill, point, px, relative, size,
+    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AccessibilityValue, App, Axis, Bounds, ContentMask, Corner, CursorStyle, DispatchPhase,
+    Element, FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId,
+    IntoElement, KeyDownEvent, LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, Position, ScrollHandle, ScrollWheelEvent, Size, Style, Window, fill, point, px,
+    relative, size,
 };
 
 use crate::theme::Theme;
@@ -196,6 +199,7 @@ pub struct Scrollbar {
     scroll_size: Option<Size<Pixels>>,
     always_visible: bool,
     horizontal_at_top: bool,
+    focus_handle: Option<FocusHandle>,
 }
 
 impl Scrollbar {
@@ -207,6 +211,7 @@ impl Scrollbar {
             scroll_size: None,
             always_visible: false,
             horizontal_at_top: false,
+            focus_handle: None,
         }
     }
 
@@ -224,6 +229,12 @@ impl Scrollbar {
 
     pub fn always_visible(mut self) -> Self {
         self.always_visible = true;
+        self
+    }
+
+    /// Give the scrollbar keyboard focusability and accessibility semantics.
+    pub fn focus_handle(mut self, focus_handle: FocusHandle) -> Self {
+        self.focus_handle = Some(focus_handle.tab_stop(true));
         self
     }
 
@@ -485,6 +496,15 @@ impl Element for Scrollbar {
             })
         }
 
+        let is_visible = self.state.0.get().is_scrollbar_visible() || self.always_visible;
+        if is_visible
+            && !states.is_empty()
+            && let Some(focus_handle) = self.focus_handle.as_ref()
+        {
+            window.set_focus_handle(focus_handle, cx);
+            window.insert_tab_stop(focus_handle);
+        }
+
         PrepaintState { hitbox, states }
     }
 
@@ -533,6 +553,82 @@ impl Element for Scrollbar {
                     let is_vertical = axis == Axis::Vertical;
 
                     window.set_cursor_style(CursorStyle::default(), &state.bar_hitbox);
+
+                    // Keyboard and screen-reader semantics, mirroring the
+                    // core ScrollBar: the bar is focusable, arrow/page/home/
+                    // end keys scroll its axis, and the node reports a range.
+                    if let Some(focus_handle) = self.focus_handle.clone() {
+                        let key_scroll_handle = self.scroll_handle.clone();
+                        let scroll_range = (scroll_area_size - container_size).max(px(0.0));
+                        let step = px(40.0);
+                        let page = if container_size > px(0.0) {
+                            container_size
+                        } else {
+                            step * 10.0
+                        };
+                        // A two-axis scrollbar has one focus handle. Reserve the
+                        // axis-agnostic page/home/end keys for its vertical axis so
+                        // a single key press never scrolls both axes.
+                        let is_primary_axis = !self.axis.is_both() || is_vertical;
+                        let key_focus_handle = focus_handle.clone();
+                        window.on_key_event(move |event: &KeyDownEvent, phase, window, _cx| {
+                            if phase != DispatchPhase::Bubble
+                                || !key_focus_handle.is_focused(window)
+                                || event.keystroke.modifiers.modified()
+                            {
+                                return;
+                            }
+                            let offset = key_scroll_handle.offset();
+                            let current = if is_vertical { -offset.y } else { -offset.x };
+                            let next = match event.keystroke.key.as_str() {
+                                "up" if is_vertical => Some(current - step),
+                                "down" if is_vertical => Some(current + step),
+                                "left" if !is_vertical => Some(current - step),
+                                "right" if !is_vertical => Some(current + step),
+                                "pageup" if is_primary_axis => Some(current - page),
+                                "pagedown" if is_primary_axis => Some(current + page),
+                                "home" if is_primary_axis => Some(px(0.0)),
+                                "end" if is_primary_axis => Some(scroll_range),
+                                _ => None,
+                            };
+                            if let Some(next) = next {
+                                let next = next.clamp(px(0.0), scroll_range);
+                                if is_vertical {
+                                    key_scroll_handle.set_offset(point(offset.x, -next));
+                                } else {
+                                    key_scroll_handle.set_offset(point(-next, offset.y));
+                                }
+                                window.refresh();
+                                window.prevent_default();
+                            }
+                        });
+
+                        let accessibility_id = window.next_anonymous_accessibility_id();
+                        let offset = self.scroll_handle.offset();
+                        let current = if is_vertical { -offset.y } else { -offset.x };
+                        let a11y_focus_handle = focus_handle.clone();
+                        window.register_accessibility_node_at(
+                            AccessibilityAttributes::new(AccessibilityRole::ScrollBar)
+                                .states(if a11y_focus_handle.is_focused(window) {
+                                    AccessibilityState::FOCUSED
+                                } else {
+                                    AccessibilityState::NONE
+                                })
+                                .value(AccessibilityValue::Range {
+                                    current: f32::from(current) as f64,
+                                    min: 0.0,
+                                    max: f32::from(scroll_range) as f64,
+                                    step: Some(40.0),
+                                })
+                                .actions(vec![
+                                    AccessibilityAction::Focus,
+                                    AccessibilityAction::Increment,
+                                    AccessibilityAction::Decrement,
+                                ])
+                                .to_node(accessibility_id),
+                            bounds,
+                        );
+                    }
 
                     window.paint_layer(hitbox_bounds, |cx| {
                         cx.paint_quad(fill(state.bounds, state.bg));
@@ -693,6 +789,39 @@ impl Element for Scrollbar {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kael::{
+        Context, InteractiveElement, ParentElement, Render, StatefulInteractiveElement, Styled,
+        TestAppContext, div,
+    };
+
+    struct FocusableScrollbarHost {
+        scroll_handle: ScrollHandle,
+        scrollbar_state: ScrollbarState,
+        focus_handle: FocusHandle,
+    }
+
+    impl Render for FocusableScrollbarHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .relative()
+                .w(px(120.0))
+                .h(px(160.0))
+                .child(
+                    div()
+                        .id("focusable-scroll-content")
+                        .size_full()
+                        .overflow_y_scroll()
+                        .track_scroll(&self.scroll_handle)
+                        .child(div().w(px(120.0)).h(px(480.0))),
+                )
+                .child(
+                    Scrollbar::vertical(&self.scrollbar_state, &self.scroll_handle)
+                        .scroll_size(size(px(120.0), px(480.0)))
+                        .always_visible()
+                        .focus_handle(self.focus_handle.clone()),
+                )
+        }
+    }
 
     #[::core::prelude::v1::test]
     fn thumb_geometry_is_bounded_for_small_containers() {
@@ -714,5 +843,49 @@ mod tests {
     fn invalid_geometry_is_rejected() {
         assert!(thumb_geometry(px(f32::NAN), px(200.0), px(0.0), px(0.0)).is_none());
         assert!(thumb_geometry(px(100.0), px(200.0), px(0.0), px(0.0)).is_none());
+    }
+
+    #[kael::test]
+    fn focusable_scrollbar_registers_during_prepaint_and_scrolls_from_keyboard(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let scroll_handle = ScrollHandle::new();
+        let scrollbar_state = ScrollbarState::default();
+        let focus_handle = cx.update(|cx| cx.focus_handle());
+        let (_view, window) = cx.add_window_view({
+            let scroll_handle = scroll_handle.clone();
+            let focus_handle = focus_handle.clone();
+            move |_, _| FocusableScrollbarHost {
+                scroll_handle,
+                scrollbar_state,
+                focus_handle,
+            }
+        });
+
+        // This draw used to panic because focus registration happened in paint.
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            // The tracked scroll container publishes its geometry at the end
+            // of the first frame; the scrollbar consumes it on the next one.
+            window.draw(cx).clear();
+        });
+        window.update(|window, _| window.focus_next());
+        assert!(window.update(|window, _| focus_handle.is_focused(window)));
+
+        window.simulate_keystrokes("pagedown");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let scrollbar_nodes = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .filter(|node| node.role == AccessibilityRole::ScrollBar)
+                .count();
+            assert_eq!(scrollbar_nodes, 1);
+        });
+        assert!(scroll_handle.offset().y < px(0.0));
     }
 }

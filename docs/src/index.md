@@ -2,10 +2,10 @@
 
 **Build ambitious desktop software that does more with less.**
 
-Kael is a native, GPU-accelerated application framework for Rust. It combines a
+Kael is a GPU-accelerated application framework for Rust. It combines a
 retained renderer, reactive application state, native platform services,
 production tooling, and optional product batteries in one coherent system for
-macOS, Windows, and Linux.
+macOS, Windows, Linux, and WebAssembly/WebGL2 browsers.
 
 The goal is not merely to render a window. Kael is for long-lived PC
 applications—editors, agent workspaces, communication products, dashboards,
@@ -37,7 +37,7 @@ library, or mix the two.
   diagnostics, packaging, and updates without a second application runtime.
 - Capability reports expose platform differences rather than hiding them behind
   APIs that may not work on a user's machine.
-- Focused support crates add storage, networking, secrets, documents,
+- Focused support crates add storage, networking, secrets, Office/PDF documents,
   diagnostics, notifications, sharing, media, release services, and application
   engines without forcing every app to compile every battery.
 - Styling primitives and design tokens keep the final product's identity in the
@@ -58,8 +58,8 @@ Or choose the layers directly:
 
 ```toml
 [dependencies]
-kael = "0.3"
-kael_ui = "0.3" # optional
+kael = "0.4"
+kael_ui = "0.4" # optional
 ```
 
 Continue with [Getting Started](getting-started.md), then read
@@ -76,5 +76,5 @@ product planning.
 - [Benchmarking Evidence](benchmarking.md) — measuring resource use and responsiveness
 - [Examples Gallery](examples.md) — Astryx and application templates
 
-Kael 0.3 is pre-1.0. Pin a compatible minor version, validate the platform
+Kael 0.4 is pre-1.0. Pin a compatible minor version, validate the platform
 capabilities your product depends on, and expect API refinement before 1.0.

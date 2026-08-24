@@ -14,6 +14,7 @@ use std::{
 
 pub(crate) struct TestWindowState {
     pub(crate) bounds: Bounds<Pixels>,
+    scale_factor: f32,
     pub(crate) handle: AnyWindowHandle,
     display: Rc<dyn PlatformDisplay>,
     pub(crate) title: Option<String>,
@@ -63,8 +64,10 @@ impl TestWindow {
         platform: Weak<TestPlatform>,
         display: Rc<dyn PlatformDisplay>,
     ) -> Self {
+        let scale_factor = display.scale_factor();
         Self(Rc::new(Mutex::new(TestWindowState {
             bounds: params.bounds,
+            scale_factor,
             display,
             platform,
             handle,
@@ -96,6 +99,21 @@ impl TestWindow {
             return;
         };
         lock.bounds.size = size;
+        drop(lock);
+        callback(size, scale_factor);
+        self.0.lock().resize_callback = Some(callback);
+    }
+
+    /// Simulate moving a window to a display with a different backing scale.
+    #[cfg(test)]
+    pub fn simulate_backing_change(&mut self, scale_factor: f32) {
+        assert!(scale_factor.is_finite() && scale_factor > 0.0);
+        let mut lock = self.0.lock();
+        lock.scale_factor = scale_factor;
+        let size = lock.bounds.size;
+        let Some(mut callback) = lock.resize_callback.take() else {
+            return;
+        };
         drop(lock);
         callback(size, scale_factor);
         self.0.lock().resize_callback = Some(callback);
@@ -157,7 +175,7 @@ impl PlatformWindow for TestWindow {
     }
 
     fn scale_factor(&self) -> f32 {
-        2.0
+        self.0.lock().scale_factor
     }
 
     fn appearance(&self) -> WindowAppearance {
@@ -411,9 +429,31 @@ impl PlatformAtlas for TestAtlas {
 #[cfg(test)]
 mod tests {
     use crate::{
-        Empty, RequestFrameOptions, TestAppContext, VisualContext, WindowInteractionCommand,
+        Context, Empty, IntoElement, Render, RequestFrameOptions, TestAppContext, VisualContext,
+        Window, WindowInteractionCommand, canvas_with_prepaint,
     };
     use raw_window_handle::{HandleError, HasDisplayHandle, HasWindowHandle};
+    use std::{cell::Cell, rc::Rc};
+
+    struct AnimationFrameRequester {
+        requested: Rc<Cell<bool>>,
+    }
+
+    impl Render for AnimationFrameRequester {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let requested = self.requested.clone();
+            canvas_with_prepaint(
+                move |_, window, _| {
+                    if !requested.replace(true) {
+                        for _ in 0..100 {
+                            window.request_animation_frame();
+                        }
+                    }
+                },
+                |_, _, _, _| {},
+            )
+        }
+    }
 
     #[kael::test]
     fn request_frames_stop_polling_when_a_test_window_goes_idle(cx: &mut TestAppContext) {
@@ -432,6 +472,27 @@ mod tests {
         test_window.run_request_frame(RequestFrameOptions::default());
 
         assert!(!test_window.0.lock().frame_polling_active);
+    }
+
+    #[kael::test]
+    fn animation_frame_requests_are_coalesced_per_view(cx: &mut TestAppContext) {
+        let requested = Rc::new(Cell::new(false));
+        let (_view, cx) = cx.add_window_view({
+            let requested = requested.clone();
+            move |_, _| AnimationFrameRequester { requested }
+        });
+        let handle = cx.window_handle();
+        let test_window = cx.test_window(handle);
+
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(window.pending_animation_frame_request_count(), 1);
+        });
+
+        test_window.run_request_frame(RequestFrameOptions::default());
+        cx.update(|window, _| {
+            assert_eq!(window.pending_animation_frame_request_count(), 0);
+        });
     }
 
     #[kael::test]
@@ -465,5 +526,18 @@ mod tests {
             test_window.display_handle(),
             Err(HandleError::Unavailable)
         ));
+    }
+
+    #[kael::test]
+    fn backing_scale_changes_reach_the_framework_window(cx: &mut TestAppContext) {
+        let (_view, cx) = cx.add_window_view(|_, _| Empty);
+        let handle = cx.window_handle();
+        let mut test_window = cx.test_window(handle);
+
+        assert_eq!(cx.update(|window, _| window.scale_factor()), 2.0);
+        test_window.simulate_backing_change(1.0);
+        assert_eq!(cx.update(|window, _| window.scale_factor()), 1.0);
+        test_window.simulate_backing_change(2.0);
+        assert_eq!(cx.update(|window, _| window.scale_factor()), 2.0);
     }
 }

@@ -20,24 +20,25 @@ use wayland_protocols::xdg::shell::client::xdg_surface;
 use wayland_protocols::xdg::shell::client::xdg_toplevel::{self};
 use wayland_protocols::{
     wp::fractional_scale::v1::client::wp_fractional_scale_v1,
+    wp::pointer_constraints::zv1::client::zwp_locked_pointer_v1,
+    wp::relative_pointer::zv1::client::zwp_relative_pointer_v1,
     xdg::shell::client::xdg_toplevel::XdgToplevel,
 };
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
-#[cfg(feature = "webview")]
-use crate::SharedString;
-#[cfg(feature = "webview")]
-use crate::platform::linux::webview::{self as linux_webview, LinuxWebViewHost};
+#[cfg(any())]
+use crate::platform::linux::webview as linux_webview;
 use crate::platform::tab_manager::{TabManagerState, WindowTabManager};
-#[cfg(feature = "webview")]
+#[cfg(any())]
 use crate::webview::{PlatformWebView, PlatformWebViewCommand};
 use crate::{
-    AnyWindowHandle, Bounds, Decorations, DispatchEventResult, Globals, GpuSpecs, Modifiers,
-    Output, Pixels, PlatformDisplay, PlatformInput, Point, PromptButton, PromptLevel,
-    RequestFrameOptions, ResizeEdge, Size, Tiling, WaylandClientStatePtr, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls, WindowDecorations,
-    WindowParams, px, size,
+    AnyWindowHandle, Bounds, Decorations, DispatchEventResult, GameInputAvailability,
+    GameInputCapabilities, GameInputError, GameInputErrorKind, Globals, GpuSpecs, Modifiers,
+    Output, Pixels, PlatformDisplay, PlatformInput, Point, PointerLockStatus, PromptButton,
+    PromptLevel, RequestFrameOptions, ResizeEdge, Size, Tiling, WaylandClientStatePtr,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls,
+    WindowDecorations, WindowParams, point, px, size,
 };
 use crate::{
     Capslock,
@@ -134,8 +135,9 @@ pub struct WaylandWindowState {
     visible: bool,
     tab_manager: WindowTabManager,
     accessibility_root: crate::platform::linux::accessibility::AtSpiAccessibleRoot,
-    #[cfg(feature = "webview")]
-    pub(crate) webviews: HashMap<SharedString, LinuxWebViewHost>,
+    pointer_lock: crate::game_input::NativePointerLockState,
+    locked_pointer: Option<zwp_locked_pointer_v1::ZwpLockedPointerV1>,
+    relative_pointer: Option<zwp_relative_pointer_v1::ZwpRelativePointerV1>,
 }
 
 #[derive(Clone)]
@@ -161,6 +163,8 @@ impl WaylandWindowState {
         options: WindowParams,
         tab_manager_state: Arc<Mutex<TabManagerState>>,
     ) -> anyhow::Result<Self> {
+        let pointer_lock_supported =
+            globals.pointer_constraints.is_some() && globals.relative_pointer_manager.is_some();
         let renderer = {
             let backend = surface.backend().upgrade().ok_or_else(|| {
                 anyhow::anyhow!("Wayland display backend disappeared while creating a window")
@@ -218,8 +222,9 @@ impl WaylandWindowState {
             visible: true,
             tab_manager: WindowTabManager::new(handle, tab_manager_state),
             accessibility_root: crate::platform::linux::accessibility::AtSpiAccessibleRoot::new(),
-            #[cfg(feature = "webview")]
-            webviews: HashMap::default(),
+            pointer_lock: crate::game_input::NativePointerLockState::new(pointer_lock_supported),
+            locked_pointer: None,
+            relative_pointer: None,
         })
     }
 
@@ -284,6 +289,7 @@ pub enum ImeInput {
 
 impl Drop for WaylandWindow {
     fn drop(&mut self) {
+        self.0.release_native_pointer_lock().ok();
         let mut state = self.0.state.borrow_mut();
         let surface_id = state.surface.id();
         let client = state.client.clone();
@@ -474,6 +480,118 @@ impl WaylandWindowStatePtr {
 
     pub fn ptr_eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.state, &other.state)
+    }
+
+    fn request_native_pointer_lock(&self) -> Result<(), GameInputError> {
+        let (client, active) = {
+            let mut state = self.state.borrow_mut();
+            if !state.pointer_lock.begin_request()? {
+                return Ok(());
+            }
+            (state.client.clone(), state.active)
+        };
+        if !active {
+            let error = GameInputError::new(
+                GameInputErrorKind::Rejected,
+                "Wayland pointer lock requires the Kael window to be active",
+            );
+            return Err(self.state.borrow_mut().pointer_lock.fail(error));
+        }
+
+        match client.request_pointer_lock(self) {
+            Ok((locked_pointer, relative_pointer)) => {
+                let mut state = self.state.borrow_mut();
+                state.locked_pointer = Some(locked_pointer);
+                state.relative_pointer = Some(relative_pointer);
+                Ok(())
+            }
+            Err(error) => Err(self.state.borrow_mut().pointer_lock.fail(error)),
+        }
+    }
+
+    pub(crate) fn release_native_pointer_lock(&self) -> Result<(), GameInputError> {
+        let (client, locked_pointer, relative_pointer, surface, position) = {
+            let mut state = self.state.borrow_mut();
+            let position = point(
+                px(state.bounds.size.width.0 * 0.5),
+                px(state.bounds.size.height.0 * 0.5),
+            );
+            (
+                state.client.clone(),
+                state.locked_pointer.take(),
+                state.relative_pointer.take(),
+                state.surface.clone(),
+                position,
+            )
+        };
+
+        if let Some(locked_pointer) = locked_pointer {
+            locked_pointer
+                .set_cursor_position_hint(f64::from(position.x.0), f64::from(position.y.0));
+            surface.commit();
+            locked_pointer.destroy();
+        }
+        if let Some(relative_pointer) = relative_pointer {
+            relative_pointer.destroy();
+        }
+        client.pointer_lock_released(self);
+        self.state.borrow_mut().pointer_lock.unlock();
+        Ok(())
+    }
+
+    pub(crate) fn compositor_pointer_locked(
+        &self,
+        locked_pointer: &zwp_locked_pointer_v1::ZwpLockedPointerV1,
+    ) {
+        let client = {
+            let mut state = self.state.borrow_mut();
+            if !state
+                .locked_pointer
+                .as_ref()
+                .is_some_and(|owned| owned.id() == locked_pointer.id())
+            {
+                return;
+            }
+            state.pointer_lock.lock();
+            state.client.clone()
+        };
+        client.pointer_lock_became_active(self);
+    }
+
+    pub(crate) fn compositor_pointer_unlocked(
+        &self,
+        locked_pointer: &zwp_locked_pointer_v1::ZwpLockedPointerV1,
+    ) {
+        if !self
+            .state
+            .borrow()
+            .locked_pointer
+            .as_ref()
+            .is_some_and(|owned| owned.id() == locked_pointer.id())
+        {
+            return;
+        }
+        self.release_native_pointer_lock().ok();
+    }
+
+    pub(crate) fn accepts_relative_pointer(
+        &self,
+        relative_pointer: &zwp_relative_pointer_v1::ZwpRelativePointerV1,
+    ) -> bool {
+        let state = self.state.borrow();
+        state.pointer_lock.status() == PointerLockStatus::Locked
+            && state
+                .relative_pointer
+                .as_ref()
+                .is_some_and(|owned| owned.id() == relative_pointer.id())
+    }
+
+    pub(crate) fn pointer_lock_anchor(&self) -> Point<Pixels> {
+        let state = self.state.borrow();
+        point(
+            px(state.bounds.size.width.0 * 0.5),
+            px(state.bounds.size.height.0 * 0.5),
+        )
     }
 
     pub fn app_id(&self) -> Option<String> {
@@ -933,6 +1051,9 @@ impl WaylandWindowStatePtr {
 
     pub fn set_focused(&self, focus: bool) {
         self.state.borrow_mut().active = focus;
+        if !focus {
+            self.release_native_pointer_lock().ok();
+        }
         let mut callback = self.callbacks.borrow_mut().active_status_change.take();
         if let Some(ref mut fun) = callback {
             super::super::catch_platform_callback("active status change", (), || fun(focus));
@@ -1259,6 +1380,36 @@ impl PlatformWindow for WaylandWindow {
         self.0.callbacks.borrow_mut().input = Some(callback);
     }
 
+    fn game_input_capabilities(&self) -> GameInputCapabilities {
+        let pointer_lock = if self.0.state.borrow().client.pointer_lock_available() {
+            GameInputAvailability::Available
+        } else {
+            GameInputAvailability::Unsupported
+        };
+        let gamepads = if cfg!(feature = "game-input") {
+            GameInputAvailability::Available
+        } else {
+            GameInputAvailability::DisabledAtCompileTime
+        };
+        GameInputCapabilities::new(pointer_lock, gamepads)
+    }
+
+    fn pointer_lock_status(&self) -> PointerLockStatus {
+        self.0.state.borrow().pointer_lock.status()
+    }
+
+    fn request_pointer_lock(&self) -> Result<(), GameInputError> {
+        self.0.request_native_pointer_lock()
+    }
+
+    fn exit_pointer_lock(&self) -> Result<(), GameInputError> {
+        self.0.release_native_pointer_lock()
+    }
+
+    fn pointer_lock_error(&self) -> Option<GameInputError> {
+        self.0.state.borrow().pointer_lock.error()
+    }
+
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>) {
         self.0.callbacks.borrow_mut().active_status_change = Some(callback);
     }
@@ -1290,14 +1441,44 @@ impl PlatformWindow for WaylandWindow {
         self.0.callbacks.borrow_mut().appearance_changed = Some(callback);
     }
 
-    #[cfg(feature = "webview")]
+    #[cfg(any())]
     fn sync_webviews(&mut self, webviews: &[PlatformWebView]) {
         linux_webview::sync_wayland_webviews(&self.0, webviews);
     }
 
-    #[cfg(feature = "webview")]
+    #[cfg(any())]
     fn dispatch_webview_command(&mut self, command: PlatformWebViewCommand) -> anyhow::Result<()> {
         linux_webview::dispatch_wayland_webview_command(&self.0, command)
+    }
+
+    fn print(&mut self, job: crate::PlatformPrintJob) -> anyhow::Result<()> {
+        crate::platform::linux::print::print_silent(job)
+    }
+
+    fn show_print_dialog(&mut self, job: crate::PlatformPrintJob) -> anyhow::Result<()> {
+        let surface = self.borrow().surface.clone();
+        smol::block_on(async move {
+            let parent = ashpd::WindowIdentifier::from_wayland(&surface).await;
+            crate::platform::linux::print::show_print_dialog(job, parent).await
+        })
+    }
+
+    fn export_scene_png(
+        &self,
+        scene: &Scene,
+    ) -> std::result::Result<crate::Image, crate::WindowCaptureError> {
+        let readback = self
+            .borrow_mut()
+            .renderer
+            .render_scene_to_bgra(scene)
+            .map_err(|error| crate::WindowCaptureError::Backend(error.to_string()))?;
+        crate::platform::encode_bgra_png(
+            readback.width,
+            readback.height,
+            readback.bgra,
+            readback.premultiplied_alpha,
+        )
+        .map_err(|error| crate::WindowCaptureError::Backend(error.to_string()))
     }
 
     fn draw(&self, scene: &Scene) {

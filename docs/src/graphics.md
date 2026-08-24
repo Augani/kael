@@ -1,6 +1,6 @@
 # Canvas & Graphics
 
-Beyond the element tree, Kael gives you direct GPU drawing: an immediate-mode canvas, a vector path builder, gradients, backdrop blur, SVG, and optional Lottie playback. Everything renders through the same per-platform pipeline (Metal / DirectX 11 / Vulkan) with device-pixel snapping for crisp output at any DPI.
+Beyond the element tree, Kael gives you direct GPU drawing: an immediate-mode canvas, a vector path builder, gradients, backdrop blur, SVG, and optional Lottie playback. Everything renders through the same per-platform pipeline (Metal / DirectX 11 / Vulkan / browser WebGL2) with device-pixel snapping for crisp output at any DPI.
 
 ## Visual escape-hatch ladder
 
@@ -11,18 +11,38 @@ choose the lowest rung that solves the problem:
 | --- | --- | --- |
 | Product UI, dashboards, tool chrome | styled `div()` / `kael_ui` | Best memory and startup profile |
 | Charts, timelines, waveform views, custom controls | `canvas(...)`, `paint_quad`, `paint_path`, `PathBuilder` | Native immediate-mode drawing |
+| Game worlds, whiteboards, and large retained 2D surfaces | `PortableScene2d` / `portable_scene(...)` | Same bounded retained commands on native and browser renderers |
 | Icons, diagrams, generated vector assets | `svg()` / `PathBuilder` | Keep assets inspectable and themeable |
 | Motion graphics and loaders | `lottie(...)` with feature `lottie` | Decodes off the UI path |
 | Frosted or filtered subtrees | `backdrop_blur(...)` / `effect_layer(...)` | Effect layers are partial CSS-filter coverage, not arbitrary shaders |
-| Browser-only graphics such as WebGL/WebGPU demos | `webview(id, url)` | Treat as a WebView island with native Kael chrome around it |
+| Run a Kael canvas in a browser | `kael` / `kael_ui` feature `browser` | Same retained Scene through the WebGL2 renderer |
+| External or hosted browser content | `webview(id, url)` | Native composition island on desktop; sandboxed iframe island in the wasm backend, with documented cross-origin limits |
 | Golden-image or benchmark evidence | `HeadlessRenderer` / `golden` | Off-screen rendering is for tests and measurements |
-| Native custom render target or custom shader | roadmap | Do not claim WebGL/WebGPU parity yet |
+| Public custom render target or custom shader | roadmap | The backend renderer is not yet a public arbitrary-shader API |
 
 The public `graphics_capability_report()` API exposes this same truth for
-readiness checks and agent planning. It reports full native coverage for styled
-elements, canvas, paths, gradients, SVG, and Lottie; partial coverage for clip
+readiness checks and agent planning. It reports full cross-backend coverage for
+styled elements, canvas, the portable retained 2D surface, paths, gradients,
+SVG, and Lottie; partial coverage for clip
 shapes, effect layers, and headless rendering; WebView coverage for browser
 graphics fallback; and roadmap status for public render targets/custom shaders.
+
+## Display density and text
+
+Kael lays out in logical pixels and updates the backing scale whenever a native
+window or browser canvas moves between displays. On macOS, glyph masks use
+display-independent grayscale antialiasing and baselines are snapped to device
+pixels. Windows also uses grayscale DirectWrite coverage instead of caching
+panel-specific ClearType RGB stripes. This avoids stale-resolution text and
+RGB/BGR subpixel color fringing on scaled, rotated, or differently ordered
+external panels, while reducing glyph-atlas storage relative to four-channel
+subpixel masks.
+
+Embed application fonts when typography is part of the product identity.
+`kael_ui::init` already registers its bundled Inter and JetBrains Mono faces.
+Font family, weight, layout scale, and backing resolution remain stable across
+screens; small rasterization differences between operating-system and browser
+text engines are still expected.
 
 ## Canvas
 
@@ -34,10 +54,25 @@ inspect composition before the commands flush into the window:
 use kael::{canvas, point, px, size, stroke, Bounds};
 
 canvas(size(px(320.0), px(180.0)), |draw, _window, _app| {
+    draw.reserve_commands(6);
     draw.fill_rect(
         Bounds::new(point(px(0.0), px(0.0)), draw.size()),
         kael::rgb(0x1e1e1e),
     );
+    draw.fill_rects([
+        (
+            Bounds::new(point(px(24.0), px(112.0)), size(px(48.0), px(40.0))),
+            kael::rgb(0x3b82f6).into(),
+        ),
+        (
+            Bounds::new(point(px(80.0), px(88.0)), size(px(48.0), px(64.0))),
+            kael::rgb(0x60a5fa).into(),
+        ),
+    ]);
+    draw.fill_circles([
+        (point(px(232.0), px(64.0)), px(12.0), kael::rgb(0xf59e0b).into()),
+        (point(px(268.0), px(64.0)), px(12.0), kael::rgb(0xfbbf24).into()),
+    ]);
     draw.stroke_rect(
         Bounds::new(point(px(24.0), px(24.0)), size(px(120.0), px(64.0))),
         stroke(px(2.0), kael::rgb(0xffffff)),
@@ -47,6 +82,13 @@ canvas(size(px(320.0), px(180.0)), |draw, _window, _app| {
 })
 ```
 
+For stable real-time workloads, call `reserve_commands` with the expected mixed
+command count before drawing, and use `fill_rects` or `fill_circles` for batches.
+The batch helpers reserve from the iterator's size hint. Circles are emitted as
+rounded quads, reusing the renderer's quad fast path instead of tessellating a
+vector path; this is the preferred route for particle systems, graph nodes, and
+game sprites that are geometrically circular.
+
 `DrawContext::to_text()` reports queued command count, path count, quad count,
 filled/stroked quad counts, text count, image count, saved-state depth, and
 canvas size without logging text, image data, colors, or drawing coordinates.
@@ -54,6 +96,40 @@ Use `command_count()`, `path_count()`, `quad_count()`, `filled_quad_count()`,
 `stroked_quad_count()`, `text_count()`, `image_count()`, `state_stack_depth()`,
 and `is_empty()` when agents or tests need to verify generated chart, timeline,
 waveform, canvas editor, or game HUD drawing.
+
+For a scene that persists across frames, use `PortableScene2d`. It accepts
+bounded batches of solid or rounded quads, decoded-image sprites, pre-tessellated
+filled paths, and triangles, with affine transforms, rectangular clips,
+source-over opacity, typed limit failures, and transactional rollback. The
+default public ceilings are 100,000 commands/objects, 1,000,000 path vertices,
+256 decoded image frames, 64 MiB of decoded image data, and 128 MiB of estimated
+retained payload. Static path transforms are baked when recorded rather than
+recomputed on every frame.
+
+```rust
+use std::sync::Arc;
+use kael::{Bounds, PortableScene2d, PortableSolidQuad, point, portable_scene,
+           px, rgb, size};
+
+let mut scene = PortableScene2d::new();
+scene.try_reserve_commands(100_000)?;
+let quads = (0..100_000).map(|index| {
+    let x = (index % 500) as f32 * 3.0;
+    let y = (index / 500) as f32 * 3.0;
+    PortableSolidQuad::new(
+        Bounds::new(point(px(x), px(y)), size(px(2.0), px(2.0))),
+        rgb(0x60a5fa),
+    )
+}).collect::<Vec<_>>();
+scene.push_solid_quads(&quads)?;
+
+let surface = portable_scene(size(px(1_500.0), px(600.0)), Arc::new(scene));
+# Ok::<_, kael::PortableSceneError>(surface)
+```
+
+This is the portable game/creative-app escape hatch, not raw GPU access.
+Custom blend modes, user shaders, compute, depth-tested 3D, and public renderer
+handles return or report `Unsupported` and remain explicit roadmap work.
 
 `canvas` also supports the lower-level two-closure form — a prepaint pass
 (compute layout/state, returns a value) and a paint pass (draw into the bounds).
@@ -73,6 +149,73 @@ canvas(
 )
 .size_full()
 ```
+
+## High-fidelity pointer input and retained scenes
+
+Use `on_pointer_event` for one drawing path across mouse, touch, and pen. Browser
+events include stable pointer id/type, primary state, changed and held buttons,
+pressure, tangential pressure, tilt, twist, contact geometry, cancellation, and
+up to 256 coalesced samples. Pointer sequences remain routed to the element that
+received the down event, including independent simultaneous touches. Give a
+surface a stable `.id(...)` when it rerenders during a stroke or drag so its
+capture set persists across frames:
+
+```rust
+use kael::{div, InteractiveElement as _, PointerPhase};
+
+div().id("drawing-surface").on_pointer_event(|event, _window, _app| {
+    if matches!(event.phase, PointerPhase::Down | PointerPhase::Move) {
+        for sample in event.stroke_samples() {
+            tracing::trace!(
+                pointer = event.pointer_id.get(),
+                pressure = sample.pressure,
+                tilt_x = sample.tilt_x,
+                tilt_y = sample.tilt_y,
+                "stroke sample"
+            );
+        }
+    }
+})
+```
+
+Existing mouse callbacks remain source compatible. Legacy desktop mouse streams
+are promoted to `PointerInputEvent` with a stable mouse id. Windows WM_POINTER
+provides simultaneous touch plus pen pressure, tilt, rotation, contact geometry,
+cancellation, and bounded chronological history. AppKit provides tablet
+identity/proximity, pressure, tangential pressure, tilt, rotation, buttons, and
+timestamps (but no macOS desktop touchscreen or contact ellipse). Wayland
+`wl_touch` and X11 XI2.2 provide simultaneous contacts and cancellation;
+Wayland also reports oriented contact geometry, while tablet pressure/tilt on
+Linux remains compositor/device-protocol dependent. `CapabilityReport` exposes
+these per-platform boundaries. Browser touch and pen expose the full Pointer
+Events shape.
+
+For large whiteboards and game scenes, `SpatialIndex` uses a bounded spatial
+hash instead of scanning every entry. `SceneGraph::hit_test` and
+`SceneGraph::visible_in_rect` reuse a cached index while preserving topmost
+order. `move_node` patches only the moved entry's old and new spatial cells;
+structural changes, visibility edits through `get_mut`, and hierarchy changes
+retain the safe lazy full-rebuild fallback. Use
+`spatial_incremental_update_count`, `spatial_full_rebuild_count`, and
+`last_spatial_candidate_count` to verify dynamic-scene behavior without
+inspecting content. Pair culling with `TileDamageTracker`: invalidate old and
+new object bounds, repaint the sorted tiles returned by `take`, and retain every
+other tile. Pathological regions promote explicitly to `TileDamage::Full`
+instead of allocating without bound.
+
+`Window::export_frame_png` returns real encoded PNG bytes at device-pixel
+resolution from browser WebGL2, macOS Metal, Windows Direct3D 11, and the Blade
+renderer used by Linux and optional macOS Blade builds. GPU readback validates
+dimensions, row pitch, channel order, alpha representation, and a 256 MiB
+allocation ceiling. It honors checked content protection and returns typed
+`WindowCaptureError` variants rather than silently dropping WebView overlays or
+live surfaces. Platform/compositor chrome and the system cursor are outside the
+scene. Blade capture renders into a bounded app-owned texture before copying to
+shared memory, so it does not depend on swapchain copy support; it returns a
+typed backend error if the selected surface format is not one of the supported
+8-bit RGBA/BGRA formats. Capability support remains partial because hosted/live
+surfaces and operating-system chrome are intentionally outside the retained
+scene, not because the release gate substitutes a headless renderer.
 
 ## Vector paths
 
@@ -194,7 +337,7 @@ formats only when the product needs them:
 
 ```toml
 [dependencies]
-kael = { version = "0.3", features = ["image-avif", "image-exr"] }
+kael = { version = "0.4", features = ["image-avif", "image-exr"] }
 ```
 
 AVIF decoding uses the native libdav1d library and pkg-config discovery.
@@ -246,7 +389,7 @@ Enable Kael's `lottie` feature to add the native decoder and renderer:
 
 ```toml
 [dependencies]
-kael = { version = "0.3", features = ["lottie"] }
+kael = { version = "0.4", features = ["lottie"] }
 ```
 
 `lottie()` plays Lottie/dotLottie animations, decoding frames on a background thread so the UI stays responsive:

@@ -27,6 +27,7 @@ pub(crate) use system_audio::*;
 mod os_info;
 mod platform;
 mod power;
+mod print;
 mod system_settings;
 mod tray;
 mod util;

@@ -1,9 +1,9 @@
 # kael
 
-The native, GPU-accelerated application framework at the center of
+The GPU-accelerated application framework at the center of
 [Kael](https://github.com/Augani/kael). It is designed for substantial desktop
-products that need to stay responsive while their data, windows, background
-work, and native integrations grow.
+and browser products that need to stay responsive while their data, surfaces,
+background work, and platform integrations grow.
 
 `kael` provides the application runtime and low-level UI primitives: retained
 rendering, layout, text, elements, state, windows, input, accessibility,
@@ -13,7 +13,7 @@ own component system directly on these primitives.
 
 ```toml
 [dependencies]
-kael = "0.3"
+kael = "0.4"
 ```
 
 WebView support is opt-in, so ordinary native applications do not pull Wry,
@@ -21,7 +21,7 @@ GTK, or WebKit. Enable it only when the application embeds web content:
 
 ```toml
 [dependencies]
-kael = { version = "0.3", features = ["webview"] }
+kael = { version = "0.4", features = ["webview"] }
 ```
 
 ```rust,no_run
@@ -49,8 +49,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Kael targets macOS (Metal), Windows (DirectX 11), and Linux X11/Wayland
-(Vulkan through Blade). OS integrations differ by host; use
+Kael targets macOS (Metal), Windows (DirectX 11), Linux X11/Wayland (Vulkan
+through Blade), and browsers (WebAssembly/WebGL2). OS and browser integrations
+differ by host; use
 `CapabilityReport::current()` when a product requires a specific service.
 
 ## Start here
@@ -65,6 +66,10 @@ Kael targets macOS (Metal), Windows (DirectX 11), and Linux X11/Wayland
 
 | Feature | Purpose |
 | --- | --- |
+| `browser` | WebAssembly runtime, WebGL2 Scene renderer, and sandboxed iframe WebView islands |
+| `portable-services` | Build-portable product batteries for one-source native/browser applications; consult capability reports for sandboxed runtime operations |
+| `browser-full` | `browser` plus the complete `portable-services` consumer graph used by release CI |
+| `game-input` | Frame-synchronized native/browser controllers plus portable browser/native pointer lock and relative motion |
 | `http-client` | Bundled Reqwest transport; the transport trait remains available without it |
 | `auto-update` | Signed feeds, verified downloads, and platform installers |
 | `lottie` | Native Lottie and dotLottie playback |
@@ -72,7 +77,7 @@ Kael targets macOS (Metal), Windows (DirectX 11), and Linux X11/Wayland
 | `media` | Native media playback integration |
 | `storage`, `document`, `audio`, `pdf` | Product data and content services |
 | `icons` | Compact embedded SVG catalog with application-asset overrides |
-| `diagnostics`, `notifications-full`, `share` | Optional platform batteries |
+| `diagnostics`, `notifications-full`, `share` | Optional diagnostics plus portable native/browser notification and sharing batteries |
 | `screen-capture` | Screen-capture backend support |
 | `image-avif`, `image-exr` | Opt-in AVIF (libdav1d) and OpenEXR decoding |
 | `agent-tools` | Structured capability-planning metadata |
@@ -82,6 +87,22 @@ The minimum supported Rust version is 1.97.1. The crate uses Rust 2024.
 
 The optional `agent-tools` feature is disabled by default and is not required to
 build applications.
+
+For a suite-class application, keep the Rust source identical and select the
+backend in the manifest:
+
+```toml
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kael = { version = "0.4", features = ["portable-services"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+kael = { version = "0.4", default-features = false, features = ["browser-full"] }
+```
+
+This guarantees that the same optional API graph compiles on both targets. It
+does not weaken browser security boundaries: use `CapabilityReport` and the
+operation-level WebView, notification, sharing, capture, and update reports to
+select the appropriate hosted fallback.
 
 Kael began as a fork of GPUI, created by Zed Industries. It is an independent
 project and is not affiliated with or endorsed by Zed Industries.

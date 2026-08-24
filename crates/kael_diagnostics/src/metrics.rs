@@ -3,19 +3,20 @@
 use std::{
     cell::Cell,
     collections::{BTreeMap, VecDeque},
-    fs,
-    io::Write,
     mem,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
-    time::Instant,
 };
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::{fs, io::Write, path::Path};
 
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
+use web_time::Instant;
 
 static NEXT_THREAD_ID: AtomicU64 = AtomicU64::new(1);
 static GLOBAL_TRACER: OnceLock<Mutex<Option<Tracer>>> = OnceLock::new();
@@ -167,7 +168,7 @@ impl Tracer {
                 enabled: false,
                 events: VecDeque::new(),
                 max_events: max_events.min(MAX_TRACE_EVENTS),
-                process_id: std::process::id() as u64,
+                process_id: current_process_id(),
                 started_at: Instant::now(),
             })),
         }
@@ -451,36 +452,52 @@ impl Tracer {
     }
 
     /// Writes retained events to disk as Chrome Trace JSON.
+    ///
+    /// Browser targets have no native paths and return a typed error; call
+    /// [`Self::export_to_chrome_json`] and pass the result to Kael's browser
+    /// file-export API instead.
     pub fn write_to_file(&self, path: impl Into<PathBuf>) -> Result<()> {
         let json = self.export_to_chrome_json()?;
         let path = path.into();
-        let parent = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create trace directory: {}", parent.display()))?;
-        let mut file = tempfile::Builder::new()
-            .prefix(".kael-trace-")
-            .tempfile_in(parent)
-            .with_context(|| {
-                format!(
-                    "failed to create temporary trace file in {}",
-                    parent.display()
-                )
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (json, path);
+            return Err(anyhow::anyhow!(
+                "browser traces do not have native file paths; use export_to_chrome_json and Kael's browser file export API"
+            ));
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let parent = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create trace directory: {}", parent.display())
             })?;
-        file.as_file_mut()
-            .write_all(json.as_bytes())
-            .with_context(|| format!("failed to write trace file for {}", path.display()))?;
-        file.as_file()
-            .sync_all()
-            .with_context(|| format!("failed to sync trace file for {}", path.display()))?;
-        file.persist(&path).map_err(|error| {
-            anyhow::Error::new(error.error)
-                .context(format!("failed to finalize trace file: {}", path.display()))
-        })?;
-        sync_directory(parent)?;
-        Ok(())
+            let mut file = tempfile::Builder::new()
+                .prefix(".kael-trace-")
+                .tempfile_in(parent)
+                .with_context(|| {
+                    format!(
+                        "failed to create temporary trace file in {}",
+                        parent.display()
+                    )
+                })?;
+            file.as_file_mut()
+                .write_all(json.as_bytes())
+                .with_context(|| format!("failed to write trace file for {}", path.display()))?;
+            file.as_file()
+                .sync_all()
+                .with_context(|| format!("failed to sync trace file for {}", path.display()))?;
+            file.persist(&path).map_err(|error| {
+                anyhow::Error::new(error.error)
+                    .context(format!("failed to finalize trace file: {}", path.display()))
+            })?;
+            sync_directory(parent)?;
+            Ok(())
+        }
     }
 }
 
@@ -730,7 +747,7 @@ fn sync_directory(directory: &Path) -> Result<()> {
         .with_context(|| format!("failed to sync trace directory: {}", directory.display()))
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(target_arch = "wasm32")))]
 fn sync_directory(_directory: &Path) -> Result<()> {
     Ok(())
 }
@@ -746,6 +763,18 @@ fn current_thread_id() -> u64 {
             next
         }
     })
+}
+
+#[cfg(target_arch = "wasm32")]
+const fn current_process_id() -> u64 {
+    // Chrome Trace accepts any stable process-group identifier. Browser wasm
+    // has no OS process identity, and the standard-library accessor panics.
+    0
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn current_process_id() -> u64 {
+    u64::from(std::process::id())
 }
 
 fn allocate_thread_id(counter: &AtomicU64) -> u64 {
@@ -1004,6 +1033,7 @@ mod tests {
         assert!(!snapshot.histograms.contains_key("over-budget"));
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn trace_export_replaces_existing_file_atomically() {
         let directory = tempfile::tempdir().unwrap();

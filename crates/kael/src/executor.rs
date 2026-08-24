@@ -1,7 +1,6 @@
 use crate::{App, PlatformDispatcher};
 use async_task::Runnable;
-use futures::channel::mpsc;
-use smol::prelude::*;
+use futures::{Future, StreamExt, channel::mpsc};
 use std::mem::ManuallyDrop;
 use std::panic::Location;
 use std::thread::{self, ThreadId};
@@ -17,10 +16,11 @@ use std::{
         atomic::{AtomicUsize, Ordering::SeqCst},
     },
     task::{Context, Poll},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use util::TryFutureExt;
 use waker_fn::waker_fn;
+use web_time::Instant;
 
 #[cfg(any(test, feature = "test-support"))]
 use rand::rngs::StdRng;
@@ -103,7 +103,7 @@ impl<T> Future for Task<T> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         match unsafe { self.get_unchecked_mut() } {
             Task(TaskState::Ready(val)) => Poll::Ready(val.take().unwrap()),
-            Task(TaskState::Spawned(task)) => task.poll(cx),
+            Task(TaskState::Spawned(task)) => Pin::new(task).poll(cx),
         }
     }
 }
@@ -165,6 +165,42 @@ impl BackgroundExecutor {
         self.spawn_internal::<R>(Box::pin(future), Some(label))
     }
 
+    /// Dispatch a serializable request to a native process worker or browser
+    /// Web Worker and await the typed response as an executor task.
+    ///
+    /// This is the portable CPU-offload path. In a browser, ordinary
+    /// [`Self::spawn`] futures are still polled on the JavaScript UI event loop;
+    /// Rust futures and closures cannot be transferred into an independently
+    /// instantiated WebAssembly worker. This method only polls the lightweight
+    /// message future on the UI loop while the registered worker handler owns
+    /// the expensive computation.
+    pub fn spawn_worker_request<Req, Resp>(
+        &self,
+        worker: crate::WorkerHandle,
+        request: Req,
+    ) -> Task<anyhow::Result<Resp>>
+    where
+        Req: serde::Serialize + Send + 'static,
+        Resp: for<'de> serde::Deserialize<'de> + Send + 'static,
+    {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.spawn(async move { worker.request_async(request).await })
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let dispatcher = self.dispatcher.clone();
+            let future: AnyLocalFuture<anyhow::Result<Resp>> =
+                Box::pin(async move { worker.request_async(request).await });
+            let (runnable, task) = spawn_local_with_source_location(future, move |runnable| {
+                dispatcher.dispatch(runnable, None);
+            });
+            runnable.schedule();
+            Task(TaskState::Spawned(task))
+        }
+    }
+
     fn spawn_internal<R: Send + 'static>(
         &self,
         future: AnyFuture<R>,
@@ -205,8 +241,6 @@ impl BackgroundExecutor {
         future: Fut,
         timeout: Option<Duration>,
     ) -> Result<Fut::Output, impl Future<Output = Fut::Output> + use<Fut>> {
-        use std::time::Instant;
-
         let mut future = Box::pin(future);
         if timeout == Some(Duration::ZERO) {
             return Err(future);
@@ -431,7 +465,10 @@ impl BackgroundExecutor {
         #[cfg(any(test, feature = "test-support"))]
         return 4;
 
-        #[cfg(not(any(test, feature = "test-support")))]
+        #[cfg(all(not(any(test, feature = "test-support")), target_arch = "wasm32"))]
+        return 1;
+
+        #[cfg(all(not(any(test, feature = "test-support")), not(target_arch = "wasm32")))]
         return num_cpus::get();
     }
 

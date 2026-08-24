@@ -147,7 +147,14 @@ pub struct SigningConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpdaterConfig {
+    /// URL fetched by applications when checking for update metadata.
     pub feed_url: String,
+    /// Base URL containing downloadable release files.
+    ///
+    /// This is deliberately separate from `feed_url`: appending an installer
+    /// name to a manifest path such as `updates/feed.json` produces an invalid
+    /// download URL.
+    pub artifact_base_url: String,
     pub public_key: Option<String>,
     #[serde(default)]
     pub channel: Option<String>,
@@ -224,15 +231,15 @@ impl DistConfig {
             }
         }
         if let Some(updater) = &self.updater {
-            if updater.feed_url.len() > 2048
-                || !(updater.feed_url.starts_with("https://")
-                    || updater.feed_url.starts_with("http://"))
-                || updater.feed_url.chars().any(char::is_control)
+            validate_distribution_url("updater feed", &updater.feed_url)?;
+            validate_distribution_url("updater artifact base", &updater.artifact_base_url)?;
+            if updater.artifact_base_url.trim_end_matches('/')
+                == updater.feed_url.trim_end_matches('/')
             {
-                bail!("dist config: updater feed URL must be a bounded HTTP(S) URL");
+                bail!("dist config: updater feed and artifact base URLs must be distinct");
             }
-            if updater.feed_url.contains("example.com") {
-                bail!("dist config: updater feed URL is still a placeholder");
+            if updater.artifact_base_url.contains('?') || updater.artifact_base_url.contains('#') {
+                bail!("dist config: updater artifact base URL cannot contain a query or fragment");
             }
             if updater
                 .public_key
@@ -253,6 +260,30 @@ impl DistConfig {
         }
         Ok(())
     }
+}
+
+fn validate_distribution_url(label: &str, value: &str) -> Result<()> {
+    let scheme_and_rest = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"));
+    let has_authority = scheme_and_rest
+        .and_then(|rest| rest.split('/').next())
+        .is_some_and(|authority| !authority.is_empty());
+    if value.len() > 2048
+        || value.trim() != value
+        || value.chars().any(char::is_control)
+        || !has_authority
+    {
+        bail!("dist config: {label} URL must be a bounded HTTP(S) URL");
+    }
+    if value.contains("example.com") {
+        bail!("dist config: {label} URL is still a placeholder");
+    }
+    Ok(())
+}
+
+fn default_release_tag(version: &str) -> String {
+    format!("v{version}")
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +342,8 @@ enum Commands {
     },
     GenerateUpdateKey,
     VerifyUpdateFeed {
+        #[arg(default_value = "kael.dist.toml")]
+        config: PathBuf,
         #[arg(long, default_value = "dist/update-feed.json")]
         feed: PathBuf,
     },
@@ -319,6 +352,11 @@ enum Commands {
         config: PathBuf,
         #[arg(short, long)]
         artifact: Vec<PathBuf>,
+        /// Artifact(s) used by the auto-updater. Required for a real publish
+        /// when `[updater]` is configured; each path must also be uploaded via
+        /// `--artifact`.
+        #[arg(long)]
+        update_artifact: Vec<PathBuf>,
         #[arg(short, long)]
         tag: Option<String>,
         #[arg(long)]
@@ -412,23 +450,71 @@ fn main() -> Result<()> {
             println!("  {public_hex}");
             Ok(())
         }
-        Commands::VerifyUpdateFeed { feed } => {
-            let signing_key = std::env::var("KAEL_UPDATE_SIGNING_KEY")
+        Commands::VerifyUpdateFeed { config, feed } => {
+            let dist = DistConfig::load(&config)?;
+            dist.validate()?;
+            let public_key = std::env::var("KAEL_UPDATE_PUBLIC_KEY")
                 .ok()
                 .filter(|key| !key.trim().is_empty())
-                .context("KAEL_UPDATE_SIGNING_KEY must be set to verify a signed feed")?;
-            update_feed::verify(&feed, &signing_key)?;
+                .or_else(|| {
+                    dist.updater
+                        .as_ref()
+                        .and_then(|updater| updater.public_key.clone())
+                })
+                .context(
+                    "KAEL_UPDATE_PUBLIC_KEY or updater.public_key must be set to verify a signed feed",
+                )?;
+            update_feed::verify(&feed, &public_key)?;
             println!("update feed signatures verified: {}", feed.display());
             Ok(())
         }
         Commands::Publish {
-            config: _,
+            config,
             artifact,
+            update_artifact,
             tag,
             dry_run,
         } => {
+            let dist = DistConfig::load(&config)?;
+            dist.validate()?;
+            if !dry_run && dist.updater.is_some() {
+                anyhow::ensure!(
+                    !update_artifact.is_empty(),
+                    "at least one --update-artifact is required when publishing with updater configuration"
+                );
+                let canonical_uploads = artifact
+                    .iter()
+                    .map(|path| {
+                        fs::canonicalize(path).with_context(|| {
+                            format!("failed to resolve release artifact: {}", path.display())
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                for update in &update_artifact {
+                    let canonical_update = fs::canonicalize(update).with_context(|| {
+                        format!("failed to resolve update artifact: {}", update.display())
+                    })?;
+                    anyhow::ensure!(
+                        canonical_uploads.contains(&canonical_update),
+                        "update artifact must also be selected for upload: {}",
+                        update.display()
+                    );
+                }
+                let signing_key = std::env::var("KAEL_UPDATE_SIGNING_KEY")
+                    .ok()
+                    .filter(|key| !key.trim().is_empty())
+                    .context("KAEL_UPDATE_SIGNING_KEY is required to publish updater artifacts")?;
+                update_feed::validate_publish_readiness(&dist, &update_artifact, &signing_key)?;
+            } else if dry_run && dist.updater.is_some() {
+                eprintln!(
+                    "dry-run: updater signing, checksums, artifact bytes, and upload credentials were not validated"
+                );
+            }
             let artifacts: Vec<&Path> = artifact.iter().map(|p| p.as_path()).collect();
-            let options = publish::PublishOptions { dry_run, tag };
+            let options = publish::PublishOptions {
+                dry_run,
+                tag: tag.or_else(|| Some(default_release_tag(&dist.version))),
+            };
             publish::run(&artifacts, &options)?;
             Ok(())
         }
@@ -447,7 +533,7 @@ fn main() -> Result<()> {
             };
             let artifacts = bundle::run(&dist, &output, &bundle_options)?;
 
-            for artifact in &artifacts {
+            for artifact in &artifacts.uploadable {
                 let sign_options = sign::SignOptions { dry_run: true };
                 sign::run(&dist, artifact, &sign_options)?;
 
@@ -460,16 +546,31 @@ fn main() -> Result<()> {
                 dry_run: true,
                 signing_key: std::env::var("KAEL_UPDATE_SIGNING_KEY").ok(),
             };
-            update_feed::run(&dist, &feed_output, &artifacts, &feed_options)?;
+            let update_artifact = artifacts
+                .update
+                .as_ref()
+                .context("distribution metadata simulation did not plan an auto-update package")?;
+            update_feed::run(
+                &dist,
+                &feed_output,
+                std::slice::from_ref(update_artifact),
+                &feed_options,
+            )?;
 
-            let artifacts_ref: Vec<&Path> = artifacts.iter().map(|p| p.as_path()).collect();
+            let artifacts_ref: Vec<&Path> = artifacts
+                .uploadable
+                .iter()
+                .map(|path| path.as_path())
+                .collect();
             let publish_options = publish::PublishOptions {
                 dry_run: true,
-                tag: None,
+                tag: Some(default_release_tag(&dist.version)),
             };
             publish::run(&artifacts_ref, &publish_options)?;
 
-            println!("dry-run: full release pipeline completed successfully");
+            println!(
+                "dry-run: distribution metadata simulation completed; binaries, signing, notarization, and uploads were not validated"
+            );
             Ok(())
         }
         Commands::New {
@@ -586,6 +687,57 @@ category = "public.app-category.utilities"
             updater: None,
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn updater_requires_distinct_valid_feed_and_artifact_urls() {
+        let mut config: DistConfig = toml::from_str(
+            r#"
+app_id = "com.kael.app"
+name = "Safe App"
+version = "1.0.0"
+
+[icons]
+[bundle]
+[updater]
+feed_url = "https://updates.kael.dev/feed.json"
+artifact_base_url = "https://downloads.kael.dev/releases/1.0.0"
+"#,
+        )
+        .unwrap();
+        assert!(config.validate().is_ok());
+
+        config.updater.as_mut().unwrap().artifact_base_url =
+            "https://updates.kael.dev/feed.json".to_string();
+        assert!(config.validate().is_err());
+
+        config.updater.as_mut().unwrap().artifact_base_url =
+            "https://downloads.kael.dev/releases?version=1.0.0".to_string();
+        assert!(config.validate().is_err());
+
+        config.updater.as_mut().unwrap().artifact_base_url =
+            "https://example.com/releases".to_string();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn updater_artifact_base_url_is_required_when_updater_is_configured() {
+        let source = r#"
+app_id = "com.kael.app"
+name = "Safe App"
+version = "1.0.0"
+
+[icons]
+[bundle]
+[updater]
+feed_url = "https://updates.kael.dev/feed.json"
+"#;
+        assert!(toml::from_str::<DistConfig>(source).is_err());
+    }
+
+    #[test]
+    fn release_tag_defaults_to_the_configured_version() {
+        assert_eq!(default_release_tag("1.2.3"), "v1.2.3");
     }
 
     #[test]

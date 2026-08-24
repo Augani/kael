@@ -1,7 +1,8 @@
 use crate::{
     Capslock, KeyDownEvent, KeyUpEvent, Keystroke, MagnifyEvent, Modifiers, ModifiersChangedEvent,
     MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,
-    Pixels, PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase,
+    Pixels, PlatformInput, PointerButtons, PointerId, PointerInputEvent, PointerPhase, PointerType,
+    ScrollDelta, ScrollWheelEvent, TouchPhase,
     platform::mac::{
         LMGetKbdType, TISCopyCurrentKeyboardLayoutInputSource, TISGetInputSourceProperty,
         UCKeyTranslate, kTISPropertyUnicodeKeyLayoutData,
@@ -357,6 +358,18 @@ impl PlatformInput {
                         modifiers: read_modifiers(native_event),
                     })
                 }),
+                NSEventType::TabletPoint | NSEventType::TabletProximity => {
+                    window_height.map(|window_height| {
+                        Self::MouseMove(MouseMoveEvent {
+                            position: point(
+                                px(native_event.locationInWindow().x as f32),
+                                window_height - px(native_event.locationInWindow().y as f32),
+                            ),
+                            pressed_button: None,
+                            modifiers: read_modifiers(native_event),
+                        })
+                    })
+                }
                 NSEventType::MouseExited => window_height.map(|window_height| {
                     Self::MouseExited(MouseExitEvent {
                         position: point(
@@ -372,6 +385,142 @@ impl PlatformInput {
             }
         }
     }
+}
+
+fn can_carry_tablet_subtype(event_type: NSEventType) -> bool {
+    matches!(
+        event_type,
+        NSEventType::LeftMouseDown
+            | NSEventType::LeftMouseUp
+            | NSEventType::RightMouseDown
+            | NSEventType::RightMouseUp
+            | NSEventType::OtherMouseDown
+            | NSEventType::OtherMouseUp
+            | NSEventType::MouseMoved
+            | NSEventType::LeftMouseDragged
+            | NSEventType::RightMouseDragged
+            | NSEventType::OtherMouseDragged
+            | NSEventType::MouseEntered
+            | NSEventType::MouseExited
+    )
+}
+
+pub(crate) fn tablet_pointer_event(
+    native_event: &NSEvent,
+    input: &PlatformInput,
+    window_height: Pixels,
+) -> Option<PointerInputEvent> {
+    use objc2_app_kit::{NSEventSubtype, NSEventType, NSPointingDeviceType};
+
+    let event_type = native_event.r#type();
+    // AppKit raises NSInternalInconsistencyException when tablet-only selectors
+    // such as `pointingDeviceType` are sent to unrelated events. In particular,
+    // a ScrollWheel MayBegin event can expose a subtype value that overlaps a
+    // tablet subtype even though it carries no tablet payload. Only inspect the
+    // subtype on mouse events that AppKit documents as tablet-derived.
+    let tablet_subtype = can_carry_tablet_subtype(event_type).then(|| native_event.subtype());
+    let tablet_point = event_type == NSEventType::TabletPoint
+        || tablet_subtype == Some(NSEventSubtype::TabletPoint);
+    let tablet_proximity = event_type == NSEventType::TabletProximity
+        || tablet_subtype == Some(NSEventSubtype::TabletProximity);
+    if !tablet_point && !tablet_proximity {
+        return None;
+    }
+
+    let (phase, button, click_count) = if tablet_proximity {
+        (
+            if native_event.isEnteringProximity() {
+                PointerPhase::Enter
+            } else {
+                PointerPhase::Leave
+            },
+            None,
+            0,
+        )
+    } else {
+        match input {
+            PlatformInput::MouseDown(event) => {
+                (PointerPhase::Down, Some(event.button), event.click_count)
+            }
+            PlatformInput::MouseUp(event) => {
+                (PointerPhase::Up, Some(event.button), event.click_count)
+            }
+            PlatformInput::MouseExited(_) => (PointerPhase::Leave, None, 0),
+            _ => (PointerPhase::Move, None, 0),
+        }
+    };
+
+    let device_type = native_event.pointingDeviceType();
+    let mut buttons = pointer_buttons_from_appkit(native_event.buttonMask().0 as u64);
+    if device_type == NSPointingDeviceType::Eraser {
+        buttons |= PointerButtons::ERASER;
+    }
+    let position = point(
+        px(native_event.locationInWindow().x as f32),
+        window_height - px(native_event.locationInWindow().y as f32),
+    );
+    let tilt = native_event.tilt();
+
+    Some(PointerInputEvent {
+        phase,
+        pointer_id: PointerId::new(native_event.uniqueID() as i64),
+        pointer_type: PointerType::Pen,
+        position,
+        movement: point(
+            px(native_event.deltaX() as f32),
+            px(-(native_event.deltaY() as f32)),
+        ),
+        button,
+        buttons,
+        modifiers: read_modifiers(native_event),
+        click_count,
+        is_primary: true,
+        pressure: crate::native_pointer::clamp_pressure(native_event.pressure()),
+        tangential_pressure: crate::native_pointer::clamp_tangential_pressure(
+            native_event.tangentialPressure(),
+        ),
+        tilt_x: crate::native_pointer::normalized_tilt_to_degrees(tilt.x as f32),
+        tilt_y: crate::native_pointer::normalized_tilt_to_degrees(tilt.y as f32),
+        twist: crate::native_pointer::normalize_twist_degrees(native_event.rotation()),
+        // AppKit does not expose a physical contact ellipse for desktop tablets.
+        width: px(0.0),
+        height: px(0.0),
+        timestamp_ms: native_event.timestamp() * 1_000.0,
+        coalesced: Vec::new(),
+    })
+}
+
+#[cfg(test)]
+mod tablet_event_tests {
+    use super::can_carry_tablet_subtype;
+    use objc2_app_kit::NSEventType;
+
+    #[test]
+    fn scroll_events_never_expose_tablet_only_selectors() {
+        assert!(!can_carry_tablet_subtype(NSEventType::ScrollWheel));
+        assert!(can_carry_tablet_subtype(NSEventType::MouseMoved));
+        assert!(can_carry_tablet_subtype(NSEventType::LeftMouseDragged));
+    }
+}
+
+fn pointer_buttons_from_appkit(mask: u64) -> PointerButtons {
+    let mut buttons = PointerButtons::empty();
+    if mask & 1 != 0 {
+        buttons |= PointerButtons::PRIMARY;
+    }
+    if mask & 2 != 0 {
+        buttons |= PointerButtons::SECONDARY;
+    }
+    if mask & 4 != 0 {
+        buttons |= PointerButtons::AUXILIARY;
+    }
+    if mask & 8 != 0 {
+        buttons |= PointerButtons::BACK;
+    }
+    if mask & 16 != 0 {
+        buttons |= PointerButtons::FORWARD;
+    }
+    buttons
 }
 
 fn parse_keystroke(native_event: &NSEvent) -> Keystroke {

@@ -564,6 +564,7 @@ fn session_window_bounds_summary<'a>(states: impl IntoIterator<Item = &'a Window
     format!("windowed:{windowed},maximized:{maximized},fullscreen:{fullscreen}")
 }
 
+#[cfg_attr(target_arch = "wasm32", allow(clippy::drop_non_drop))]
 fn write_json_atomically<T: Serialize>(path: &Path, value: &T, label: &str) -> Result<()> {
     let temp_path = path.with_extension(format!("json.tmp.{}", uuid::Uuid::new_v4()));
     let json = serde_json::to_string_pretty(value)

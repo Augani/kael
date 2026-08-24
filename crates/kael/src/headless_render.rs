@@ -17,6 +17,7 @@ use crate::{
 const MAX_HEADLESS_FRAME_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_HEADLESS_COMPLEXITY: usize = 1_000_000;
 const MAX_COMPUTE_BUFFER_BYTES: usize = 64 * 1024 * 1024;
+const MAX_HEADLESS_SCROLL_OFFSET: f32 = 1_000_000_000.0;
 
 /// Which rendering backend a [`HeadlessRenderer`] is using.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +43,23 @@ pub struct RenderedFrame {
     pub checksum: u64,
     /// Whether the frame was rasterized on the GPU.
     pub gpu: bool,
+}
+
+/// Dynamic state applied to a procedural headless benchmark scene.
+///
+/// Changing this state changes scene geometry or styling while retaining the
+/// same primitive count, allowing benchmarks to measure scrolling and
+/// interaction updates instead of repeatedly drawing an identical frame.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct HeadlessSceneState {
+    /// Vertical scroll offset in device pixels.
+    ///
+    /// The procedural scene wraps at the viewport height so long benchmark
+    /// sessions remain spatially bounded.
+    pub scroll_offset: f32,
+    /// Primitive index currently affected by an interaction, such as selection
+    /// or hover. Indices beyond the scene size wrap to a valid primitive.
+    pub interaction_index: Option<usize>,
 }
 
 /// One frame rendered into an `RGBA16Float` off-screen target (linear, ≥16-bit).
@@ -119,14 +137,40 @@ impl HeadlessRenderer {
         (self.width, self.height)
     }
 
+    /// Change the device-pixel dimensions used by subsequent frames.
+    ///
+    /// Validation happens before either dimension is changed, so a failed
+    /// resize leaves the renderer at its previous size. Off-screen targets are
+    /// created for the new viewport by the next render.
+    pub fn resize(&mut self, width: u32, height: u32) -> Result<()> {
+        validate_headless_dimensions(width, height)?;
+        self.width = width;
+        self.height = height;
+        Ok(())
+    }
+
     /// Build a procedural scene of `complexity` quads and process one frame.
     ///
     /// On a GPU backend the scene is rasterized off-screen and the checksum is
     /// derived from the read-back pixels; on a CPU-only backend the real scene
     /// is built and batched and the checksum is derived from its structure.
     pub fn render_frame(&mut self, complexity: usize) -> Result<RenderedFrame> {
+        self.render_frame_with_state(complexity, HeadlessSceneState::default())
+    }
+
+    /// Build and process a procedural frame with changing scroll or interaction state.
+    ///
+    /// This performs the same real scene construction, batching, and optional
+    /// GPU read-back as [`Self::render_frame`], but lets interaction benchmarks
+    /// mutate visible work without changing scene complexity.
+    pub fn render_frame_with_state(
+        &mut self,
+        complexity: usize,
+        state: HeadlessSceneState,
+    ) -> Result<RenderedFrame> {
         validate_headless_complexity(complexity)?;
-        let scene = build_benchmark_scene(self.width, self.height, complexity);
+        validate_headless_scene_state(state)?;
+        let scene = build_benchmark_scene(self.width, self.height, complexity, state);
 
         #[cfg(all(target_os = "macos", not(feature = "macos-blade")))]
         if let Some(renderer) = self.metal.as_mut() {
@@ -158,7 +202,12 @@ impl HeadlessRenderer {
         validate_headless_complexity(complexity)?;
         #[cfg(all(target_os = "macos", not(feature = "macos-blade")))]
         if let Some(renderer) = self.metal.as_mut() {
-            let scene = build_benchmark_scene(self.width, self.height, complexity);
+            let scene = build_benchmark_scene(
+                self.width,
+                self.height,
+                complexity,
+                HeadlessSceneState::default(),
+            );
             let viewport = size(
                 DevicePixels(self.width as i32),
                 DevicePixels(self.height as i32),
@@ -296,13 +345,32 @@ fn validate_headless_complexity(complexity: usize) -> Result<()> {
     Ok(())
 }
 
-fn build_benchmark_scene(width: u32, height: u32, complexity: usize) -> Scene {
+fn validate_headless_scene_state(state: HeadlessSceneState) -> Result<()> {
+    anyhow::ensure!(
+        state.scroll_offset.is_finite(),
+        "headless scene scroll offset must be finite"
+    );
+    anyhow::ensure!(
+        state.scroll_offset.abs() <= MAX_HEADLESS_SCROLL_OFFSET,
+        "headless scene scroll offset cannot exceed {MAX_HEADLESS_SCROLL_OFFSET} pixels"
+    );
+    Ok(())
+}
+
+fn build_benchmark_scene(
+    width: u32,
+    height: u32,
+    complexity: usize,
+    state: HeadlessSceneState,
+) -> Scene {
     let mut scene = Scene::default();
     let count = complexity.max(1);
     let cols = ((count as f64).sqrt().ceil() as u32).max(1);
     let rows = (count as u32).div_ceil(cols).max(1);
     let cell_w = (width as f32 / cols as f32).max(1.0);
     let cell_h = (height as f32 / rows as f32).max(1.0);
+    let scroll_offset = state.scroll_offset.rem_euclid(height as f32);
+    let interaction_index = state.interaction_index.map(|index| index % count);
 
     let viewport = Bounds {
         origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
@@ -312,15 +380,21 @@ fn build_benchmark_scene(width: u32, height: u32, complexity: usize) -> Scene {
     for i in 0..count {
         let col = (i as u32 % cols) as f32;
         let row = (i as u32 / cols) as f32;
+        let y = (row * cell_h - scroll_offset).rem_euclid(height as f32);
         let bounds = Bounds {
-            origin: point(ScaledPixels(col * cell_w), ScaledPixels(row * cell_h)),
+            origin: point(ScaledPixels(col * cell_w), ScaledPixels(y)),
             size: size(ScaledPixels(cell_w), ScaledPixels(cell_h)),
         };
         let hue = (i as f32 / count as f32).fract();
+        let (saturation, lightness) = if interaction_index == Some(i) {
+            (0.95, 0.75)
+        } else {
+            (0.7, 0.5)
+        };
         scene.insert_primitive(crate::Quad {
             bounds,
             content_mask: ContentMask { bounds: viewport },
-            background: Background::from(hsla(hue, 0.7, 0.5, 1.0)),
+            background: Background::from(hsla(hue, saturation, lightness, 1.0)),
             transform: TransformationMatrix::unit(),
             ..Default::default()
         });
@@ -420,6 +494,62 @@ mod tests {
         assert!(
             renderer
                 .render_frame_rgba16f(MAX_HEADLESS_COMPLEXITY + 1)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn resize_validates_atomically_and_applies_new_dimensions() {
+        let mut renderer = HeadlessRenderer::new(64, 32).unwrap();
+        renderer.resize(96, 48).unwrap();
+        assert_eq!(renderer.dimensions(), (96, 48));
+
+        let resized = renderer.render_frame(16).unwrap();
+        assert_eq!((resized.width, resized.height), (96, 48));
+
+        assert!(renderer.resize(0, 48).is_err());
+        assert_eq!(renderer.dimensions(), (96, 48));
+        assert!(renderer.resize(u32::MAX, u32::MAX).is_err());
+        assert_eq!(renderer.dimensions(), (96, 48));
+    }
+
+    #[test]
+    fn changing_scroll_and_interaction_state_changes_output() {
+        let mut renderer = HeadlessRenderer::new(96, 64).unwrap();
+        let base = renderer.render_frame(64).unwrap();
+        let scrolled_state = HeadlessSceneState {
+            scroll_offset: 7.5,
+            interaction_index: None,
+        };
+        let scrolled = renderer
+            .render_frame_with_state(64, scrolled_state)
+            .unwrap();
+        let repeated = renderer
+            .render_frame_with_state(64, scrolled_state)
+            .unwrap();
+        assert_ne!(base.checksum, scrolled.checksum);
+        assert_eq!(scrolled.checksum, repeated.checksum);
+
+        let interacted = renderer
+            .render_frame_with_state(
+                64,
+                HeadlessSceneState {
+                    interaction_index: Some(17),
+                    ..scrolled_state
+                },
+            )
+            .unwrap();
+        assert_ne!(scrolled.checksum, interacted.checksum);
+
+        assert!(
+            renderer
+                .render_frame_with_state(
+                    64,
+                    HeadlessSceneState {
+                        scroll_offset: f32::NAN,
+                        interaction_index: None,
+                    },
+                )
                 .is_err()
         );
     }

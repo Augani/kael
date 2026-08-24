@@ -11,7 +11,9 @@ members = [
     "crates/kael_document",
     "crates/kael_audio",
     "crates/kael_pdf",
+    "crates/kael_office",
     "crates/kael_notifications",
+    "crates/kael_markdown",
     "crates/kael_share",
     "crates/kael_cache",
     "crates/kael_i18n",
@@ -40,7 +42,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.97.1"
 authors = ["Augustus Otu"]
@@ -59,6 +61,13 @@ smol = "2.0"
 thiserror = "2.0.12"
 unicode-segmentation = "1.10"
 windows = "0.62"
+
+# Release builds trade compile time for runtime and download performance. Keep
+# debug/dev profiles fast; shipped native binaries and Wasm receive whole-graph
+# optimization while preserving symbols for Kael diagnostics and crash reports.
+[profile.release]
+codegen-units = 1
+lto = "fat"
 
 [workspace.lints.clippy]
 dbg_macro = "deny"

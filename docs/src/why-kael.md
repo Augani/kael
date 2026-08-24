@@ -1,12 +1,12 @@
 # Choosing Kael
 
-Kael is for teams building substantial desktop products in Rust: software with
-many screens, large data sets, multiple windows, background work, native OS
-integrations, and a long operational life. Its design target is simple:
+Kael is for teams building substantial Rust products: native desktop software
+with many screens, large data sets, multiple windows, background work, and OS
+integrations, plus browser builds that reuse the same application UI. Its design target is simple:
 applications should become more capable without requiring proportionally more
 memory, idle CPU, runtime layers, or integration code.
 
-Kael is pre-1.0 (currently `0.3.x`). The architecture and batteries are broad,
+Kael is pre-1.0 (currently `0.4.x`). The architecture and batteries are broad,
 but applications should still pin a compatible minor release and validate the
 capabilities that matter to their users.
 
@@ -50,12 +50,12 @@ build before making a product decision.
 
 | | **Kael** | **Electron-style stack** | **Tauri** | **egui** | **Iced** |
 | --- | --- | --- | --- | --- | --- |
-| Architecture | Native GPU retained mode | Bundled Chromium + Node | OS WebView + Rust core | Immediate-mode GPU | Native retained mode |
+| Architecture | GPU retained mode | Bundled Chromium + Node | OS WebView + Rust core | Immediate-mode GPU | Native retained mode |
 | Main UI language | Rust | JavaScript/TypeScript | HTML/CSS/JS | Rust | Rust |
-| Render path | Metal / DX11 / Vulkan | Chromium compositor | System WebView | wgpu/glow | wgpu/tiny-skia |
+| Render path | Metal / DX11 / Vulkan / WebGL2 | Chromium compositor | System WebView | wgpu/glow | wgpu/tiny-skia |
 | State model | Reactive entities | Application-selected web state | Application-selected web state | Redraw each frame | Message/update/view |
 | Product batteries | Framework and focused crates | Mature web/Node ecosystem | Bundler and updater ecosystem | Mostly application-owned | Mostly application-owned |
-| Web deployment | No | No | No | Optional wasm | Optional wasm |
+| Web deployment | Optional wasm | No | No | Optional wasm | Optional wasm |
 | Maturity | Pre-1.0 | Very mature | Mature | Mature | Mature |
 
 Choose a web-based desktop stack when web compatibility, the npm ecosystem, or
@@ -71,10 +71,16 @@ Kael produces one accessibility tree and serves it through the platform adapter:
 - **Windows** — UI Automation through `WM_GETOBJECT`.
 - **macOS** — `accesskit_macos` over the window's `NSView` for VoiceOver.
 - **Linux** — AccessKit's AT-SPI2 adapter for X11 and Wayland.
+- **Browser** — a bounded, retained ARIA DOM mirror above each WebGL2 canvas;
+  semantic focus, activation, range, expand/collapse, and scroll actions route
+  back through the same Kael accessibility action path.
 
-This is a real implementation, but it is younger than browser accessibility
-stacks. Validate the screen readers, keyboard workflows, scale factors, and
-locales your application supports.
+The browser mirror diffs stable nodes and caps a faulty unvirtualized tree at
+4,096 DOM nodes. It does not turn the retained application into a second DOM
+text editor; Kael's IME bridge continues to own text entry. This is a real
+implementation, but it is younger than browser accessibility stacks. Validate
+the screen readers, keyboard workflows, scale factors, and locales your
+application supports.
 
 ## Packaging and updates
 
@@ -86,10 +92,19 @@ of the Kael framework itself.
 
 ## Current boundaries
 
-- **Touch and pen input are partial.** Pointer, scroll, magnify, and gesture
-  primitives exist, but full contact streams and pressure/tilt metadata still
-  need backend work.
-- **Desktop only.** Kael does not provide a wasm/browser deployment target.
+- **Native touch and pen delivery is still backend-dependent.** The shared rich
+  pointer API carries identity, pressure, tangential pressure, tilt, twist,
+  contact geometry, cancellation, capture, and coalesced samples. Browsers feed
+  that complete contract from Pointer Events; desktop mouse input is promoted
+  compatibly, while some native OS backends do not yet originate raw touch or
+  tablet streams.
+- **The browser backend has explicit host boundaries.** It renders the same
+  retained scenes in independent in-page window surfaces and supports WebGL2,
+  high-DPI resizing, bundled-font shaping, IME, clipboard, rich pointer input,
+  ARIA semantics, byte-based file workflows, printing, workers, and durable
+  storage/document APIs. It cannot create detached operating-system windows,
+  expose arbitrary native paths or subprocesses, or provide a system keychain.
+  Cross-origin iframe WebViews also remain constrained by browser security.
 - **Web-specific surfaces stay explicit.** Use the optional WebView feature for
   OAuth, payments, maps, hosted documents, vendor widgets, or another
   intentionally web-owned surface.
@@ -107,8 +122,8 @@ communication apps, dashboards, database clients, media tools, design software,
 and other desktop products where responsiveness, resource use, native services,
 and a coherent application architecture all matter.
 
-It is a weaker fit when the product must share its primary interface with the
-web, depends heavily on DOM-only packages, or needs a platform capability Kael
-currently reports as unsupported. Read the
+It is a weaker fit when the browser version depends heavily on DOM-only
+packages, requires native integrations to behave identically on the web, or
+needs a platform capability Kael currently reports as unsupported. Read the
 [Native Capability Bridge](native-capability-bridge.md) before committing to an
 OS-dependent workflow.

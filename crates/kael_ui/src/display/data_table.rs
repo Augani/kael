@@ -4,9 +4,11 @@ use crate::components::icon_source::IconSource;
 use crate::components::input::{Input, InputSize, InputState};
 use crate::components::select::{Select, SelectEvent, SelectOption};
 use crate::theme::{Theme, use_theme};
-use crate::virtual_list::vlist_uniform_view;
+use crate::virtual_list::{
+    ItemExtentProvider, hlist_variable, hlist_variable_view, vlist_uniform_view,
+};
 use kael::{prelude::FluentBuilder as _, *};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, VecDeque, hash_map::Entry};
 use std::ops::Range;
 use std::{panic::Location, rc::Rc};
 
@@ -82,6 +84,258 @@ pub enum SortDirection {
     Descending,
 }
 
+/// A scalable, owned snapshot of a data-table row selection.
+///
+/// Large "select all" operations use [`Self::AllExcept`] and retain only the
+/// rows that a user subsequently deselects. Consumers can therefore persist,
+/// send to a worker, or apply a bulk operation without materializing every row
+/// index in a million-row table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DataTableSelectionSnapshot {
+    /// Only the listed rows are selected.
+    Explicit {
+        /// Total rows in the table when the snapshot was captured.
+        total_rows: usize,
+        /// Sorted selected row indices.
+        selected: Vec<usize>,
+    },
+    /// Every row is selected except the listed rows.
+    AllExcept {
+        /// Total rows in the table when the snapshot was captured.
+        total_rows: usize,
+        /// Sorted row indices excluded from the selection.
+        deselected: Vec<usize>,
+    },
+}
+
+impl DataTableSelectionSnapshot {
+    /// Total rows in the table when this snapshot was captured.
+    pub fn total_rows(&self) -> usize {
+        match self {
+            Self::Explicit { total_rows, .. } | Self::AllExcept { total_rows, .. } => *total_rows,
+        }
+    }
+
+    /// Number of selected rows without expanding an all-except selection.
+    pub fn selected_count(&self) -> usize {
+        match self {
+            Self::Explicit { selected, .. } => selected.len(),
+            Self::AllExcept {
+                total_rows,
+                deselected,
+            } => total_rows.saturating_sub(deselected.len()),
+        }
+    }
+
+    /// Number of row indices retained by the snapshot representation.
+    pub fn stored_index_count(&self) -> usize {
+        match self {
+            Self::Explicit { selected, .. } => selected.len(),
+            Self::AllExcept { deselected, .. } => deselected.len(),
+        }
+    }
+
+    /// Stable representation key for diagnostics and serialization adapters.
+    pub fn representation_key(&self) -> &'static str {
+        match self {
+            Self::Explicit { .. } => "explicit",
+            Self::AllExcept { .. } => "all_except",
+        }
+    }
+
+    /// Returns true when `row_index` belongs to this selection.
+    pub fn contains(&self, row_index: usize) -> bool {
+        if row_index >= self.total_rows() {
+            return false;
+        }
+        match self {
+            Self::Explicit { selected, .. } => selected.binary_search(&row_index).is_ok(),
+            Self::AllExcept { deselected, .. } => deselected.binary_search(&row_index).is_err(),
+        }
+    }
+
+    /// Returns true when every current row is selected.
+    pub fn is_all_selected(&self) -> bool {
+        self.total_rows() > 0 && self.selected_count() == self.total_rows()
+    }
+
+    /// Returns explicit selected indices when this snapshot already stores them.
+    ///
+    /// `None` means the snapshot is an all-except selection, not an empty
+    /// selection. Use [`Self::contains`] or [`Self::try_materialize_selected`]
+    /// when callers truly require selected indices.
+    pub fn explicit_selected(&self) -> Option<&[usize]> {
+        match self {
+            Self::Explicit { selected, .. } => Some(selected),
+            Self::AllExcept { .. } => None,
+        }
+    }
+
+    /// Returns excluded indices for an all-except snapshot.
+    pub fn deselected(&self) -> Option<&[usize]> {
+        match self {
+            Self::AllExcept { deselected, .. } => Some(deselected),
+            Self::Explicit { .. } => None,
+        }
+    }
+
+    /// Materialize selected indices only when the caller-provided bound permits it.
+    ///
+    /// This is intentionally fallible so a bulk callback cannot accidentally
+    /// allocate a million indices. Explicit snapshots are cloned only when their
+    /// selected count also fits the bound.
+    pub fn try_materialize_selected(&self, max_indices: usize) -> Option<Vec<usize>> {
+        if self.selected_count() > max_indices {
+            return None;
+        }
+        match self {
+            Self::Explicit { selected, .. } => Some(selected.clone()),
+            Self::AllExcept {
+                total_rows,
+                deselected,
+            } => {
+                let mut selected = Vec::with_capacity(self.selected_count());
+                let mut excluded = deselected.iter().copied().peekable();
+                for index in 0..*total_rows {
+                    if excluded.peek() == Some(&index) {
+                        excluded.next();
+                    } else {
+                        selected.push(index);
+                    }
+                }
+                Some(selected)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum RowSelection {
+    Explicit(BTreeSet<usize>),
+    AllExcept(BTreeSet<usize>),
+}
+
+impl Default for RowSelection {
+    fn default() -> Self {
+        Self::Explicit(BTreeSet::new())
+    }
+}
+
+impl RowSelection {
+    fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    fn select_all(&mut self) {
+        *self = Self::AllExcept(BTreeSet::new());
+    }
+
+    fn toggle(&mut self, row_index: usize) {
+        let indices = match self {
+            Self::Explicit(indices) | Self::AllExcept(indices) => indices,
+        };
+        if !indices.remove(&row_index) {
+            indices.insert(row_index);
+        }
+    }
+
+    fn contains(&self, row_index: usize, total_rows: usize) -> bool {
+        if row_index >= total_rows {
+            return false;
+        }
+        match self {
+            Self::Explicit(selected) => selected.contains(&row_index),
+            Self::AllExcept(deselected) => !deselected.contains(&row_index),
+        }
+    }
+
+    fn selected_count(&self, total_rows: usize) -> usize {
+        match self {
+            Self::Explicit(selected) => selected.len().min(total_rows),
+            Self::AllExcept(deselected) => total_rows.saturating_sub(deselected.len()),
+        }
+    }
+
+    fn stored_index_count(&self) -> usize {
+        match self {
+            Self::Explicit(selected) | Self::AllExcept(selected) => selected.len(),
+        }
+    }
+
+    fn representation_key(&self) -> &'static str {
+        match self {
+            Self::Explicit(_) => "explicit",
+            Self::AllExcept(_) => "all_except",
+        }
+    }
+
+    fn snapshot(&self, total_rows: usize) -> DataTableSelectionSnapshot {
+        match self {
+            Self::Explicit(selected) => DataTableSelectionSnapshot::Explicit {
+                total_rows,
+                selected: selected
+                    .iter()
+                    .copied()
+                    .take_while(|index| *index < total_rows)
+                    .collect(),
+            },
+            Self::AllExcept(deselected) => DataTableSelectionSnapshot::AllExcept {
+                total_rows,
+                deselected: deselected
+                    .iter()
+                    .copied()
+                    .take_while(|index| *index < total_rows)
+                    .collect(),
+            },
+        }
+    }
+
+    fn remap_after_sort(&mut self, old_to_new: &HashMap<usize, usize>) {
+        let indices = match self {
+            Self::Explicit(indices) | Self::AllExcept(indices) => indices,
+        };
+        *indices = indices
+            .iter()
+            .filter_map(|old_index| old_to_new.get(old_index).copied())
+            .collect();
+    }
+}
+
+/// Identifies one virtual-data request within a specific table query.
+///
+/// The generation changes whenever the virtual data set is reset or its
+/// server-side search/sort inputs change. Pass this value back to
+/// [`DataTable::set_page_data_for`] so a response from an older query cannot
+/// overwrite the current cache.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DataTablePageRequest {
+    page_start: usize,
+    page_size: usize,
+    generation: u64,
+}
+
+impl DataTablePageRequest {
+    pub fn page_start(self) -> usize {
+        self.page_start
+    }
+
+    pub fn page_size(self) -> usize {
+        self.page_size
+    }
+
+    pub fn generation(self) -> u64 {
+        self.generation
+    }
+
+    /// Content-safe summary for diagnostics.
+    pub fn to_text(self) -> String {
+        format!(
+            "data_table_page_request(page_start={}, page_size={}, generation={})",
+            self.page_start, self.page_size, self.generation
+        )
+    }
+}
+
 impl SortDirection {
     /// Stable sort direction key for content-safe diagnostics.
     pub fn to_text(self) -> &'static str {
@@ -129,6 +383,24 @@ fn should_capture_vertical_scroll(
 struct VirtualScroller {
     viewport: ViewportState,
     total_items: usize,
+}
+
+#[derive(Clone)]
+struct ColumnExtents(Rc<Vec<Pixels>>);
+
+impl ItemExtentProvider for ColumnExtents {
+    fn extent(&self, index: usize) -> Pixels {
+        self.0.get(index).copied().unwrap_or(px(1.0))
+    }
+}
+
+#[derive(Clone)]
+struct TableColumnSnapshot {
+    header: SharedString,
+    width: Pixels,
+    resizable: bool,
+    sortable: bool,
+    focus_handle: FocusHandle,
 }
 
 impl VirtualScroller {
@@ -270,10 +542,22 @@ enum DataBacking<T: Clone + 'static> {
     Virtual {
         total_items: usize,
         cache: HashMap<usize, T>,
-        in_flight_pages: HashSet<usize>,
+        cached_pages: HashMap<usize, usize>,
+        page_lru: VecDeque<usize>,
+        in_flight_pages: HashMap<usize, u64>,
         page_size: usize,
+        max_cached_pages: usize,
+        generation: u64,
     },
 }
+
+const DEFAULT_MAX_CACHED_PAGES: usize = 16;
+/// Maximum exact selection size delivered to the legacy slice callback.
+///
+/// Larger all-except selections remain available through
+/// [`DataTableSelectionSnapshot`] and `on_selection_change_snapshot` without
+/// materializing every selected row index.
+pub const DATA_TABLE_LEGACY_SELECTION_MATERIALIZATION_LIMIT: usize = 16_384;
 
 pub struct DataTableState<T: Clone + 'static> {
     columns: Vec<ColumnDef<T>>,
@@ -281,7 +565,7 @@ pub struct DataTableState<T: Clone + 'static> {
     sort_column: Option<usize>,
     sort_direction: SortDirection,
     scroller: VirtualScroller,
-    selected_rows: Vec<usize>,
+    selection: RowSelection,
     backing: DataBacking<T>,
 }
 
@@ -303,7 +587,7 @@ impl<T: Clone + 'static> DataTableState<T> {
             sort_column: None,
             sort_direction: SortDirection::Ascending,
             scroller: VirtualScroller::new(total_items, viewport),
-            selected_rows: Vec::new(),
+            selection: RowSelection::default(),
             backing: DataBacking::InMemory { data },
         }
     }
@@ -343,7 +627,7 @@ impl<T: Clone + 'static> DataTableState<T> {
         let count = data.len();
         self.backing = DataBacking::InMemory { data };
         self.scroller.set_total_items(count);
-        self.selected_rows.clear();
+        self.selection.clear();
 
         if let Some(column_index) = self.sort_column {
             self.sort_by_column(column_index, self.sort_direction);
@@ -355,12 +639,19 @@ impl<T: Clone + 'static> DataTableState<T> {
             DataBacking::Virtual {
                 total_items: t,
                 cache,
+                cached_pages,
+                page_lru,
                 in_flight_pages,
                 page_size: ps,
+                generation,
+                ..
             } => {
                 *t = total_items;
                 cache.clear();
+                cached_pages.clear();
+                page_lru.clear();
                 in_flight_pages.clear();
+                *generation = generation.wrapping_add(1).max(1);
                 if let Some(s) = page_size {
                     *ps = s.max(1);
                 }
@@ -369,27 +660,167 @@ impl<T: Clone + 'static> DataTableState<T> {
                 self.backing = DataBacking::Virtual {
                     total_items,
                     cache: HashMap::new(),
-                    in_flight_pages: HashSet::new(),
+                    cached_pages: HashMap::new(),
+                    page_lru: VecDeque::new(),
+                    in_flight_pages: HashMap::new(),
                     page_size: page_size.unwrap_or(200).max(1),
+                    max_cached_pages: DEFAULT_MAX_CACHED_PAGES,
+                    generation: 1,
                 };
             }
         }
         self.scroller.set_total_items(total_items);
-        self.selected_rows.clear();
+        self.selection.clear();
     }
 
-    fn virtual_set_page(&mut self, page_start: usize, rows: Vec<T>) {
+    fn virtual_set_page(
+        &mut self,
+        page_start: usize,
+        rows: Vec<T>,
+        request_generation: Option<u64>,
+    ) -> bool {
         if let DataBacking::Virtual {
+            total_items,
             cache,
+            cached_pages,
+            page_lru,
             in_flight_pages,
-            ..
+            page_size,
+            max_cached_pages,
+            generation,
         } = &mut self.backing
         {
-            for (i, row) in rows.into_iter().enumerate() {
+            let Some(in_flight_generation) = in_flight_pages.get(&page_start).copied() else {
+                return false;
+            };
+            if in_flight_generation != *generation
+                || request_generation.is_some_and(|value| value != *generation)
+            {
+                return false;
+            }
+
+            if let Some(previous_count) = cached_pages.remove(&page_start) {
+                for index in page_start..page_start.saturating_add(previous_count) {
+                    cache.remove(&index);
+                }
+            }
+
+            let accepted_count = rows
+                .len()
+                .min(*page_size)
+                .min(total_items.saturating_sub(page_start));
+            for (i, row) in rows.into_iter().take(accepted_count).enumerate() {
                 cache.insert(page_start + i, row);
             }
             in_flight_pages.remove(&page_start);
+            cached_pages.insert(page_start, accepted_count);
+            touch_lru_page(page_lru, page_start);
+            evict_lru_pages(cache, cached_pages, page_lru, (*max_cached_pages).max(1));
+            return true;
         }
+        false
+    }
+
+    fn invalidate_virtual_query(&mut self) -> bool {
+        let DataBacking::Virtual {
+            cache,
+            cached_pages,
+            page_lru,
+            in_flight_pages,
+            generation,
+            ..
+        } = &mut self.backing
+        else {
+            return false;
+        };
+        cache.clear();
+        cached_pages.clear();
+        page_lru.clear();
+        in_flight_pages.clear();
+        *generation = generation.wrapping_add(1).max(1);
+        true
+    }
+
+    fn set_max_cached_pages(&mut self, max_cached_pages: usize) {
+        if let DataBacking::Virtual {
+            cache,
+            cached_pages,
+            page_lru,
+            max_cached_pages: configured,
+            ..
+        } = &mut self.backing
+        {
+            *configured = max_cached_pages.max(1);
+            evict_lru_pages(cache, cached_pages, page_lru, *configured);
+        }
+    }
+
+    fn virtual_requests_for_range(&mut self, range: Range<usize>) -> Vec<DataTablePageRequest> {
+        let DataBacking::Virtual {
+            total_items,
+            cached_pages,
+            page_lru,
+            in_flight_pages,
+            page_size,
+            generation,
+            ..
+        } = &mut self.backing
+        else {
+            return Vec::new();
+        };
+        if range.is_empty() || *total_items == 0 {
+            return Vec::new();
+        }
+
+        let start = range.start.min(*total_items);
+        let end = range.end.min(*total_items);
+        if start >= end {
+            return Vec::new();
+        }
+
+        let first_page = (start / *page_size) * *page_size;
+        let last_page = ((end - 1) / *page_size) * *page_size;
+        let mut requests = Vec::new();
+        let mut page_start = first_page;
+        loop {
+            if cached_pages.contains_key(&page_start) {
+                touch_lru_page(page_lru, page_start);
+            } else if let Entry::Vacant(entry) = in_flight_pages.entry(page_start) {
+                entry.insert(*generation);
+                requests.push(DataTablePageRequest {
+                    page_start,
+                    page_size: (*page_size).min(total_items.saturating_sub(page_start)),
+                    generation: *generation,
+                });
+            }
+
+            if page_start == last_page {
+                break;
+            }
+            let Some(next) = page_start.checked_add(*page_size) else {
+                break;
+            };
+            page_start = next;
+        }
+        requests
+    }
+
+    fn virtual_page_failed(&mut self, request: DataTablePageRequest) -> bool {
+        let DataBacking::Virtual {
+            in_flight_pages,
+            generation,
+            ..
+        } = &mut self.backing
+        else {
+            return false;
+        };
+        if request.generation != *generation
+            || in_flight_pages.get(&request.page_start) != Some(generation)
+        {
+            return false;
+        }
+        in_flight_pages.remove(&request.page_start);
+        true
     }
 
     pub fn sort_by_column(&mut self, column_index: usize, direction: SortDirection) {
@@ -399,35 +830,38 @@ impl<T: Clone + 'static> DataTableState<T> {
         if !column.sortable {
             return;
         }
+        let accessor = column.accessor.clone();
 
         self.sort_column = Some(column_index);
         self.sort_direction = direction;
 
+        if self.invalidate_virtual_query() {
+            return;
+        }
+
         if let DataBacking::InMemory { data } = &mut self.backing {
-            let mut indexed_values: Vec<(usize, String)> = data
-                .iter()
+            let mut indexed_values: Vec<(usize, String, T)> = std::mem::take(data)
+                .into_iter()
                 .enumerate()
-                .map(|(idx, row)| (idx, (column.accessor)(row).to_string()))
+                .map(|(idx, row)| {
+                    let value = accessor(&row).to_string();
+                    (idx, value, row)
+                })
                 .collect();
 
-            indexed_values.sort_by(|(_, a), (_, b)| match direction {
+            indexed_values.sort_by(|(_, a, _), (_, b, _)| match direction {
                 SortDirection::Ascending => a.cmp(b),
                 SortDirection::Descending => b.cmp(a),
             });
 
-            let selected: HashSet<usize> = self.selected_rows.iter().copied().collect();
-            self.selected_rows = indexed_values
+            let old_to_new = indexed_values
                 .iter()
                 .enumerate()
-                .filter_map(|(new_index, (old_index, _))| {
-                    selected.contains(old_index).then_some(new_index)
-                })
-                .collect();
+                .map(|(new_index, (old_index, _, _))| (*old_index, new_index))
+                .collect::<HashMap<_, _>>();
+            self.selection.remap_after_sort(&old_to_new);
 
-            let sorted_data = indexed_values
-                .into_iter()
-                .map(|(old_index, _)| data[old_index].clone())
-                .collect();
+            let sorted_data = indexed_values.into_iter().map(|(_, _, row)| row).collect();
             *data = sorted_data;
         }
     }
@@ -436,15 +870,11 @@ impl<T: Clone + 'static> DataTableState<T> {
         if row_index >= self.total_items() {
             return;
         }
-        if let Some(pos) = self.selected_rows.iter().position(|&i| i == row_index) {
-            self.selected_rows.remove(pos);
-        } else {
-            self.selected_rows.push(row_index);
-        }
+        self.selection.toggle(row_index);
     }
 
     pub fn is_row_selected(&self, row_index: usize) -> bool {
-        self.selected_rows.contains(&row_index)
+        self.selection.contains(row_index, self.total_items())
     }
 
     pub fn resize_column(&mut self, column_index: usize, new_width: Pixels) {
@@ -488,6 +918,14 @@ impl<T: Clone + 'static> DataTableState<T> {
         }
     }
 
+    /// Number of complete virtual pages retained in the bounded cache.
+    pub fn cached_page_count(&self) -> usize {
+        match &self.backing {
+            DataBacking::Virtual { cached_pages, .. } => cached_pages.len(),
+            DataBacking::InMemory { .. } => 0,
+        }
+    }
+
     /// Number of in-flight virtual pages.
     pub fn in_flight_page_count(&self) -> usize {
         match &self.backing {
@@ -495,6 +933,24 @@ impl<T: Clone + 'static> DataTableState<T> {
                 in_flight_pages, ..
             } => in_flight_pages.len(),
             DataBacking::InMemory { .. } => 0,
+        }
+    }
+
+    /// Configured maximum number of retained virtual pages.
+    pub fn max_cached_pages(&self) -> Option<usize> {
+        match &self.backing {
+            DataBacking::Virtual {
+                max_cached_pages, ..
+            } => Some(*max_cached_pages),
+            DataBacking::InMemory { .. } => None,
+        }
+    }
+
+    /// Current virtual query generation.
+    pub fn virtual_generation(&self) -> Option<u64> {
+        match &self.backing {
+            DataBacking::Virtual { generation, .. } => Some(*generation),
+            DataBacking::InMemory { .. } => None,
         }
     }
 
@@ -508,7 +964,22 @@ impl<T: Clone + 'static> DataTableState<T> {
 
     /// Number of selected rows.
     pub fn selected_count(&self) -> usize {
-        self.selected_rows.len()
+        self.selection.selected_count(self.total_items())
+    }
+
+    /// Number of row indices retained by the compressed selection model.
+    pub fn stored_selection_index_count(&self) -> usize {
+        self.selection.stored_index_count()
+    }
+
+    /// Stable key describing how the current selection is represented.
+    pub fn selection_representation_key(&self) -> &'static str {
+        self.selection.representation_key()
+    }
+
+    /// Capture an owned selection snapshot without expanding select-all state.
+    pub fn selection_snapshot(&self) -> DataTableSelectionSnapshot {
+        self.selection.snapshot(self.total_items())
     }
 
     /// Returns true when a sort column is configured.
@@ -567,15 +1038,20 @@ impl<T: Clone + 'static> DataTableState<T> {
     /// Content-safe summary for logs, tests, and AI-agent diagnostics.
     pub fn to_text(&self) -> String {
         format!(
-            "data_table_state(columns={}, rows={}, backing={}, virtual={}, cached_rows={}, in_flight_pages={}, page_size={}, selected={}, has_sort={}, sort_column={}, sort_direction={}, sortable_columns={}, editable_columns={}, resizable_columns={}, row_height_class={}, viewport_class={})",
+            "data_table_state(columns={}, rows={}, backing={}, virtual={}, cached_rows={}, cached_pages={}, max_cached_pages={}, in_flight_pages={}, page_size={}, generation={}, selected={}, selection_representation={}, stored_selection_indices={}, has_sort={}, sort_column={}, sort_direction={}, sortable_columns={}, editable_columns={}, resizable_columns={}, row_height_class={}, viewport_class={})",
             self.column_count(),
             self.row_count(),
             self.backing_kind(),
             self.is_virtual(),
             self.cached_row_count(),
+            self.cached_page_count(),
+            self.max_cached_pages().unwrap_or(0),
             self.in_flight_page_count(),
             self.page_size().map_or(0, |size| size),
+            self.virtual_generation().unwrap_or(0),
             self.selected_count(),
+            self.selection_representation_key(),
+            self.stored_selection_index_count(),
             self.has_sort(),
             self.sort_column_index()
                 .map_or_else(|| "none".to_string(), |index| index.to_string()),
@@ -586,6 +1062,32 @@ impl<T: Clone + 'static> DataTableState<T> {
             self.row_height_class(),
             self.viewport_class()
         )
+    }
+}
+
+fn touch_lru_page(page_lru: &mut VecDeque<usize>, page_start: usize) {
+    if let Some(position) = page_lru.iter().position(|entry| *entry == page_start) {
+        page_lru.remove(position);
+    }
+    page_lru.push_back(page_start);
+}
+
+fn evict_lru_pages<T>(
+    cache: &mut HashMap<usize, T>,
+    cached_pages: &mut HashMap<usize, usize>,
+    page_lru: &mut VecDeque<usize>,
+    max_cached_pages: usize,
+) {
+    while cached_pages.len() > max_cached_pages {
+        let Some(page_start) = page_lru.pop_front() else {
+            break;
+        };
+        let Some(row_count) = cached_pages.remove(&page_start) else {
+            continue;
+        };
+        for index in page_start..page_start.saturating_add(row_count) {
+            cache.remove(&index);
+        }
     }
 }
 
@@ -600,6 +1102,7 @@ pub struct DataTable<T: Clone + 'static> {
     load_more_threshold: f32,
     load_more_triggered: bool,
     scroll_handle: ScrollHandle,
+    horizontal_scroll_handle: ScrollHandle,
     editing_cell: Option<(usize, usize)>,
     edit_input: Option<Entity<InputState>>,
     edit_column_id: SharedString,
@@ -612,6 +1115,8 @@ pub struct DataTable<T: Clone + 'static> {
         Box<dyn Fn(&T, SharedString, SharedString, &mut Window, &mut Context<Self>) + 'static>,
     >,
     on_fetch_page: Option<Box<dyn Fn(usize, usize, &mut Window, &mut Context<Self>) + 'static>>,
+    on_fetch_page_request:
+        Option<Box<dyn Fn(DataTablePageRequest, &mut Window, &mut Context<Self>) + 'static>>,
     on_row_click: Option<Box<dyn Fn(usize, &T, &mut Window, &mut Context<Self>) + 'static>>,
     search_query: String,
     search_column: Option<usize>,
@@ -619,7 +1124,15 @@ pub struct DataTable<T: Clone + 'static> {
     search_column_select: Entity<Select<usize>>,
     search_input: Entity<InputState>,
     show_selection: bool,
+    /// Compatibility callback for explicitly enumerable selections.
+    ///
+    /// All-except selections larger than
+    /// [`DATA_TABLE_LEGACY_SELECTION_MATERIALIZATION_LIMIT`]
+    /// are intentionally not sent through this slice API; use
+    /// `on_selection_change_snapshot` for every selection transition.
     on_selection_change: Option<Box<dyn Fn(&[usize], &mut Window, &mut Context<Self>) + 'static>>,
+    on_selection_change_snapshot:
+        Option<Box<dyn Fn(&DataTableSelectionSnapshot, &mut Window, &mut Context<Self>) + 'static>>,
     row_actions: Vec<RowAction>,
     context_menu: Option<(usize, Point<Pixels>)>,
     empty_message: SharedString,
@@ -661,12 +1174,16 @@ impl<T: Clone + 'static> DataTable<T> {
             |this, _select, event: &SelectEvent, cx| match event {
                 SelectEvent::Change => {
                     let selected = this.search_column_select.read(cx).selected_value().copied();
-                    this.search_column = if selected == Some(usize::MAX) {
+                    let next_column = if selected == Some(usize::MAX) {
                         None
                     } else {
                         selected
                     };
-                    cx.notify();
+                    if this.search_column != next_column {
+                        this.search_column = next_column;
+                        this.state.invalidate_virtual_query();
+                        cx.notify();
+                    }
                 }
             },
         )
@@ -685,6 +1202,7 @@ impl<T: Clone + 'static> DataTable<T> {
             load_more_threshold: 0.7,
             load_more_triggered: false,
             scroll_handle: ScrollHandle::new(),
+            horizontal_scroll_handle: ScrollHandle::new(),
             editing_cell: None,
             edit_input: None,
             edit_column_id: SharedString::from(""),
@@ -693,6 +1211,7 @@ impl<T: Clone + 'static> DataTable<T> {
             on_cell_edit: None,
             on_cell_double_click: None,
             on_fetch_page: None,
+            on_fetch_page_request: None,
             on_row_click: None,
             search_query: String::new(),
             search_column: None,
@@ -701,6 +1220,7 @@ impl<T: Clone + 'static> DataTable<T> {
             search_input,
             show_selection: false,
             on_selection_change: None,
+            on_selection_change_snapshot: None,
             row_actions: Vec::new(),
             context_menu: None,
             empty_message: "No rows to display".into(),
@@ -732,6 +1252,19 @@ impl<T: Clone + 'static> DataTable<T> {
         F: Fn(&[usize], &mut Window, &mut Context<Self>) + 'static,
     {
         self.on_selection_change = Some(Box::new(callback));
+        self
+    }
+
+    /// Set a selection callback that remains exact and bounded for virtual tables.
+    ///
+    /// Unlike [`Self::on_selection_change`], this callback is invoked for every
+    /// transition, including million-row select-all operations represented as
+    /// [`DataTableSelectionSnapshot::AllExcept`].
+    pub fn on_selection_change_snapshot<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(&DataTableSelectionSnapshot, &mut Window, &mut Context<Self>) + 'static,
+    {
+        self.on_selection_change_snapshot = Some(Box::new(callback));
         self
     }
 
@@ -771,12 +1304,16 @@ impl<T: Clone + 'static> DataTable<T> {
             |this, _select, event: &SelectEvent, cx| match event {
                 SelectEvent::Change => {
                     let selected = this.search_column_select.read(cx).selected_value().copied();
-                    this.search_column = if selected == Some(usize::MAX) {
+                    let next_column = if selected == Some(usize::MAX) {
                         None
                     } else {
                         selected
                     };
-                    cx.notify();
+                    if this.search_column != next_column {
+                        this.search_column = next_column;
+                        this.state.invalidate_virtual_query();
+                        cx.notify();
+                    }
                 }
             },
         )
@@ -795,6 +1332,7 @@ impl<T: Clone + 'static> DataTable<T> {
             load_more_threshold: 0.7,
             load_more_triggered: false,
             scroll_handle: ScrollHandle::new(),
+            horizontal_scroll_handle: ScrollHandle::new(),
             editing_cell: None,
             edit_input: None,
             edit_column_id: SharedString::from(""),
@@ -803,6 +1341,7 @@ impl<T: Clone + 'static> DataTable<T> {
             on_cell_edit: None,
             on_cell_double_click: None,
             on_fetch_page: None,
+            on_fetch_page_request: None,
             on_row_click: None,
             search_query: String::new(),
             search_column: None,
@@ -811,6 +1350,7 @@ impl<T: Clone + 'static> DataTable<T> {
             search_input,
             show_selection: false,
             on_selection_change: None,
+            on_selection_change_snapshot: None,
             row_actions: Vec::new(),
             context_menu: None,
             empty_message: "No rows to display".into(),
@@ -851,6 +1391,27 @@ impl<T: Clone + 'static> DataTable<T> {
         F: Fn(usize, usize, &mut Window, &mut Context<Self>) + 'static,
     {
         self.on_fetch_page = Some(Box::new(callback));
+        self
+    }
+
+    /// Sets a generation-safe virtual page callback.
+    ///
+    /// Prefer this over [`Self::on_fetch_page`] for asynchronous data sources.
+    /// Return results through [`Self::set_page_data_for`] and report failures
+    /// through [`Self::page_load_failed`] so retries remain possible.
+    pub fn on_fetch_page_request<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(DataTablePageRequest, &mut Window, &mut Context<Self>) + 'static,
+    {
+        self.on_fetch_page_request = Some(Box::new(callback));
+        self
+    }
+
+    /// Configures the maximum number of virtual pages retained in memory.
+    ///
+    /// The default is 16 pages and the minimum is one page.
+    pub fn max_cached_pages(mut self, max_cached_pages: usize) -> Self {
+        self.state.set_max_cached_pages(max_cached_pages);
         self
     }
 
@@ -937,7 +1498,12 @@ impl<T: Clone + 'static> DataTable<T> {
 
     /// Returns true when page fetching is configured for virtual data.
     pub fn has_fetch_page_handler(&self) -> bool {
-        self.on_fetch_page.is_some()
+        self.on_fetch_page.is_some() || self.on_fetch_page_request.is_some()
+    }
+
+    /// Returns true when generation-safe page fetching is configured.
+    pub fn has_generation_safe_fetch_handler(&self) -> bool {
+        self.on_fetch_page_request.is_some()
     }
 
     /// Returns true when cell edit callbacks are configured.
@@ -962,7 +1528,12 @@ impl<T: Clone + 'static> DataTable<T> {
 
     /// Returns true when selection-change callbacks are configured.
     pub fn has_selection_change_handler(&self) -> bool {
-        self.on_selection_change.is_some()
+        self.on_selection_change.is_some() || self.on_selection_change_snapshot.is_some()
+    }
+
+    /// Returns true when the compressed selection snapshot callback is configured.
+    pub fn has_scalable_selection_change_handler(&self) -> bool {
+        self.on_selection_change_snapshot.is_some()
     }
 
     /// Returns true when search UI is enabled.
@@ -1027,46 +1598,55 @@ impl<T: Clone + 'static> DataTable<T> {
     }
 
     pub fn set_search(&mut self, query: String, cx: &mut Context<Self>) {
+        if self.search_query == query {
+            return;
+        }
         self.search_query = query;
+        self.state.invalidate_virtual_query();
         cx.notify();
     }
 
     pub fn set_search_column(&mut self, column_index: Option<usize>, cx: &mut Context<Self>) {
+        if self.search_column == column_index {
+            return;
+        }
         self.search_column = column_index;
+        self.state.invalidate_virtual_query();
         cx.notify();
     }
 
-    fn row_matches_search(&self, row: &T) -> bool {
-        if self.search_query.is_empty() {
-            return true;
-        }
-
-        let query_lower = self.search_query.to_lowercase();
-
+    fn row_matches_lowercase_query(&self, row: &T, query_lower: &str) -> bool {
         if let Some(col_idx) = self.search_column {
             if let Some(column) = self.state.columns.get(col_idx) {
                 let cell_value = (column.accessor)(row);
-                cell_value.to_string().to_lowercase().contains(&query_lower)
+                cell_value.to_string().to_lowercase().contains(query_lower)
             } else {
                 false
             }
         } else {
             self.state.columns.iter().any(|column| {
                 let cell_value = (column.accessor)(row);
-                cell_value.to_string().to_lowercase().contains(&query_lower)
+                cell_value.to_string().to_lowercase().contains(query_lower)
             })
         }
     }
 
     fn get_filtered_indices(&self) -> Vec<usize> {
         if let DataBacking::InMemory { data } = &self.state.backing {
+            if self.search_query.is_empty() {
+                return Vec::new();
+            }
+            let query_lower = self.search_query.to_lowercase();
             data.iter()
                 .enumerate()
-                .filter(|(_, row)| self.row_matches_search(row))
+                .filter(|(_, row)| self.row_matches_lowercase_query(row, &query_lower))
                 .map(|(idx, _)| idx)
                 .collect()
         } else {
-            (0..self.state.total_items()).collect()
+            // Virtual queries are delegated to the backing data source through
+            // `on_fetch_page_request`; materializing the logical row range here
+            // would defeat virtualization for million-row tables.
+            Vec::new()
         }
     }
 
@@ -1099,9 +1679,45 @@ impl<T: Clone + 'static> DataTable<T> {
     }
 
     pub fn set_page_data(&mut self, page_start: usize, rows: Vec<T>, cx: &mut Context<Self>) {
-        self.state.virtual_set_page(page_start, rows);
-        self.load_more_triggered = false;
-        cx.notify();
+        if self.state.virtual_set_page(page_start, rows, None) {
+            self.load_more_triggered = false;
+            cx.notify();
+        }
+    }
+
+    /// Commits a virtual page only when it belongs to the current query.
+    ///
+    /// Returns `false` for cancelled, duplicate, or stale requests without
+    /// mutating the current cache.
+    pub fn set_page_data_for(
+        &mut self,
+        request: DataTablePageRequest,
+        rows: Vec<T>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let accepted =
+            self.state
+                .virtual_set_page(request.page_start, rows, Some(request.generation));
+        if accepted {
+            self.load_more_triggered = false;
+            cx.notify();
+        }
+        accepted
+    }
+
+    /// Clears a failed current request so the page can be retried.
+    ///
+    /// Stale failures are ignored and return `false`.
+    pub fn page_load_failed(
+        &mut self,
+        request: DataTablePageRequest,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let cleared = self.state.virtual_page_failed(request);
+        if cleared {
+            cx.notify();
+        }
+        cleared
     }
 
     pub fn data(&self) -> &[T] {
@@ -1115,8 +1731,53 @@ impl<T: Clone + 'static> DataTable<T> {
         self.state.total_items()
     }
 
-    pub fn selected_rows(&self) -> &[usize] {
-        &self.state.selected_rows
+    /// Number of rows currently resident in the bounded virtual page cache.
+    pub fn cached_row_count(&self) -> usize {
+        self.state.cached_row_count()
+    }
+
+    /// Number of resident virtual pages.
+    pub fn cached_page_count(&self) -> usize {
+        self.state.cached_page_count()
+    }
+
+    /// Configured maximum resident virtual pages, or `None` for in-memory data.
+    pub fn max_cached_page_count(&self) -> Option<usize> {
+        self.state.max_cached_pages()
+    }
+
+    /// Number of row indices retained by the compressed selection model.
+    pub fn stored_selection_index_count(&self) -> usize {
+        self.state.stored_selection_index_count()
+    }
+
+    /// Capture the current row selection without expanding select-all state.
+    pub fn selection_snapshot(&self) -> DataTableSelectionSnapshot {
+        self.state.selection_snapshot()
+    }
+
+    /// Return selected row indices only when they are explicitly stored.
+    ///
+    /// `None` means the table currently uses an all-except representation. It
+    /// never means "no selection", so callers cannot accidentally treat a
+    /// million-row selection as empty. Prefer [`Self::selection_snapshot`].
+    pub fn selected_rows(&self) -> Option<Vec<usize>> {
+        self.selection_snapshot()
+            .explicit_selected()
+            .map(<[usize]>::to_vec)
+    }
+
+    fn emit_selection_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let snapshot = self.state.selection_snapshot();
+        if let Some(ref callback) = self.on_selection_change_snapshot {
+            callback(&snapshot, window, cx);
+        }
+        if let Some(ref callback) = self.on_selection_change
+            && let Some(selected) =
+                snapshot.try_materialize_selected(DATA_TABLE_LEGACY_SELECTION_MATERIALIZATION_LIMIT)
+        {
+            callback(&selected, window, cx);
+        }
     }
 
     pub fn toggle_row_selection(
@@ -1126,56 +1787,24 @@ impl<T: Clone + 'static> DataTable<T> {
         cx: &mut Context<Self>,
     ) {
         self.state.toggle_row(row_index);
-
-        if let Some(ref callback) = self.on_selection_change {
-            callback(&self.state.selected_rows, window, cx);
-        }
-
+        self.emit_selection_change(window, cx);
         cx.notify();
     }
 
     pub fn select_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let total = self.state.total_items();
-        self.state.selected_rows = (0..total).collect();
-
-        if let Some(ref callback) = self.on_selection_change {
-            callback(&self.state.selected_rows, window, cx);
-        }
-
+        self.state.selection.select_all();
+        self.emit_selection_change(window, cx);
         cx.notify();
     }
 
     pub fn clear_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.state.selected_rows.clear();
-
-        if let Some(ref callback) = self.on_selection_change {
-            callback(&self.state.selected_rows, window, cx);
-        }
-
+        self.state.selection.clear();
+        self.emit_selection_change(window, cx);
         cx.notify();
     }
 
     fn is_all_selected(&self) -> bool {
-        let total = self.state.total_items();
-        total > 0 && self.state.selected_rows.len() == total
-    }
-
-    fn total_table_width(&self) -> Pixels {
-        let mut total: f32 = self
-            .state
-            .column_widths
-            .iter()
-            .map(|w| {
-                let w_f32: f32 = (*w).into();
-                w_f32
-            })
-            .sum();
-
-        if self.show_selection {
-            total += 50.0;
-        }
-
-        px(total)
+        self.state.selection_snapshot().is_all_selected()
     }
 
     fn save_edit(&mut self, cx: &mut Context<Self>) {
@@ -1241,8 +1870,12 @@ impl<T: Clone + 'static> DataTable<T> {
                             let entity = cx.entity();
                             move |value: SharedString, cx| {
                                 entity.update(cx, |this, cx| {
-                                    this.search_query = value.to_string();
-                                    cx.notify();
+                                    let next_query = value.to_string();
+                                    if this.search_query != next_query {
+                                        this.search_query = next_query;
+                                        this.state.invalidate_virtual_query();
+                                        cx.notify();
+                                    }
                                 });
                             }
                         }),
@@ -1253,8 +1886,10 @@ impl<T: Clone + 'static> DataTable<T> {
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<T> {
         let theme = Theme::of(cx);
 
-        let total_width = self.total_table_width();
-        let mut header_row = div().flex().w_full().min_w(total_width);
+        let mut header_row = div()
+            .accessibility(AccessibilityAttributes::new(AccessibilityRole::Row).row_index(1))
+            .flex()
+            .w_full();
 
         if self.show_selection {
             let all_selected = self.is_all_selected();
@@ -1340,153 +1975,197 @@ impl<T: Clone + 'static> DataTable<T> {
             );
         }
 
-        let header_cells = self
-            .state
-            .columns
-            .iter()
-            .enumerate()
-            .map(|(col_idx, column)| {
-                let width = self.state.column_widths[col_idx];
-                let is_last_column = col_idx + 1 == self.state.columns.len();
-                let is_sorted = self.state.sort_column == Some(col_idx);
-                let sortable = column.sortable;
-                let focus_handle = self.header_focus_handles[col_idx].clone();
-                let focus_on_mouse = focus_handle.clone();
-                let header_label = if sortable {
-                    format!("Sort by {}", column.header)
-                } else {
-                    column.header.to_string()
-                };
-
-                let mut header_cell = div()
-                    .id(ElementId::NamedChild(
-                        Box::new(self.id.clone()),
-                        format!("header-{col_idx}").into(),
-                    ))
-                    .accessibility(
-                        AccessibilityAttributes::new(if sortable {
-                            AccessibilityRole::Button
+        let snapshots = Rc::new(
+            self.state
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(index, column)| TableColumnSnapshot {
+                    header: column.header.clone(),
+                    width: self.state.column_widths[index],
+                    resizable: column.resizable,
+                    sortable: column.sortable,
+                    focus_handle: self.header_focus_handles[index].clone(),
+                })
+                .collect::<Vec<_>>(),
+        );
+        let extents = ColumnExtents(Rc::new(
+            snapshots.iter().map(|column| column.width).collect(),
+        ));
+        let snapshot_count = snapshots.len();
+        let table_id = self.id.clone();
+        let table_entity = cx.entity().clone();
+        let horizontal_scroll = self.horizontal_scroll_handle.clone();
+        let header_list = hlist_variable(
+            ElementId::NamedChild(Box::new(table_id.clone()), "header-columns".into()),
+            snapshot_count,
+            extents,
+            move |range, _window, app| {
+                let theme = use_theme();
+                range
+                    .map(|col_idx| {
+                        let column = &snapshots[col_idx];
+                        let is_sorted = table_entity.read(app).state.sort_column == Some(col_idx);
+                        let sort_direction = table_entity.read(app).state.sort_direction;
+                        let focus_handle = column.focus_handle.clone();
+                        let focus_on_mouse = focus_handle.clone();
+                        let entity_for_mouse = table_entity.clone();
+                        let entity_for_key = table_entity.clone();
+                        let entity_for_resize = table_entity.clone();
+                        let header_label = if column.sortable {
+                            format!("Sort by {}", column.header)
                         } else {
-                            AccessibilityRole::StaticText
-                        })
-                        .label(header_label),
-                    )
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .px(px(16.0))
-                    .py(px(12.0))
-                    .min_w(width)
-                    .when(is_last_column, |cell| cell.flex_1())
-                    .when(!is_last_column, |cell| cell.w(width).flex_shrink_0())
-                    .text_size(px(13.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.tokens.muted_foreground)
-                    .border_b_1()
-                    .border_r_1()
-                    .border_color(theme.tokens.border)
-                    .bg(theme.tokens.muted.opacity(0.5))
-                    .hover(|style| {
-                        if sortable {
-                            style
-                                .bg(theme.tokens.muted.opacity(0.7))
-                                .cursor(CursorStyle::PointingHand)
-                        } else {
-                            style
+                            column.header.to_string()
+                        };
+                        let mut header_accessibility =
+                            AccessibilityAttributes::new(AccessibilityRole::ColumnHeader)
+                                .label(header_label)
+                                .column_index(col_idx + 1);
+                        if column.sortable {
+                            header_accessibility = header_accessibility.actions(vec![
+                                AccessibilityAction::Focus,
+                                AccessibilityAction::Click,
+                            ]);
                         }
-                    })
-                    .child(
-                        div()
+                        if is_sorted {
+                            header_accessibility =
+                                header_accessibility.sort_direction(match sort_direction {
+                                    SortDirection::Ascending => {
+                                        AccessibilitySortDirection::Ascending
+                                    }
+                                    SortDirection::Descending => {
+                                        AccessibilitySortDirection::Descending
+                                    }
+                                });
+                        }
+                        let mut cell = div()
+                            .id(ElementId::NamedChild(
+                                Box::new(table_id.clone()),
+                                format!("header-{col_idx}").into(),
+                            ))
+                            .accessibility(header_accessibility)
+                            .track_focus(&focus_handle.tab_index(0).tab_stop(true))
+                            .relative()
                             .flex()
                             .items_center()
-                            .gap(px(8.0))
-                            .child(column.header.clone())
-                            .when(is_sorted, |el| {
-                                el.child(div().text_size(px(10.0)).child(
-                                    match self.state.sort_direction {
-                                        SortDirection::Ascending => "▲",
-                                        SortDirection::Descending => "▼",
-                                    },
-                                ))
-                            }),
-                    );
-
-                if sortable {
-                    header_cell = header_cell
-                        .track_focus(&focus_handle.tab_index(0).tab_stop(true))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _event, window, cx| {
-                                window.focus(&focus_on_mouse);
-                                let new_direction = if this.state.sort_column == Some(col_idx) {
-                                    match this.state.sort_direction {
-                                        SortDirection::Ascending => SortDirection::Descending,
-                                        SortDirection::Descending => SortDirection::Ascending,
+                            .justify_between()
+                            .size_full()
+                            .px(px(16.0))
+                            .py(px(12.0))
+                            .text_size(px(13.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.tokens.muted_foreground)
+                            .border_b_1()
+                            .border_r_1()
+                            .border_color(theme.tokens.border)
+                            .bg(theme.tokens.muted.opacity(0.5))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .child(column.header.clone())
+                                    .when(is_sorted, |element| {
+                                        element.child(div().text_size(px(10.0)).child(
+                                            match sort_direction {
+                                                SortDirection::Ascending => "▲",
+                                                SortDirection::Descending => "▼",
+                                            },
+                                        ))
+                                    }),
+                            );
+                        if column.sortable {
+                            cell = cell
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(|style| style.bg(theme.tokens.muted.opacity(0.7)))
+                                .on_mouse_down(MouseButton::Left, move |_, window, app| {
+                                    window.focus(&focus_on_mouse);
+                                    entity_for_mouse.update(app, |this, cx| {
+                                        let direction = if this.state.sort_column == Some(col_idx) {
+                                            match this.state.sort_direction {
+                                                SortDirection::Ascending => {
+                                                    SortDirection::Descending
+                                                }
+                                                SortDirection::Descending => {
+                                                    SortDirection::Ascending
+                                                }
+                                            }
+                                        } else {
+                                            SortDirection::Ascending
+                                        };
+                                        this.state.sort_by_column(col_idx, direction);
+                                        cx.notify();
+                                    });
+                                })
+                                .on_key_down(move |event: &KeyDownEvent, _, app| {
+                                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                        entity_for_key.update(app, |this, cx| {
+                                            let direction =
+                                                if this.state.sort_column == Some(col_idx) {
+                                                    match this.state.sort_direction {
+                                                        SortDirection::Ascending => {
+                                                            SortDirection::Descending
+                                                        }
+                                                        SortDirection::Descending => {
+                                                            SortDirection::Ascending
+                                                        }
+                                                    }
+                                                } else {
+                                                    SortDirection::Ascending
+                                                };
+                                            this.state.sort_by_column(col_idx, direction);
+                                            cx.notify();
+                                        });
+                                        app.stop_propagation();
                                     }
-                                } else {
-                                    SortDirection::Ascending
-                                };
-
-                                this.state.sort_by_column(col_idx, new_direction);
-                                cx.notify();
-                            }),
-                        )
-                        .on_key_down(cx.listener(
-                            move |this, event: &KeyDownEvent, _window, cx| {
-                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                    let new_direction = if this.state.sort_column == Some(col_idx) {
-                                        match this.state.sort_direction {
-                                            SortDirection::Ascending => SortDirection::Descending,
-                                            SortDirection::Descending => SortDirection::Ascending,
-                                        }
-                                    } else {
-                                        SortDirection::Ascending
-                                    };
-                                    this.state.sort_by_column(col_idx, new_direction);
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }
-                            },
-                        ));
-                }
-
-                header_cell = header_cell.when(column.resizable, |el| {
-                    el.child(
-                        div()
-                            .id(ElementId::NamedChild(
-                                Box::new(self.id.clone()),
-                                format!("resize-{col_idx}").into(),
-                            ))
-                            .accessibility(
-                                AccessibilityAttributes::new(AccessibilityRole::Separator)
-                                    .label(format!("Resize {} column", column.header)),
-                            )
-                            .w(px(4.0))
-                            .h_full()
-                            .absolute()
-                            .right(px(0.0))
-                            .top(px(0.0))
-                            .cursor(CursorStyle::ResizeLeftRight)
-                            .bg(kael::transparent_black())
-                            .hover(|style| style.bg(theme.tokens.primary.opacity(0.5)))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
-                                    this.resizing_column = Some(col_idx);
-                                    this.resize_start_x = event.position.x.into();
-                                    this.resize_start_width = this.state.column_widths[col_idx];
-                                    cx.notify();
-                                }),
-                            ),
-                    )
-                });
-
-                header_cell.relative()
-            });
+                                });
+                        }
+                        if column.resizable {
+                            let header = column.header.clone();
+                            cell = cell.child(
+                                div()
+                                    .id(ElementId::NamedChild(
+                                        Box::new(table_id.clone()),
+                                        format!("resize-{col_idx}").into(),
+                                    ))
+                                    .accessibility(
+                                        AccessibilityAttributes::new(AccessibilityRole::Separator)
+                                            .label(format!("Resize {header} column")),
+                                    )
+                                    .absolute()
+                                    .right(px(0.0))
+                                    .top(px(0.0))
+                                    .w(px(4.0))
+                                    .h_full()
+                                    .cursor(CursorStyle::ResizeLeftRight)
+                                    .hover(|style| style.bg(theme.tokens.primary.opacity(0.5)))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        move |event: &MouseDownEvent, _, app| {
+                                            entity_for_resize.update(app, |this, cx| {
+                                                this.resizing_column = Some(col_idx);
+                                                this.resize_start_x = event.position.x.into();
+                                                this.resize_start_width =
+                                                    this.state.column_widths[col_idx];
+                                                cx.notify();
+                                            });
+                                        },
+                                    ),
+                            );
+                        }
+                        cell.into_any_element()
+                    })
+                    .collect::<Vec<_>>()
+            },
+        )
+        .track_scroll(&horizontal_scroll)
+        .overscan(2)
+        .h(px(self.state.row_height()))
+        .flex_1();
 
         header_row
             .accessibility(AccessibilityAttributes::new(AccessibilityRole::Group).label("Columns"))
-            .children(header_cells)
+            .child(header_list)
     }
 }
 
@@ -1615,7 +2294,13 @@ mod tests {
 
         state.sort_by_column(0, SortDirection::Ascending);
 
-        assert_eq!(state.selected_rows, vec![1]);
+        assert_eq!(
+            state.selection_snapshot(),
+            DataTableSelectionSnapshot::Explicit {
+                total_rows: 2,
+                selected: vec![1],
+            }
+        );
         assert_eq!(state.get_row(1).map(|row| row.name.as_ref()), Some("Bravo"));
 
         state.sort_by_column(1, SortDirection::Descending);
@@ -1635,7 +2320,13 @@ mod tests {
         );
         state.toggle_row(0);
         state.toggle_row(9);
-        assert_eq!(state.selected_rows, vec![0]);
+        assert_eq!(
+            state.selection_snapshot(),
+            DataTableSelectionSnapshot::Explicit {
+                total_rows: 1,
+                selected: vec![0],
+            }
+        );
 
         state.resize_column(0, px(f32::NAN));
         assert_eq!(state.column_widths[0], px(220.0));
@@ -1646,7 +2337,7 @@ mod tests {
             name: "Replacement".into(),
             revenue: "$2".into(),
         }]);
-        assert!(state.selected_rows.is_empty());
+        assert_eq!(state.selected_count(), 0);
     }
 
     #[::core::prelude::v1::test]
@@ -1696,13 +2387,15 @@ mod tests {
     fn data_table_virtual_summary_is_content_safe() {
         let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
         state.virtual_reset(10_000, Some(250));
-        state.virtual_set_page(
-            0,
+        let request = state.virtual_requests_for_range(0..1).remove(0);
+        assert!(state.virtual_set_page(
+            request.page_start(),
             vec![PrivateRow {
                 name: "Cached Secret Row".into(),
                 revenue: "$99,000".into(),
             }],
-        );
+            Some(request.generation()),
+        ));
 
         assert_eq!(state.backing_kind(), "virtual");
         assert!(state.is_virtual());
@@ -1716,6 +2409,146 @@ mod tests {
         assert!(summary.contains("cached_rows=1"));
         assert!(!summary.contains("Cached Secret Row"));
         assert!(!summary.contains("$99,000"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn virtual_pages_use_a_bounded_lru_cache() {
+        let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        state.virtual_reset(1_000_000, Some(10));
+        state.set_max_cached_pages(2);
+
+        for page_start in [0, 10, 20] {
+            let request = state
+                .virtual_requests_for_range(page_start..page_start + 1)
+                .remove(0);
+            let rows = (0..10)
+                .map(|offset| PrivateRow {
+                    name: format!("row-{}", page_start + offset).into(),
+                    revenue: "$1".into(),
+                })
+                .collect();
+            assert!(
+                state.virtual_set_page(request.page_start(), rows, Some(request.generation()),)
+            );
+        }
+
+        assert_eq!(state.row_count(), 1_000_000);
+        assert_eq!(state.cached_page_count(), 2);
+        assert_eq!(state.cached_row_count(), 20);
+        assert!(state.get_row(0).is_none());
+        assert!(state.get_row(10).is_some());
+        assert!(state.get_row(20).is_some());
+    }
+
+    #[::core::prelude::v1::test]
+    fn million_row_select_all_is_constant_space_and_exact() {
+        let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        state.virtual_reset(1_000_000, Some(128));
+
+        state.selection.select_all();
+        assert_eq!(state.selected_count(), 1_000_000);
+        assert_eq!(state.stored_selection_index_count(), 0);
+        assert_eq!(state.selection_representation_key(), "all_except");
+        assert!(state.is_row_selected(0));
+        assert!(state.is_row_selected(999_999));
+
+        state.toggle_row(123_456);
+        let snapshot = state.selection_snapshot();
+        assert_eq!(snapshot.selected_count(), 999_999);
+        assert_eq!(snapshot.stored_index_count(), 1);
+        assert!(!snapshot.contains(123_456));
+        assert!(snapshot.contains(123_455));
+        assert_eq!(snapshot.deselected(), Some([123_456].as_slice()));
+        assert!(snapshot.try_materialize_selected(16_384).is_none());
+    }
+
+    #[::core::prelude::v1::test]
+    fn all_except_selection_remaps_exclusions_when_in_memory_rows_sort() {
+        let mut state = DataTableState::new(
+            vec![
+                PrivateRow {
+                    name: "Bravo".into(),
+                    revenue: "$20".into(),
+                },
+                PrivateRow {
+                    name: "Alpha".into(),
+                    revenue: "$10".into(),
+                },
+            ],
+            private_columns(),
+        );
+        state.selection.select_all();
+        state.toggle_row(0);
+
+        state.sort_by_column(0, SortDirection::Ascending);
+
+        let snapshot = state.selection_snapshot();
+        assert_eq!(snapshot.deselected(), Some([1].as_slice()));
+        assert!(snapshot.contains(0));
+        assert!(!snapshot.contains(1));
+    }
+
+    #[::core::prelude::v1::test]
+    fn bounded_snapshot_materialization_is_exact() {
+        let all_except = DataTableSelectionSnapshot::AllExcept {
+            total_rows: 5,
+            deselected: vec![1, 3],
+        };
+        assert_eq!(all_except.try_materialize_selected(3), Some(vec![0, 2, 4]));
+        assert!(all_except.try_materialize_selected(2).is_none());
+        assert_eq!(all_except.representation_key(), "all_except");
+
+        let explicit = DataTableSelectionSnapshot::Explicit {
+            total_rows: 5,
+            selected: vec![1, 4],
+        };
+        assert_eq!(explicit.explicit_selected(), Some([1, 4].as_slice()));
+        assert!(explicit.deselected().is_none());
+        assert_eq!(explicit.try_materialize_selected(2), Some(vec![1, 4]));
+    }
+
+    #[::core::prelude::v1::test]
+    fn stale_virtual_page_responses_cannot_overwrite_a_new_query() {
+        let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        state.virtual_reset(1_000, Some(100));
+        let stale = state.virtual_requests_for_range(0..1).remove(0);
+
+        state.virtual_reset(1_000, None);
+        let current = state.virtual_requests_for_range(0..1).remove(0);
+        assert_ne!(stale.generation(), current.generation());
+        assert!(!state.virtual_set_page(
+            stale.page_start(),
+            vec![PrivateRow {
+                name: "stale".into(),
+                revenue: "$0".into(),
+            }],
+            Some(stale.generation()),
+        ));
+        assert!(state.get_row(0).is_none());
+
+        assert!(state.virtual_set_page(
+            current.page_start(),
+            vec![PrivateRow {
+                name: "current".into(),
+                revenue: "$1".into(),
+            }],
+            Some(current.generation()),
+        ));
+        assert_eq!(state.get_row(0).unwrap().name, "current");
+    }
+
+    #[::core::prelude::v1::test]
+    fn virtual_requests_are_deduplicated_and_failures_can_retry() {
+        let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        state.virtual_reset(500, Some(50));
+        let request = state.virtual_requests_for_range(10..80);
+        assert_eq!(request.len(), 2);
+        assert!(state.virtual_requests_for_range(10..80).is_empty());
+        assert_eq!(state.in_flight_page_count(), 2);
+
+        assert!(state.virtual_page_failed(request[0]));
+        let retry = state.virtual_requests_for_range(0..1);
+        assert_eq!(retry, vec![request[0]]);
     }
 
     #[::core::prelude::v1::test]
@@ -1781,22 +2614,28 @@ impl<T: Clone + 'static> Render for DataTable<T> {
 
         let user_style = self.style.clone();
 
-        let (total_items, filtered_indices): (usize, Option<Rc<Vec<usize>>>) =
-            match &self.state.backing {
-                DataBacking::InMemory { .. } => {
-                    let indices = Rc::new(self.get_filtered_indices());
-                    (indices.len(), Some(indices))
-                }
-                DataBacking::Virtual { .. } => (self.state.total_items(), None),
-            };
+        let (total_items, filtered_indices): (usize, Option<Rc<Vec<usize>>>) = match &self
+            .state
+            .backing
+        {
+            DataBacking::InMemory { data } if self.search_query.is_empty() => (data.len(), None),
+            DataBacking::InMemory { .. } => {
+                let indices = Rc::new(self.get_filtered_indices());
+                (indices.len(), Some(indices))
+            }
+            DataBacking::Virtual { .. } => (self.state.total_items(), None),
+        };
         let viewport_height = self.state.effective_viewport_height(total_items);
         let row_extent = px(self.state.row_height());
-        let total_width = self.total_table_width();
+        let column_extents = ColumnExtents(Rc::new(self.state.column_widths.clone()));
+        let horizontal_scroll_handle = self.horizontal_scroll_handle.clone();
 
         let view_entity = cx.entity().clone();
         let filtered_indices_for_render = filtered_indices.clone();
         let table_id = self.id.clone();
         let table_id_for_rows = table_id.clone();
+        let column_extents_for_rows = column_extents.clone();
+        let horizontal_scroll_for_rows = horizontal_scroll_handle.clone();
         let renderer = move |this: &mut DataTable<T>,
                              range: Range<usize>,
                              window: &mut Window,
@@ -1829,8 +2668,9 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                         let mut row_div = div()
                             .id(row_id)
                             .accessibility(
-                                AccessibilityAttributes::new(AccessibilityRole::ListItem)
+                                AccessibilityAttributes::new(AccessibilityRole::Row)
                                     .label(format!("Row {}", actual_idx + 1))
+                                    .row_index(row_idx + 2)
                                     .states(row_state),
                             )
                             .when(row_clickable, |row| {
@@ -1840,7 +2680,6 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                             })
                             .flex()
                             .w_full()
-                            .min_w(total_width)
                             .h(row_extent)
                             .bg(if is_selected {
                                 theme.tokens.accent.opacity(0.2)
@@ -1974,76 +2813,81 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                             );
                         }
 
-                        let cells =
-                            this.state
-                                .columns
-                                .iter()
-                                .enumerate()
-                                .map(|(col_idx, column)| {
-                                    let width = this.state.column_widths[col_idx];
-                                    let is_last_column = col_idx + 1 == this.state.columns.len();
-                                    let cell_value = (column.accessor)(row_data);
-                                    let is_editable = column.editable;
-                                    let is_editing =
-                                        this.editing_cell == Some((actual_idx, col_idx));
 
-                                    let mut cell_div = div()
-                                        .accessibility(
-                                            AccessibilityAttributes::new(AccessibilityRole::Group)
+                        let row_entity = cx.entity().clone();
+                        let row_data = row_data.clone();
+                        let horizontal_scroll = horizontal_scroll_for_rows.clone();
+                        let row_columns = hlist_variable_view(
+                            row_entity,
+                            ElementId::NamedChild(
+                                Box::new(table_id_for_rows.clone()),
+                                format!("row-columns-{actual_idx}").into(),
+                            ),
+                            this.state.columns.len(),
+                            column_extents_for_rows.clone(),
+                            move |this, visible_columns, _window, cx| {
+                                let theme = Theme::of(cx).clone();
+                                visible_columns
+                                    .map(|col_idx| {
+                                        let column = &this.state.columns[col_idx];
+                                        let cell_value = (column.accessor)(&row_data);
+                                        let is_editing =
+                                            this.editing_cell == Some((actual_idx, col_idx));
+                                        let mut cell = div()
+                                            .accessibility(
+                                                AccessibilityAttributes::new(
+                                                    AccessibilityRole::Cell,
+                                                )
                                                 .label(format!(
                                                     "{} column, row {}",
                                                     column.header,
                                                     actual_idx + 1
-                                                )),
-                                        )
-                                        .flex()
-                                        .items_center()
-                                        .px(px(16.0))
-                                        .py(px(12.0))
-                                        .min_w(width)
-                                        .when(is_last_column, |cell| cell.flex_1())
-                                        .when(!is_last_column, |cell| cell.w(width).flex_shrink_0())
-                                        .text_size(px(13.0))
-                                        .text_color(theme.tokens.foreground)
-                                        .border_b_1()
-                                        .border_r_1()
-                                        .border_color(theme.tokens.border.opacity(0.5))
-                                        .overflow_hidden()
-                                        .text_ellipsis();
+                                                ))
+                                                .row_index(row_idx + 2)
+                                                .column_index(col_idx + 1)
+                                                .state(
+                                                    AccessibilityState::READ_ONLY,
+                                                    !column.editable,
+                                                ),
+                                            )
+                                            .flex()
+                                            .items_center()
+                                            .size_full()
+                                            .px(px(16.0))
+                                            .py(px(12.0))
+                                            .text_size(px(13.0))
+                                            .text_color(theme.tokens.foreground)
+                                            .border_b_1()
+                                            .border_r_1()
+                                            .border_color(theme.tokens.border.opacity(0.5))
+                                            .overflow_hidden()
+                                            .text_ellipsis();
 
-                                    if is_editable && !is_editing {
-                                        let cell_value_for_closure = cell_value.clone();
-                                        let column_id = column.id.clone();
-                                        let row_data_clone = row_data.clone();
-                                        cell_div = cell_div
-                                            .cursor(CursorStyle::IBeam)
-                                            .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(
-                                                move |this, event: &MouseDownEvent, window, cx| {
+                                        if column.editable && !is_editing {
+                                            let value_for_edit = cell_value.clone();
+                                            let column_id = column.id.clone();
+                                            let row_for_edit = row_data.clone();
+                                            cell = cell.cursor(CursorStyle::IBeam).on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                                                     if event.click_count < 2 {
                                                         return;
                                                     }
-
-                                                    if this.on_cell_double_click.is_some() {
-                                                        if let Some(ref cb) =
-                                                            this.on_cell_double_click
-                                                        {
-                                                            (cb)(
-                                                                &row_data_clone,
-                                                                column_id.clone(),
-                                                                cell_value_for_closure.clone(),
-                                                                window,
-                                                                cx,
-                                                            );
-                                                        }
+                                                    if let Some(ref callback) = this.on_cell_double_click {
+                                                        callback(
+                                                            &row_for_edit,
+                                                            column_id.clone(),
+                                                            value_for_edit.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
                                                         return;
                                                     }
 
                                                     let input_state = cx.new(|cx| {
                                                         let mut state = InputState::new(cx);
                                                         state.set_value(
-                                                            cell_value_for_closure.clone(),
+                                                            value_for_edit.clone(),
                                                             window,
                                                             cx,
                                                         );
@@ -2052,53 +2896,50 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                                                     use crate::components::input::InputEvent;
                                                     cx.subscribe(
                                                         &input_state,
-                                                        |this, _, event: &InputEvent, cx| {
-                                                            match event {
-                                                                InputEvent::Enter => {
-                                                                    this.save_edit(cx)
-                                                                }
-                                                                InputEvent::Blur
-                                                                    if !this.use_edit_dialog =>
-                                                                {
-                                                                    this.save_edit(cx);
-                                                                }
-                                                                _ => {}
+                                                        |this, _, event: &InputEvent, cx| match event {
+                                                            InputEvent::Enter => this.save_edit(cx),
+                                                            InputEvent::Blur if !this.use_edit_dialog => {
+                                                                this.save_edit(cx);
                                                             }
+                                                            _ => {}
                                                         },
                                                     )
                                                     .detach();
                                                     this.editing_cell = Some((actual_idx, col_idx));
                                                     this.edit_input = Some(input_state);
                                                     this.edit_column_id = column_id.clone();
-                                                    this.edit_old_value =
-                                                        cell_value_for_closure.clone();
+                                                    this.edit_old_value = value_for_edit.clone();
                                                     if let Some(ref input) = this.edit_input {
-                                                        window.focus(
-                                                            &input.read(cx).focus_handle(cx),
-                                                        );
+                                                        window.focus(&input.read(cx).focus_handle(cx));
                                                     }
                                                     cx.notify();
-                                                },
-                                            ),
-                                        );
-                                    }
-
-                                    if is_editing {
-                                        if let Some(ref input_state) = this.edit_input {
-                                            cell_div
-                                                .child(Input::new(input_state).size(InputSize::Sm))
-                                        } else {
-                                            cell_div.child(cell_value)
+                                                }),
+                                            );
                                         }
-                                    } else {
-                                        cell_div.child(cell_value)
-                                    }
-                                });
 
-                        row_div.children(cells).into_any_element()
+                                        if is_editing {
+                                            if let Some(ref input_state) = this.edit_input {
+                                                cell.child(Input::new(input_state).size(InputSize::Sm))
+                                                    .into_any_element()
+                                            } else {
+                                                cell.child(cell_value).into_any_element()
+                                            }
+                                        } else {
+                                            cell.child(cell_value).into_any_element()
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()
+                            },
+                        )
+                        .track_scroll(&horizontal_scroll)
+                        .overscan(2)
+                        .h(row_extent)
+                        .flex_1();
+
+                        row_div.child(row_columns).into_any_element()
                     } else {
                         let mut skeleton_row =
-                            div().flex().w_full().min_w(total_width).h(row_extent).bg(
+                            div().flex().w_full().h(row_extent).bg(
                                 if row_idx % 2 == 0 {
                                     theme.tokens.background
                                 } else {
@@ -2120,29 +2961,45 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                                     .border_color(theme.tokens.border.opacity(0.5)),
                             );
                         }
-                        let cells = this.state.columns.iter().enumerate().map(|(col_idx, _)| {
-                            let width = this.state.column_widths[col_idx];
-                            let is_last_column = col_idx + 1 == this.state.columns.len();
-                            div()
-                                .flex()
-                                .items_center()
-                                .px(px(16.0))
-                                .py(px(12.0))
-                                .min_w(width)
-                                .when(is_last_column, |cell| cell.flex_1())
-                                .when(!is_last_column, |cell| cell.w(width).flex_shrink_0())
-                                .border_b_1()
-                                .border_r_1()
-                                .border_color(theme.tokens.border.opacity(0.5))
-                                .child(
-                                    div()
-                                        .w(px(96.0))
-                                        .h(px(12.0))
-                                        .rounded(theme.tokens.radius_sm)
-                                        .bg(theme.tokens.muted.opacity(0.6)),
-                                )
-                        });
-                        skeleton_row.children(cells).into_any_element()
+
+                        let horizontal_scroll = horizontal_scroll_for_rows.clone();
+                        let skeleton_theme = theme.clone();
+                        let skeleton_columns = hlist_variable(
+                            ElementId::NamedChild(
+                                Box::new(table_id_for_rows.clone()),
+                                format!("skeleton-columns-{actual_idx}").into(),
+                            ),
+                            this.state.columns.len(),
+                            column_extents_for_rows.clone(),
+                            move |visible_columns, _window, _app| {
+                                visible_columns
+                                    .map(|_| {
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .size_full()
+                                            .px(px(16.0))
+                                            .py(px(12.0))
+                                            .border_b_1()
+                                            .border_r_1()
+                                            .border_color(skeleton_theme.tokens.border.opacity(0.5))
+                                            .child(
+                                                div()
+                                                    .w(px(96.0))
+                                                    .h(px(12.0))
+                                                    .rounded(skeleton_theme.tokens.radius_sm)
+                                                    .bg(skeleton_theme.tokens.muted.opacity(0.6)),
+                                            )
+                                            .into_any_element()
+                                    })
+                                    .collect::<Vec<_>>()
+                            },
+                        )
+                        .track_scroll(&horizontal_scroll)
+                        .overscan(2)
+                        .h(row_extent)
+                        .flex_1();
+                        skeleton_row.child(skeleton_columns).into_any_element()
                     }
                 })
                 .collect::<Vec<_>>()
@@ -2150,6 +3007,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
 
         let view_for_visible = view_entity.clone();
         let view_for_near_end = view_entity.clone();
+        let rendered_total_items = total_items;
         let body_scroll = vlist_uniform_view(
             view_entity,
             ElementId::NamedChild(Box::new(table_id.clone()), "body-list".into()),
@@ -2165,10 +3023,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
             let end = range.end;
             let _ = window;
             view_for_visible.update(app, |this: &mut DataTable<T>, cx| {
-                let total_items = match &this.state.backing {
-                    DataBacking::InMemory { .. } => this.get_filtered_indices().len(),
-                    DataBacking::Virtual { .. } => this.state.total_items(),
-                };
+                let total_items = rendered_total_items;
                 if total_items > 0 && !this.load_more_triggered {
                     let progress = end as f32 / total_items as f32;
                     if progress >= this.load_more_threshold
@@ -2179,31 +3034,14 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                     }
                 }
 
-                if let DataBacking::Virtual {
-                    page_size,
-                    in_flight_pages,
-                    cache,
-                    ..
-                } = &mut this.state.backing
-                    && let Some(ref fetch_cb) = this.on_fetch_page
-                {
-                    let first_page_start = (start / *page_size) * *page_size;
-                    let last_index = end.saturating_sub(1);
-                    let last_page_start = (last_index / *page_size) * *page_size;
-                    let mut page = first_page_start;
-                    while page <= last_page_start {
-                        let mut needs_fetch = false;
-                        for i in page..(page + *page_size).min(total_items) {
-                            if !cache.contains_key(&i) {
-                                needs_fetch = true;
-                                break;
-                            }
+                if this.on_fetch_page_request.is_some() || this.on_fetch_page.is_some() {
+                    let requests = this.state.virtual_requests_for_range(start..end);
+                    for request in requests {
+                        if let Some(ref fetch_cb) = this.on_fetch_page_request {
+                            fetch_cb(request, window, cx);
+                        } else if let Some(ref fetch_cb) = this.on_fetch_page {
+                            fetch_cb(request.page_start, request.page_size, window, cx);
                         }
-                        if needs_fetch && !in_flight_pages.contains(&page) {
-                            in_flight_pages.insert(page);
-                            fetch_cb(page, *page_size, window, cx);
-                        }
-                        page += *page_size;
                     }
                 }
             });
@@ -2243,7 +3081,9 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                 Box::new(table_id.clone()),
                 "body".into(),
             ))
-            .accessibility(AccessibilityAttributes::new(AccessibilityRole::List))
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group).label("Table rows"),
+            )
             .h(px(viewport_height))
             .on_scroll_wheel(
                 cx.listener(move |view, event: &ScrollWheelEvent, _window, cx| {
@@ -2273,16 +3113,27 @@ impl<T: Clone + 'static> Render for DataTable<T> {
             ))
             .flex()
             .flex_col()
-            .overflow_x_scroll()
+            .overflow_hidden()
             .w_full()
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .w_full()
-                    .min_w(total_width)
                     .child(self.render_header(cx))
                     .child(body_container),
+            )
+            .child(
+                div().w_full().h(px(12.0)).child(
+                    scroll_bar(
+                        ElementId::NamedChild(
+                            Box::new(table_id.clone()),
+                            "horizontal-scrollbar".into(),
+                        ),
+                        horizontal_scroll_handle,
+                    )
+                    .horizontal(),
+                ),
             );
 
         let table_div = if self.sticky_header {
@@ -2332,7 +3183,10 @@ impl<T: Clone + 'static> Render for DataTable<T> {
         div()
             .id(table_id)
             .accessibility(
-                AccessibilityAttributes::new(AccessibilityRole::Group).label("Data table"),
+                AccessibilityAttributes::new(AccessibilityRole::Table)
+                    .label("Data table")
+                    .row_count(total_items.saturating_add(1))
+                    .column_count(self.state.columns.len()),
             )
             .relative()
             .w_full()

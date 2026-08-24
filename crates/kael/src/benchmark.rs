@@ -1747,28 +1747,23 @@ pub fn check_regressions_with_thresholds(
     let mut regressions = Vec::new();
 
     for candidate_result in candidate {
-        if let Some(baseline_result) = baseline
-            .iter()
-            .find(|b| b.scenario == candidate_result.scenario)
-        {
-            for comparison in compare_results(baseline_result, candidate_result) {
-                let threshold = thresholds.threshold_for(comparison.metric);
-                let is_regression = if comparison.lower_is_better {
-                    comparison.percent_change > threshold
-                } else {
-                    comparison.percent_change < -threshold
-                };
+        for comparison in comparisons_against_result_set(baseline, candidate_result) {
+            let threshold = thresholds.threshold_for(comparison.metric);
+            let is_regression = if comparison.lower_is_better {
+                comparison.percent_change > threshold
+            } else {
+                comparison.percent_change < -threshold
+            };
 
-                if is_regression {
-                    regressions.push(Regression {
-                        scenario: candidate_result.scenario,
-                        metric: comparison.metric,
-                        baseline: comparison.baseline,
-                        candidate: comparison.candidate,
-                        percent_change: comparison.percent_change,
-                        unit: comparison.unit,
-                    });
-                }
+            if is_regression {
+                regressions.push(Regression {
+                    scenario: candidate_result.scenario,
+                    metric: comparison.metric,
+                    baseline: comparison.baseline,
+                    candidate: comparison.candidate,
+                    percent_change: comparison.percent_change,
+                    unit: comparison.unit,
+                });
             }
         }
     }
@@ -2375,30 +2370,63 @@ pub fn compare_results(
                 && measurement.unit == baseline_m.unit
                 && measurement.validate().is_ok()
         }) {
-            let delta = candidate_m.value - baseline_m.value;
-            let percent_change = if baseline_m.value != 0.0 {
-                (delta / baseline_m.value) * 100.0
-            } else if candidate_m.value > 0.0 {
-                100.0
-            } else if candidate_m.value < 0.0 {
-                -100.0
-            } else {
-                0.0
-            };
-
-            comparisons.push(MetricComparison {
-                metric: baseline_m.metric,
-                baseline: baseline_m.value,
-                candidate: candidate_m.value,
-                delta,
-                percent_change,
-                unit: baseline_m.unit,
-                lower_is_better: baseline_m.metric.lower_is_better(),
-            });
+            comparisons.push(compare_measurements(baseline_m, candidate_m));
         }
     }
 
     comparisons
+}
+
+fn comparisons_against_result_set(
+    baseline: &[BenchmarkResult],
+    candidate: &BenchmarkResult,
+) -> Vec<MetricComparison> {
+    candidate
+        .measurements
+        .iter()
+        .filter(|measurement| measurement.validate().is_ok())
+        .filter_map(|candidate_measurement| {
+            let baseline_measurement = baseline
+                .iter()
+                .filter(|result| result.scenario == candidate.scenario)
+                .flat_map(|result| &result.measurements)
+                .find(|measurement| {
+                    measurement.metric == candidate_measurement.metric
+                        && measurement.unit == candidate_measurement.unit
+                        && measurement.validate().is_ok()
+                })?;
+            Some(compare_measurements(
+                baseline_measurement,
+                candidate_measurement,
+            ))
+        })
+        .collect()
+}
+
+fn compare_measurements(
+    baseline: &BenchmarkMeasurement,
+    candidate: &BenchmarkMeasurement,
+) -> MetricComparison {
+    let delta = candidate.value - baseline.value;
+    let percent_change = if baseline.value != 0.0 {
+        (delta / baseline.value) * 100.0
+    } else if candidate.value > 0.0 {
+        100.0
+    } else if candidate.value < 0.0 {
+        -100.0
+    } else {
+        0.0
+    };
+
+    MetricComparison {
+        metric: baseline.metric,
+        baseline: baseline.value,
+        candidate: candidate.value,
+        delta,
+        percent_change,
+        unit: baseline.unit,
+        lower_is_better: baseline.metric.lower_is_better(),
+    }
 }
 
 /// Load benchmark results from a JSON string.
@@ -2445,27 +2473,22 @@ pub fn check_regressions(
     let mut regressions = Vec::new();
 
     for candidate_result in candidate {
-        if let Some(baseline_result) = baseline
-            .iter()
-            .find(|b| b.scenario == candidate_result.scenario)
-        {
-            for comparison in compare_results(baseline_result, candidate_result) {
-                let is_regression = if comparison.lower_is_better {
-                    comparison.percent_change > threshold_percent
-                } else {
-                    comparison.percent_change < -threshold_percent
-                };
+        for comparison in comparisons_against_result_set(baseline, candidate_result) {
+            let is_regression = if comparison.lower_is_better {
+                comparison.percent_change > threshold_percent
+            } else {
+                comparison.percent_change < -threshold_percent
+            };
 
-                if is_regression {
-                    regressions.push(Regression {
-                        scenario: candidate_result.scenario,
-                        metric: comparison.metric,
-                        baseline: comparison.baseline,
-                        candidate: comparison.candidate,
-                        percent_change: comparison.percent_change,
-                        unit: comparison.unit,
-                    });
-                }
+            if is_regression {
+                regressions.push(Regression {
+                    scenario: candidate_result.scenario,
+                    metric: comparison.metric,
+                    baseline: comparison.baseline,
+                    candidate: comparison.candidate,
+                    percent_change: comparison.percent_change,
+                    unit: comparison.unit,
+                });
             }
         }
     }
@@ -2522,11 +2545,20 @@ mod tests {
         value: f64,
         unit: MetricUnit,
     ) -> BenchmarkResult {
+        measurement_result(scenario, BenchmarkMetric::ColdStart, value, unit)
+    }
+
+    fn measurement_result(
+        scenario: BenchmarkScenario,
+        metric: BenchmarkMetric,
+        value: f64,
+        unit: MetricUnit,
+    ) -> BenchmarkResult {
         BenchmarkResult {
             scenario,
             subject: "subject".to_string(),
             measurements: vec![BenchmarkMeasurement {
-                metric: BenchmarkMetric::ColdStart,
+                metric,
                 value,
                 unit,
                 elapsed: Duration::default(),
@@ -2826,6 +2858,42 @@ mod tests {
         let regressions = check_regressions(&baseline, &candidate, 10.0);
         assert_eq!(regressions.len(), 1);
         assert_eq!(regressions[0].percent_change, 50.0);
+    }
+
+    #[test]
+    fn regression_checks_match_metrics_across_split_scenario_results() {
+        let baseline = vec![
+            measurement_result(
+                BenchmarkScenario::Messaging,
+                BenchmarkMetric::ColdStart,
+                10.0,
+                MetricUnit::Milliseconds,
+            ),
+            measurement_result(
+                BenchmarkScenario::Messaging,
+                BenchmarkMetric::ScrollSmoothness,
+                1.0,
+                MetricUnit::Milliseconds,
+            ),
+        ];
+        let candidate = vec![measurement_result(
+            BenchmarkScenario::Messaging,
+            BenchmarkMetric::ScrollSmoothness,
+            1.25,
+            MetricUnit::Milliseconds,
+        )];
+
+        let regressions = check_regressions(&baseline, &candidate, 10.0);
+        assert_eq!(regressions.len(), 1);
+        assert_eq!(regressions[0].metric, BenchmarkMetric::ScrollSmoothness);
+        assert_eq!(regressions[0].percent_change, 25.0);
+
+        let threshold_regressions = check_regressions_with_thresholds(
+            &baseline,
+            &candidate,
+            &RegressionThresholds::new(10.0),
+        );
+        assert_eq!(threshold_regressions, regressions);
     }
 
     #[test]

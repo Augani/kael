@@ -7,7 +7,6 @@ use crate::{
 use std::{any::TypeId, cell::RefCell, collections::HashMap, rc::Rc};
 
 const DEFAULT_OVERDRAW_PX: f32 = 200.0;
-const DEFAULT_MAX_POOLED_ITEMS_PER_TYPE: usize = 8;
 
 /// Lazily render a heterogeneous list with estimated heights for off-screen items.
 ///
@@ -34,6 +33,17 @@ pub trait ListDelegate: 'static {
 
     /// Return the estimated height for an item that has not been measured yet.
     fn estimated_item_height(&self, ix: usize) -> Pixels;
+
+    /// Return a revision for the item count and estimated heights when they can be cached.
+    ///
+    /// Returning `Some(revision)` lets the list reuse its height tree without walking every
+    /// item on steady-state frames. Increment the revision whenever an item is inserted,
+    /// removed, reordered, or its estimated height changes. The default, `None`, preserves
+    /// dynamic delegates by re-reading estimates each frame, so estimates never become
+    /// silently stale.
+    fn estimated_heights_revision(&self) -> Option<u64> {
+        None
+    }
 
     /// Render the item at the given index.
     fn render_item(&self, ix: usize, window: &mut Window, cx: &mut App) -> AnyElement;
@@ -69,6 +79,7 @@ pub struct RecyclingList<D> {
 struct RecyclingListElementState {
     list_state: ListState,
     estimated_heights: Vec<Pixels>,
+    estimated_heights_revision: Option<u64>,
     element_pool: Rc<RefCell<ElementPool>>,
     alignment: ListAlignment,
     overdraw: Pixels,
@@ -81,21 +92,30 @@ pub struct RecyclingListFrameState {
     element_pool: Rc<RefCell<ElementPool>>,
 }
 
+/// Frame state used by a [`RecyclingList`] between layout and prepaint.
+pub struct RecyclingListRequestLayoutState {
+    list_state: ListState,
+    element_pool: Rc<RefCell<ElementPool>>,
+}
+
 #[derive(Default)]
 struct ElementPool {
     pools: HashMap<TypeId, Vec<AnyElement>>,
-    max_per_type: usize,
+    frame_demand: HashMap<TypeId, usize>,
+    high_water: HashMap<TypeId, usize>,
 }
 
 impl ElementPool {
-    fn new(max_per_type: usize) -> Self {
-        Self {
-            pools: HashMap::default(),
-            max_per_type,
-        }
+    fn begin_frame(&mut self) {
+        self.frame_demand.clear();
     }
 
     fn take(&mut self, key: TypeId) -> Option<AnyElement> {
+        let demand = self.frame_demand.entry(key).or_default();
+        *demand += 1;
+        let high_water = self.high_water.entry(key).or_default();
+        *high_water = (*high_water).max(*demand);
+
         let pool = self.pools.get_mut(&key)?;
         let element = pool.pop();
         if pool.is_empty() {
@@ -106,7 +126,8 @@ impl ElementPool {
 
     fn release(&mut self, key: TypeId, element: AnyElement) {
         let pool = self.pools.entry(key).or_default();
-        if pool.len() < self.max_per_type {
+        let retention_limit = self.high_water.get(&key).copied().unwrap_or(1);
+        if pool.len() < retention_limit {
             pool.push(element);
         }
     }
@@ -177,7 +198,7 @@ where
         self
     }
 
-    fn estimated_heights(&self) -> Vec<Pixels> {
+    fn collect_estimated_heights(&self) -> Vec<Pixels> {
         (0..self.delegate.item_count())
             .map(|ix| self.delegate.estimated_item_height(ix))
             .collect()
@@ -215,23 +236,32 @@ where
         inner
     }
 
-    fn build_state(&self, estimated_heights: &[Pixels]) -> RecyclingListElementState {
+    fn build_state(&self) -> RecyclingListElementState {
+        let estimated_heights = self.collect_estimated_heights();
         RecyclingListElementState {
             list_state: ListState::new_estimated(
                 estimated_heights.iter().copied(),
                 self.alignment,
                 self.overdraw,
             ),
-            estimated_heights: estimated_heights.to_vec(),
-            element_pool: Rc::new(RefCell::new(ElementPool::new(
-                DEFAULT_MAX_POOLED_ITEMS_PER_TYPE,
-            ))),
+            estimated_heights,
+            estimated_heights_revision: self.delegate.estimated_heights_revision(),
+            element_pool: Rc::new(RefCell::new(ElementPool::default())),
             alignment: self.alignment,
             overdraw: self.overdraw,
         }
     }
 
-    fn sync_state(&self, state: &mut RecyclingListElementState, estimated_heights: &[Pixels]) {
+    fn sync_state(&self, state: &mut RecyclingListElementState) {
+        let revision = self.delegate.estimated_heights_revision();
+        let item_count_changed = state.estimated_heights.len() != self.delegate.item_count();
+        let revision_changed = state.estimated_heights_revision != revision;
+        let must_refresh_estimates = revision.is_none() || revision_changed || item_count_changed;
+        let refreshed_heights = must_refresh_estimates.then(|| self.collect_estimated_heights());
+        let estimated_heights = refreshed_heights
+            .as_deref()
+            .unwrap_or(&state.estimated_heights);
+
         if state.alignment != self.alignment || state.overdraw != self.overdraw {
             let scroll_top = state.list_state.logical_scroll_top();
             state.list_state = ListState::new_estimated(
@@ -243,15 +273,20 @@ where
             state.alignment = self.alignment;
             state.overdraw = self.overdraw;
             state.estimated_heights = estimated_heights.to_vec();
+            state.estimated_heights_revision = revision;
             return;
         }
 
-        if state.estimated_heights != estimated_heights {
+        if refreshed_heights
+            .as_ref()
+            .is_some_and(|heights| *heights != state.estimated_heights)
+        {
             state
                 .list_state
                 .replace_estimated_heights(estimated_heights.iter().copied());
             state.estimated_heights = estimated_heights.to_vec();
         }
+        state.estimated_heights_revision = revision;
     }
 }
 
@@ -259,7 +294,7 @@ impl<D> Element for RecyclingList<D>
 where
     D: ListDelegate,
 {
-    type RequestLayoutState = Vec<Pixels>;
+    type RequestLayoutState = RecyclingListRequestLayoutState;
     type PrepaintState = RecyclingListFrameState;
 
     fn id(&self) -> Option<ElementId> {
@@ -277,20 +312,31 @@ where
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let estimated_heights = self.estimated_heights();
-        let temporary_state = ListState::new_estimated(
-            estimated_heights.iter().copied(),
-            self.alignment,
-            self.overdraw,
-        );
-        let mut inner = self.build_list(
-            temporary_state,
-            Rc::new(RefCell::new(ElementPool::new(
-                DEFAULT_MAX_POOLED_ITEMS_PER_TYPE,
-            ))),
-        );
-        let (layout_id, _) = inner.request_layout(None, None, window, cx);
-        (layout_id, estimated_heights)
+        window.with_optional_element_state(
+            _global_id,
+            |element_state: Option<Option<RecyclingListElementState>>, window| {
+                let mut element_state = element_state
+                    .flatten()
+                    .unwrap_or_else(|| self.build_state());
+                self.sync_state(&mut element_state);
+
+                let list_state = element_state.list_state.clone();
+                let element_pool = element_state.element_pool.clone();
+                let mut inner = self.build_list(list_state.clone(), element_pool.clone());
+                let (layout_id, _) = inner.request_layout(None, None, window, cx);
+
+                (
+                    (
+                        layout_id,
+                        RecyclingListRequestLayoutState {
+                            list_state,
+                            element_pool,
+                        },
+                    ),
+                    Some(element_state),
+                )
+            },
+        )
     }
 
     fn prepaint(
@@ -302,31 +348,19 @@ where
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        window.with_optional_element_state(
-            global_id,
-            |element_state: Option<Option<RecyclingListElementState>>, window| {
-                let mut element_state = element_state
-                    .flatten()
-                    .unwrap_or_else(|| self.build_state(request_layout));
-                self.sync_state(&mut element_state, request_layout);
+        let _ = global_id;
+        request_layout.element_pool.borrow_mut().begin_frame();
+        let list_state = request_layout.list_state.clone();
+        let element_pool = request_layout.element_pool.clone();
+        let mut inner = self.build_list(list_state.clone(), element_pool.clone());
+        let mut inner_request_layout = ();
+        let inner = inner.prepaint(None, None, bounds, &mut inner_request_layout, window, cx);
 
-                let list_state = element_state.list_state.clone();
-                let element_pool = element_state.element_pool.clone();
-                let mut inner = self.build_list(list_state.clone(), element_pool.clone());
-                let mut inner_request_layout = ();
-                let inner =
-                    inner.prepaint(None, None, bounds, &mut inner_request_layout, window, cx);
-
-                (
-                    RecyclingListFrameState {
-                        inner,
-                        list_state,
-                        element_pool,
-                    },
-                    Some(element_state),
-                )
-            },
-        )
+        RecyclingListFrameState {
+            inner,
+            list_state,
+            element_pool,
+        }
     }
 
     fn paint(
@@ -469,17 +503,22 @@ mod tests {
 
     #[derive(Clone)]
     struct PoolingDelegate {
+        item_count: usize,
         created: Rc<Cell<usize>>,
         reused: Rc<Cell<usize>>,
     }
 
     impl ListDelegate for PoolingDelegate {
         fn item_count(&self) -> usize {
-            100
+            self.item_count
         }
 
         fn estimated_item_height(&self, _ix: usize) -> crate::Pixels {
             px(20.)
+        }
+
+        fn estimated_heights_revision(&self) -> Option<u64> {
+            Some(0)
         }
 
         fn render_item(
@@ -518,6 +557,7 @@ mod tests {
         let created = Rc::new(Cell::new(0));
         let reused = Rc::new(Cell::new(0));
         let delegate = PoolingDelegate {
+            item_count: 100,
             created: created.clone(),
             reused: reused.clone(),
         };
@@ -552,5 +592,198 @@ mod tests {
 
         assert!(created.get() <= created_after_first_draw + 1);
         assert!(reused.get() > 0);
+    }
+
+    #[derive(Clone)]
+    struct RevisionedDelegate {
+        item_count: usize,
+        estimate_calls: Rc<Cell<usize>>,
+        revision: Rc<Cell<u64>>,
+    }
+
+    impl ListDelegate for RevisionedDelegate {
+        fn item_count(&self) -> usize {
+            self.item_count
+        }
+
+        fn estimated_item_height(&self, _ix: usize) -> crate::Pixels {
+            self.estimate_calls.set(self.estimate_calls.get() + 1);
+            px(20.)
+        }
+
+        fn estimated_heights_revision(&self) -> Option<u64> {
+            Some(self.revision.get())
+        }
+
+        fn render_item(
+            &self,
+            _ix: usize,
+            _window: &mut Window,
+            _cx: &mut crate::App,
+        ) -> crate::AnyElement {
+            div().h(px(20.)).w_full().into_any()
+        }
+    }
+
+    #[derive(Clone)]
+    struct DynamicEstimateDelegate {
+        estimate_calls: Rc<Cell<usize>>,
+        estimated_height: Rc<Cell<f32>>,
+    }
+
+    impl ListDelegate for DynamicEstimateDelegate {
+        fn item_count(&self) -> usize {
+            4
+        }
+
+        fn estimated_item_height(&self, _ix: usize) -> crate::Pixels {
+            self.estimate_calls.set(self.estimate_calls.get() + 1);
+            px(self.estimated_height.get())
+        }
+
+        fn render_item(
+            &self,
+            _ix: usize,
+            _window: &mut Window,
+            _cx: &mut crate::App,
+        ) -> crate::AnyElement {
+            div().into_any()
+        }
+    }
+
+    #[test]
+    fn unrevisioned_delegate_refreshes_estimates_instead_of_becoming_stale() {
+        let estimate_calls = Rc::new(Cell::new(0));
+        let estimated_height = Rc::new(Cell::new(10.));
+        let list = recycling_list(
+            "dynamic-estimates",
+            DynamicEstimateDelegate {
+                estimate_calls: estimate_calls.clone(),
+                estimated_height: estimated_height.clone(),
+            },
+        );
+        let mut state = list.build_state();
+        assert_eq!(estimate_calls.get(), 4);
+        assert!(
+            state
+                .estimated_heights
+                .iter()
+                .all(|height| *height == px(10.))
+        );
+
+        estimated_height.set(30.);
+        list.sync_state(&mut state);
+        assert_eq!(estimate_calls.get(), 8);
+        assert!(
+            state
+                .estimated_heights
+                .iter()
+                .all(|height| *height == px(30.))
+        );
+    }
+
+    #[kael::test]
+    fn revisioned_large_list_skips_steady_state_estimation(cx: &mut TestAppContext) {
+        const ITEM_COUNT: usize = 100_000;
+
+        let cx = cx.add_empty_window();
+        let estimate_calls = Rc::new(Cell::new(0));
+        let revision = Rc::new(Cell::new(7));
+        let delegate = RevisionedDelegate {
+            item_count: ITEM_COUNT,
+            estimate_calls: estimate_calls.clone(),
+            revision: revision.clone(),
+        };
+
+        struct RevisionedView(RevisionedDelegate);
+        impl Render for RevisionedView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                recycling_list("revisioned-large-list", self.0.clone())
+                    .with_overdraw(px(0.))
+                    .w_full()
+                    .h_full()
+            }
+        }
+
+        let view = cx.new(|_| RevisionedView(delegate));
+        let draw = |cx: &mut crate::VisualTestContext| {
+            cx.draw(point(px(0.), px(0.)), size(px(100.), px(40.)), |_, _| {
+                view.clone()
+            });
+        };
+
+        draw(cx);
+        assert_eq!(estimate_calls.get(), ITEM_COUNT);
+
+        draw(cx);
+        assert_eq!(
+            estimate_calls.get(),
+            ITEM_COUNT,
+            "an unchanged revision must not walk all estimates again"
+        );
+
+        revision.set(8);
+        draw(cx);
+        assert_eq!(estimate_calls.get(), ITEM_COUNT * 2);
+    }
+
+    fn assert_pool_scales_to_viewport(cx: &mut TestAppContext, visible_rows: usize) {
+        let cx = cx.add_empty_window();
+        let created = Rc::new(Cell::new(0));
+        let reused = Rc::new(Cell::new(0));
+        let delegate = PoolingDelegate {
+            item_count: 1_000,
+            created: created.clone(),
+            reused: reused.clone(),
+        };
+
+        struct PoolingView(PoolingDelegate);
+        impl Render for PoolingView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                recycling_list("viewport-sized-pool", self.0.clone())
+                    .with_overdraw(px(80.))
+                    .w_full()
+                    .h_full()
+            }
+        }
+
+        let view = cx.new(|_| PoolingView(delegate));
+        let viewport_height = px(20. * visible_rows as f32);
+        cx.draw(
+            point(px(0.), px(0.)),
+            size(px(100.), viewport_height),
+            |_, _| view.clone(),
+        );
+        let created_after_first_draw = created.get();
+        assert!(created_after_first_draw >= visible_rows);
+        assert!(created_after_first_draw <= visible_rows + 2);
+
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(1.), px(1.)),
+            delta: ScrollDelta::Pixels(point(px(0.), -viewport_height * 2.0)),
+            ..Default::default()
+        });
+        cx.draw(
+            point(px(0.), px(0.)),
+            size(px(100.), viewport_height),
+            |_, _| view.clone(),
+        );
+
+        assert_eq!(
+            created.get(),
+            created_after_first_draw,
+            "the pool should retain the visible high-water mark and an overdraw row"
+        );
+        assert!(reused.get() >= visible_rows);
+    }
+
+    #[kael::test]
+    fn recycling_pool_retains_32_visible_rows(cx: &mut TestAppContext) {
+        assert_pool_scales_to_viewport(cx, 32);
+    }
+
+    #[kael::test]
+    fn recycling_pool_retains_100_visible_rows(cx: &mut TestAppContext) {
+        assert_pool_scales_to_viewport(cx, 100);
     }
 }

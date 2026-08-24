@@ -1,21 +1,33 @@
+#[cfg(not(target_arch = "wasm32"))]
 use std::{
-    collections::{BTreeMap, BTreeSet},
-    io,
-    path::{Path, PathBuf},
+    collections::BTreeMap,
     sync::{Arc, Mutex},
 };
+use std::{
+    collections::BTreeSet,
+    io,
+    path::{Path, PathBuf},
+};
 
-use anyhow::{Context as _, Result, anyhow, bail};
+#[cfg(not(target_arch = "wasm32"))]
+use anyhow::{Context as _, anyhow};
+use anyhow::{Result, bail};
+#[cfg(not(target_arch = "wasm32"))]
 use notify::{
     Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
     event::{CreateKind, ModifyKind, RemoveKind, RenameMode},
 };
+#[cfg(not(target_arch = "wasm32"))]
 use smol::channel;
 
-use crate::{App, ForegroundExecutor, Task};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::Task;
+use crate::{App, ForegroundExecutor};
 
 const MAX_WATCH_REGISTRATIONS: usize = 1024;
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_QUEUED_WATCH_EVENTS: usize = 1024;
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_PATHS_PER_NOTIFY_EVENT: usize = 256;
 
 /// Options that control how a path is watched.
@@ -178,6 +190,7 @@ impl FileWatchSet {
         )
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn into_parts(self) -> (Vec<PathBuf>, FileWatchOptions) {
         (self.paths, self.options)
     }
@@ -323,6 +336,7 @@ impl From<&Path> for FileWatchSetBuilder {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WatchRegistration {
     recursive: bool,
@@ -391,6 +405,7 @@ impl FileWatchEvent {
 ///
 /// Callbacks are always executed on the GPUI foreground executor so they can
 /// safely interact with other UI state.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct FileWatcher {
     watcher: RecommendedWatcher,
     registrations: Arc<Mutex<BTreeMap<PathBuf, WatchRegistration>>>,
@@ -398,6 +413,7 @@ pub struct FileWatcher {
     _callback_task: Task<()>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl FileWatcher {
     /// Creates a file watcher that dispatches callbacks on the given app's
     /// foreground executor.
@@ -566,10 +582,66 @@ impl FileWatcher {
     }
 }
 
+/// Browser placeholder for Kael's file-system watcher.
+///
+/// Browsers cannot observe arbitrary local paths. This implementation keeps
+/// configuration and application startup portable while explicit browser file
+/// picker interactions remain the refresh boundary.
+#[cfg(target_arch = "wasm32")]
+pub struct FileWatcher;
+
+#[cfg(target_arch = "wasm32")]
+impl FileWatcher {
+    /// Create a browser file-watcher placeholder.
+    pub fn new(_app: &App, _callback: impl FnMut(FileWatchEvent) + 'static) -> Result<Self> {
+        Ok(Self)
+    }
+
+    /// Create a browser file-watcher placeholder.
+    pub fn new_with_executor(
+        _executor: ForegroundExecutor,
+        _callback: impl FnMut(FileWatchEvent) + 'static,
+    ) -> Result<Self> {
+        Ok(Self)
+    }
+
+    /// Validate a watch request. Browser builds do not emit path events.
+    pub fn watch(&mut self, path: impl AsRef<Path>, recursive: bool) -> Result<()> {
+        self.watch_with_options(
+            path,
+            FileWatchOptions {
+                recursive,
+                max_depth: None,
+            },
+        )
+    }
+
+    /// Validate a watch request. Browser builds do not emit path events.
+    pub fn watch_with_options(
+        &mut self,
+        _path: impl AsRef<Path>,
+        options: FileWatchOptions,
+    ) -> Result<()> {
+        options.validate()
+    }
+
+    /// Validate and return a browser watch-set description.
+    pub fn watch_set(&mut self, watch_set: impl Into<FileWatchSetBuilder>) -> Result<FileWatchSet> {
+        watch_set.into().build_checked()
+    }
+
+    /// Browser placeholders have no native registration to remove.
+    pub fn unwatch(&mut self, _path: impl AsRef<Path>) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn dispatch_watch_callback(callback: &mut impl FnMut(FileWatchEvent), event: FileWatchEvent) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(event)));
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn normalize_watch_path(path: &Path) -> Result<PathBuf> {
     validate_watch_input_path(path)?;
     let absolute = resolve_input_path(path)?;
@@ -583,6 +655,13 @@ fn normalize_watch_path(path: &Path) -> Result<PathBuf> {
         .with_context(|| format!("failed to canonicalize {}", absolute.display()))
 }
 
+#[cfg(target_arch = "wasm32")]
+fn normalize_watch_path(path: &Path) -> Result<PathBuf> {
+    validate_watch_input_path(path)?;
+    Ok(path.to_path_buf())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn resolve_input_path(path: &Path) -> Result<PathBuf> {
     Ok(if path.is_absolute() {
         path.to_path_buf()
@@ -605,6 +684,7 @@ fn validate_watch_input_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn translate_notify_result(
     result: notify::Result<Event>,
     registrations: &BTreeMap<PathBuf, WatchRegistration>,
@@ -615,6 +695,7 @@ fn translate_notify_result(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn translate_notify_event(
     event: Event,
     registrations: &BTreeMap<PathBuf, WatchRegistration>,
@@ -669,6 +750,7 @@ fn translate_notify_event(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn translate_notify_error(
     error: notify::Error,
     registrations: &BTreeMap<PathBuf, WatchRegistration>,
@@ -693,6 +775,7 @@ fn translate_notify_error(
         .collect()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn paths_matching_registrations(
     paths: &[PathBuf],
     registrations: &BTreeMap<PathBuf, WatchRegistration>,
@@ -705,6 +788,7 @@ fn paths_matching_registrations(
         .collect()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn rename_matches_registrations(
     from: &Path,
     to: &Path,
@@ -714,6 +798,7 @@ fn rename_matches_registrations(
         || path_matches_any_registration(to, registrations)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn path_matches_any_registration(
     path: &Path,
     registrations: &BTreeMap<PathBuf, WatchRegistration>,
@@ -723,6 +808,7 @@ fn path_matches_any_registration(
         .any(|(root, registration)| path_matches_registration(path, root, registration))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn path_matches_registration(path: &Path, root: &Path, registration: &WatchRegistration) -> bool {
     if path == root {
         return true;

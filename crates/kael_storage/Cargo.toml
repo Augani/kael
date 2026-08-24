@@ -5,8 +5,8 @@ rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
-description = "Durable SQLite and JSON storage for native Kael applications"
-keywords = ["storage", "persistence", "sqlite", "database", "kael"]
+description = "Durable SQLite, IndexedDB, and JSON storage for Kael applications"
+keywords = ["storage", "persistence", "sqlite", "indexeddb", "kael"]
 categories = ["database-implementations", "caching"]
 authors.workspace = true
 repository.workspace = true
@@ -20,10 +20,6 @@ path = "src/lib.rs"
 [dependencies.parking_lot]
 version = "0.12.1"
 
-[dependencies.rusqlite]
-version = "0.32.1"
-features = ["bundled"]
-
 [dependencies.serde]
 workspace = true
 features = ["derive"]
@@ -31,17 +27,37 @@ features = ["derive"]
 [dependencies.serde_json]
 workspace = true
 
-[dependencies.smol]
-workspace = true
-
 [dependencies.thiserror]
 workspace = true
 
-[dependencies.tempfile]
+[target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies.rusqlite]
+version = "0.32.1"
+features = ["bundled"]
+
+[target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies.smol]
+workspace = true
+
+[target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies.tempfile]
 version = "3.20.0"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies.js-sys]
+version = "0.3"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies.rexie]
+version = "0.6.2"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies.wasm-bindgen]
+version = "0.2"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies.web-sys]
+version = "0.3"
+features = ["DomException", "Storage", "Window"]
 
 [dev-dependencies.futures]
 workspace = true
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies.wasm-bindgen-test]
+version = "0.3"
 
 [lints]
 workspace = true

@@ -30,6 +30,13 @@ pub(crate) const DISABLE_DIRECT_COMPOSITION: &str = "GPUI_DISABLE_DIRECT_COMPOSI
 const RENDER_TARGET_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 // This configuration is used for MSAA rendering on paths only, and it's guaranteed to be supported by DirectX 11.
 const PATH_MULTISAMPLE_COUNT: u32 = 4;
+const MAX_SCENE_READBACK_BYTES: usize = 256 * 1024 * 1024;
+
+pub(crate) struct DirectXSceneReadback {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) premultiplied_bgra: Vec<u8>,
+}
 
 fn require_com_output<T>(output: Option<T>, operation: &'static str) -> Result<T> {
     output.ok_or_else(|| anyhow::anyhow!("{operation} succeeded without returning an object"))
@@ -316,7 +323,7 @@ impl DirectXRenderer {
         Ok(())
     }
 
-    pub(crate) fn draw(&mut self, scene: &Scene) -> Result<()> {
+    fn render_scene(&mut self, scene: &Scene) -> Result<()> {
         self.pre_draw()?;
         for batch in scene.batches() {
             match batch {
@@ -349,6 +356,11 @@ impl DirectXRenderer {
         }
 
         self.draw_cached_surface_snapshots(scene)?;
+        Ok(())
+    }
+
+    pub(crate) fn draw(&mut self, scene: &Scene) -> Result<()> {
+        self.render_scene(scene)?;
         self.present()?;
         if let Some(budget) = self.atlas_byte_budget {
             const IN_FLIGHT_FRAMES: u64 = 3;
@@ -356,6 +368,135 @@ impl DirectXRenderer {
         }
         self.atlas.advance_frame();
         Ok(())
+    }
+
+    /// Render a retained Kael scene and copy the exact device-pixel target into
+    /// bounded CPU memory. This intentionally reads the renderer target rather
+    /// than the HWND so OS chrome, the cursor, and hosted child windows are not
+    /// silently included.
+    pub(crate) fn render_scene_to_bgra(&mut self, scene: &Scene) -> Result<DirectXSceneReadback> {
+        self.render_scene(scene)?;
+
+        let width = self.resources.width;
+        let height = self.resources.height;
+        anyhow::ensure!(width > 0 && height > 0, "scene readback target is empty");
+        let row_bytes = usize::try_from(width)
+            .ok()
+            .and_then(|width| width.checked_mul(4))
+            .context("scene readback row byte count overflowed")?;
+        let byte_len = usize::try_from(height)
+            .ok()
+            .and_then(|height| height.checked_mul(row_bytes))
+            .context("scene readback byte count overflowed")?;
+        anyhow::ensure!(
+            byte_len <= MAX_SCENE_READBACK_BYTES,
+            "scene readback exceeds the {MAX_SCENE_READBACK_BYTES}-byte safety limit"
+        );
+
+        let staging = {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: width,
+                Height: height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: RENDER_TARGET_FORMAT,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                MiscFlags: 0,
+            };
+            let mut staging = None;
+            unsafe {
+                self.devices
+                    .device
+                    .CreateTexture2D(&desc, None, Some(&mut staging))
+            }
+            .context("creating Direct3D scene-readback staging texture")?;
+            require_com_output(staging, "CreateTexture2D for scene readback")?
+        };
+
+        let render_target = self
+            .resources
+            .render_target
+            .as_ref()
+            .context("Direct3D scene readback target is unavailable")?;
+        unsafe {
+            // Detach the target before copying so the runtime never observes it
+            // simultaneously bound for output and used as a copy source.
+            self.devices.device_context.OMSetRenderTargets(None, None);
+            self.devices
+                .device_context
+                .CopyResource(&staging, render_target);
+        }
+
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        let map_result = unsafe {
+            self.devices
+                .device_context
+                .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+        };
+        if let Err(error) = map_result {
+            // Copy setup temporarily detached the target. Restore it even when
+            // the staging texture cannot be mapped so the live window remains
+            // renderable after a failed export.
+            unsafe {
+                self.devices
+                    .device_context
+                    .OMSetRenderTargets(Some(&self.resources.render_target_view), None);
+            }
+            return Err(error).context("mapping Direct3D scene-readback staging texture");
+        }
+
+        let copy_result = (|| -> Result<Vec<u8>> {
+            let row_pitch = usize::try_from(mapped.RowPitch)
+                .context("Direct3D scene-readback row pitch does not fit usize")?;
+            anyhow::ensure!(
+                row_pitch >= row_bytes,
+                "Direct3D scene-readback row pitch is smaller than a pixel row"
+            );
+            anyhow::ensure!(
+                !mapped.pData.is_null(),
+                "Direct3D mapped scene-readback pointer is null"
+            );
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(byte_len)
+                .context("allocating Direct3D scene-readback buffer")?;
+            bytes.resize(byte_len, 0);
+            for row in 0..usize::try_from(height).unwrap_or(0) {
+                let source_offset = row
+                    .checked_mul(row_pitch)
+                    .context("Direct3D source row offset overflowed")?;
+                let destination_offset = row
+                    .checked_mul(row_bytes)
+                    .context("Direct3D destination row offset overflowed")?;
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        (mapped.pData as *const u8).add(source_offset),
+                        bytes.as_mut_ptr().add(destination_offset),
+                        row_bytes,
+                    );
+                }
+            }
+            Ok(bytes)
+        })();
+        unsafe {
+            self.devices.device_context.Unmap(&staging, 0);
+            self.devices
+                .device_context
+                .OMSetRenderTargets(Some(&self.resources.render_target_view), None);
+        }
+        let premultiplied_bgra = copy_result?;
+
+        Ok(DirectXSceneReadback {
+            width,
+            height,
+            premultiplied_bgra,
+        })
     }
 
     pub(crate) fn set_atlas_byte_budget(&mut self, budget: Option<u64>) {

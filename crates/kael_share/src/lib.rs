@@ -5,8 +5,8 @@
 //!
 //! let sheet = ShareSheet::builder()
 //!     .subject("Release notes")
-//!     .text("Kael 0.3 is ready")
-//!     .url("https://example.com/releases/0.3")
+//!     .text("Kael 0.4 is ready")
+//!     .url("https://example.com/releases/0.4")
 //!     .exclude(ShareType::Social)
 //!     .build_checked()?;
 //!
@@ -17,17 +17,69 @@
 
 #![deny(missing_docs)]
 
+mod error;
 mod platform;
 
 use anyhow::{Result, bail};
 use std::{collections::BTreeSet, path::PathBuf, sync::Arc, time::Duration};
 
+pub use error::{ShareError, ShareOperationResult};
 pub use platform::PlatformShareSupport;
 
 type ReceiverCallback = Box<dyn Fn(Vec<ShareItem>) + Send + 'static>;
 
 const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TOTAL_IMAGE_BYTES: usize = 256 * 1024 * 1024;
+const MAX_FILE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_TOTAL_BINARY_BYTES: usize = 256 * 1024 * 1024;
+
+/// A bounded in-memory file that can cross both native and browser share APIs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShareFile {
+    name: String,
+    mime_type: String,
+    bytes: Arc<[u8]>,
+}
+
+impl ShareFile {
+    /// Creates an in-memory file with an explicit name and MIME type.
+    pub fn new(
+        name: impl Into<String>,
+        mime_type: impl Into<String>,
+        bytes: impl Into<Vec<u8>>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            mime_type: mime_type.into(),
+            bytes: Arc::<[u8]>::from(bytes.into().into_boxed_slice()),
+        }
+    }
+
+    /// Returns the portable file name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the declared MIME type.
+    pub fn mime_type(&self) -> &str {
+        &self.mime_type
+    }
+
+    /// Returns the file bytes.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Returns the number of payload bytes.
+    pub fn len_bytes(&self) -> usize {
+        self.bytes.len()
+    }
+
+    /// Returns whether the file has no bytes.
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
 
 /// An in-memory image payload that can be materialized for sharing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -134,6 +186,8 @@ pub struct ShareItem {
     pub image: Option<ShareImage>,
     /// Optional file attachments.
     pub files: Vec<PathBuf>,
+    /// Portable in-memory file attachments.
+    pub memory_files: Vec<ShareFile>,
     /// Optional mail-like subject line.
     pub subject: Option<String>,
 }
@@ -171,6 +225,11 @@ impl ShareItem {
     /// Creates a share item containing an in-memory image.
     pub fn image(image: ShareImage) -> Self {
         Self::new().with_image(image)
+    }
+
+    /// Creates a share item containing one portable in-memory file.
+    pub fn memory_file(file: ShareFile) -> Self {
+        Self::new().with_memory_file(file)
     }
 
     /// Sets the plain text payload.
@@ -213,12 +272,25 @@ impl ShareItem {
         self
     }
 
+    /// Adds a portable in-memory file attachment.
+    pub fn with_memory_file(mut self, file: ShareFile) -> Self {
+        self.memory_files.push(file);
+        self
+    }
+
+    /// Adds multiple portable in-memory file attachments.
+    pub fn with_memory_files(mut self, files: impl IntoIterator<Item = ShareFile>) -> Self {
+        self.memory_files.extend(files);
+        self
+    }
+
     /// Returns true when the item has no shareable payload.
     pub fn is_empty(&self) -> bool {
         self.text.as_deref().is_none_or(str::is_empty)
             && self.url.as_deref().is_none_or(str::is_empty)
             && self.image.is_none()
             && self.files.is_empty()
+            && self.memory_files.is_empty()
     }
 
     /// Returns whether this item contains a non-empty text payload.
@@ -245,16 +317,17 @@ impl ShareItem {
 
     /// Number of file attachments on this item.
     pub fn file_count(&self) -> usize {
-        self.files.len()
+        self.files.len().saturating_add(self.memory_files.len())
     }
 
     /// Human-readable, content-safe summary for logs and agents.
     pub fn to_text(&self) -> String {
         format!(
-            "share item: text {}, url {}, files {}, image {}, subject {}",
+            "share item: text {}, url {}, files {}, memory files {}, image {}, subject {}",
             self.has_text(),
             self.has_url(),
             self.file_count(),
+            self.memory_files.len(),
             self.has_image(),
             self.has_subject()
         )
@@ -412,6 +485,11 @@ impl ShareSheet {
         Self::new(vec![ShareItem::file(path)])
     }
 
+    /// Creates a share sheet containing one portable in-memory file.
+    pub fn memory_file(file: ShareFile) -> Self {
+        Self::new(vec![ShareItem::memory_file(file)])
+    }
+
     /// Creates a share sheet containing multiple file attachments.
     pub fn files<I, P>(paths: I) -> Self
     where
@@ -467,7 +545,7 @@ impl ShareSheet {
     pub fn file_attachment_count(&self) -> usize {
         self.items
             .iter()
-            .map(|item| item.files.len())
+            .map(ShareItem::file_count)
             .fold(0, usize::saturating_add)
     }
 
@@ -477,6 +555,14 @@ impl ShareSheet {
             .iter()
             .filter(|item| item.image.is_some())
             .count()
+    }
+
+    /// Number of portable in-memory file attachments.
+    pub fn memory_file_count(&self) -> usize {
+        self.items
+            .iter()
+            .map(|item| item.memory_files.len())
+            .fold(0, usize::saturating_add)
     }
 
     /// Number of excluded destination families.
@@ -519,20 +605,62 @@ impl ShareSheet {
 
     /// Attempts to launch a share operation using the current platform backend.
     pub async fn show(&self) -> Result<ShareResult> {
-        self.validate()?;
+        self.show_portable().await.map_err(anyhow::Error::new)
+    }
+
+    /// Validates and launches the target share API with typed cross-platform errors.
+    ///
+    /// Browser callers must invoke this future directly from a click, key activation,
+    /// or another transient user gesture. Awaiting unrelated work first may consume
+    /// the activation and returns [`ShareError::UserActivationRequired`].
+    pub async fn show_portable(&self) -> ShareOperationResult<ShareResult> {
+        self.validate()
+            .map_err(|error| ShareError::InvalidPayload(error.to_string()))?;
         platform::show(self).await
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn is_excluded(&self, share_type: ShareType) -> bool {
         self.excluded_types.contains(&share_type)
     }
 
-    #[cfg(any(target_os = "linux", target_os = "windows", test))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "windows",
+        all(test, not(target_arch = "wasm32"))
+    ))]
     pub(crate) fn first_subject(&self) -> Option<&str> {
         self.items
             .iter()
             .filter_map(|item| item.subject.as_deref())
             .find(|subject| !subject.is_empty())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn first_subject(&self) -> Option<&str> {
+        self.items
+            .iter()
+            .filter_map(|item| item.subject.as_deref())
+            .find(|subject| !subject.is_empty())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn browser_text_and_url(&self) -> (Option<String>, Option<String>) {
+        let mut text = Vec::new();
+        let mut primary_url = None;
+        for item in &self.items {
+            if let Some(value) = item.text.as_deref().filter(|value| !value.is_empty()) {
+                text.push(value.to_string());
+            }
+            if let Some(value) = item.url.as_deref().filter(|value| !value.is_empty()) {
+                if primary_url.is_none() {
+                    primary_url = Some(value.to_string());
+                } else {
+                    text.push(value.to_string());
+                }
+            }
+        }
+        ((!text.is_empty()).then(|| text.join("\n\n")), primary_url)
     }
 
     #[cfg(any(target_os = "linux", target_os = "windows", test))]
@@ -558,8 +686,20 @@ impl ShareSheet {
             if let Some(image) = item.image.as_ref() {
                 paths.push(materialize_image(image)?);
             }
+            for file in &item.memory_files {
+                paths.push(materialize_file(file)?);
+            }
         }
         Ok(paths)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn memory_file_paths(&self) -> Result<Vec<PathBuf>> {
+        self.items
+            .iter()
+            .flat_map(|item| &item.memory_files)
+            .map(materialize_file)
+            .collect()
     }
 
     #[cfg(any(target_os = "windows", test))]
@@ -658,8 +798,15 @@ impl ShareSheet {
             }
 
             total_files = total_files
-                .checked_add(item.files.len())
+                .checked_add(item.file_count())
                 .ok_or_else(|| anyhow::anyhow!("share attachment count overflow"))?;
+            #[cfg(target_arch = "wasm32")]
+            if !item.files.is_empty() {
+                bail!(
+                    "browser sharing cannot read native paths; use ShareFile for in-memory bytes"
+                );
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             for path in &item.files {
                 let metadata = std::fs::metadata(path).map_err(|_| {
                     anyhow::anyhow!(
@@ -670,6 +817,11 @@ impl ShareSheet {
                 if !metadata.is_file() {
                     bail!("share attachment is not a regular file: {}", path.display());
                 }
+            }
+            for file in &item.memory_files {
+                validate_memory_file(file)?;
+                total_image_bytes =
+                    checked_total_binary_bytes(total_image_bytes, file.bytes().len())?;
             }
         }
         if total_files > MAX_FILES {
@@ -691,6 +843,40 @@ fn checked_total_image_bytes(current: usize, additional: usize) -> Result<usize>
         bail!("share images exceed the {MAX_TOTAL_IMAGE_BYTES} byte total limit");
     }
     Ok(total)
+}
+
+fn checked_total_binary_bytes(current: usize, additional: usize) -> Result<usize> {
+    let total = current
+        .checked_add(additional)
+        .ok_or_else(|| anyhow::anyhow!("share binary size overflow"))?;
+    if total > MAX_TOTAL_BINARY_BYTES {
+        bail!("share files exceed the {MAX_TOTAL_BINARY_BYTES} byte total limit");
+    }
+    Ok(total)
+}
+
+fn validate_memory_file(file: &ShareFile) -> Result<()> {
+    if file.name.is_empty()
+        || file.name.len() > 255
+        || file.name.chars().any(char::is_control)
+        || file.name.contains(['/', '\\'])
+    {
+        bail!("share file name is invalid");
+    }
+    if file.mime_type.is_empty()
+        || file.mime_type.len() > 127
+        || file.mime_type.chars().any(char::is_control)
+        || !file.mime_type.contains('/')
+    {
+        bail!("share file MIME type is invalid");
+    }
+    if file.bytes.is_empty() {
+        bail!("share file bytes cannot be empty");
+    }
+    if file.bytes.len() > MAX_FILE_BYTES {
+        bail!("share file exceeds the {MAX_FILE_BYTES} byte limit");
+    }
+    Ok(())
 }
 
 /// Builder for composing a checked share sheet from common payload types.
@@ -732,6 +918,12 @@ impl ShareSheetBuilder {
         P: Into<PathBuf>,
     {
         self.items.push(ShareItem::files(paths));
+        self
+    }
+
+    /// Add one portable in-memory file attachment.
+    pub fn memory_file(mut self, file: ShareFile) -> Self {
+        self.items.push(ShareItem::memory_file(file));
         self
     }
 
@@ -925,11 +1117,34 @@ pub fn cleanup_share_temps(temp_dir: &std::path::Path, max_age: Duration) -> usi
 
 #[cfg(any(target_os = "linux", test))]
 fn materialize_image(image: &ShareImage) -> Result<PathBuf> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let file_name = image
+        .suggested_name()
+        .map(sanitize_file_name)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| format!("kael-share-image-{stamp}.{}", image.extension()));
+    let final_name = if std::path::Path::new(&file_name).extension().is_some() {
+        file_name
+    } else {
+        format!("{file_name}.{}", image.extension())
+    };
+    materialize_bytes(&final_name, image.bytes())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+fn materialize_file(file: &ShareFile) -> Result<PathBuf> {
+    materialize_bytes(&sanitize_file_name(file.name()), file.bytes())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+fn materialize_bytes(final_name: &str, bytes: &[u8]) -> Result<PathBuf> {
     use anyhow::Context;
     use std::{
         fs,
         io::Write,
-        path::Path,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -938,16 +1153,6 @@ fn materialize_image(image: &ShareImage) -> Result<PathBuf> {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let file_name = image
-        .suggested_name()
-        .map(sanitize_file_name)
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| format!("kael-share-image-{stamp}.{}", image.extension()));
-    let final_name = if Path::new(&file_name).extension().is_some() {
-        file_name
-    } else {
-        format!("{file_name}.{}", image.extension())
-    };
     for attempt in 0..16 {
         let dir = temp_dir.join(format!(
             "kael-share-{stamp}-{}-{attempt}",
@@ -964,7 +1169,7 @@ fn materialize_image(image: &ShareImage) -> Result<PathBuf> {
         let directory = fs::DirBuilder::new();
         match directory.create(&dir) {
             Ok(()) => {
-                let path = dir.join(&final_name);
+                let path = dir.join(final_name);
                 let result = (|| {
                     let mut options = fs::OpenOptions::new();
                     options.write(true).create_new(true);
@@ -976,8 +1181,8 @@ fn materialize_image(image: &ShareImage) -> Result<PathBuf> {
                     let mut file = options.open(&path).with_context(|| {
                         format!("failed to materialize share image at {}", path.display())
                     })?;
-                    file.write_all(image.bytes()).with_context(|| {
-                        format!("failed to write share image at {}", path.display())
+                    file.write_all(bytes).with_context(|| {
+                        format!("failed to write share payload at {}", path.display())
                     })?;
                     file.flush().with_context(|| {
                         format!("failed to flush share image at {}", path.display())
@@ -1007,7 +1212,7 @@ fn materialize_image(image: &ShareImage) -> Result<PathBuf> {
     anyhow::bail!("failed to create a unique share temp directory")
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn sanitize_file_name(input: &str) -> String {
     input
         .chars()
@@ -1098,8 +1303,8 @@ mod tests {
         assert_eq!(
             sheet.item_summaries(),
             vec![
-                "share item: text true, url false, files 0, image false, subject true",
-                "share item: text false, url true, files 0, image false, subject false",
+                "share item: text true, url false, files 0, memory files 0, image false, subject true",
+                "share item: text false, url true, files 0, memory files 0, image false, subject false",
             ]
         );
         assert!(!sheet.item_summaries().join("; ").contains("Sprint update"));
@@ -1127,7 +1332,7 @@ mod tests {
 
         assert_eq!(
             item.to_text(),
-            "share item: text true, url true, files 1, image true, subject true"
+            "share item: text true, url true, files 1, memory files 0, image true, subject true"
         );
         assert!(!item.to_text().contains("Private report"));
         assert!(!item.to_text().contains("example.com"));
@@ -1145,13 +1350,16 @@ mod tests {
             social: false,
             print: true,
             receiver_registration: false,
+            system_picker: false,
+            memory_files: true,
+            requires_user_activation: false,
         };
 
         assert_eq!(support.supported_count(), 3);
         assert!(!support.is_empty());
         assert_eq!(
             support.to_text(),
-            "share support: 3 supported, mail true, messages false, airdrop false, clipboard true, social false, print true, receiver false"
+            "share support: 3 supported, mail true, messages false, airdrop false, clipboard true, social false, print true, receiver false, picker false, memory files true, activation false"
         );
         assert_eq!(ShareType::AirDrop.to_text(), "airdrop");
 

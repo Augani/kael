@@ -1,14 +1,18 @@
 # kael_storage
 
-Durable application storage for Kael's native runtime.
+Durable application storage for Kael's desktop and browser runtimes.
 
 The crate provides:
 
-- `PlatformKvStore`, a SQLite-backed typed key-value store in the operating
-  system's application-data location;
+- `PlatformKvStore`, a typed settings store backed by SQLite on desktop and one
+  atomic `localStorage` entry in browsers;
+- `BlobStore`, an asynchronous byte store backed by SQLite BLOB records on
+  desktop and `Uint8Array` records in IndexedDB on the web;
 - `JsonKvStore` for applications that explicitly need a readable JSON file;
 - SQLite connections, transactions, typed row mapping, and ordered migrations;
-- deterministic platform paths on macOS, Windows, Linux, and FreeBSD.
+- deterministic platform paths on macOS, Windows, Linux, and FreeBSD; and
+- typed browser errors for native-path and SQLite operations that cannot keep
+  their desktop semantics on the web.
 
 It is independent of `kael_ui`: applications can use the storage battery with
 Kael's runtime primitives and their own interface layer.
@@ -48,6 +52,47 @@ JSON updates are written to a temporary file in the destination directory,
 flushed, synced, and atomically persisted over the previous file. The SQLite
 backend enables write-ahead logging, a five-second busy timeout, and normal
 synchronous durability.
+
+## Binary and document data
+
+`BlobStore` is the cross-platform choice for document bodies, images, project
+archives, and other byte-oriented values:
+
+```rust,no_run
+use kael_storage::BlobStore;
+
+# async fn example() -> kael_storage::Result<()> {
+let documents = BlobStore::open("com.example.product", "documents").await?;
+documents.put("draft", b"format-owned bytes").await?;
+assert_eq!(documents.get("draft").await?.as_deref(), Some(&b"format-owned bytes"[..]));
+# Ok(())
+# }
+```
+
+Each record is bounded to 256 MiB. A successful mutation has committed its
+SQLite or IndexedDB transaction before its future resolves. The browser store
+uses raw `Uint8Array` records and does not base64-encode binary payloads.
+
+## Browser contract
+
+Browser `PlatformKvStore` is for settings and small metadata. Its serialized
+map is bounded to 4 MiB so Kael reports a predictable size error before a
+typical browser quota failure. `localStorage` quota, availability in private
+browsing, and eviction remain browser policy. Store instances refresh from
+`localStorage` on each operation; observers are local to the instance that
+registered them.
+
+`BlobStore` uses origin-scoped IndexedDB and surfaces denied access, quota
+failures, transaction aborts, and corrupt record types as `Error::BrowserStorage`.
+The maintained browser test opens a second connection and verifies committed
+binary bytes survive it.
+
+The native `Database`/`Transaction` SQL surface is deliberately not emulated.
+On browser WebAssembly those entry points return `Error::BrowserSqlUnsupported`;
+use `PlatformKvStore` or `BlobStore`, or integrate a domain-specific browser
+database if the application genuinely requires SQL. Likewise, path-resolution
+APIs return `Error::BrowserPathUnsupported` because an IndexedDB origin is not
+a native directory.
 
 See the [Kael guide](https://augani.github.io/kael/) for framework-level usage.
 

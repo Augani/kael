@@ -53,6 +53,10 @@ pub fn get_default_system_shell_preferring_bash() -> String {
 
 /// Locates Git for Windows' bundled Bash executable, if installed.
 pub fn get_windows_git_bash() -> Option<String> {
+    #[cfg(target_arch = "wasm32")]
+    return None;
+
+    #[cfg(not(target_arch = "wasm32"))]
     static GIT_BASH: LazyLock<Option<String>> = LazyLock::new(|| {
         // /path/to/git/cmd/git.exe/../../bin/bash.exe
         let git = which::which("git").ok()?;
@@ -64,7 +68,8 @@ pub fn get_windows_git_bash() -> Option<String> {
         }
     });
 
-    (*GIT_BASH).clone()
+    #[cfg(not(target_arch = "wasm32"))]
+    return (*GIT_BASH).clone();
 }
 
 /// Returns the preferred PowerShell executable on Windows.

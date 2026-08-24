@@ -18,7 +18,7 @@ use anyhow::{Context as _, Result, anyhow};
 use async_task::Runnable;
 use futures::channel::oneshot::{self, Receiver};
 use itertools::Itertools;
-use parking_lot::RwLock;
+use parking_lot::{Condvar, Mutex as ParkingMutex, RwLock};
 use smallvec::SmallVec;
 use windows::{
     UI::ViewManagement::UISettings,
@@ -51,6 +51,7 @@ impl Drop for CredentialAllocation {
 pub(crate) struct WindowsPlatform {
     inner: Rc<WindowsPlatformInner>,
     raw_window_handles: Arc<RwLock<SmallVec<[SafeHwnd; 4]>>>,
+    frame_polling_windows: Arc<FramePollingWindows>,
     // The below members will never change throughout the entire lifecycle of the app.
     icon: HICON,
     background_executor: BackgroundExecutor,
@@ -61,6 +62,50 @@ pub(crate) struct WindowsPlatform {
     handle: HWND,
     disable_direct_composition: bool,
     tab_manager_state: Arc<Mutex<TabManagerState>>,
+}
+
+/// Windows whose retained scene currently needs compositor-paced frame callbacks.
+///
+/// Keeping this registry separate from `raw_window_handles` lets the vsync thread
+/// sleep while every window is idle instead of invalidating the whole application at
+/// the desktop refresh rate.
+pub(crate) struct FramePollingWindows {
+    handles: ParkingMutex<SmallVec<[SafeHwnd; 4]>>,
+    changed: Condvar,
+}
+
+impl FramePollingWindows {
+    fn new() -> Self {
+        Self {
+            handles: ParkingMutex::new(SmallVec::new()),
+            changed: Condvar::new(),
+        }
+    }
+
+    pub(crate) fn set(&self, hwnd: HWND, active: bool) {
+        let mut handles = self.handles.lock();
+        let index = handles.iter().position(|handle| handle.as_raw() == hwnd);
+        match (active, index) {
+            (true, None) => {
+                handles.push(hwnd.into());
+                self.changed.notify_one();
+            }
+            (false, Some(index)) => {
+                handles.remove(index);
+            }
+            _ => {}
+        }
+    }
+
+    fn wait_for_active(&self) -> SmallVec<[SafeHwnd; 4]> {
+        let mut handles = self.handles.lock();
+        if handles.is_empty() {
+            // The timeout lets the thread release its temporary strong `Arc` and
+            // observe platform shutdown even if no window ever requests another frame.
+            self.changed.wait_for(&mut handles, Duration::from_secs(1));
+        }
+        handles.clone()
+    }
 }
 
 struct WindowsPlatformInner {
@@ -153,6 +198,7 @@ impl WindowsPlatform {
             rand::random::<u32>() as usize
         };
         let raw_window_handles = Arc::new(RwLock::new(SmallVec::new()));
+        let frame_polling_windows = Arc::new(FramePollingWindows::new());
         let text_system = Arc::new(
             DirectWriteTextSystem::new(&directx_devices)
                 .context("Error creating DirectWriteTextSystem")?,
@@ -215,6 +261,7 @@ impl WindowsPlatform {
             inner,
             handle,
             raw_window_handles,
+            frame_polling_windows,
             icon,
             background_executor,
             foreground_executor,
@@ -266,6 +313,7 @@ impl WindowsPlatform {
             directx_devices: (*self.inner.state.borrow().directx_devices).clone(),
             tab_manager_state: self.tab_manager_state.clone(),
             owner_window: None,
+            frame_polling_windows: self.frame_polling_windows.clone(),
         }
     }
 
@@ -317,12 +365,22 @@ impl WindowsPlatform {
         let platform_window: SafeHwnd = self.handle.into();
         let validation_number = self.inner.validation_number;
         let all_windows = Arc::downgrade(&self.raw_window_handles);
+        let frame_polling_windows = Arc::downgrade(&self.frame_polling_windows);
         let text_system = Arc::downgrade(&self.text_system);
         if let Err(error) = std::thread::Builder::new()
             .name("VSyncProvider".to_owned())
             .spawn(move || {
                 let mut vsync_provider = VSyncProvider::new();
                 loop {
+                    let Some(frame_polling_windows) = frame_polling_windows.upgrade() else {
+                        break;
+                    };
+                    let windows_to_redraw = frame_polling_windows.wait_for_active();
+                    drop(frame_polling_windows);
+                    if windows_to_redraw.is_empty() {
+                        continue;
+                    }
+
                     vsync_provider.wait_for_vsync();
                     if check_device_lost(&directx_device.device) {
                         handle_gpu_device_lost(
@@ -333,10 +391,10 @@ impl WindowsPlatform {
                             &text_system,
                         );
                     }
-                    let Some(all_windows) = all_windows.upgrade() else {
+                    if all_windows.upgrade().is_none() {
                         break;
-                    };
-                    for hwnd in all_windows.read().iter() {
+                    }
+                    for hwnd in windows_to_redraw {
                         unsafe {
                             let _ = RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE);
                         }
@@ -1732,6 +1790,7 @@ pub(crate) struct WindowCreationInfo {
     pub(crate) directx_devices: DirectXDevices,
     pub(crate) tab_manager_state: Arc<Mutex<TabManagerState>>,
     pub(crate) owner_window: Option<HWND>,
+    pub(crate) frame_polling_windows: Arc<FramePollingWindows>,
 }
 
 struct PlatformWindowCreateContext {

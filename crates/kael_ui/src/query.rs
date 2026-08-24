@@ -7,7 +7,8 @@
 use kael::{Context, SharedString};
 use std::collections::HashMap;
 use std::future::Future;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 /// The lifecycle state of an asynchronously loaded value.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

@@ -46,7 +46,7 @@ use super::{
     pressed_button_from_mask,
 };
 
-#[cfg(feature = "webview")]
+#[cfg(any())]
 use crate::platform::linux::webview::pump_gtk_webview_events;
 use crate::platform::{
     LinuxCommon, PlatformWindow,
@@ -60,10 +60,12 @@ use crate::platform::{
     },
 };
 use crate::{
-    AnyWindowHandle, Bounds, ClipboardItem, CursorStyle, DisplayId, FileDropEvent, Keystroke,
-    LinuxKeyboardLayout, Modifiers, ModifiersChangedEvent, MouseButton, Pixels, Platform,
-    PlatformDisplay, PlatformInput, PlatformKeyboardLayout, Point, RequestFrameOptions,
-    ScrollDelta, Size, TouchPhase, WindowParams, X11Window, modifiers_from_xinput_info, point, px,
+    AnyWindowHandle, Bounds, ClipboardItem, CursorStyle, DisplayId, FileDropEvent, GameInputError,
+    GameInputErrorKind, Keystroke, LinuxKeyboardLayout, Modifiers, ModifiersChangedEvent,
+    MouseButton, MouseMoveEvent, Pixels, Platform, PlatformDisplay, PlatformInput,
+    PlatformKeyboardLayout, Point, PointerButtons, PointerId, PointerInputEvent, PointerPhase,
+    PointerType, RequestFrameOptions, ScrollDelta, Size, TouchPhase, WindowParams, X11Window,
+    modifiers_from_xinput_info, point, px,
 };
 
 /// Value for DeviceId parameters which selects all devices.
@@ -77,6 +79,9 @@ pub(crate) const XINPUT_ALL_DEVICES: xinput::DeviceId = 0;
 pub(crate) const XINPUT_ALL_DEVICE_GROUPS: xinput::DeviceId = 1;
 
 const GPUI_X11_SCALE_FACTOR_ENV: &str = "GPUI_X11_SCALE_FACTOR";
+
+#[cfg(any())]
+const WEBVIEW_EVENT_PUMP_INTERVAL: Duration = Duration::from_millis(16);
 
 pub(crate) struct WindowRef {
     window: X11WindowStatePtr,
@@ -155,6 +160,13 @@ struct PointerDeviceState {
     vertical: ScrollAxisState,
 }
 
+#[derive(Clone)]
+struct X11TouchState {
+    window: X11WindowStatePtr,
+    position: Point<Pixels>,
+    is_primary: bool,
+}
+
 #[derive(Debug, Default)]
 struct ScrollAxisState {
     /// Valuator number for looking up this axis's scroll value.
@@ -172,6 +184,8 @@ struct ScrollAxisState {
 pub struct X11ClientState {
     pub(crate) loop_handle: LoopHandle<'static, X11Client>,
     pub(crate) event_loop: Option<calloop::EventLoop<'static, X11Client>>,
+    #[cfg(any())]
+    webview_event_pump_active: bool,
 
     pub(crate) last_click: Instant,
     pub(crate) last_mouse_button: Option<MouseButton>,
@@ -192,6 +206,9 @@ pub struct X11ClientState {
     pub(crate) windows: HashMap<xproto::Window, WindowRef>,
     pub(crate) mouse_focused_window: Option<xproto::Window>,
     pub(crate) keyboard_focused_window: Option<xproto::Window>,
+    pointer_lock_window: Option<xproto::Window>,
+    pointer_lock_pressed_button: Option<MouseButton>,
+    pointer_lock_saved_root_position: Option<(i16, i16)>,
     pub(crate) xkb: xkbc::State,
     keyboard_layout: LinuxKeyboardLayout,
     pub(crate) ximc: Option<X11rbClient<Rc<XCBConnection>>>,
@@ -212,6 +229,8 @@ pub struct X11ClientState {
     pub(crate) cursor_cache: HashMap<CursorStyle, Option<xproto::Cursor>>,
 
     pointer_device_states: BTreeMap<xinput::DeviceId, PointerDeviceState>,
+    xinput_touch_supported: bool,
+    active_touches: HashMap<u32, X11TouchState>,
 
     pub(crate) common: LinuxCommon,
     pub(crate) clipboard: Clipboard,
@@ -232,11 +251,275 @@ impl X11ClientStatePtr {
         self.0.upgrade().map(X11Client)
     }
 
+    pub(crate) fn process_pending_x11_events(&self) {
+        let Some(client) = self.get_client() else {
+            return;
+        };
+        let xcb_connection = client.0.borrow().xcb_connection.clone();
+        client.process_x11_events(&xcb_connection).log_err();
+    }
+
+    pub(crate) fn request_pointer_lock(
+        &self,
+        x_window: xproto::Window,
+    ) -> Result<(), GameInputError> {
+        let Some(client) = self.get_client() else {
+            return Err(GameInputError::new(
+                GameInputErrorKind::InitializationFailed,
+                "the X11 connection disappeared while requesting pointer lock",
+            ));
+        };
+
+        let (xcb, root, invisible_cursor) = {
+            let mut state = client.0.borrow_mut();
+            if state
+                .pointer_lock_window
+                .is_some_and(|owner| owner != x_window)
+            {
+                return Err(GameInputError::new(
+                    GameInputErrorKind::Rejected,
+                    "another Kael window currently owns the X11 pointer lock",
+                ));
+            }
+            if state.pointer_lock_window == Some(x_window) {
+                return Ok(());
+            }
+            let cursor = state.get_cursor_icon(CursorStyle::None).ok_or_else(|| {
+                GameInputError::new(
+                    GameInputErrorKind::InitializationFailed,
+                    "X11 could not create an invisible cursor for pointer lock",
+                )
+            })?;
+            (
+                state.xcb_connection.clone(),
+                state.xcb_connection.setup().roots[state.x_root_index].root,
+                cursor,
+            )
+        };
+
+        let saved_root_position = if super::super::x11_pointer_position_restore_is_safe() {
+            let pointer = xcb
+                .query_pointer(x_window)
+                .map_err(|error| {
+                    GameInputError::new(
+                        GameInputErrorKind::Platform,
+                        format!("X11 failed to send the pointer-position query: {error}"),
+                    )
+                })?
+                .reply()
+                .map_err(|error| {
+                    GameInputError::new(
+                        GameInputErrorKind::Platform,
+                        format!("X11 failed to save the cursor position: {error}"),
+                    )
+                })?;
+            Some((pointer.root_x, pointer.root_y))
+        } else {
+            None
+        };
+
+        xcb.xinput_xi_select_events(
+            root,
+            &[xinput::EventMask {
+                deviceid: XINPUT_ALL_DEVICE_GROUPS,
+                mask: vec![xinput::XIEventMask::RAW_MOTION],
+            }],
+        )
+        .map_err(|error| {
+            GameInputError::new(
+                GameInputErrorKind::Platform,
+                format!("X11 failed to select XI2 raw motion: {error}"),
+            )
+        })?
+        .check()
+        .map_err(|error| {
+            GameInputError::new(
+                GameInputErrorKind::Platform,
+                format!("X11 rejected XI2 raw-motion selection: {error}"),
+            )
+        })?;
+
+        let reply = xcb
+            .grab_pointer(
+                true,
+                x_window,
+                EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION,
+                xproto::GrabMode::ASYNC,
+                xproto::GrabMode::ASYNC,
+                x_window,
+                invisible_cursor,
+                x11rb::CURRENT_TIME,
+            )
+            .map_err(|error| {
+                GameInputError::new(
+                    GameInputErrorKind::Platform,
+                    format!("X11 failed to send the pointer-grab request: {error}"),
+                )
+            })?
+            .reply()
+            .map_err(|error| {
+                GameInputError::new(
+                    GameInputErrorKind::Platform,
+                    format!("X11 failed to receive the pointer-grab reply: {error}"),
+                )
+            })?;
+
+        if reply.status != xproto::GrabStatus::SUCCESS {
+            xcb.xinput_xi_select_events(
+                root,
+                &[xinput::EventMask {
+                    deviceid: XINPUT_ALL_DEVICE_GROUPS,
+                    mask: Vec::new(),
+                }],
+            )
+            .ok()
+            .and_then(|cookie| cookie.check().ok());
+            return Err(GameInputError::new(
+                GameInputErrorKind::Rejected,
+                format!("X11 rejected pointer confinement: {:?}", reply.status),
+            ));
+        }
+
+        if let Err(error) = xcb.flush() {
+            xcb.ungrab_pointer(x11rb::CURRENT_TIME)
+                .ok()
+                .and_then(|cookie| cookie.check().ok());
+            xcb.xinput_xi_select_events(
+                root,
+                &[xinput::EventMask {
+                    deviceid: XINPUT_ALL_DEVICE_GROUPS,
+                    mask: Vec::new(),
+                }],
+            )
+            .ok()
+            .and_then(|cookie| cookie.check().ok());
+            return Err(GameInputError::new(
+                GameInputErrorKind::Platform,
+                format!("X11 failed to flush the pointer-lock requests: {error}"),
+            ));
+        }
+
+        let mut state = client.0.borrow_mut();
+        state.pointer_lock_window = Some(x_window);
+        state.pointer_lock_pressed_button = None;
+        state.pointer_lock_saved_root_position = saved_root_position;
+        Ok(())
+    }
+
+    pub(crate) fn release_pointer_lock(
+        &self,
+        x_window: xproto::Window,
+    ) -> Result<(), GameInputError> {
+        let Some(client) = self.get_client() else {
+            return Ok(());
+        };
+        let (xcb, root, owns_lock, saved_root_position) = {
+            let state = client.0.borrow();
+            (
+                state.xcb_connection.clone(),
+                state.xcb_connection.setup().roots[state.x_root_index].root,
+                state.pointer_lock_window == Some(x_window),
+                state.pointer_lock_saved_root_position,
+            )
+        };
+        if !owns_lock {
+            return Ok(());
+        }
+
+        let mut first_error = None;
+        let ungrab = xcb.ungrab_pointer(x11rb::CURRENT_TIME);
+        let restore_position =
+            saved_root_position.map(|(x, y)| xcb.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, x, y));
+        if let Err(error) = check_reply(|| "X11 failed to release the pointer grab", ungrab) {
+            first_error = Some(GameInputError::new(
+                GameInputErrorKind::Platform,
+                format!("X11 failed to release the pointer grab: {error}"),
+            ));
+        }
+        if let Some(restore_position) = restore_position
+            && let Err(error) = check_reply(
+                || "X11 failed to restore the cursor position",
+                restore_position,
+            )
+            && first_error.is_none()
+        {
+            first_error = Some(GameInputError::new(
+                GameInputErrorKind::Platform,
+                format!("X11 failed to restore the cursor position: {error}"),
+            ));
+        }
+        if let Err(error) = check_reply(
+            || "X11 failed to clear XI2 raw-motion selection",
+            xcb.xinput_xi_select_events(
+                root,
+                &[xinput::EventMask {
+                    deviceid: XINPUT_ALL_DEVICE_GROUPS,
+                    mask: Vec::new(),
+                }],
+            ),
+        ) && first_error.is_none()
+        {
+            first_error = Some(GameInputError::new(
+                GameInputErrorKind::Platform,
+                format!("X11 failed to clear XI2 raw-motion selection: {error}"),
+            ));
+        }
+        xcb.flush().log_err();
+
+        let mut state = client.0.borrow_mut();
+        if state.pointer_lock_window == Some(x_window) {
+            state.pointer_lock_window = None;
+            state.pointer_lock_pressed_button = None;
+            state.pointer_lock_saved_root_position = None;
+        }
+        drop(state);
+
+        first_error.map_or(Ok(()), Err)
+    }
+
+    #[cfg(any())]
+    pub(crate) fn ensure_webview_event_pump(&self) {
+        let Some(client) = self.get_client() else {
+            return;
+        };
+        let loop_handle = {
+            let mut state = client.0.borrow_mut();
+            if state.webview_event_pump_active {
+                return;
+            }
+            state.webview_event_pump_active = true;
+            state.loop_handle.clone()
+        };
+
+        if let Err(error) = loop_handle.insert_source(calloop::timer::Timer::immediate(), {
+            move |_deadline, (), client| {
+                let has_webviews = {
+                    let state = client.0.borrow();
+                    state
+                        .windows
+                        .values()
+                        .any(|window| !window.state.borrow().webviews.is_empty())
+                };
+                if has_webviews {
+                    calloop::timer::TimeoutAction::ToDuration(WEBVIEW_EVENT_PUMP_INTERVAL)
+                } else {
+                    client.0.borrow_mut().webview_event_pump_active = false;
+                    calloop::timer::TimeoutAction::Drop
+                }
+            }
+        }) {
+            client.0.borrow_mut().webview_event_pump_active = false;
+            log::error!("failed to initialize X11 WebView event pump: {error:?}");
+        }
+    }
+
     pub fn drop_window(&self, x_window: u32) {
+        self.release_pointer_lock(x_window).log_err();
         let Some(client) = self.get_client() else {
             return;
         };
         let mut state = client.0.borrow_mut();
+        let cancelled_touches = cancel_x11_touches_for_window(&mut state, x_window);
 
         if let Some(window_ref) = state.windows.remove(&x_window)
             && let Some(RefreshState::PeriodicRefresh {
@@ -256,6 +539,8 @@ impl X11ClientStatePtr {
         if state.windows.is_empty() && !state.common.keep_alive_without_windows {
             state.common.signal.stop();
         }
+        drop(state);
+        dispatch_x11_touch_events(cancelled_touches);
     }
 
     pub fn update_ime_position(&self, bounds: Bounds<Pixels>) {
@@ -381,16 +666,18 @@ impl X11Client {
         xcb_connection.prefetch_extension_information(xinput::X11_EXTENSION_NAME)?;
         xcb_connection.prefetch_extension_information(present::X11_EXTENSION_NAME)?;
 
-        // Announce to X server that XInput up to 2.1 is supported. To increase this to 2.2 and
-        // beyond, support for touch events would need to be added.
+        // XI 2.2 adds direct multi-touch. Older XI2 servers remain usable with
+        // the established mouse/pen-compatible stream.
         let xinput_version = get_reply(
             || "XInput XiQueryVersion failed",
-            xcb_connection.xinput_xi_query_version(2, 1),
+            xcb_connection.xinput_xi_query_version(2, 2),
         )?;
         anyhow::ensure!(
             xinput_version.major_version >= 2,
             "XInput version >= 2 is required"
         );
+        let xinput_touch_supported = xinput_version.major_version > 2
+            || (xinput_version.major_version == 2 && xinput_version.minor_version >= 2);
 
         let pointer_device_states =
             current_pointer_device_states(&xcb_connection, &BTreeMap::new()).unwrap_or_default();
@@ -544,6 +831,8 @@ impl X11Client {
             last_capslock_changed_event: Capslock::default(),
             event_loop: Some(event_loop),
             loop_handle: handle,
+            #[cfg(any())]
+            webview_event_pump_active: false,
             common,
             last_click: Instant::now(),
             last_mouse_button: None,
@@ -562,6 +851,9 @@ impl X11Client {
             windows: HashMap::default(),
             mouse_focused_window: None,
             keyboard_focused_window: None,
+            pointer_lock_window: None,
+            pointer_lock_pressed_button: None,
+            pointer_lock_saved_root_position: None,
             xkb: xkb_state,
             keyboard_layout,
             ximc,
@@ -577,6 +869,8 @@ impl X11Client {
             cursor_cache: HashMap::default(),
 
             pointer_device_states,
+            xinput_touch_supported,
+            active_touches: HashMap::default(),
 
             clipboard,
             clipboard_item: None,
@@ -834,12 +1128,16 @@ impl X11Client {
         match event {
             Event::UnmapNotify(event) => {
                 let mut state = self.0.borrow_mut();
+                let cancelled_touches = cancel_x11_touches_for_window(&mut state, event.window);
                 if let Some(window_ref) = state.windows.get_mut(&event.window) {
                     window_ref.is_mapped = false;
                 }
                 state.update_refresh_loop(event.window);
+                drop(state);
+                dispatch_x11_touch_events(cancelled_touches);
             }
             Event::MapNotify(event) => {
+                log::debug!("x11: window {} mapped", event.window);
                 let mut state = self.0.borrow_mut();
                 if let Some(window_ref) = state.windows.get_mut(&event.window) {
                     window_ref.is_mapped = true;
@@ -989,10 +1287,22 @@ impl X11Client {
                     },
                 };
                 let window = self.get_window(event.window)?;
-                window
+                let display_changed = window
                     .set_bounds(bounds)
                     .context("X11: Failed to set window bounds")
-                    .log_err();
+                    .log_err()
+                    .unwrap_or(false);
+                if display_changed {
+                    let mut state = self.0.borrow_mut();
+                    if let Some(window_ref) = state.windows.get_mut(&event.window)
+                        && let Some(RefreshState::PeriodicRefresh {
+                            event_loop_token, ..
+                        }) = window_ref.refresh_state.take()
+                    {
+                        state.loop_handle.remove(event_loop_token);
+                    }
+                    state.update_refresh_loop(event.window);
+                }
             }
             Event::PropertyNotify(event) => {
                 let window = self.get_window(event.window)?;
@@ -1238,14 +1548,23 @@ impl X11Client {
             }
             Event::XinputButtonPress(event) => {
                 let window = self.get_window(event.event)?;
+                let scale_factor = window.input_scale_factor();
                 let mut state = self.0.borrow_mut();
+
+                if state.xinput_touch_supported
+                    && event
+                        .flags
+                        .contains(xinput::PointerEventFlags::POINTER_EMULATED)
+                {
+                    return Some(());
+                }
 
                 let modifiers = modifiers_from_xinput_info(event.mods);
                 state.modifiers = modifiers;
 
                 let position = point(
-                    px(event.event_x as f32 / u16::MAX as f32 / state.scale_factor),
-                    px(event.event_y as f32 / u16::MAX as f32 / state.scale_factor),
+                    px(event.event_x as f32 / u16::MAX as f32 / scale_factor),
+                    px(event.event_y as f32 / u16::MAX as f32 / scale_factor),
                 );
 
                 if state.composing && state.ximc.is_some() {
@@ -1263,6 +1582,9 @@ impl X11Client {
                 }
                 match button_or_scroll_from_event_detail(event.detail) {
                     Some(ButtonOrScroll::Button(button)) => {
+                        if state.pointer_lock_window == Some(event.event) {
+                            state.pointer_lock_pressed_button = Some(button);
+                        }
                         let click_elapsed = state.last_click.elapsed();
                         if click_elapsed < DOUBLE_CLICK_INTERVAL
                             && state
@@ -1315,17 +1637,30 @@ impl X11Client {
             }
             Event::XinputButtonRelease(event) => {
                 let window = self.get_window(event.event)?;
+                let scale_factor = window.input_scale_factor();
                 let mut state = self.0.borrow_mut();
+                if state.xinput_touch_supported
+                    && event
+                        .flags
+                        .contains(xinput::PointerEventFlags::POINTER_EMULATED)
+                {
+                    return Some(());
+                }
                 let modifiers = modifiers_from_xinput_info(event.mods);
                 state.modifiers = modifiers;
 
                 let position = point(
-                    px(event.event_x as f32 / u16::MAX as f32 / state.scale_factor),
-                    px(event.event_y as f32 / u16::MAX as f32 / state.scale_factor),
+                    px(event.event_x as f32 / u16::MAX as f32 / scale_factor),
+                    px(event.event_y as f32 / u16::MAX as f32 / scale_factor),
                 );
                 match button_or_scroll_from_event_detail(event.detail) {
                     Some(ButtonOrScroll::Button(button)) => {
                         let click_count = state.current_count;
+                        if state.pointer_lock_window == Some(event.event)
+                            && state.pointer_lock_pressed_button == Some(button)
+                        {
+                            state.pointer_lock_pressed_button = None;
+                        }
                         drop(state);
                         window.handle_input(PlatformInput::MouseUp(crate::MouseUpEvent {
                             button,
@@ -1338,19 +1673,128 @@ impl X11Client {
                     None => {}
                 }
             }
+            Event::XinputTouchBegin(event) => {
+                let window = self.get_window(event.event)?;
+                let scale_factor = window.input_scale_factor();
+                let position = xinput_event_position(event.event_x, event.event_y, scale_factor);
+                let modifiers = modifiers_from_xinput_info(event.mods);
+                let mut state = self.0.borrow_mut();
+                if state.active_touches.len() >= 256 {
+                    log::warn!("ignoring an XI2 touch contact beyond the supported bound");
+                    return Some(());
+                }
+                state.modifiers = modifiers;
+                let touch = X11TouchState {
+                    window: window.clone(),
+                    position,
+                    is_primary: state.active_touches.is_empty(),
+                };
+                let pointer = x11_touch_pointer(
+                    event.detail,
+                    &touch,
+                    PointerPhase::Down,
+                    event.time,
+                    Point::default(),
+                    modifiers,
+                );
+                state.active_touches.insert(event.detail, touch);
+                drop(state);
+                window.handle_input(PlatformInput::Pointer(pointer));
+            }
+            Event::XinputTouchUpdate(event) => {
+                let scale_factor = self
+                    .get_window(event.event)
+                    .map(|window| window.input_scale_factor())?;
+                let position = xinput_event_position(event.event_x, event.event_y, scale_factor);
+                let modifiers = modifiers_from_xinput_info(event.mods);
+                let mut state = self.0.borrow_mut();
+                state.modifiers = modifiers;
+                let touch = state.active_touches.get_mut(&event.detail)?;
+                let movement = position - touch.position;
+                touch.position = position;
+                let window = touch.window.clone();
+                let pointer = x11_touch_pointer(
+                    event.detail,
+                    touch,
+                    PointerPhase::Move,
+                    event.time,
+                    movement,
+                    modifiers,
+                );
+                drop(state);
+                window.handle_input(PlatformInput::Pointer(pointer));
+            }
+            Event::XinputTouchEnd(event) => {
+                let modifiers = modifiers_from_xinput_info(event.mods);
+                let mut state = self.0.borrow_mut();
+                state.modifiers = modifiers;
+                let touch = state.active_touches.remove(&event.detail)?;
+                let window = touch.window.clone();
+                let pointer = x11_touch_pointer(
+                    event.detail,
+                    &touch,
+                    PointerPhase::Up,
+                    event.time,
+                    Point::default(),
+                    modifiers,
+                );
+                drop(state);
+                window.handle_input(PlatformInput::Pointer(pointer));
+            }
+            Event::XinputRawMotion(event) => {
+                let state = self.0.borrow();
+                let locked_window_id = state.pointer_lock_window?;
+                let window = state.windows.get(&locked_window_id)?.window.clone();
+                let (scale_factor, position) = window.pointer_lock_metrics();
+                let pressed_button = state.pointer_lock_pressed_button;
+                let modifiers = state.modifiers;
+                drop(state);
+
+                let movement_x = xinput_raw_axis(&event, 0) / f64::from(scale_factor);
+                let movement_y = xinput_raw_axis(&event, 1) / f64::from(scale_factor);
+                if (!movement_x.is_finite() || !movement_y.is_finite())
+                    || (movement_x == 0.0 && movement_y == 0.0)
+                {
+                    return Some(());
+                }
+                let mouse_move = MouseMoveEvent {
+                    position,
+                    pressed_button,
+                    modifiers,
+                };
+                let mut pointer = PointerInputEvent::from(&mouse_move);
+                pointer.movement = point(px(movement_x as f32), px(movement_y as f32));
+                window.handle_input(PlatformInput::Pointer(pointer));
+            }
             Event::XinputMotion(event) => {
                 let window = self.get_window(event.event)?;
+                let scale_factor = window.input_scale_factor();
                 let mut state = self.0.borrow_mut();
-                let pressed_button = pressed_button_from_mask(event.button_mask[0]);
+                if state.xinput_touch_supported
+                    && event
+                        .flags
+                        .contains(xinput::PointerEventFlags::POINTER_EMULATED)
+                {
+                    return Some(());
+                }
+                let pointer_locked = state.pointer_lock_window == Some(event.event);
+                let pressed_button = pressed_button_from_mask(
+                    event.button_mask.first().copied().unwrap_or_default(),
+                );
                 let position = point(
-                    px(event.event_x as f32 / u16::MAX as f32 / state.scale_factor),
-                    px(event.event_y as f32 / u16::MAX as f32 / state.scale_factor),
+                    px(event.event_x as f32 / u16::MAX as f32 / scale_factor),
+                    px(event.event_y as f32 / u16::MAX as f32 / scale_factor),
                 );
                 let modifiers = modifiers_from_xinput_info(event.mods);
                 state.modifiers = modifiers;
                 drop(state);
 
-                if event.valuator_mask[0] & 3 != 0 {
+                if !pointer_locked
+                    && event
+                        .valuator_mask
+                        .first()
+                        .is_some_and(|mask| mask & 3 != 0)
+                {
                     window.handle_input(PlatformInput::MouseMove(crate::MouseMoveEvent {
                         position,
                         pressed_button,
@@ -1378,6 +1822,8 @@ impl X11Client {
                 state.mouse_focused_window = Some(event.event);
             }
             Event::XinputLeave(event) if event.mode == xinput::NotifyMode::NORMAL => {
+                let window = self.get_window(event.event)?;
+                let scale_factor = window.input_scale_factor();
                 let mut state = self.0.borrow_mut();
 
                 // Set last scroll values to `None` so that a large delta isn't created if scrolling is done outside the window (the valuator is global)
@@ -1385,14 +1831,13 @@ impl X11Client {
                 state.mouse_focused_window = None;
                 let pressed_button = pressed_button_from_mask(event.buttons[0]);
                 let position = point(
-                    px(event.event_x as f32 / u16::MAX as f32 / state.scale_factor),
-                    px(event.event_y as f32 / u16::MAX as f32 / state.scale_factor),
+                    px(event.event_x as f32 / u16::MAX as f32 / scale_factor),
+                    px(event.event_y as f32 / u16::MAX as f32 / scale_factor),
                 );
                 let modifiers = modifiers_from_xinput_info(event.mods);
                 state.modifiers = modifiers;
                 drop(state);
 
-                let window = self.get_window(event.event)?;
                 window.handle_input(PlatformInput::MouseExited(crate::MouseExitEvent {
                     pressed_button,
                     position,
@@ -1402,6 +1847,7 @@ impl X11Client {
             }
             Event::XinputHierarchy(event) => {
                 let mut state = self.0.borrow_mut();
+                let cancelled_touches = cancel_x11_touches(&mut state);
                 // Temporarily use `state.pointer_device_states` to only store pointers that still have valid scroll values.
                 // Any change to a device invalidates its scroll values.
                 for info in event.infos {
@@ -1415,11 +1861,20 @@ impl X11Client {
                 ) {
                     state.pointer_device_states = pointer_device_states;
                 }
+                drop(state);
+                for (window, pointer) in cancelled_touches {
+                    window.handle_input(PlatformInput::Pointer(pointer));
+                }
             }
             Event::XinputDeviceChanged(event) => {
                 let mut state = self.0.borrow_mut();
+                let cancelled_touches = cancel_x11_touches(&mut state);
                 if let Some(mut pointer) = state.pointer_device_states.get_mut(&event.sourceid) {
                     reset_pointer_device_scroll_positions(pointer);
+                }
+                drop(state);
+                for (window, pointer) in cancelled_touches {
+                    window.handle_input(PlatformInput::Pointer(pointer));
                 }
             }
             Event::RandrScreenChangeNotify(_) | Event::RandrNotify(_) => {
@@ -1582,10 +2037,10 @@ impl LinuxClient for X11Client {
             .roots
             .iter()
             .enumerate()
-            .filter_map(|(root_id, _)| {
-                Some(Rc::new(
-                    X11Display::new(&state.xcb_connection, state.scale_factor, root_id).ok()?,
-                ) as Rc<dyn PlatformDisplay>)
+            .flat_map(|(root_id, _)| {
+                X11Display::all(&state.xcb_connection, state.scale_factor, root_id)
+                    .into_iter()
+                    .map(|display| Rc::new(display) as Rc<dyn PlatformDisplay>)
             })
             .collect()
     }
@@ -1603,10 +2058,17 @@ impl LinuxClient for X11Client {
 
     fn display(&self, id: DisplayId) -> Option<Rc<dyn PlatformDisplay>> {
         let state = self.0.borrow();
-
-        Some(Rc::new(
-            X11Display::new(&state.xcb_connection, state.scale_factor, id.0 as usize).ok()?,
-        ))
+        state
+            .xcb_connection
+            .setup()
+            .roots
+            .iter()
+            .enumerate()
+            .flat_map(|(root_id, _)| {
+                X11Display::all(&state.xcb_connection, state.scale_factor, root_id)
+            })
+            .find(|display| display.id() == id)
+            .map(|display| Rc::new(display) as Rc<dyn PlatformDisplay>)
     }
 
     #[cfg(feature = "screen-capture")]
@@ -1668,6 +2130,7 @@ impl LinuxClient for X11Client {
             &state.atoms,
             state.scale_factor,
             state.common.appearance,
+            state.xinput_touch_supported,
             parent_window,
             tab_manager_state,
         )?;
@@ -1820,7 +2283,7 @@ impl LinuxClient for X11Client {
 
         event_loop
             .run(None, &mut self.clone(), |_| {
-                #[cfg(feature = "webview")]
+                #[cfg(any())]
                 pump_gtk_webview_events();
             })
             .log_err();
@@ -2287,6 +2750,111 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
 
 fn fp3232_to_f32(value: xinput::Fp3232) -> f32 {
     value.integral as f32 + value.frac as f32 / u32::MAX as f32
+}
+
+fn xinput_event_position(
+    event_x: xinput::Fp1616,
+    event_y: xinput::Fp1616,
+    scale_factor: f32,
+) -> Point<Pixels> {
+    point(
+        px(event_x as f32 / u16::MAX as f32 / scale_factor),
+        px(event_y as f32 / u16::MAX as f32 / scale_factor),
+    )
+}
+
+fn x11_touch_pointer(
+    id: u32,
+    touch: &X11TouchState,
+    phase: PointerPhase,
+    timestamp_ms: u32,
+    movement: Point<Pixels>,
+    modifiers: Modifiers,
+) -> PointerInputEvent {
+    PointerInputEvent {
+        phase,
+        pointer_id: PointerId::new(i64::from(id)),
+        pointer_type: PointerType::Touch,
+        position: touch.position,
+        movement,
+        button: matches!(phase, PointerPhase::Down | PointerPhase::Up).then_some(MouseButton::Left),
+        buttons: if matches!(phase, PointerPhase::Down | PointerPhase::Move) {
+            PointerButtons::PRIMARY
+        } else {
+            PointerButtons::empty()
+        },
+        modifiers,
+        click_count: usize::from(matches!(phase, PointerPhase::Down | PointerPhase::Up)),
+        is_primary: touch.is_primary,
+        pressure: 0.0,
+        tangential_pressure: 0.0,
+        tilt_x: 0.0,
+        tilt_y: 0.0,
+        twist: 0.0,
+        width: px(0.0),
+        height: px(0.0),
+        timestamp_ms: f64::from(timestamp_ms),
+        coalesced: Vec::new(),
+    }
+}
+
+fn cancel_x11_touches(state: &mut X11ClientState) -> Vec<(X11WindowStatePtr, PointerInputEvent)> {
+    let modifiers = state.modifiers;
+    std::mem::take(&mut state.active_touches)
+        .into_iter()
+        .map(|(id, touch)| {
+            let window = touch.window.clone();
+            let pointer = x11_touch_pointer(
+                id,
+                &touch,
+                PointerPhase::Cancel,
+                0,
+                Point::default(),
+                modifiers,
+            );
+            (window, pointer)
+        })
+        .collect()
+}
+
+fn cancel_x11_touches_for_window(
+    state: &mut X11ClientState,
+    x_window: xproto::Window,
+) -> Vec<(X11WindowStatePtr, PointerInputEvent)> {
+    let ids = state
+        .active_touches
+        .iter()
+        .filter_map(|(id, touch)| (touch.window.x_window == x_window).then_some(*id))
+        .collect::<Vec<_>>();
+    let modifiers = state.modifiers;
+    ids.into_iter()
+        .filter_map(|id| {
+            let touch = state.active_touches.remove(&id)?;
+            let window = touch.window.clone();
+            let pointer = x11_touch_pointer(
+                id,
+                &touch,
+                PointerPhase::Cancel,
+                0,
+                Point::default(),
+                modifiers,
+            );
+            Some((window, pointer))
+        })
+        .collect()
+}
+
+fn dispatch_x11_touch_events(events: Vec<(X11WindowStatePtr, PointerInputEvent)>) {
+    for (window, pointer) in events {
+        window.handle_input(PlatformInput::Pointer(pointer));
+    }
+}
+
+fn xinput_raw_axis(event: &xinput::RawMotionEvent, valuator_number: u16) -> f64 {
+    get_valuator_axis_index(&event.valuator_mask, valuator_number)
+        .and_then(|index| event.axisvalues_raw.get(index))
+        .map(|value| f64::from(value.integral) + f64::from(value.frac) / (u32::MAX as f64 + 1.0))
+        .unwrap_or(0.0)
 }
 
 fn check_compositor_present(xcb_connection: &XCBConnection, root: u32) -> bool {

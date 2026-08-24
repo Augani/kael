@@ -636,7 +636,7 @@ impl Style {
     pub fn overflow_mask(
         &self,
         bounds: Bounds<Pixels>,
-        rem_size: Pixels,
+        window: &Window,
     ) -> Option<ContentMask<Pixels>> {
         match self.overflow {
             Point {
@@ -651,10 +651,11 @@ impl Style {
                     .border_color
                     .is_some_and(|color| !color.is_transparent())
                 {
-                    min.x += self.border_widths.left.to_pixels(rem_size);
-                    max.x -= self.border_widths.right.to_pixels(rem_size);
-                    min.y += self.border_widths.top.to_pixels(rem_size);
-                    max.y -= self.border_widths.bottom.to_pixels(rem_size);
+                    let border_widths = window.ui_edges_in_pixels(self.border_widths);
+                    min.x += border_widths.left;
+                    max.x -= border_widths.right;
+                    min.y += border_widths.top;
+                    max.y -= border_widths.bottom;
                 }
 
                 let bounds = match (
@@ -688,15 +689,14 @@ impl Style {
     pub fn rounded_overflow_clip(
         &self,
         bounds: Bounds<Pixels>,
-        rem_size: Pixels,
+        window: &Window,
     ) -> Option<(Bounds<Pixels>, Corners<Pixels>)> {
         if self.overflow.x == Overflow::Visible || self.overflow.y == Overflow::Visible {
             return None;
         }
 
-        let corner_radii = self
-            .corner_radii
-            .to_pixels(rem_size)
+        let corner_radii = window
+            .ui_corners_in_pixels(self.corner_radii)
             .clamp_radii_for_quad_size(bounds.size);
         if corner_radii.max() <= Pixels::ZERO {
             return None;
@@ -723,24 +723,16 @@ impl Style {
             window.paint_quad(crate::outline(bounds, crate::red(), BorderStyle::default()));
         }
 
-        let rem_size = window.rem_size();
-        let corner_radii = self
-            .corner_radii
-            .to_pixels(rem_size)
+        let corner_radii = window
+            .ui_corners_in_pixels(self.corner_radii)
             .clamp_radii_for_quad_size(bounds.size);
 
-        let transform = self.compose_transform(bounds, window.scale_factor());
+        let transform =
+            self.compose_transform(bounds, window.scale_factor(), window.ui_zoom_factor());
         let color_filter = self.color_filter;
         window.with_element_transform(transform, |window| {
             window.with_color_filter(color_filter, |window| {
-                self.paint_within_transform(
-                    bounds,
-                    corner_radii,
-                    rem_size,
-                    window,
-                    cx,
-                    continuation,
-                )
+                self.paint_within_transform(bounds, corner_radii, window, cx, continuation)
             })
         });
     }
@@ -749,12 +741,13 @@ impl Style {
         &self,
         bounds: Bounds<Pixels>,
         corner_radii: Corners<Pixels>,
-        rem_size: Pixels,
         window: &mut Window,
         cx: &mut App,
         continuation: impl FnOnce(&mut Window, &mut App),
     ) {
-        if let Some(backdrop_blur) = self.backdrop_blur.map(|radius| radius.to_pixels(rem_size))
+        if let Some(backdrop_blur) = self
+            .backdrop_blur
+            .map(|radius| window.ui_length_in_pixels(radius))
             && backdrop_blur > Pixels::ZERO
         {
             window.paint_blur(
@@ -801,7 +794,7 @@ impl Style {
         continuation(window, cx);
 
         if self.is_border_visible() {
-            let border_widths = self.border_widths.to_pixels(rem_size);
+            let border_widths = window.ui_edges_in_pixels(self.border_widths);
             let max_border_width = border_widths.max();
             let max_corner_radius = corner_radii.max();
 
@@ -876,6 +869,7 @@ impl Style {
         &self,
         bounds: Bounds<Pixels>,
         scale_factor: f32,
+        ui_zoom_factor: f32,
     ) -> Option<TransformationMatrix> {
         let has_transform = self.rotate.is_some()
             || self.scale.is_some()
@@ -893,8 +887,8 @@ impl Style {
 
         if let Some(translate) = self.translate {
             t = t.translate(Point {
-                x: crate::ScaledPixels(translate.x.0 * scale_factor),
-                y: crate::ScaledPixels(translate.y.0 * scale_factor),
+                x: crate::ScaledPixels(translate.x.0 * scale_factor * ui_zoom_factor),
+                y: crate::ScaledPixels(translate.y.0 * scale_factor * ui_zoom_factor),
             });
         }
         if let Some(scale) = self.scale {
@@ -1647,7 +1641,7 @@ mod tests {
         let mut style = Style::default();
         style.rotate = Some(std::f32::consts::PI);
         let transform = style
-            .compose_transform(bounds, 2.0)
+            .compose_transform(bounds, 2.0, 1.0)
             .expect("rotation should produce a transform");
         let center = transform.apply(point(px(400.), px(200.)));
         assert!((center.x.0 - 400.).abs() < 0.01);
@@ -1659,13 +1653,17 @@ mod tests {
         let mut style = Style::default();
         style.translate = Some(point(px(10.), px(-5.)));
         let transform = style
-            .compose_transform(bounds, 2.0)
+            .compose_transform(bounds, 2.0, 1.0)
             .expect("translation should produce a transform");
         let moved = transform.apply(point(px(0.), px(0.)));
         assert!((moved.x.0 - 20.).abs() < 0.01);
         assert!((moved.y.0 + 10.).abs() < 0.01);
 
-        assert!(Style::default().compose_transform(bounds, 2.0).is_none());
+        assert!(
+            Style::default()
+                .compose_transform(bounds, 2.0, 1.0)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1679,7 +1677,7 @@ mod tests {
         style.skew = Some(point(std::f32::consts::FRAC_PI_4, 0.0));
         style.transform_origin = Some(point(0.0, 0.0));
         let transform = style
-            .compose_transform(bounds, 1.0)
+            .compose_transform(bounds, 1.0, 1.0)
             .expect("skew should produce a transform");
         let sheared = transform.apply(point(px(0.), px(100.)));
         assert!((sheared.x.0 - 100.).abs() < 0.01);

@@ -27,10 +27,18 @@
 - [Canvas & Graphics](graphics.md)
 - [Containers & Overlays](containers.md)
 - [Lists & Data](lists-and-data.md)
+- [Suite-scale Applications](suite-scale-apps.md)
 
 # Platform
 
+- [Browser (WebAssembly)](browser.md)
+- [Browser Audio](browser-audio.md)
+- [Browser Workers](browser-workers.md)
+- [Game Input](game-input.md)
+- [Realtime Networking](realtime-networking.md)
 - [Platform APIs](platform-apis.md)
+- [Office and PDF Document Bytes](office-documents.md)
+- [Linux WebView Hosting](linux-webviews.md)
 - [Crash Reporting](crash-reporting.md)
 - [Examples Gallery](examples.md)
 
@@ -46,6 +54,7 @@
 
 - [Inspector & Frame Stats](devtools.md)
 - [Testing](testing.md)
+- [Release Process](releasing.md)
 
 ---
 

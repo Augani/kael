@@ -3,13 +3,17 @@
 use std::{
     backtrace::Backtrace,
     collections::BinaryHeap,
-    fs,
-    io::{Read as _, Write as _},
     path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+};
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::{
+    fs,
+    io::{Read as _, Write as _},
 };
 
 use anyhow::{Context as _, Result, anyhow};
@@ -118,7 +122,10 @@ impl PriorCrashSummary {
     }
 }
 
-/// A crash reporter that captures Rust panics and persists reports to disk.
+/// A crash reporter that captures Rust panics and persists reports locally.
+///
+/// Native targets use private atomic files. Browser targets use origin-local
+/// storage and expose virtual report paths through the same bounded API.
 pub struct CrashReporter {
     reports_dir: PathBuf,
     endpoint: Option<String>,
@@ -164,7 +171,7 @@ impl CrashReporter {
         })
     }
 
-    /// Returns the directory where pending crash reports are stored.
+    /// Returns the directory or virtual browser namespace for pending reports.
     pub fn reports_dir(&self) -> &Path {
         &self.reports_dir
     }
@@ -281,10 +288,7 @@ impl CrashReporter {
     /// Returns `true` if handlers were installed by this call, `false` if they
     /// were already installed in this process.
     pub fn install_native(&mut self) -> Result<bool> {
-        let started_at_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_millis())
-            .unwrap_or_default();
+        let started_at_ms = current_time_millis();
 
         let context = NativeContext {
             session_id: self.session_id.clone(),
@@ -339,38 +343,46 @@ impl CrashReporter {
 
     /// Lists the pending crash report files.
     pub fn pending_reports(&self) -> Result<Vec<PathBuf>> {
-        let mut reports = BinaryHeap::with_capacity(MAX_PENDING_REPORTS_PER_BATCH + 1);
-        if !self.reports_dir.exists() {
-            return Ok(Vec::new());
+        #[cfg(target_arch = "wasm32")]
+        {
+            return browser_pending_reports(&self.reports_dir);
         }
 
-        for entry in fs::read_dir(&self.reports_dir).with_context(|| {
-            format!(
-                "failed to read reports directory: {}",
-                self.reports_dir.display()
-            )
-        })? {
-            let entry = entry?;
-            let path = entry.path();
-            let file_type = entry.file_type()?;
-            if file_type.is_file() {
-                let Some(sort_key) = crash_report_sort_key(&path) else {
-                    continue;
-                };
-                reports.push((sort_key, path));
-                if reports.len() > MAX_PENDING_REPORTS_PER_BATCH {
-                    reports.pop();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut reports = BinaryHeap::with_capacity(MAX_PENDING_REPORTS_PER_BATCH + 1);
+            if !self.reports_dir.exists() {
+                return Ok(Vec::new());
+            }
+
+            for entry in fs::read_dir(&self.reports_dir).with_context(|| {
+                format!(
+                    "failed to read reports directory: {}",
+                    self.reports_dir.display()
+                )
+            })? {
+                let entry = entry?;
+                let path = entry.path();
+                let file_type = entry.file_type()?;
+                if file_type.is_file() {
+                    let Some(sort_key) = crash_report_sort_key(&path) else {
+                        continue;
+                    };
+                    reports.push((sort_key, path));
+                    if reports.len() > MAX_PENDING_REPORTS_PER_BATCH {
+                        reports.pop();
+                    }
                 }
             }
-        }
 
-        let mut reports = reports.into_vec();
-        reports.sort_by(|(left_key, left_path), (right_key, right_path)| {
-            left_key
-                .cmp(right_key)
-                .then_with(|| left_path.cmp(right_path))
-        });
-        Ok(reports.into_iter().map(|(_, path)| path).collect())
+            let mut reports = reports.into_vec();
+            reports.sort_by(|(left_key, left_path), (right_key, right_path)| {
+                left_key
+                    .cmp(right_key)
+                    .then_with(|| left_path.cmp(right_path))
+            });
+            Ok(reports.into_iter().map(|(_, path)| path).collect())
+        }
     }
 
     /// Attempts to upload all pending crash reports.
@@ -400,12 +412,7 @@ impl CrashReporter {
                     path.display()
                 ));
             }
-            fs::remove_file(&path).with_context(|| {
-                format!(
-                    "failed to remove submitted crash report: {}",
-                    path.display()
-                )
-            })?;
+            remove_crash_report(&path)?;
         }
 
         Ok(())
@@ -521,19 +528,19 @@ pub fn capture_crash_report(
     }
 }
 
-/// Persists a crash report to disk.
+/// Persists a crash report to private native storage or browser origin storage.
 pub fn write_crash_report(dir: &Path, report: &CrashReport) -> Result<PathBuf> {
     prepare_reports_dir(dir)?;
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
+    let timestamp = current_time_millis();
     let sequence = NEXT_REPORT_ID
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(1)
         })
         .map_err(|_| anyhow!("crash report identifier space exhausted"))?;
+    #[cfg(not(target_arch = "wasm32"))]
     let process_id = std::process::id();
+    #[cfg(target_arch = "wasm32")]
+    let process_id = 0;
     let filename = format!("crash_report_{timestamp}_{process_id}_{sequence}.json");
     let path = dir.join(filename);
     let mut json = BoundedJsonWriter::new(MAX_REPORT_BYTES as usize);
@@ -546,27 +553,39 @@ pub fn write_crash_report(dir: &Path, report: &CrashReport) -> Result<PathBuf> {
         return Err(error).context("failed to serialize crash report");
     }
 
-    let mut file = tempfile::Builder::new()
-        .prefix(".kael-crash-report-")
-        .tempfile_in(dir)
-        .with_context(|| {
-            format!(
-                "failed to create temporary crash report in {}",
-                dir.display()
-            )
+    #[cfg(target_arch = "wasm32")]
+    {
+        let json = std::str::from_utf8(json.as_bytes())
+            .context("serialized browser crash report was not UTF-8")?;
+        browser_storage()?
+            .set_item(&browser_storage_key(&path)?, json)
+            .map_err(|error| anyhow!("failed to persist browser crash report: {error:?}"))?;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut file = tempfile::Builder::new()
+            .prefix(".kael-crash-report-")
+            .tempfile_in(dir)
+            .with_context(|| {
+                format!(
+                    "failed to create temporary crash report in {}",
+                    dir.display()
+                )
+            })?;
+        file.write_all(json.as_bytes())
+            .with_context(|| format!("failed to write crash report for {}", path.display()))?;
+        file.as_file()
+            .sync_all()
+            .with_context(|| format!("failed to sync crash report for {}", path.display()))?;
+        file.persist_noclobber(&path).map_err(|error| {
+            anyhow::Error::new(error.error).context(format!(
+                "failed to finalize crash report: {}",
+                path.display()
+            ))
         })?;
-    file.write_all(json.as_bytes())
-        .with_context(|| format!("failed to write crash report for {}", path.display()))?;
-    file.as_file()
-        .sync_all()
-        .with_context(|| format!("failed to sync crash report for {}", path.display()))?;
-    file.persist_noclobber(&path).map_err(|error| {
-        anyhow::Error::new(error.error).context(format!(
-            "failed to finalize crash report: {}",
-            path.display()
-        ))
-    })?;
-    sync_parent_dir(dir)?;
+        sync_parent_dir(dir)?;
+    }
 
     Ok(path)
 }
@@ -617,17 +636,40 @@ impl std::io::Write for BoundedJsonWriter {
 
 /// Collects basic operating-system information for a crash report.
 pub fn collect_os_info() -> OsInfo {
-    let hostname = std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("COMPUTERNAME"))
-        .unwrap_or_default();
-    let locale = std::env::var("LANG").unwrap_or_default();
+    #[cfg(target_arch = "wasm32")]
+    {
+        let navigator = web_sys::window().map(|window| window.navigator());
+        let version = navigator
+            .as_ref()
+            .and_then(|navigator| navigator.user_agent().ok())
+            .unwrap_or_default();
+        let locale = navigator
+            .as_ref()
+            .and_then(web_sys::Navigator::language)
+            .unwrap_or_default();
+        return OsInfo {
+            name: "browser".to_owned(),
+            version: truncate_text(version, MAX_CONTEXT_BYTES),
+            arch: std::env::consts::ARCH.to_owned(),
+            locale: truncate_text(locale, MAX_CONTEXT_BYTES),
+            hostname: String::new(),
+        };
+    }
 
-    OsInfo {
-        name: std::env::consts::OS.to_string(),
-        version: String::new(),
-        arch: std::env::consts::ARCH.to_string(),
-        locale: truncate_text(locale, MAX_CONTEXT_BYTES),
-        hostname: truncate_text(hostname, MAX_CONTEXT_BYTES),
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let hostname = std::env::var("HOSTNAME")
+            .or_else(|_| std::env::var("COMPUTERNAME"))
+            .unwrap_or_default();
+        let locale = std::env::var("LANG").unwrap_or_default();
+
+        OsInfo {
+            name: std::env::consts::OS.to_string(),
+            version: String::new(),
+            arch: std::env::consts::ARCH.to_string(),
+            locale: truncate_text(locale, MAX_CONTEXT_BYTES),
+            hostname: truncate_text(hostname, MAX_CONTEXT_BYTES),
+        }
     }
 }
 
@@ -705,7 +747,7 @@ fn validate_endpoint(endpoint: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 fn is_crash_report_path(path: &Path) -> bool {
     crash_report_sort_key(path).is_some()
 }
@@ -731,48 +773,175 @@ fn crash_report_sort_key(path: &Path) -> Option<(u128, u64, u64)> {
     }
 }
 
-fn read_crash_report(path: &Path) -> Result<String> {
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("failed to inspect crash report: {}", path.display()))?;
-    if !metadata.file_type().is_file() || metadata.len() > MAX_REPORT_BYTES {
+#[cfg(target_arch = "wasm32")]
+const BROWSER_REPORT_ROOT: &str = "/__kael_browser_diagnostics";
+#[cfg(target_arch = "wasm32")]
+const BROWSER_STORAGE_PREFIX: &str = "kael.diagnostics.v1:";
+
+#[cfg(target_arch = "wasm32")]
+fn browser_storage() -> Result<web_sys::Storage> {
+    web_sys::window()
+        .ok_or_else(|| anyhow!("browser Window is unavailable"))?
+        .local_storage()
+        .map_err(|error| anyhow!("failed to access browser local storage: {error:?}"))?
+        .ok_or_else(|| anyhow!("browser local storage is unavailable for this origin"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn ensure_browser_report_path(path: &Path) -> Result<()> {
+    let path_text = path
+        .to_str()
+        .ok_or_else(|| anyhow!("browser crash report path must be valid UTF-8"))?;
+    let below_root = path_text == BROWSER_REPORT_ROOT
+        || path_text
+            .strip_prefix(BROWSER_REPORT_ROOT)
+            .is_some_and(|suffix| suffix.starts_with('/'));
+    let has_traversal = path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir | std::path::Component::CurDir
+        )
+    });
+    if !below_root || has_traversal {
         return Err(anyhow!(
-            "crash report must be a regular file of at most {MAX_REPORT_BYTES} bytes: {}",
+            "browser crash reports must use a traversal-free virtual path below {BROWSER_REPORT_ROOT}: {}",
             path.display()
         ));
     }
+    Ok(())
+}
 
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
+#[cfg(target_arch = "wasm32")]
+fn browser_storage_key(path: &Path) -> Result<String> {
+    ensure_browser_report_path(path)?;
+    let path = path
+        .to_str()
+        .ok_or_else(|| anyhow!("browser crash report path must be valid UTF-8"))?;
+    Ok(format!("{BROWSER_STORAGE_PREFIX}{path}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn browser_pending_reports(dir: &Path) -> Result<Vec<PathBuf>> {
+    let storage = browser_storage()?;
+    let directory_key = browser_storage_key(dir)?;
+    let directory_prefix = format!("{}/", directory_key.trim_end_matches('/'));
+    let mut reports = BinaryHeap::with_capacity(MAX_PENDING_REPORTS_PER_BATCH + 1);
+    for index in 0..storage
+        .length()
+        .map_err(|error| anyhow!("failed to enumerate browser crash-report storage: {error:?}"))?
     {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(libc::O_NOFOLLOW);
+        let Some(key) = storage.key(index).map_err(|error| {
+            anyhow!("failed to read browser crash-report storage key: {error:?}")
+        })?
+        else {
+            continue;
+        };
+        let Some(path) = key.strip_prefix(&directory_prefix) else {
+            continue;
+        };
+        let path = dir.join(path);
+        let Some(sort_key) = crash_report_sort_key(&path) else {
+            continue;
+        };
+        reports.push((sort_key, path));
+        if reports.len() > MAX_PENDING_REPORTS_PER_BATCH {
+            reports.pop();
+        }
     }
-    let file = options
-        .open(path)
-        .with_context(|| format!("failed to open crash report: {}", path.display()))?;
-    let opened_metadata = file
-        .metadata()
-        .with_context(|| format!("failed to inspect crash report: {}", path.display()))?;
-    if !opened_metadata.is_file() || opened_metadata.len() > MAX_REPORT_BYTES {
-        return Err(anyhow!(
-            "crash report changed while opening: {}",
+    let mut reports = reports.into_vec();
+    reports.sort_by(|(left_key, left_path), (right_key, right_path)| {
+        left_key
+            .cmp(right_key)
+            .then_with(|| left_path.cmp(right_path))
+    });
+    Ok(reports.into_iter().map(|(_, path)| path).collect())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn remove_crash_report(path: &Path) -> Result<()> {
+    browser_storage()?
+        .remove_item(&browser_storage_key(path)?)
+        .map_err(|error| {
+            anyhow!(
+                "failed to remove submitted browser crash report {}: {error:?}",
+                path.display()
+            )
+        })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn remove_crash_report(path: &Path) -> Result<()> {
+    fs::remove_file(path).with_context(|| {
+        format!(
+            "failed to remove submitted crash report: {}",
             path.display()
-        ));
+        )
+    })
+}
+
+fn read_crash_report(path: &Path) -> Result<String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        return browser_storage()?
+            .get_item(&browser_storage_key(path)?)
+            .map_err(|error| anyhow!("failed to read browser crash report: {error:?}"))?
+            .ok_or_else(|| anyhow!("browser crash report is missing: {}", path.display()))
+            .and_then(|json| {
+                if json.len() as u64 > MAX_REPORT_BYTES {
+                    Err(anyhow!(
+                        "browser crash report exceeds {MAX_REPORT_BYTES} byte limit: {}",
+                        path.display()
+                    ))
+                } else {
+                    Ok(json)
+                }
+            });
     }
 
-    let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
-    file.take(MAX_REPORT_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .with_context(|| format!("failed to read crash report: {}", path.display()))?;
-    if bytes.len() as u64 > MAX_REPORT_BYTES {
-        return Err(anyhow!(
-            "crash report exceeds {MAX_REPORT_BYTES} byte limit: {}",
-            path.display()
-        ));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let metadata = fs::symlink_metadata(path)
+            .with_context(|| format!("failed to inspect crash report: {}", path.display()))?;
+        if !metadata.file_type().is_file() || metadata.len() > MAX_REPORT_BYTES {
+            return Err(anyhow!(
+                "crash report must be a regular file of at most {MAX_REPORT_BYTES} bytes: {}",
+                path.display()
+            ));
+        }
+
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let file = options
+            .open(path)
+            .with_context(|| format!("failed to open crash report: {}", path.display()))?;
+        let opened_metadata = file
+            .metadata()
+            .with_context(|| format!("failed to inspect crash report: {}", path.display()))?;
+        if !opened_metadata.is_file() || opened_metadata.len() > MAX_REPORT_BYTES {
+            return Err(anyhow!(
+                "crash report changed while opening: {}",
+                path.display()
+            ));
+        }
+
+        let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
+        file.take(MAX_REPORT_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .with_context(|| format!("failed to read crash report: {}", path.display()))?;
+        if bytes.len() as u64 > MAX_REPORT_BYTES {
+            return Err(anyhow!(
+                "crash report exceeds {MAX_REPORT_BYTES} byte limit: {}",
+                path.display()
+            ));
+        }
+        String::from_utf8(bytes)
+            .with_context(|| format!("crash report is not UTF-8: {}", path.display()))
     }
-    String::from_utf8(bytes)
-        .with_context(|| format!("crash report is not UTF-8: {}", path.display()))
 }
 
 fn truncate_text(mut text: String, max_bytes: usize) -> String {
@@ -787,40 +956,57 @@ fn truncate_text(mut text: String, max_bytes: usize) -> String {
     text
 }
 
+fn current_time_millis() -> u128 {
+    web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
 pub(crate) fn prepare_reports_dir(dir: &Path) -> Result<()> {
-    fs::create_dir_all(dir).with_context(|| {
-        format!(
-            "failed to create crash reports directory: {}",
-            dir.display()
-        )
-    })?;
-    let metadata = fs::symlink_metadata(dir).with_context(|| {
-        format!(
-            "failed to inspect crash reports directory: {}",
-            dir.display()
-        )
-    })?;
-    if !metadata.file_type().is_dir() {
-        return Err(anyhow!(
-            "crash reports path must be a real directory: {}",
-            dir.display()
-        ));
-    }
-    #[cfg(unix)]
+    #[cfg(target_arch = "wasm32")]
     {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut permissions = metadata.permissions();
-        if permissions.mode() & 0o777 != 0o700 {
-            permissions.set_mode(0o700);
-            fs::set_permissions(dir, permissions).with_context(|| {
-                format!(
-                    "failed to restrict crash reports directory permissions: {}",
-                    dir.display()
-                )
-            })?;
-        }
+        ensure_browser_report_path(dir)?;
+        browser_storage()?;
+        return Ok(());
     }
-    Ok(())
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        fs::create_dir_all(dir).with_context(|| {
+            format!(
+                "failed to create crash reports directory: {}",
+                dir.display()
+            )
+        })?;
+        let metadata = fs::symlink_metadata(dir).with_context(|| {
+            format!(
+                "failed to inspect crash reports directory: {}",
+                dir.display()
+            )
+        })?;
+        if !metadata.file_type().is_dir() {
+            return Err(anyhow!(
+                "crash reports path must be a real directory: {}",
+                dir.display()
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut permissions = metadata.permissions();
+            if permissions.mode() & 0o777 != 0o700 {
+                permissions.set_mode(0o700);
+                fs::set_permissions(dir, permissions).with_context(|| {
+                    format!(
+                        "failed to restrict crash reports directory permissions: {}",
+                        dir.display()
+                    )
+                })?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(unix)]
@@ -831,7 +1017,7 @@ pub(crate) fn sync_parent_dir(dir: &Path) -> Result<()> {
         .with_context(|| format!("failed to sync crash reports directory: {}", dir.display()))
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(target_arch = "wasm32")))]
 pub(crate) fn sync_parent_dir(_dir: &Path) -> Result<()> {
     Ok(())
 }
@@ -870,7 +1056,12 @@ fn base_data_dir() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("XDG_DATA_HOME or HOME environment variable not set"))
 }
 
-#[cfg(test)]
+#[cfg(target_arch = "wasm32")]
+fn base_data_dir() -> Result<PathBuf> {
+    Ok(PathBuf::from(BROWSER_REPORT_ROOT))
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use std::collections::HashMap;
 
@@ -1192,5 +1383,54 @@ mod tests {
         let report: CrashReport = serde_json::from_str(&json).unwrap();
 
         assert_eq!(report.breadcrumbs, vec![breadcrumb]);
+    }
+}
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod browser_tests {
+    use super::{BreadcrumbBuffer, CrashReporter, remove_crash_report};
+    use crate::{TracePhase, Tracer};
+    use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    #[wasm_bindgen_test]
+    fn reports_round_trip_through_origin_local_storage() {
+        let reporter = CrashReporter::new(
+            "com.kael.browser.diagnostics.test",
+            BreadcrumbBuffer::new(8),
+        )
+        .expect("browser crash reporter should initialize");
+        for path in reporter
+            .pending_reports()
+            .expect("browser pending reports should be enumerable")
+        {
+            remove_crash_report(&path).expect("stale browser report should be removable");
+        }
+
+        let error = anyhow::anyhow!("portable browser diagnostic");
+        let written = reporter
+            .capture_error(error.as_ref())
+            .expect("browser crash report should persist");
+        let pending = reporter
+            .pending_reports()
+            .expect("browser pending reports should be enumerable");
+        assert_eq!(pending, vec![written.clone()]);
+
+        remove_crash_report(&written).expect("browser report should be removable");
+        assert!(
+            reporter
+                .pending_reports()
+                .expect("browser pending reports should remain enumerable")
+                .is_empty()
+        );
+
+        let tracer = Tracer::new(8);
+        tracer.enable();
+        tracer.record("browser-frame", "render", TracePhase::Instant);
+        let trace = tracer
+            .export_to_chrome_json()
+            .expect("browser trace should export");
+        assert!(trace.contains("browser-frame"));
     }
 }

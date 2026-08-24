@@ -716,7 +716,18 @@ fn render_mode_button(
             }
         })
         .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            if event.keystroke.modifiers.modified() {
+                return;
+            }
             let key = event.keystroke.key.as_str();
+            if matches!(key, "enter" | "space") {
+                // Div synthesizes the radio click on key-up. Consuming the
+                // press here prevents Space from scrolling without applying
+                // the mode twice.
+                cx.stop_propagation();
+                window.prevent_default();
+                return;
+            }
             let target = match key {
                 "left" | "up" => Some((index + handles.len() - 1) % handles.len()),
                 "right" | "down" => Some((index + 1) % handles.len()),
@@ -728,14 +739,6 @@ fn render_mode_button(
                 window.focus(&handles[target]);
                 state.update(cx, |state, cx| {
                     state.set_mode(modes_for_index(target));
-                    cx.notify();
-                });
-                window.refresh();
-                cx.stop_propagation();
-                window.prevent_default();
-            } else if matches!(key, "enter" | "space") {
-                state.update(cx, |state, cx| {
-                    state.set_mode(mode);
                     cx.notify();
                 });
                 window.refresh();
@@ -1274,6 +1277,15 @@ mod window_tests {
             assert!(
                 focused_radio,
                 "the active HSL radio must own keyboard focus"
+            );
+        });
+
+        window.simulate_keystrokes("cmd-right");
+        window.update(|_, cx| {
+            assert_eq!(
+                state.read(cx).mode(),
+                super::ColorMode::HSL,
+                "modified arrows must remain available to the application"
             );
         });
 

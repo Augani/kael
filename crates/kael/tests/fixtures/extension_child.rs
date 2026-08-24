@@ -1,4 +1,6 @@
+#[cfg(any(unix, windows))]
 use anyhow::{Context as _, Result};
+#[cfg(any(unix, windows))]
 use kael::{
     EXTENSION_RPC_VERSION, ExtensionHandshake, ExtensionMessage, ExtensionRequest,
     ExtensionResponse, ExtensionTransport,
@@ -25,6 +27,7 @@ fn connect_transport() -> Result<ExtensionTransport> {
     Ok(ExtensionTransport::new(Box::new(transport)))
 }
 
+#[cfg(any(unix, windows))]
 fn main() -> Result<()> {
     let mut transport = connect_transport()?;
     match transport.recv_message()? {
@@ -71,3 +74,6 @@ fn main() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(not(any(unix, windows)))]
+fn main() {}

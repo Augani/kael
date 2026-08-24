@@ -1,7 +1,8 @@
 //! Shared element (hero) transition between views.
 
 use kael::{prelude::FluentBuilder as _, *};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use crate::animations::{durations, easings, lerp_pixels};
 
@@ -76,31 +77,18 @@ impl SharedElementState {
             return;
         }
 
-        self.schedule_tick(version, cx);
+        self.schedule_completion(version, cx);
     }
 
-    fn schedule_tick(&self, version: usize, cx: &mut Context<Self>) {
+    fn schedule_completion(&self, version: usize, cx: &mut Context<Self>) {
+        let duration = self.duration;
         cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(16))
-                .await;
+            cx.background_executor().timer(duration).await;
             _ = this.update(cx, |state, cx| {
                 if !state.is_transitioning || state.version != version {
                     return;
                 }
-
-                let elapsed = state
-                    .transition_started_at
-                    .map_or(state.duration, |started| started.elapsed());
-                state.progress =
-                    (elapsed.as_secs_f32() / state.duration.as_secs_f32()).clamp(0.0, 1.0);
-
-                if state.progress >= 1.0 {
-                    state.complete_transition(cx);
-                } else {
-                    state.schedule_tick(version, cx);
-                    cx.notify();
-                }
+                state.complete_transition(cx);
             });
         })
         .detach();
@@ -119,6 +107,11 @@ impl SharedElementState {
     }
 
     pub fn progress(&self) -> f32 {
+        if self.is_transitioning && !self.duration.is_zero() {
+            return self.transition_started_at.map_or(self.progress, |started| {
+                (started.elapsed().as_secs_f32() / self.duration.as_secs_f32()).clamp(0.0, 1.0)
+            });
+        }
         self.progress
     }
 

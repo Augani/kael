@@ -254,6 +254,14 @@ impl RenderOnce for ContextMenu {
             )
             .read(cx)
             .clone();
+        let menu_scroll_handle = window
+            .use_keyed_state(
+                ElementId::NamedChild(Box::new(menu_id.clone()), "scroll".into()),
+                cx,
+                |_, _| ScrollHandle::new(),
+            )
+            .read(cx)
+            .clone();
         let tracked_menu_focus = menu_focus_handle
             .clone()
             .tab_index(0)
@@ -302,6 +310,7 @@ impl RenderOnce for ContextMenu {
                         .min_w(min_width)
                         .max_h(CONTEXT_MENU_MAX_HEIGHT)
                         .overflow_y_scroll()
+                        .track_scroll(&menu_scroll_handle)
                         .bg(theme.tokens.popover)
                         .rounded(theme.tokens.radius_lg)
                         .shadow(theme.tokens.shadow_md.to_vec())
@@ -318,7 +327,9 @@ impl RenderOnce for ContextMenu {
                         .when(on_close_handler.is_some(), |this| {
                             let on_close = on_close_handler.clone().unwrap();
                             this.on_key_down(move |event: &KeyDownEvent, window, cx| {
-                                if event.keystroke.key.as_str() == "escape" {
+                                if event.keystroke.key.as_str() == "escape"
+                                    && !event.keystroke.modifiers.modified()
+                                {
                                     on_close(window, cx);
                                     cx.stop_propagation();
                                     window.prevent_default();
@@ -405,9 +416,19 @@ impl RenderOnce for ContextMenu {
                                             let on_close = on_close.clone();
                                             let handles_for_key = item_focus_handles.clone();
                                             let indices_for_key = interactive_indices.clone();
+                                            let scroll_for_key = menu_scroll_handle.clone();
                                             this.on_key_down(
                                                 move |event: &KeyDownEvent, window, cx| {
+                                                    if event.keystroke.modifiers.modified() {
+                                                        return;
+                                                    }
                                                     let key = event.keystroke.key.as_str();
+                                                    if matches!(key, "enter" | "space") {
+                                                        // Div emits the menu-item click on key-up.
+                                                        cx.stop_propagation();
+                                                        window.prevent_default();
+                                                        return;
+                                                    }
                                                     let current = indices_for_key
                                                         .iter()
                                                         .position(|candidate| {
@@ -437,11 +458,16 @@ impl RenderOnce for ContextMenu {
                                                         _ => None,
                                                     };
                                                     if let Some(target) = target {
+                                                        scroll_for_key.scroll_to_item(
+                                                            indices_for_key[target],
+                                                        );
                                                         window.focus(
                                                             &handles_for_key
                                                                 [indices_for_key[target]],
                                                         );
+                                                        window.refresh();
                                                         cx.stop_propagation();
+                                                        window.prevent_default();
                                                     } else if key == "escape" {
                                                         if let Some(on_close) = &on_close {
                                                             on_close(window, cx);
@@ -793,6 +819,12 @@ mod tests {
         );
 
         // Down must skip the disabled item.
+        window.simulate_keystrokes("cmd-down");
+        assert_eq!(
+            window.update(focused_label).as_deref(),
+            Some("First"),
+            "modified arrows must remain available to the host"
+        );
         window.simulate_keystrokes("down");
         assert_eq!(
             window.update(focused_label).as_deref(),
@@ -865,6 +897,64 @@ mod tests {
                 menu_bounds.y + menu_bounds.height <= (f32::from(viewport.height) + 0.5) as f64,
                 "menu must stay inside the bottom viewport edge: {:?} vs {viewport:?}",
                 menu_bounds
+            );
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn keyboard_focus_scrolls_long_menu_items_into_view() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let (_host, window) = cx.add_window_view(|_, _| {
+            struct LongMenuHost;
+            impl Render for LongMenuHost {
+                fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                    ContextMenu::new(point(px(12.0), px(16.0)))
+                        .id("long-context-menu")
+                        .items(
+                            (0..24)
+                                .map(|index| {
+                                    ContextMenuItem::new(
+                                        format!("item-{index}"),
+                                        format!("Item {index}"),
+                                    )
+                                    .on_click(|_, _| {})
+                                })
+                                .collect(),
+                        )
+                        .into_any_element()
+                }
+            }
+            LongMenuHost
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+
+        window.simulate_keystrokes("end");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            let menu = tree
+                .nodes
+                .values()
+                .find(|node| node.role == AccessibilityRole::Menu)
+                .and_then(|node| node.bounds.as_ref())
+                .expect("menu bounds");
+            let item = tree
+                .nodes
+                .values()
+                .find(|node| {
+                    node.role == AccessibilityRole::MenuItem
+                        && node.label.as_deref() == Some("Item 23")
+                })
+                .expect("last item");
+            assert!(item.states.contains(AccessibilityState::FOCUSED));
+            let item = item.bounds.as_ref().expect("last item bounds");
+            assert!(
+                item.y >= menu.y - 0.5 && item.y + item.height <= menu.y + menu.height + 0.5,
+                "focused item must be inside the scroll viewport: {item:?} vs {menu:?}"
             );
         });
     }

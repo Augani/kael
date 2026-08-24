@@ -1,15 +1,18 @@
 //! Extension host runtime managing the full lifecycle of extensions.
 #![allow(missing_docs)]
 
+#[cfg(any(unix, windows))]
+use std::time::Duration;
 use std::{
     collections::{HashMap, VecDeque},
     io::Read as _,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use anyhow::{Context as _, Result, anyhow};
 
+#[cfg(any(unix, windows))]
+use crate::process_model::{ProcessInfo, RestartPolicy};
 use crate::{
     extension_rpc::{
         EXTENSION_RPC_VERSION, ExtensionHandshake, ExtensionMessage, ExtensionNotification,
@@ -20,7 +23,7 @@ use crate::{
         ExecutionModel, ExtensionHost, ExtensionInfo, HOST_API_VERSION, PluginManifest,
         is_api_compatible,
     },
-    process_model::{ProcessId, ProcessInfo, RestartPolicy},
+    process_model::ProcessId,
     security::{PermissionBroker, PermissionResult},
     supervisor::ProcessSupervisor,
 };
@@ -73,6 +76,7 @@ pub struct ExtensionHostRuntime {
     supervisor: ProcessSupervisor,
     extensions_dir: PathBuf,
     transports: HashMap<String, ExtensionTransport>,
+    #[cfg(any(unix, windows))]
     app_id: String,
     next_request_id: u64,
 }
@@ -150,11 +154,14 @@ impl Transport for WasmExtensionTransport {
 impl ExtensionHostRuntime {
     /// Creates a new extension host runtime.
     pub fn new(extensions_dir: impl AsRef<Path>, app_id: impl Into<String>) -> Self {
+        #[cfg(not(any(unix, windows)))]
+        let _ = app_id.into();
         Self {
             host: ExtensionHost::new(),
             supervisor: ProcessSupervisor::new(),
             extensions_dir: extensions_dir.as_ref().to_path_buf(),
             transports: HashMap::new(),
+            #[cfg(any(unix, windows))]
             app_id: app_id.into(),
             next_request_id: 1,
         }
@@ -555,12 +562,12 @@ impl ExtensionHostRuntime {
             let (mut transport, timeout_control) = {
                 use crate::ipc_transport::UnixDomainSocketTransport;
 
-                let deadline = std::time::Instant::now() + EXTENSION_BOOTSTRAP_TIMEOUT;
+                let deadline = web_time::Instant::now() + EXTENSION_BOOTSTRAP_TIMEOUT;
                 let stream = loop {
                     match listener.accept() {
                         Ok((stream, _)) => break stream,
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            if std::time::Instant::now() >= deadline {
+                            if web_time::Instant::now() >= deadline {
                                 return Err(anyhow!(
                                     "timed out waiting for extension {id} to connect"
                                 ));
@@ -1141,7 +1148,7 @@ mod tests {
         .unwrap();
         runtime.load(manifest).unwrap();
 
-        let started = std::time::Instant::now();
+        let started = web_time::Instant::now();
         assert!(runtime.activate("com.test.exits").is_err());
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(!runtime.get("com.test.exits").unwrap().is_active);

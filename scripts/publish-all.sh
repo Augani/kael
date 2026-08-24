@@ -26,8 +26,10 @@ crates=(
   kael_render_graph
   kael_release
   kael_pdf
+  kael_office
   kael_notifications
   kael_media_sys
+  kael_markdown
   kael_icons
   kael_i18n
   kael_gpu_budget
@@ -53,18 +55,56 @@ crates=(
 )
 
 package_version="$(cargo pkgid -p kael | sed -E 's/.*[@#]//')"
+package_minor_version="${package_version%.*}"
+dist_version="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)"/\1/p' kael.dist.toml | head -n 1)"
+scaffold_version="$(sed -nE 's/^const KAEL_VERSION: &str = "([^"]+)";/\1/p' xtask/src/scaffold.rs | head -n 1)"
+
+if [[ "$dist_version" != "$package_version" ]]; then
+  echo "error: kael.dist.toml version $dist_version does not match workspace $package_version" >&2
+  exit 1
+fi
+if [[ "$scaffold_version" != "$package_minor_version" ]]; then
+  echo "error: scaffold dependency version $scaffold_version does not match workspace minor $package_minor_version" >&2
+  exit 1
+fi
+if ! grep -Eq "^## \\[$package_version\\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md; then
+  echo "error: CHANGELOG.md has no dated [$package_version] release section" >&2
+  exit 1
+fi
 
 preflight_crate() {
   local crate="$1"
+  local crate_version
   local listing
+  local unapproved_examples
+  crate_version="$(cargo pkgid -p "$crate" | sed -E 's/.*[@#]//')"
+  if [[ "$crate_version" != "$package_version" ]]; then
+    echo "error: $crate version $crate_version does not match workspace $package_version" >&2
+    return 1
+  fi
   listing="$(cargo package --locked --allow-dirty -p "$crate" --list)"
 
   if ! grep -qx 'LICENSE-APACHE' <<<"$listing"; then
     echo "error: $crate would publish without its Apache-2.0 license text" >&2
     return 1
   fi
-  if grep -Eq '(^|/)(examples?|benches?)/' <<<"$listing"; then
-    echo "error: $crate would publish an example or benchmark" >&2
+  unapproved_examples="$(grep -E '(^|/)(examples?|benches?)/' <<<"$listing" || true)"
+  if [[ "$crate" == "kael_net" ]]; then
+    for required_example in \
+      examples/browser_websocket_smoke.rs \
+      examples/websocket_echo_server.rs; do
+      if ! grep -qx "$required_example" <<<"$listing"; then
+        echo "error: $crate would publish without declared example $required_example" >&2
+        return 1
+      fi
+    done
+    unapproved_examples="$(grep -Ev \
+      '^(examples/browser_websocket_smoke\.rs|examples/websocket_echo_server\.rs)$' \
+      <<<"$unapproved_examples" || true)"
+  fi
+  if [[ -n "$unapproved_examples" ]]; then
+    echo "error: $crate would publish an unapproved example or benchmark:" >&2
+    printf '%s\n' "$unapproved_examples" >&2
     return 1
   fi
 
@@ -94,6 +134,37 @@ preflight_crate() {
     return 1
   fi
   echo "package contents clean: $crate ($(wc -l <<<"$listing" | tr -d ' ') files)"
+}
+
+verify_package_archives() {
+  local crate
+  local archive
+  local archive_bytes
+  local -a package_args=()
+  local max_crate_bytes=10485760
+
+  # Package the complete selected set at once. Cargo can then resolve workspace
+  # dependencies that intentionally do not exist on crates.io until this release
+  # is uploaded, and verifies each extracted archive rather than only compiling
+  # the source checkout.
+  for crate in "${crates[@]}"; do
+    package_args+=(--package "$crate")
+  done
+  cargo package --locked --allow-dirty "${package_args[@]}"
+
+  for crate in "${crates[@]}"; do
+    archive="target/package/${crate}-${package_version}.crate"
+    if [[ ! -s "$archive" ]]; then
+      echo "error: cargo package did not create $archive" >&2
+      return 1
+    fi
+    archive_bytes="$(wc -c < "$archive" | tr -d ' ')"
+    if ((archive_bytes > max_crate_bytes)); then
+      echo "error: $archive exceeds the crates.io 10 MiB archive limit: $archive_bytes bytes" >&2
+      return 1
+    fi
+    echo "package archive verified: $crate ($archive_bytes bytes)"
+  done
 }
 
 registry_has_version() {
@@ -159,6 +230,7 @@ for crate in "${crates[@]}"; do
 done
 
 if [[ "$mode" == "preflight" ]]; then
+  verify_package_archives
   echo "Preflight complete. No crates were uploaded."
 else
   echo "Published all Kael $package_version crates."

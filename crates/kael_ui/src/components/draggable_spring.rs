@@ -1,9 +1,7 @@
 use kael::{prelude::FluentBuilder as _, *};
-use std::time::Duration;
 
+use crate::animations::DisplayFrameClock;
 use crate::spring::{SpringPoint, SpringPreset};
-
-const FRAME_INTERVAL: Duration = Duration::from_millis(8);
 
 pub struct DraggableSpringState {
     offset: SpringPoint,
@@ -14,6 +12,7 @@ pub struct DraggableSpringState {
     drag_origin: Point<f32>,
     grab_offset: Point<f32>,
     release_velocity: Point<f32>,
+    frame_clock: DisplayFrameClock,
 }
 
 impl DraggableSpringState {
@@ -27,6 +26,7 @@ impl DraggableSpringState {
             drag_origin: Point::default(),
             grab_offset: Point::default(),
             release_velocity: Point::default(),
+            frame_clock: DisplayFrameClock::default(),
         }
     }
 
@@ -51,6 +51,7 @@ impl DraggableSpringState {
     }
 
     fn nudge(&mut self, dx: f32, dy: f32, cx: &mut Context<Self>) {
+        self.cancel_animation();
         self.offset.stop();
         let (x, y) = self.offset.value();
         self.offset.set_value(x + dx, y + dy);
@@ -58,6 +59,7 @@ impl DraggableSpringState {
     }
 
     fn reset_position(&mut self, cx: &mut Context<Self>) {
+        self.cancel_animation();
         self.offset.stop();
         self.offset.set_value(0.0, 0.0);
         cx.notify();
@@ -71,6 +73,7 @@ impl DraggableSpringState {
     ) {
         self.pan.reset();
         self.pan.on_event(&PlatformInput::MouseDown(event.clone()));
+        self.cancel_animation();
         self.offset.stop();
         self.is_dragging = true;
         self.release_velocity = Point::default();
@@ -124,7 +127,7 @@ impl DraggableSpringState {
         if cx.reduce_motion() {
             self.offset.stop();
             self.offset.set_value(target.x, target.y);
-            self.animating = false;
+            self.cancel_animation();
             cx.notify();
             return;
         }
@@ -162,34 +165,51 @@ impl DraggableSpringState {
             return;
         }
         self.animating = true;
-        self.schedule_tick(cx);
+        self.frame_clock.restart();
+        cx.notify();
     }
 
-    fn schedule_tick(&self, cx: &mut Context<Self>) {
-        cx.spawn(async |this, cx| {
-            cx.background_executor().timer(FRAME_INTERVAL).await;
+    fn cancel_animation(&mut self) {
+        self.animating = false;
+        self.frame_clock.stop();
+    }
+}
 
-            _ = this.update(cx, |state, cx| {
-                if !state.animating {
-                    return;
-                }
+fn schedule_spring_frame(state: &Entity<DraggableSpringState>, window: &Window, cx: &mut App) {
+    let generation = state.update(cx, |state, _| {
+        state
+            .animating
+            .then(|| state.frame_clock.try_arm())
+            .flatten()
+    });
+    let Some(generation) = generation else {
+        return;
+    };
 
-                if state.is_dragging {
-                    state.animating = false;
-                    return;
-                }
-
-                let moving = state.offset.tick_with_real_dt();
-                if moving {
-                    state.schedule_tick(cx);
-                } else {
-                    state.animating = false;
-                }
+    let state = state.downgrade();
+    window.on_next_frame(move |window, cx| {
+        _ = state.update(cx, |state, cx| {
+            let Some(dt) = state.frame_clock.sample(generation) else {
+                return;
+            };
+            if !state.animating || state.is_dragging {
+                state.cancel_animation();
+                return;
+            }
+            if !window.animations_enabled() {
+                let target = state.offset.target();
+                state.offset.set_value(target.0, target.1);
+                state.cancel_animation();
                 cx.notify();
-            });
-        })
-        .detach();
-    }
+                return;
+            }
+
+            if !state.offset.tick(dt) {
+                state.cancel_animation();
+            }
+            cx.notify();
+        });
+    });
 }
 
 impl Render for DraggableSpringState {
@@ -274,6 +294,7 @@ impl ParentElement for DraggableSpring {
 impl RenderOnce for DraggableSpring {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let user_style = self.style;
+        schedule_spring_frame(&self.state, window, cx);
         let state = self.state.read(cx);
         let offset = state.offset();
         let accessibility_value = format!("x {:.0}, y {:.0}", offset.x, offset.y);

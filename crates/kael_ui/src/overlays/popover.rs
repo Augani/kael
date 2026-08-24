@@ -85,7 +85,7 @@ impl Render for PopoverContent {
                 cx.notify();
 
                 cx.spawn_in(window, async move |entity, cx| {
-                    smol::Timer::after(Duration::from_millis(120)).await;
+                    Timer::after(Duration::from_millis(120)).await;
                     let _ = entity.update(cx, |_, cx| {
                         cx.emit(DismissEvent);
                     });

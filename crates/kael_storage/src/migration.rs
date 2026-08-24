@@ -1,5 +1,6 @@
 //! Migration types and ordering helpers.
 
+#[cfg(any(not(all(target_arch = "wasm32", target_os = "unknown")), test))]
 use crate::{Error, Result};
 
 /// A database migration step.
@@ -15,6 +16,7 @@ pub struct Migration {
     pub down: Option<&'static str>,
 }
 
+#[cfg(any(not(all(target_arch = "wasm32", target_os = "unknown")), test))]
 pub(crate) fn validate_migrations(migrations: &[Migration]) -> Result<()> {
     let mut previous_version = None;
 
@@ -38,6 +40,7 @@ pub(crate) fn validate_migrations(migrations: &[Migration]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(not(all(target_arch = "wasm32", target_os = "unknown")), test))]
 pub(crate) fn pending_migrations(
     current_version: u32,
     migrations: &[Migration],

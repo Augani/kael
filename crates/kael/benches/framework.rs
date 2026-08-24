@@ -1,8 +1,8 @@
 use kael::{
     BenchmarkHarness, BenchmarkMetric, BenchmarkResult, BenchmarkScenario, ColdStartCollector,
-    HeadlessBackend, HeadlessRenderer, InputLatencyCollector, LongSessionCollector,
-    MemoryCollector, MetricCollector, SmoothnessCollector, check_regressions, compare_results,
-    load_results_from_json,
+    HeadlessBackend, HeadlessRenderer, HeadlessSceneState, InputLatencyCollector,
+    LongSessionCollector, MemoryCollector, MetricCollector, SmoothnessCollector, check_regressions,
+    compare_results, load_results_from_json,
 };
 use std::{hint::black_box, path::Path};
 
@@ -17,6 +17,17 @@ const FRAME_HEIGHT: u32 = 288;
 
 fn frame_quads(scenario: BenchmarkScenario) -> usize {
     scenario.complexity_score() as usize
+}
+
+fn interactive_scene_state(
+    frame_index: usize,
+    complexity: usize,
+    scroll_per_frame: f32,
+) -> HeadlessSceneState {
+    HeadlessSceneState {
+        scroll_offset: frame_index as f32 * scroll_per_frame,
+        interaction_index: Some(frame_index.wrapping_mul(37) % complexity.max(1)),
+    }
 }
 
 fn main() {
@@ -101,9 +112,13 @@ fn run_memory_benchmark(harness: &mut BenchmarkHarness, renderer: &mut HeadlessR
         "kael",
         &mut collectors,
         |_collectors| {
-            for _ in 0..30 {
+            let complexity = frame_quads(BenchmarkScenario::Workspace);
+            for frame_index in 0..30 {
                 let frame = renderer
-                    .render_frame(frame_quads(BenchmarkScenario::Workspace))
+                    .render_frame_with_state(
+                        complexity,
+                        interactive_scene_state(frame_index, complexity, 2.0),
+                    )
                     .expect("memory-scenario render failed");
                 black_box(frame.checksum);
             }
@@ -128,10 +143,14 @@ fn run_input_latency_benchmark(harness: &mut BenchmarkHarness, renderer: &mut He
                 .as_any_mut()
                 .downcast_mut::<InputLatencyCollector>()
                 .unwrap();
-            for _ in 0..60 {
+            let complexity = frame_quads(BenchmarkScenario::MediaControl);
+            for frame_index in 0..60 {
                 latency.record_input();
                 let frame = renderer
-                    .render_frame(frame_quads(BenchmarkScenario::MediaControl))
+                    .render_frame_with_state(
+                        complexity,
+                        interactive_scene_state(frame_index, complexity, 0.75),
+                    )
                     .expect("input-latency render failed");
                 black_box(frame.checksum);
                 latency.record_frame_presented();
@@ -160,9 +179,16 @@ fn run_scroll_smoothness_benchmark(
                 .as_any_mut()
                 .downcast_mut::<SmoothnessCollector>()
                 .unwrap();
-            for _ in 0..120 {
+            let complexity = frame_quads(BenchmarkScenario::Messaging);
+            for frame_index in 0..120 {
                 let frame = renderer
-                    .render_frame(frame_quads(BenchmarkScenario::Messaging))
+                    .render_frame_with_state(
+                        complexity,
+                        HeadlessSceneState {
+                            scroll_offset: frame_index as f32 * 5.25,
+                            interaction_index: None,
+                        },
+                    )
                     .expect("scroll-smoothness render failed");
                 black_box(frame.checksum);
                 smoothness.record_frame();
@@ -191,13 +217,32 @@ fn run_resize_smoothness_benchmark(
                 .as_any_mut()
                 .downcast_mut::<SmoothnessCollector>()
                 .unwrap();
-            for _ in 0..90 {
+            const RESIZE_SEQUENCE: [(u32, u32); 6] = [
+                (512, 288),
+                (576, 324),
+                (640, 360),
+                (704, 396),
+                (640, 360),
+                (576, 324),
+            ];
+            let complexity = frame_quads(BenchmarkScenario::Workspace);
+            for frame_index in 0..90 {
+                let (width, height) = RESIZE_SEQUENCE[frame_index % RESIZE_SEQUENCE.len()];
+                renderer
+                    .resize(width, height)
+                    .expect("resize-scenario dimensions must be valid");
                 let frame = renderer
-                    .render_frame(frame_quads(BenchmarkScenario::Workspace))
+                    .render_frame_with_state(
+                        complexity,
+                        interactive_scene_state(frame_index, complexity, 1.0),
+                    )
                     .expect("resize-smoothness render failed");
                 black_box(frame.checksum);
                 smoothness.record_frame();
             }
+            renderer
+                .resize(FRAME_WIDTH, FRAME_HEIGHT)
+                .expect("default benchmark dimensions must be valid");
         },
     );
 
@@ -219,9 +264,13 @@ fn run_long_session_benchmark(harness: &mut BenchmarkHarness, renderer: &mut Hea
                 .as_any_mut()
                 .downcast_mut::<LongSessionCollector>()
                 .unwrap();
-            for _ in 0..50 {
+            let complexity = frame_quads(BenchmarkScenario::MediaControl);
+            for frame_index in 0..50 {
                 let frame = renderer
-                    .render_frame(frame_quads(BenchmarkScenario::MediaControl))
+                    .render_frame_with_state(
+                        complexity,
+                        interactive_scene_state(frame_index, complexity, 1.5),
+                    )
                     .expect("long-session render failed");
                 black_box(frame.checksum);
                 session.sample();
@@ -317,8 +366,13 @@ fn compare_against_baseline(results: &[BenchmarkResult], baseline_path: &str) {
         );
         for reg in &regressions {
             println!(
-                "  {:?} / {:?}: {:.2}% ({:.2} → {:.2} {})",
-                reg.scenario, reg.metric, reg.percent_change, reg.baseline, reg.candidate, reg.unit
+                "  {scenario:?} / {metric:?}: {percent_change:.2}% ({baseline:.2} → {candidate:.2} {unit})",
+                scenario = reg.scenario,
+                metric = reg.metric,
+                percent_change = reg.percent_change,
+                baseline = reg.baseline,
+                candidate = reg.candidate,
+                unit = reg.unit,
             );
         }
         std::process::exit(1);

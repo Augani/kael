@@ -5,13 +5,14 @@ use crate::{
 use collections::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use stacksafe::{StackSafe, stacksafe};
-use std::{fmt::Debug, mem, ops::Range, time::Instant};
+use std::{fmt::Debug, mem, ops::Range};
 use taffy::{
     TaffyTree,
     geometry::{Point as TaffyPoint, Rect as TaffyRect, Size as TaffySize},
     style::AvailableSpace as TaffyAvailableSpace,
     tree::NodeId,
 };
+use web_time::Instant;
 
 type NodeMeasureFn = StackSafe<
     Box<

@@ -1,7 +1,5 @@
-use std::{
-    collections::VecDeque,
-    time::{Duration, Instant},
-};
+use std::{collections::VecDeque, time::Duration};
+use web_time::Instant;
 
 use crate::{
     MagnifyEvent, Modifiers, MouseButton, Pixels, PlatformInput, Point, ScrollDelta,

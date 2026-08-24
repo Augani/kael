@@ -27,7 +27,7 @@ doctest = true
 [dependencies.derive_refineable]
 path = "../derive_refineable"
 package = "kael_derive_refineable"
-version = "0.3.1"
+version = "0.4.0"
 
 [dev-dependencies.serde]
 workspace = true

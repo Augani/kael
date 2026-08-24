@@ -351,6 +351,13 @@ impl WindowTextSystem {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn clear_browser_font_caches(&self) {
+        self.line_layout_cache.clear();
+        self.text_system.font_metrics.write().clear();
+        self.text_system.raster_bounds.write().clear();
+    }
+
     pub(crate) fn layout_index(&self) -> LineLayoutIndex {
         self.line_layout_cache.layout_index()
     }

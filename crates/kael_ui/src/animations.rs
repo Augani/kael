@@ -66,6 +66,75 @@
 use kael::*;
 use smallvec::SmallVec;
 use std::time::Duration;
+use web_time::Instant;
+
+const MIN_DISPLAY_FRAME_DT: f32 = 1.0 / 1_000.0;
+const MAX_DISPLAY_FRAME_DT: f32 = 1.0 / 20.0;
+
+/// A small, refresh-rate-independent clock for custom frame-driven effects.
+///
+/// Pair [`DisplayFrameClock::try_arm`] with [`Window::on_next_frame`], then pass
+/// the returned generation to [`DisplayFrameClock::sample`]. The generation
+/// makes callbacks from a stopped or restarted effect harmless, while the
+/// scheduled bit prevents duplicate callbacks when a view renders more than
+/// once before the display presents. Delta time is measured with a browser-safe
+/// monotonic clock and clamped so a suspended tab or stalled window cannot feed
+/// an unstable step into a simulation.
+#[derive(Clone, Debug, Default)]
+pub struct DisplayFrameClock {
+    generation: u64,
+    scheduled: bool,
+    last_sample: Option<Instant>,
+}
+
+impl DisplayFrameClock {
+    /// Starts or restarts the clock and invalidates already queued callbacks.
+    pub fn restart(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.scheduled = false;
+        self.last_sample = Some(Instant::now());
+    }
+
+    /// Stops the clock and invalidates already queued callbacks.
+    pub fn stop(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.scheduled = false;
+        self.last_sample = None;
+    }
+
+    /// Arms at most one callback for the current generation.
+    pub fn try_arm(&mut self) -> Option<u64> {
+        if self.scheduled {
+            return None;
+        }
+        self.scheduled = true;
+        Some(self.generation)
+    }
+
+    /// Samples a currently armed frame, returning its refresh-independent delta.
+    ///
+    /// Stale generations return `None` without disturbing a newer callback.
+    pub fn sample(&mut self, generation: u64) -> Option<f32> {
+        if generation != self.generation || !self.scheduled {
+            return None;
+        }
+
+        self.scheduled = false;
+        let now = Instant::now();
+        let dt = self
+            .last_sample
+            .replace(now)
+            .map_or(1.0 / 60.0, |previous| {
+                now.duration_since(previous).as_secs_f32()
+            });
+        Some(dt.clamp(MIN_DISPLAY_FRAME_DT, MAX_DISPLAY_FRAME_DT))
+    }
+
+    /// Returns whether a callback is already queued for this generation.
+    pub fn is_armed(&self) -> bool {
+        self.scheduled
+    }
+}
 
 /// Returns a stagger delay without overflowing for unusually large item counts.
 pub(crate) fn stagger_delay(stagger: Duration, index: usize) -> Duration {
@@ -683,7 +752,7 @@ pub fn lerp_shadows(from: &[BoxShadow], to: &[BoxShadow], t: f32) -> SmallVec<[B
 
 #[cfg(test)]
 mod easing_delegate_tests {
-    use super::{delayed_animation_progress, easings, stagger_delay};
+    use super::{DisplayFrameClock, delayed_animation_progress, easings, stagger_delay};
     use kael::Easing;
     use std::time::Duration;
 
@@ -754,5 +823,28 @@ mod easing_delegate_tests {
             Duration::from_millis(150)
         );
         assert_eq!(stagger_delay(Duration::MAX, usize::MAX), Duration::MAX);
+    }
+
+    #[test]
+    fn display_frame_clock_coalesces_and_rejects_stale_callbacks() {
+        let mut clock = DisplayFrameClock::default();
+        clock.restart();
+        let stale_generation = clock.try_arm().expect("first frame should arm");
+        assert!(clock.is_armed());
+        assert_eq!(clock.try_arm(), None, "duplicate frame should coalesce");
+
+        clock.restart();
+        let current_generation = clock.try_arm().expect("restarted frame should arm");
+        assert_eq!(clock.sample(stale_generation), None);
+        assert!(
+            clock.is_armed(),
+            "stale callback must not disarm current frame"
+        );
+
+        let dt = clock
+            .sample(current_generation)
+            .expect("current callback should sample");
+        assert!((super::MIN_DISPLAY_FRAME_DT..=super::MAX_DISPLAY_FRAME_DT).contains(&dt));
+        assert!(!clock.is_armed());
     }
 }

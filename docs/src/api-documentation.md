@@ -21,7 +21,7 @@ Use rustdoc while implementing it.
 | Storage and migrations | [`kael_storage`](https://docs.rs/kael_storage) |
 | HTTP and connected application patterns | [`kael_http_client`](https://docs.rs/kael_http_client) and [`kael_net`](https://docs.rs/kael_net) |
 | Diagnostics and crash data | [`kael_diagnostics`](https://docs.rs/kael_diagnostics) |
-| Documents, PDF, and sharing | [`kael_document`](https://docs.rs/kael_document), [`kael_pdf`](https://docs.rs/kael_pdf), and [`kael_share`](https://docs.rs/kael_share) |
+| Documents, Office/PDF bytes, and sharing | [`kael_document`](https://docs.rs/kael_document), [`kael_office`](https://docs.rs/kael_office), [`kael_pdf`](https://docs.rs/kael_pdf), and [`kael_share`](https://docs.rs/kael_share) |
 | Audio and media | [`kael_audio`](https://docs.rs/kael_audio), [`kael_media`](https://docs.rs/kael-media), and [`kael_media_engines`](https://docs.rs/kael_media_engines) |
 | Application engines | [`kael_engines`](https://docs.rs/kael_engines) |
 
@@ -64,6 +64,7 @@ The core crate keeps costly or specialized integrations optional:
 | `document` | Document lifecycle helpers |
 | `audio` | Audio integration |
 | `pdf` | PDF services |
+| `office` | Portable DOCX/XLSX/PPTX OPC parsing, extraction, and deterministic export |
 | `notifications-full` | Notification services |
 | `share` | Platform sharing workflows |
 | `screen-capture` | Screen-capture backend support |

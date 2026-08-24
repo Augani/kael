@@ -10,9 +10,9 @@ repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
 publish = true
-description = "Ready-made native components for building branded, resource-efficient Kael applications"
+description = "Ready-made components for branded, resource-efficient Kael desktop and WebAssembly applications"
 documentation = "https://docs.rs/kael_ui"
-keywords = ["kael", "ui", "gui", "components", "desktop"]
+keywords = ["kael", "ui", "gui", "components", "wasm"]
 categories = ["gui", "rendering"]
 exclude = [
     "assets/icons/**/*",
@@ -39,7 +39,8 @@ path = "src/lib.rs"
 
 [dependencies]
 # Core framework
-kael = { path = "../kael", version = "0.3.1", features = ["icons"] }
+kael = { path = "../kael", version = "0.4.0", default-features = false, features = ["icons"] }
+kael_engines = { path = "../kael_engines", version = "0.4.0" }
 smallvec.workspace = true
 once_cell = "1.19"
 
@@ -48,20 +49,51 @@ unicode-segmentation.workspace = true
 regex = "1.10"
 svgtypes = "0.15.3"
 
-# Async runtime
-smol.workspace = true
 futures.workspace = true
+web-time = "1.1"
 
 # QR code generation
 qrcode = { version = "0.14", default-features = false }
 
 # Rope data structure for editor
-ropey = "1.6"
+ropey = { version = "1.6", optional = true }
 
-# Syntax highlighting (tree-sitter based)
-tree-sitter = "0.25.10"
+# Markdown parsing (optional)
+pulldown-cmark = { version = "0.12", default-features = false, optional = true }
 
-# Language grammars (optional, behind feature flags)
+# HTML parsing (optional)
+html5ever = { version = "0.36", optional = true }
+markup5ever_rcdom = { version = "0.36", optional = true }
+
+[features]
+default = ["native", "editor", "http"]
+native = ["kael/font-kit", "kael/wayland", "kael/x11", "kael/windows-manifest"]
+browser = ["kael/browser"]
+game-input = ["kael/game-input"]
+screen-capture = ["kael/screen-capture"]
+editor = ["dep:ropey", "dep:tree-sitter"]
+http = ["kael/http-client"]
+media = ["kael/media"]
+markdown = ["pulldown-cmark"]
+html-render = ["html5ever", "markup5ever_rcdom"]
+audio = ["dep:rodio", "dep:kael_audio"]
+image-avif = ["kael/image-avif"]
+image-exr = ["kael/image-exr"]
+editor-languages = [
+    "editor",
+    "tree-sitter-rust", "tree-sitter-javascript", "tree-sitter-typescript",
+    "tree-sitter-python", "tree-sitter-json", "tree-sitter-toml-ng",
+    "tree-sitter-md", "tree-sitter-go", "tree-sitter-c", "tree-sitter-cpp",
+    "tree-sitter-java", "tree-sitter-ruby", "tree-sitter-bash",
+    "tree-sitter-css", "tree-sitter-html", "tree-sitter-yaml",
+    "tree-sitter-lua", "tree-sitter-zig", "tree-sitter-scala",
+    "tree-sitter-php", "tree-sitter-ocaml",
+    "tree-sitter-sequel",
+]
+
+# Language grammars embed C parsers and remain native-only. Browser builds
+# keep the feature/API surface while using EditorSyntaxBackend::PlainText.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tree-sitter-rust = { version = "0.23", optional = true }
 tree-sitter-javascript = { version = "0.23", optional = true }
 tree-sitter-typescript = { version = "0.23", optional = true }
@@ -85,40 +117,58 @@ tree-sitter-php = { version = "0.24", optional = true }
 tree-sitter-ocaml = { version = "0.24", optional = true }
 tree-sitter-sequel = { version = "0.3", optional = true }
 
-# Markdown parsing (optional)
-pulldown-cmark = { version = "0.12", default-features = false, optional = true }
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.tree-sitter]
+version = "0.25.10"
+optional = true
 
-# HTML parsing (optional)
-html5ever = { version = "0.36", optional = true }
-markup5ever_rcdom = { version = "0.36", optional = true }
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.rodio]
+version = "0.19"
+optional = true
 
-# Audio playback (optional)
-rodio = { version = "0.19", optional = true }
+[target.'cfg(target_arch = "wasm32")'.dependencies.kael_audio]
+path = "../kael_audio"
+version = "0.4.0"
+default-features = false
+features = ["browser"]
+optional = true
 
-[features]
-default = ["http"]
-http = ["kael/http-client"]
-media = ["kael/media"]
-markdown = ["pulldown-cmark"]
-html-render = ["html5ever", "markup5ever_rcdom"]
-audio = ["rodio"]
-image-avif = ["kael/image-avif"]
-image-exr = ["kael/image-exr"]
-editor-languages = [
-    "tree-sitter-rust", "tree-sitter-javascript", "tree-sitter-typescript",
-    "tree-sitter-python", "tree-sitter-json", "tree-sitter-toml-ng",
-    "tree-sitter-md", "tree-sitter-go", "tree-sitter-c", "tree-sitter-cpp",
-    "tree-sitter-java", "tree-sitter-ruby", "tree-sitter-bash",
-    "tree-sitter-css", "tree-sitter-html", "tree-sitter-yaml",
-    "tree-sitter-lua", "tree-sitter-zig", "tree-sitter-scala",
-    "tree-sitter-php", "tree-sitter-ocaml",
-    "tree-sitter-sequel",
-]
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kael = { path = "../kael", version = "0.4.0", features = ["runtime_shaders", "test-support"] }
 
-[dev-dependencies]
-kael = { path = "../kael", version = "0.3.1", features = ["runtime_shaders", "test-support"] }
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+anyhow.workspace = true
+js-sys = "0.3"
+serde.workspace = true
+serde_json.workspace = true
+wasm-bindgen = "=0.2.122"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["DedicatedWorkerGlobalScope", "Document", "Element", "Window", "console"] }
 
 [[example]]
 name = "astryx_showcase"
 path = "examples/astryx_showcase.rs"
 required-features = ["media"]
+
+[[example]]
+name = "browser_smoke"
+path = "examples/browser_smoke.rs"
+required-features = ["browser"]
+
+[[example]]
+name = "browser_worker_smoke"
+path = "examples/browser_worker_smoke.rs"
+required-features = ["browser"]
+
+[[example]]
+name = "browser_capture_smoke"
+path = "examples/browser_capture_smoke.rs"
+required-features = ["browser", "screen-capture"]
+
+[[example]]
+name = "browser_game_input_smoke"
+path = "examples/browser_game_input_smoke.rs"
+required-features = ["browser", "game-input"]
+
+[[example]]
+name = "suite_scale_smoke"
+path = "examples/suite_scale_smoke.rs"

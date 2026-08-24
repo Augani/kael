@@ -9,7 +9,7 @@ use windows::Win32::{
     UI::{
         Controls::*,
         HiDpi::*,
-        Input::{Ime::*, KeyboardAndMouse::*},
+        Input::{Ime::*, KeyboardAndMouse::*, Pointer::*, *},
         WindowsAndMessaging::*,
     },
 };
@@ -60,6 +60,11 @@ impl WindowsWindowInner {
     ) -> LRESULT {
         let handled = match msg {
             WM_ACTIVATE => self.handle_activate_msg(wparam),
+            WM_KILLFOCUS => {
+                self.release_native_pointer_lock().log_err();
+                self.cancel_active_precision_pointers();
+                None
+            }
             WM_CREATE => self.handle_create_msg(handle),
             WM_MOVE => self.handle_move_msg(handle, lparam),
             WM_SIZE => self.handle_size_msg(wparam, lparam),
@@ -75,6 +80,13 @@ impl WindowsWindowInner {
             WM_CLOSE => self.handle_close_msg(),
             WM_DESTROY => self.handle_destroy_msg(handle),
             WM_MOUSEMOVE => self.handle_mouse_move_msg(handle, lparam, wparam),
+            WM_INPUT => self.handle_raw_pointer_input(lparam),
+            WM_POINTERDOWN
+            | WM_POINTERUPDATE
+            | WM_POINTERUP
+            | WM_POINTERENTER
+            | WM_POINTERLEAVE
+            | WM_POINTERCAPTURECHANGED => self.handle_precision_pointer_msg(handle, msg, wparam),
             WM_MOUSELEAVE | WM_NCMOUSELEAVE => self.handle_mouse_leave_msg(),
             WM_NCMOUSEMOVE => self.handle_nc_mouse_move_msg(handle, lparam),
             // Treat double click as a second single click, since we track the double clicks ourselves.
@@ -167,10 +179,14 @@ impl WindowsWindowInner {
                 }
             }
         }
-        if let Some(mut callback) = lock.callbacks.moved.take() {
-            drop(lock);
+        let mut callback = lock.callbacks.moved.take();
+        drop(lock);
+        if let Some(ref mut callback) = callback {
             callback();
-            self.state.borrow_mut().callbacks.moved = Some(callback);
+        }
+        self.state.borrow_mut().callbacks.moved = callback;
+        if let Err(error) = self.refresh_native_pointer_clip() {
+            self.fail_native_pointer_lock(error);
         }
         Some(0)
     }
@@ -201,6 +217,9 @@ impl WindowsWindowInner {
         // that on restore the swap chain can be recreated via `update_drawable_size_even_if_unchanged`.
         if wparam.0 == SIZE_MINIMIZED as usize {
             lock.restore_from_minimized = lock.callbacks.request_frame.take();
+            drop(lock);
+            self.release_native_pointer_lock().log_err();
+            self.frame_polling_windows.set(self.hwnd, false);
             return Some(0);
         }
 
@@ -210,14 +229,26 @@ impl WindowsWindowInner {
 
         let scale_factor = lock.scale_factor;
         let mut should_resize_renderer = false;
-        if lock.restore_from_minimized.is_some() {
+        let restored_from_minimized = lock.restore_from_minimized.is_some();
+        if restored_from_minimized {
             lock.callbacks.request_frame = lock.restore_from_minimized.take();
         } else {
             should_resize_renderer = true;
         }
+        let frame_polling_requested = lock.frame_polling_requested;
         drop(lock);
 
+        if restored_from_minimized
+            && frame_polling_requested
+            && unsafe { IsWindowVisible(self.hwnd).as_bool() }
+        {
+            self.frame_polling_windows.set(self.hwnd, true);
+        }
+
         self.handle_size_change(new_size, scale_factor, should_resize_renderer);
+        if let Err(error) = self.refresh_native_pointer_clip() {
+            self.fail_native_pointer_lock(error);
+        }
         Some(0)
     }
 
@@ -290,6 +321,8 @@ impl WindowsWindowInner {
     }
 
     fn handle_destroy_msg(&self, handle: HWND) -> Option<isize> {
+        self.release_native_pointer_lock().log_err();
+        self.frame_polling_windows.set(handle, false);
         let callback = {
             let mut lock = self.state.borrow_mut();
             lock.callbacks.close.take()
@@ -311,6 +344,13 @@ impl WindowsWindowInner {
 
     fn handle_mouse_move_msg(&self, handle: HWND, lparam: LPARAM, wparam: WPARAM) -> Option<isize> {
         self.start_tracking_mouse(handle, TME_LEAVE);
+
+        // `WM_INPUT` is the sole movement stream while locked. Suppress the
+        // clipped legacy coordinates so consumers never see duplicate zero or
+        // edge motion events.
+        if self.is_native_pointer_locked() {
+            return Some(0);
+        }
 
         let mut lock = self.state.borrow_mut();
         let Some(mut func) = lock.callbacks.input.take() else {
@@ -342,6 +382,225 @@ impl WindowsWindowInner {
         self.state.borrow_mut().callbacks.input = Some(func);
 
         if handled { Some(0) } else { Some(1) }
+    }
+
+    fn handle_raw_pointer_input(&self, lparam: LPARAM) -> Option<isize> {
+        if !self.is_native_pointer_locked() {
+            return None;
+        }
+
+        let hrawinput = HRAWINPUT(lparam.0 as *mut _);
+        let header_size = std::mem::size_of::<RAWINPUTHEADER>() as u32;
+        let mut required_size = 0u32;
+        let query_result =
+            unsafe { GetRawInputData(hrawinput, RID_INPUT, None, &mut required_size, header_size) };
+        if query_result == u32::MAX
+            || required_size < header_size
+            || required_size > std::mem::size_of::<RAWINPUT>() as u32
+        {
+            self.fail_native_pointer_lock(GameInputError::new(
+                GameInputErrorKind::Platform,
+                format!(
+                    "Windows returned invalid raw mouse input metadata (result {query_result}, size {required_size})"
+                ),
+            ));
+            return Some(0);
+        }
+
+        let mut raw_input = std::mem::MaybeUninit::<RAWINPUT>::zeroed();
+        let mut read_size = required_size;
+        let read_result = unsafe {
+            GetRawInputData(
+                hrawinput,
+                RID_INPUT,
+                Some(raw_input.as_mut_ptr().cast()),
+                &mut read_size,
+                header_size,
+            )
+        };
+        if read_result == u32::MAX || read_result != required_size || read_size != required_size {
+            self.fail_native_pointer_lock(GameInputError::new(
+                GameInputErrorKind::Platform,
+                format!(
+                    "Windows failed to read a complete raw mouse event (expected {required_size}, read {read_result}, reported {read_size})"
+                ),
+            ));
+            return Some(0);
+        }
+
+        let raw_input = unsafe { raw_input.assume_init() };
+        if raw_input.header.dwType != RIM_TYPEMOUSE.0 {
+            return Some(0);
+        }
+        let mouse = unsafe { raw_input.data.mouse };
+        let (movement_x, movement_y) = if mouse.usFlags.0 & MOUSE_MOVE_ABSOLUTE.0 != 0 {
+            let virtual_desktop = mouse.usFlags.0 & MOUSE_VIRTUAL_DESKTOP.0 != 0;
+            let (origin_x, origin_y, width, height) = unsafe {
+                if virtual_desktop {
+                    (
+                        GetSystemMetrics(SM_XVIRTUALSCREEN),
+                        GetSystemMetrics(SM_YVIRTUALSCREEN),
+                        GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                        GetSystemMetrics(SM_CYVIRTUALSCREEN),
+                    )
+                } else {
+                    (
+                        0,
+                        0,
+                        GetSystemMetrics(SM_CXSCREEN),
+                        GetSystemMetrics(SM_CYSCREEN),
+                    )
+                }
+            };
+            let absolute = (
+                origin_x.saturating_add(
+                    ((i64::from(mouse.lLastX).clamp(0, 65_535) * i64::from(width.max(1))) / 65_535)
+                        as i32,
+                ),
+                origin_y.saturating_add(
+                    ((i64::from(mouse.lLastY).clamp(0, 65_535) * i64::from(height.max(1))) / 65_535)
+                        as i32,
+                ),
+            );
+            let mut state = self.state.borrow_mut();
+            let movement = state
+                .pointer_lock_absolute_position
+                .map(|previous| {
+                    (
+                        absolute.0.saturating_sub(previous.0),
+                        absolute.1.saturating_sub(previous.1),
+                    )
+                })
+                .unwrap_or_default();
+            state.pointer_lock_absolute_position = Some(absolute);
+            movement
+        } else {
+            self.state.borrow_mut().pointer_lock_absolute_position = None;
+            (mouse.lLastX, mouse.lLastY)
+        };
+
+        if movement_x == 0 && movement_y == 0 {
+            return Some(0);
+        }
+
+        let (scale_factor, position, mut input_callback) = {
+            let mut state = self.state.borrow_mut();
+            let position = point(
+                px(state.logical_size.width.0 * 0.5),
+                px(state.logical_size.height.0 * 0.5),
+            );
+            (state.scale_factor, position, state.callbacks.input.take())
+        };
+        let Some(callback) = input_callback.as_mut() else {
+            return Some(0);
+        };
+
+        let pressed_button = unsafe {
+            if GetKeyState(VK_LBUTTON.0 as i32) < 0 {
+                Some(MouseButton::Left)
+            } else if GetKeyState(VK_RBUTTON.0 as i32) < 0 {
+                Some(MouseButton::Right)
+            } else if GetKeyState(VK_MBUTTON.0 as i32) < 0 {
+                Some(MouseButton::Middle)
+            } else {
+                None
+            }
+        };
+        let mouse_move = MouseMoveEvent {
+            position,
+            pressed_button,
+            modifiers: current_modifiers(),
+        };
+        let mut pointer = PointerInputEvent::from(&mouse_move);
+        pointer.movement = point(
+            px(movement_x as f32 / scale_factor),
+            px(movement_y as f32 / scale_factor),
+        );
+        let handled = !callback(PlatformInput::Pointer(pointer)).propagate;
+        self.state.borrow_mut().callbacks.input = input_callback;
+        Some(if handled { 0 } else { 1 })
+    }
+
+    fn handle_precision_pointer_msg(
+        &self,
+        handle: HWND,
+        message: u32,
+        wparam: WPARAM,
+    ) -> Option<isize> {
+        let pointer_id = wparam.loword() as u32;
+        let (scale_factor, previous) = {
+            let state = self.state.borrow();
+            (
+                state.scale_factor,
+                state.active_pointers.get(&pointer_id).cloned(),
+            )
+        };
+
+        let mut pointer = match read_precision_pointer(
+            handle,
+            message,
+            pointer_id,
+            scale_factor,
+            previous.as_ref(),
+        ) {
+            Ok(Some(pointer)) => pointer,
+            Ok(None) => return None,
+            Err(error) => {
+                // Capture loss can race device removal. Preserve an honest cancel
+                // using the last complete event rather than fabricating new analog data.
+                if message == WM_POINTERCAPTURECHANGED
+                    && let Some(mut previous) = previous
+                {
+                    previous.phase = PointerPhase::Cancel;
+                    previous.coalesced.clear();
+                    previous.movement = Point::default();
+                    previous
+                } else {
+                    log::warn!("failed to decode Windows pointer {pointer_id}: {error}");
+                    return Some(0);
+                }
+            }
+        };
+
+        let terminal = matches!(pointer.phase, PointerPhase::Up | PointerPhase::Cancel);
+        let mut callback = {
+            let mut state = self.state.borrow_mut();
+            if terminal {
+                state.active_pointers.remove(&pointer_id);
+            } else {
+                state.active_pointers.insert(pointer_id, pointer.clone());
+            }
+            state.callbacks.input.take()
+        };
+
+        if let Some(callback) = callback.as_mut() {
+            callback(PlatformInput::Pointer(pointer));
+        }
+        self.state.borrow_mut().callbacks.input = callback;
+        // Returning zero suppresses Win32's synthesized mouse stream. Kael's
+        // portable dispatcher already supplies exactly one legacy event for
+        // the primary touch/pen contact.
+        Some(0)
+    }
+
+    fn cancel_active_precision_pointers(&self) {
+        let (pointers, mut callback) = {
+            let mut state = self.state.borrow_mut();
+            (
+                std::mem::take(&mut state.active_pointers),
+                state.callbacks.input.take(),
+            )
+        };
+        if let Some(callback) = callback.as_mut() {
+            for (_, mut pointer) in pointers {
+                pointer.phase = PointerPhase::Cancel;
+                pointer.buttons = PointerButtons::empty();
+                pointer.movement = Point::default();
+                pointer.coalesced.clear();
+                callback(PlatformInput::Pointer(pointer));
+            }
+        }
+        self.state.borrow_mut().callbacks.input = callback;
     }
 
     fn handle_mouse_leave_msg(&self) -> Option<isize> {
@@ -768,6 +1027,9 @@ impl WindowsWindowInner {
 
     fn handle_activate_msg(self: &Rc<Self>, wparam: WPARAM) -> Option<isize> {
         let activated = wparam.loword() > 0;
+        if !activated {
+            self.release_native_pointer_lock().log_err();
+        }
         let this = self.clone();
 
         // Fire UIA focus changed event when the window gains focus.
@@ -819,6 +1081,12 @@ impl WindowsWindowInner {
         let is_maximized = lock.is_maximized();
         let new_scale_factor = new_dpi / USER_DEFAULT_SCREEN_DPI as f32;
         lock.scale_factor = new_scale_factor;
+        let monitor = unsafe { MonitorFromWindow(handle, MONITOR_DEFAULTTONEAREST) };
+        if !monitor.is_invalid()
+            && let Some(display) = WindowsDisplay::new_with_handle(monitor)
+        {
+            lock.display = display;
+        }
         lock.border_offset.update(handle).log_err();
         drop(lock);
 
@@ -849,6 +1117,10 @@ impl WindowsWindowInner {
             self.handle_size_change(device_size, new_scale_factor, true);
         }
 
+        if let Err(error) = self.refresh_native_pointer_clip() {
+            self.fail_native_pointer_lock(error);
+        }
+
         Some(0)
     }
 
@@ -868,17 +1140,16 @@ impl WindowsWindowInner {
         // are handled there.
         // So we only care about if monitor is disconnected.
         let previous_monitor = self.state.borrow().display;
-        if WindowsDisplay::is_connected(previous_monitor.handle) {
-            // we are fine, other display changed
-            return None;
-        }
+        let was_disconnected = !WindowsDisplay::is_connected(previous_monitor.handle);
         // display disconnected
         // in this case, the OS will move our window to another monitor, and minimize it.
         // we deminimize the window and query the monitor after moving
-        unsafe {
-            let _ = ShowWindow(handle, SW_SHOWNORMAL);
-        };
-        let new_monitor = unsafe { MonitorFromWindow(handle, MONITOR_DEFAULTTONULL) };
+        if was_disconnected {
+            unsafe {
+                let _ = ShowWindow(handle, SW_SHOWNORMAL);
+            };
+        }
+        let new_monitor = unsafe { MonitorFromWindow(handle, MONITOR_DEFAULTTONEAREST) };
         // all monitors disconnected
         if new_monitor.is_invalid() {
             log::error!("No monitor detected!");
@@ -889,7 +1160,7 @@ impl WindowsWindowInner {
             return None;
         };
         self.state.borrow_mut().display = new_display;
-        Some(0)
+        was_disconnected.then_some(0)
     }
 
     fn handle_hit_test_msg(
@@ -1147,7 +1418,9 @@ impl WindowsWindowInner {
             Some(HCURSOR(lparam.0 as _))
         };
 
-        if had_cursor != state.current_cursor.is_some() {
+        if state.pointer_lock.status() == PointerLockStatus::Locked {
+            unsafe { SetCursor(None) };
+        } else if had_cursor != state.current_cursor.is_some() {
             unsafe { SetCursor(state.current_cursor) };
         }
 
@@ -1155,6 +1428,10 @@ impl WindowsWindowInner {
     }
 
     fn handle_set_cursor(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
+        if self.is_native_pointer_locked() {
+            unsafe { SetCursor(None) };
+            return Some(1);
+        }
         if unsafe { !IsWindowEnabled(handle).as_bool() }
             || matches!(
                 lparam.loword() as u32,
@@ -1248,7 +1525,11 @@ impl WindowsWindowInner {
     }
 
     fn handle_window_visibility_changed(&self, handle: HWND, wparam: WPARAM) -> Option<isize> {
-        if wparam.0 == 1 {
+        let visible = wparam.0 == 1;
+        let frame_polling_requested = self.state.borrow().frame_polling_requested;
+        self.frame_polling_windows
+            .set(handle, visible && frame_polling_requested);
+        if visible {
             self.draw_window(handle, false);
         }
         None
@@ -1367,6 +1648,310 @@ fn translate_message(handle: HWND, wparam: WPARAM, lparam: LPARAM) {
         pt: POINT::default(),
     };
     unsafe { TranslateMessage(&msg).ok().log_err() };
+}
+
+const MAX_POINTER_HISTORY: u32 = 256;
+
+#[derive(Clone, Copy)]
+enum PrecisionPointerInfo {
+    Pen(POINTER_PEN_INFO),
+    Touch(POINTER_TOUCH_INFO),
+}
+
+impl PrecisionPointerInfo {
+    fn pointer_info(self) -> POINTER_INFO {
+        match self {
+            Self::Pen(info) => info.pointerInfo,
+            Self::Touch(info) => info.pointerInfo,
+        }
+    }
+
+    fn pointer_type(self) -> PointerType {
+        match self {
+            Self::Pen(_) => PointerType::Pen,
+            Self::Touch(_) => PointerType::Touch,
+        }
+    }
+
+    fn pressure(self) -> f32 {
+        match self {
+            Self::Pen(info) if info.penMask & PEN_MASK_PRESSURE != 0 => {
+                crate::native_pointer::normalize_unsigned(info.pressure, 1024)
+            }
+            Self::Touch(info) if info.touchMask & TOUCH_MASK_PRESSURE != 0 => {
+                crate::native_pointer::normalize_unsigned(info.pressure, 1024)
+            }
+            _ => 0.0,
+        }
+    }
+
+    fn tilt(self) -> (f32, f32) {
+        match self {
+            Self::Pen(info) => (
+                if info.penMask & PEN_MASK_TILT_X != 0 {
+                    (info.tiltX as f32).clamp(-90.0, 90.0)
+                } else {
+                    0.0
+                },
+                if info.penMask & PEN_MASK_TILT_Y != 0 {
+                    (info.tiltY as f32).clamp(-90.0, 90.0)
+                } else {
+                    0.0
+                },
+            ),
+            Self::Touch(_) => (0.0, 0.0),
+        }
+    }
+
+    fn twist(self) -> f32 {
+        match self {
+            Self::Pen(info) if info.penMask & PEN_MASK_ROTATION != 0 => {
+                crate::native_pointer::normalize_twist_degrees(info.rotation as f32)
+            }
+            _ => 0.0,
+        }
+    }
+
+    fn contact_size(self, scale_factor: f32) -> (Pixels, Pixels) {
+        match self {
+            Self::Touch(info) if info.touchMask & TOUCH_MASK_CONTACTAREA != 0 => (
+                px(crate::native_pointer::contact_extent(
+                    info.rcContact.right.saturating_sub(info.rcContact.left),
+                    scale_factor,
+                )),
+                px(crate::native_pointer::contact_extent(
+                    info.rcContact.bottom.saturating_sub(info.rcContact.top),
+                    scale_factor,
+                )),
+            ),
+            _ => (px(0.0), px(0.0)),
+        }
+    }
+
+    fn buttons(self) -> PointerButtons {
+        let info = self.pointer_info();
+        let flags = info.pointerFlags.0;
+        let mut buttons = PointerButtons::empty();
+        if flags & (POINTER_FLAG_INCONTACT.0 | POINTER_FLAG_FIRSTBUTTON.0) != 0 {
+            buttons |= PointerButtons::PRIMARY;
+        }
+        if flags & POINTER_FLAG_SECONDBUTTON.0 != 0 {
+            buttons |= PointerButtons::SECONDARY;
+        }
+        if flags & POINTER_FLAG_THIRDBUTTON.0 != 0 {
+            buttons |= PointerButtons::AUXILIARY;
+        }
+        if flags & POINTER_FLAG_FOURTHBUTTON.0 != 0 {
+            buttons |= PointerButtons::BACK;
+        }
+        if flags & POINTER_FLAG_FIFTHBUTTON.0 != 0 {
+            buttons |= PointerButtons::FORWARD;
+        }
+        if let Self::Pen(pen) = self {
+            if pen.penFlags & PEN_FLAG_BARREL != 0 {
+                buttons |= PointerButtons::SECONDARY;
+            }
+            if pen.penFlags & (PEN_FLAG_ERASER | PEN_FLAG_INVERTED) != 0 {
+                buttons |= PointerButtons::ERASER;
+            }
+        }
+        buttons
+    }
+}
+
+fn read_precision_pointer(
+    handle: HWND,
+    message: u32,
+    pointer_id: u32,
+    scale_factor: f32,
+    previous: Option<&PointerInputEvent>,
+) -> anyhow::Result<Option<PointerInputEvent>> {
+    let mut pointer_type = POINTER_INPUT_TYPE::default();
+    unsafe { GetPointerType(pointer_id, &mut pointer_type) }?;
+    let current = if pointer_type == PT_PEN {
+        let mut info = POINTER_PEN_INFO::default();
+        unsafe { GetPointerPenInfo(pointer_id, &mut info) }?;
+        PrecisionPointerInfo::Pen(info)
+    } else if pointer_type == PT_TOUCH {
+        let mut info = POINTER_TOUCH_INFO::default();
+        unsafe { GetPointerTouchInfo(pointer_id, &mut info) }?;
+        PrecisionPointerInfo::Touch(info)
+    } else {
+        // Mouse and precision-touchpad compatibility streams remain on the
+        // established WM_MOUSE/WM_INPUT path, avoiding duplicate dispatch.
+        return Ok(None);
+    };
+
+    let pointer_info = current.pointer_info();
+    let phase = pointer_phase(message, pointer_info.pointerFlags);
+    let position = pointer_position(handle, pointer_info.ptPixelLocation, scale_factor)?;
+    let movement = previous
+        .map(|previous| position - previous.position)
+        .unwrap_or_default();
+    let (width, height) = current.contact_size(scale_factor);
+    let (tilt_x, tilt_y) = current.tilt();
+    let buttons = current.buttons();
+    let button = changed_pointer_button(pointer_info.ButtonChangeType).or_else(|| {
+        matches!(phase, PointerPhase::Down | PointerPhase::Up).then_some(MouseButton::Left)
+    });
+
+    let mut coalesced = if message == WM_POINTERUPDATE {
+        read_pointer_history(pointer_id, current.pointer_type())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|history| pointer_sample(handle, history, scale_factor))
+            .collect::<anyhow::Result<Vec<_>>>()?
+    } else {
+        Vec::new()
+    };
+    // Win32 returns newest-first and includes the current event. Publish only
+    // the strictly historical samples, in chronological order.
+    coalesced.reverse();
+    if coalesced.last().is_some_and(|sample| {
+        sample.timestamp_ms == f64::from(pointer_info.dwTime) && sample.position == position
+    }) {
+        coalesced.pop();
+    }
+    let mut sample_origin = previous.map(|previous| previous.position);
+    for sample in &mut coalesced {
+        sample.movement = sample_origin
+            .map(|origin| sample.position - origin)
+            .unwrap_or_default();
+        sample_origin = Some(sample.position);
+    }
+    let movement = sample_origin
+        .map(|origin| position - origin)
+        .unwrap_or(movement);
+
+    Ok(Some(PointerInputEvent {
+        phase,
+        pointer_id: PointerId::new(i64::from(pointer_id)),
+        pointer_type: current.pointer_type(),
+        position,
+        movement,
+        button,
+        buttons,
+        modifiers: current_modifiers(),
+        click_count: usize::from(matches!(phase, PointerPhase::Down | PointerPhase::Up)),
+        is_primary: pointer_info.pointerFlags.0 & POINTER_FLAG_PRIMARY.0 != 0,
+        pressure: current.pressure(),
+        tangential_pressure: 0.0,
+        tilt_x,
+        tilt_y,
+        twist: current.twist(),
+        width,
+        height,
+        timestamp_ms: f64::from(pointer_info.dwTime),
+        coalesced,
+    }))
+}
+
+fn pointer_phase(message: u32, flags: POINTER_FLAGS) -> PointerPhase {
+    if flags.0 & (POINTER_FLAG_CANCELED.0 | POINTER_FLAG_CAPTURECHANGED.0) != 0
+        || message == WM_POINTERCAPTURECHANGED
+    {
+        PointerPhase::Cancel
+    } else {
+        match message {
+            WM_POINTERDOWN => PointerPhase::Down,
+            WM_POINTERUP => PointerPhase::Up,
+            WM_POINTERENTER => PointerPhase::Enter,
+            WM_POINTERLEAVE => PointerPhase::Leave,
+            _ => PointerPhase::Move,
+        }
+    }
+}
+
+fn changed_pointer_button(change: POINTER_BUTTON_CHANGE_TYPE) -> Option<MouseButton> {
+    match change {
+        POINTER_CHANGE_FIRSTBUTTON_DOWN | POINTER_CHANGE_FIRSTBUTTON_UP => Some(MouseButton::Left),
+        POINTER_CHANGE_SECONDBUTTON_DOWN | POINTER_CHANGE_SECONDBUTTON_UP => {
+            Some(MouseButton::Right)
+        }
+        POINTER_CHANGE_THIRDBUTTON_DOWN | POINTER_CHANGE_THIRDBUTTON_UP => {
+            Some(MouseButton::Middle)
+        }
+        POINTER_CHANGE_FOURTHBUTTON_DOWN | POINTER_CHANGE_FOURTHBUTTON_UP => {
+            Some(MouseButton::Navigate(NavigationDirection::Back))
+        }
+        POINTER_CHANGE_FIFTHBUTTON_DOWN | POINTER_CHANGE_FIFTHBUTTON_UP => {
+            Some(MouseButton::Navigate(NavigationDirection::Forward))
+        }
+        _ => None,
+    }
+}
+
+fn pointer_position(
+    handle: HWND,
+    mut screen_position: POINT,
+    scale_factor: f32,
+) -> anyhow::Result<Point<Pixels>> {
+    unsafe { ScreenToClient(handle, &mut screen_position) }.ok()?;
+    Ok(logical_point(
+        screen_position.x as f32,
+        screen_position.y as f32,
+        scale_factor,
+    ))
+}
+
+fn pointer_sample(
+    handle: HWND,
+    info: PrecisionPointerInfo,
+    scale_factor: f32,
+) -> anyhow::Result<PointerSample> {
+    let pointer_info = info.pointer_info();
+    let (width, height) = info.contact_size(scale_factor);
+    let (tilt_x, tilt_y) = info.tilt();
+    Ok(PointerSample {
+        position: pointer_position(handle, pointer_info.ptPixelLocation, scale_factor)?,
+        movement: Point::default(),
+        pressure: info.pressure(),
+        tangential_pressure: 0.0,
+        tilt_x,
+        tilt_y,
+        twist: info.twist(),
+        width,
+        height,
+        timestamp_ms: f64::from(pointer_info.dwTime),
+    })
+}
+
+fn read_pointer_history(
+    pointer_id: u32,
+    pointer_type: PointerType,
+) -> windows::core::Result<Vec<PrecisionPointerInfo>> {
+    match pointer_type {
+        PointerType::Pen => {
+            let mut count = 0;
+            unsafe { GetPointerPenInfoHistory(pointer_id, &mut count, None) }?;
+            count = count.min(MAX_POINTER_HISTORY);
+            let mut history = vec![POINTER_PEN_INFO::default(); count as usize];
+            if count != 0 {
+                unsafe {
+                    GetPointerPenInfoHistory(pointer_id, &mut count, Some(history.as_mut_ptr()))
+                }?;
+                history.truncate(count as usize);
+            }
+            Ok(history.into_iter().map(PrecisionPointerInfo::Pen).collect())
+        }
+        PointerType::Touch => {
+            let mut count = 0;
+            unsafe { GetPointerTouchInfoHistory(pointer_id, &mut count, None) }?;
+            count = count.min(MAX_POINTER_HISTORY);
+            let mut history = vec![POINTER_TOUCH_INFO::default(); count as usize];
+            if count != 0 {
+                unsafe {
+                    GetPointerTouchInfoHistory(pointer_id, &mut count, Some(history.as_mut_ptr()))
+                }?;
+                history.truncate(count as usize);
+            }
+            Ok(history
+                .into_iter()
+                .map(PrecisionPointerInfo::Touch)
+                .collect())
+        }
+        _ => Ok(Vec::new()),
+    }
 }
 
 fn handle_key_event<F>(

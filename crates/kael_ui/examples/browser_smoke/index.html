@@ -1,0 +1,861 @@
+<!doctype html>
+<html
+  lang="en"
+  data-kael-text-probe="requested"
+  data-kael-ime-probe="requested"
+  data-kael-clipboard-input="requested"
+  data-kael-clipboard-probe="requested"
+  data-kael-clipboard-bounds="requested"
+  data-kael-accessibility-probe="requested"
+  data-kael-accessibility-action="requested"
+  data-kael-virtual-performance="requested"
+  data-kael-gpu-probe="requested"
+  data-kael-print-probe="requested"
+>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <link rel="icon" href="data:," />
+    <title>Kael browser smoke</title>
+    <style>
+      html,
+      body,
+      #blade {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        overflow: hidden;
+        background: #111827;
+      }
+      #blade {
+        display: block;
+        touch-action: none;
+      }
+      #failure {
+        position: fixed;
+        inset: 1.25rem;
+        z-index: 1000;
+        box-sizing: border-box;
+        overflow: auto;
+        padding: 1rem 1.125rem;
+        border: 1px solid rgb(248 113 113 / 45%);
+        border-radius: 0.75rem;
+        background: rgb(17 24 39 / 96%);
+        box-shadow: 0 24px 70px rgb(0 0 0 / 55%);
+        color: #fecaca;
+        font: 14px/1.5 ui-monospace, monospace;
+        white-space: pre-wrap;
+      }
+      #failure:empty {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas
+      id="blade"
+      aria-label="Kael application"
+      data-kael-verify-pixels="continuous"
+    ></canvas>
+    <pre id="failure" role="alert"></pre>
+    <script type="module">
+      import init from "./browser_smoke.js";
+
+      async function verifyImeBridge() {
+        const deadline = performance.now() + 5_000;
+        let imeInput;
+        while (performance.now() < deadline) {
+          imeInput = document.querySelector('[data-kael-ime-input="true"]');
+          if (imeInput && document.activeElement === imeInput) {
+            break;
+          }
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+        if (!imeInput) {
+          throw new Error("Kael did not install its browser IME bridge");
+        }
+        if (document.activeElement !== imeInput) {
+          throw new Error("Kael did not focus its IME bridge for the active InputState");
+        }
+
+        const compositionText = "Kael 日本語 🧠";
+        imeInput.dispatchEvent(
+          new CompositionEvent("compositionstart", { bubbles: true, data: "" }),
+        );
+        imeInput.dispatchEvent(
+          new CompositionEvent("compositionupdate", {
+            bubbles: true,
+            data: compositionText,
+          }),
+        );
+        imeInput.dispatchEvent(
+          new CompositionEvent("compositionend", {
+            bubbles: true,
+            data: compositionText,
+          }),
+        );
+        // Browsers emit one trailing input event for committed composition.
+        // The bridge must suppress that duplicate before accepting normal text.
+        imeInput.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            data: compositionText,
+            inputType: "insertCompositionText",
+            isComposing: false,
+          }),
+        );
+        imeInput.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            data: "!",
+            inputType: "insertText",
+            isComposing: false,
+          }),
+        );
+
+        while (
+          document.documentElement.dataset.kaelImeProbe !== "passed" &&
+          performance.now() < deadline
+        ) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+        if (document.documentElement.dataset.kaelImeProbe !== "passed") {
+          throw new Error(
+            `Kael IME composition/commit probe failed ` +
+              `(state=${document.documentElement.dataset.kaelImeProbe ?? "missing"})`,
+          );
+        }
+
+        const clipboardCapability = new DataTransfer();
+        clipboardCapability.setData("text/plain", "kael-capability");
+        const clipboardCapabilityEvent = new ClipboardEvent("paste", {
+          clipboardData: clipboardCapability,
+        });
+        if (
+          clipboardCapabilityEvent.clipboardData?.getData("text/plain") !==
+          "kael-capability"
+        ) {
+          // Firefox deliberately ignores clipboardData on script-constructed
+          // ClipboardEvent objects. Real trusted paste events still carry it,
+          // but browser automation cannot synthesize that privileged payload.
+          document.documentElement.dataset.kaelClipboardInput =
+            "automation-unavailable";
+          document.documentElement.dataset.kaelClipboardProbe =
+            "automation-unavailable";
+          document.documentElement.dataset.kaelClipboardBounds =
+            "automation-unavailable";
+          return;
+        }
+
+        const clipboardText = `${compositionText}! clipboard`;
+        const pasteTransfer = new DataTransfer();
+        pasteTransfer.setData("text/plain", " clipboard");
+        imeInput.dispatchEvent(
+          new ClipboardEvent("paste", {
+            bubbles: true,
+            cancelable: true,
+            clipboardData: pasteTransfer,
+          }),
+        );
+        while (
+          document.documentElement.dataset.kaelClipboardInput !== "passed" &&
+          performance.now() < deadline
+        ) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+        if (document.documentElement.dataset.kaelClipboardInput !== "passed") {
+          throw new Error("Kael did not paste the browser clipboard payload into InputState");
+        }
+
+        imeInput.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "a",
+            code: "KeyA",
+            ctrlKey: true,
+          }),
+        );
+        imeInput.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "c",
+            code: "KeyC",
+            ctrlKey: true,
+          }),
+        );
+        const copyTransfer = new DataTransfer();
+        imeInput.dispatchEvent(
+          new ClipboardEvent("copy", {
+            bubbles: true,
+            cancelable: true,
+            clipboardData: copyTransfer,
+          }),
+        );
+        const copiedText = copyTransfer.getData("text/plain");
+        if (copiedText !== clipboardText) {
+          throw new Error(
+            `Kael clipboard copy round trip differed ` +
+              `(expected=${clipboardText}, actual=${copiedText || "missing"})`,
+          );
+        }
+
+        const copyCurrentInput = () => {
+          imeInput.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              bubbles: true,
+              cancelable: true,
+              key: "a",
+              code: "KeyA",
+              ctrlKey: true,
+            }),
+          );
+          imeInput.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              bubbles: true,
+              cancelable: true,
+              key: "c",
+              code: "KeyC",
+              ctrlKey: true,
+            }),
+          );
+          const transfer = new DataTransfer();
+          imeInput.dispatchEvent(
+            new ClipboardEvent("copy", {
+              bubbles: true,
+              cancelable: true,
+              clipboardData: transfer,
+            }),
+          );
+          return transfer.getData("text/plain");
+        };
+        const assertRejectedPaste = (transfer, label) => {
+          imeInput.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              bubbles: true,
+              cancelable: true,
+              key: "v",
+              code: "KeyV",
+              ctrlKey: true,
+            }),
+          );
+          const event = new ClipboardEvent("paste", {
+            bubbles: true,
+            cancelable: true,
+            clipboardData: transfer,
+          });
+          imeInput.dispatchEvent(event);
+          if (!event.defaultPrevented) {
+            throw new Error(`Kael did not consume rejected ${label} paste`);
+          }
+          const retainedText = copyCurrentInput();
+          if (retainedText !== clipboardText) {
+            throw new Error(
+              `Kael mutated InputState after rejected ${label} paste ` +
+                `(actual=${retainedText || "missing"})`,
+            );
+          }
+        };
+
+        const oversizedText = new DataTransfer();
+        oversizedText.setData("text/plain", "x".repeat(8 * 1024 * 1024 + 1));
+        assertRejectedPaste(oversizedText, "oversized text");
+
+        const originalFileSize = Object.getOwnPropertyDescriptor(
+          File.prototype,
+          "size",
+        );
+        const blobSize = Object.getOwnPropertyDescriptor(Blob.prototype, "size")?.get;
+        if (!blobSize) {
+          throw new Error("Blob.size getter is unavailable for clipboard bound tests");
+        }
+        Object.defineProperty(File.prototype, "size", {
+          configurable: true,
+          get() {
+            if (this.name === "kael-oversized-image.png") {
+              return Number.MAX_SAFE_INTEGER;
+            }
+            if (this.name.startsWith("kael-aggregate-image-")) {
+              return 40 * 1024 * 1024;
+            }
+            return blobSize.call(this);
+          },
+        });
+        try {
+          const oversizedImage = new DataTransfer();
+          oversizedImage.items.add(
+            new File(["x"], "kael-oversized-image.png", { type: "image/png" }),
+          );
+          assertRejectedPaste(oversizedImage, "oversized image");
+
+          const aggregateImages = new DataTransfer();
+          for (let index = 0; index < 4; index += 1) {
+            aggregateImages.items.add(
+              new File(["x"], `kael-aggregate-image-${index}.png`, {
+                type: "image/png",
+              }),
+            );
+          }
+          assertRejectedPaste(aggregateImages, "oversized aggregate");
+
+          const tooManyItems = new DataTransfer();
+          for (let index = 0; index < 33; index += 1) {
+            tooManyItems.items.add(
+              new File(["x"], `kael-item-${index}.png`, { type: "image/png" }),
+            );
+          }
+          assertRejectedPaste(tooManyItems, "excess-item");
+        } finally {
+          if (originalFileSize) {
+            Object.defineProperty(File.prototype, "size", originalFileSize);
+          } else {
+            delete File.prototype.size;
+          }
+        }
+        document.documentElement.dataset.kaelClipboardBounds = "passed";
+        document.documentElement.dataset.kaelClipboardProbe = "passed";
+      }
+
+      async function verifyAccessibilityBridge(canvas) {
+        const deadline = performance.now() + 5_000;
+        let button;
+        let textInput;
+        let millionRowGrid;
+        while (performance.now() < deadline) {
+          button = document.querySelector(
+            '#kael-accessibility-layer [role="button"]' +
+              '[aria-label="Test pointer, text, and animation"]',
+          );
+          textInput = document.querySelector(
+            '#kael-accessibility-layer [role="textbox"]' +
+              '[aria-label="Browser IME release probe"]',
+          );
+          millionRowGrid = document.querySelector(
+            '#kael-accessibility-layer [role="grid"]' +
+              '[aria-label="Million-row execution table"]',
+          );
+          if (
+            canvas.dataset.kaelAccessibility === "ready" &&
+            button &&
+            textInput &&
+            millionRowGrid
+          ) {
+            break;
+          }
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+        const nodeCount = Number(canvas.dataset.kaelAccessibilityNodes ?? 0);
+        if (
+          canvas.dataset.kaelAccessibility !== "ready" ||
+          canvas.dataset.kaelAccessibilityTruncated !== "false" ||
+          !Number.isInteger(nodeCount) ||
+          nodeCount < 3 ||
+          nodeCount > 4_096 ||
+          !button ||
+          !textInput ||
+          !millionRowGrid
+        ) {
+          throw new Error(
+            `Kael accessibility DOM mirror is incomplete ` +
+              `(state=${canvas.dataset.kaelAccessibility ?? "missing"}, ` +
+              `nodes=${nodeCount}, truncated=${canvas.dataset.kaelAccessibilityTruncated ?? "missing"})`,
+          );
+        }
+        const buttonBounds = button.getBoundingClientRect();
+        if (buttonBounds.width <= 0 || buttonBounds.height <= 0) {
+          throw new Error("Kael accessibility button did not retain layout bounds");
+        }
+        if (
+          millionRowGrid.getAttribute("aria-rowcount") !== "1000001" ||
+          millionRowGrid.getAttribute("aria-colcount") !== "4"
+        ) {
+          throw new Error("Kael virtual grid did not expose its full logical dimensions");
+        }
+        const mountedCell = millionRowGrid.querySelector(
+          '[role="cell"][aria-rowindex][aria-colindex="4"]',
+        );
+        const mountedRowIndex = Number(
+          mountedCell?.getAttribute("aria-rowindex") ?? 0,
+        );
+        if (
+          !mountedCell ||
+          !Number.isInteger(mountedRowIndex) ||
+          mountedRowIndex < 2 ||
+          mountedRowIndex > 1_000_001
+        ) {
+          throw new Error("Kael virtual grid did not expose mounted cell coordinates");
+        }
+        document.documentElement.dataset.kaelAccessibilityGrid = "passed";
+        button.dispatchEvent(
+          new MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+        while (
+          document.documentElement.dataset.kaelAccessibilityAction !== "passed" &&
+          performance.now() < deadline
+        ) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+        if (document.documentElement.dataset.kaelAccessibilityAction !== "passed") {
+          throw new Error("Kael did not route a semantic DOM click through its action router");
+        }
+        document.documentElement.dataset.kaelAccessibilityProbe = "passed";
+
+        if (canvas.dataset.kaelPrintCapability !== "print-job-dialog") {
+          throw new Error("Kael did not expose its browser PrintJob snapshot capability");
+        }
+        document.documentElement.dataset.kaelPrintProbe = "available";
+      }
+
+      function percentile(samples, quantile) {
+        const sorted = [...samples].sort((left, right) => left - right);
+        const index = Math.min(
+          sorted.length - 1,
+          Math.max(0, Math.ceil(sorted.length * quantile) - 1),
+        );
+        return sorted[index];
+      }
+
+      async function verifyMillionRowPerformance(canvas) {
+        const root = document.documentElement;
+        const grid = document.querySelector(
+          '#kael-accessibility-layer [role="grid"]' +
+            '[aria-label="Million-row execution table"]',
+        );
+        if (!grid) {
+          throw new Error("Kael million-row grid was unavailable for the performance gate");
+        }
+
+        // Continuous framebuffer verification intentionally performs a
+        // synchronous 512x512 WebGL readback and hash on every rendered frame.
+        // Keep that expensive release-test instrumentation out of the scroll
+        // latency measurement, then restore it for the context-loss proof that
+        // follows this gate. Production canvases never opt into this attribute.
+        const previousPixelVerification = canvas.getAttribute("data-kael-verify-pixels");
+        canvas.setAttribute("data-kael-verify-pixels", "false");
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+
+        const longTasks = [];
+        let observer;
+        if (typeof PerformanceObserver !== "undefined") {
+          try {
+            observer = new PerformanceObserver((list) => {
+              for (const entry of list.getEntries()) {
+                longTasks.push(entry.duration);
+              }
+            });
+            observer.observe({ type: "longtask", buffered: false });
+          } catch {
+            observer = undefined;
+          }
+        }
+
+        const bounds = grid.getBoundingClientRect();
+        const clientX = Math.max(1, Math.min(innerWidth - 2, bounds.left + bounds.width * 0.5));
+        const clientY = Math.max(
+          1,
+          Math.min(innerHeight - 2, bounds.top + Math.max(72, bounds.height * 0.7)),
+        );
+        canvas.dispatchEvent(
+          new PointerEvent("pointermove", {
+            bubbles: true,
+            clientX,
+            clientY,
+            pointerId: 1,
+            pointerType: "mouse",
+          }),
+        );
+
+        const responseSamples = [];
+        const materializeSamples = [];
+        const damageRatios = [];
+        const damageModes = { region: 0, full: 0, none: 0, unknown: 0 };
+        let peakMountedRows = 0;
+        for (let sample = 0; sample < 24; sample += 1) {
+          const priorStart = Number(root.dataset.kaelVirtualRangeStart ?? -1);
+          const started = performance.now();
+          canvas.dispatchEvent(
+            new WheelEvent("wheel", {
+              bubbles: true,
+              cancelable: true,
+              clientX,
+              clientY,
+              deltaY: 480,
+              deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+            }),
+          );
+          let nextStart = priorStart;
+          for (let frame = 0; frame < 10 && nextStart === priorStart; frame += 1) {
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+            nextStart = Number(root.dataset.kaelVirtualRangeStart ?? -1);
+          }
+          if (nextStart !== priorStart && nextStart >= 0) {
+            responseSamples.push(performance.now() - started);
+            const materialize = Number(root.dataset.kaelVirtualMaterializeUs ?? NaN);
+            if (Number.isFinite(materialize)) {
+              materializeSamples.push(materialize);
+            }
+            const damageMode = canvas.dataset.kaelFrameDamage ?? "unknown";
+            damageModes[damageMode in damageModes ? damageMode : "unknown"] += 1;
+            const damageRatio = Number(canvas.dataset.kaelFrameDamageRatio ?? NaN);
+            if (Number.isFinite(damageRatio)) {
+              damageRatios.push(damageRatio);
+            }
+            peakMountedRows = Math.max(
+              peakMountedRows,
+              Number(root.dataset.kaelVirtualMountedRows ?? 0),
+            );
+          }
+        }
+        if (observer) {
+          for (const entry of observer.takeRecords()) {
+            longTasks.push(entry.duration);
+          }
+          observer.disconnect();
+        }
+        if (previousPixelVerification === null) {
+          canvas.removeAttribute("data-kael-verify-pixels");
+        } else {
+          canvas.setAttribute("data-kael-verify-pixels", previousPixelVerification);
+        }
+
+        // The latency loop deliberately disabled readback, so request one real
+        // semantic update after restoring it. The context-recovery proof below
+        // must compare against the *current* scrolled frame, not the pre-benchmark
+        // sample that happened to be cached in the canvas diagnostics.
+        const verificationFrame = Number(canvas.dataset.kaelFrameCount ?? 0);
+        const semanticButton = document.querySelector(
+          '#kael-accessibility-layer [role="button"]' +
+            '[aria-label="Test pointer, text, and animation"]',
+        );
+        if (!semanticButton) {
+          throw new Error("Kael semantic button disappeared during the performance gate");
+        }
+        semanticButton.dispatchEvent(
+          new MouseEvent("click", { bubbles: true, cancelable: true }),
+        );
+        const verificationDeadline = performance.now() + 2_000;
+        while (
+          Number(canvas.dataset.kaelFrameCount ?? 0) <= verificationFrame &&
+          performance.now() < verificationDeadline
+        ) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+        if (Number(canvas.dataset.kaelFrameCount ?? 0) <= verificationFrame) {
+          throw new Error("Kael did not refresh its post-benchmark framebuffer evidence");
+        }
+
+        if (responseSamples.length < 16 || materializeSamples.length < 16) {
+          throw new Error(
+            `Kael million-row performance gate collected too few samples ` +
+              `(response=${responseSamples.length}, materialize=${materializeSamples.length})`,
+          );
+        }
+        const p50 = percentile(responseSamples, 0.5);
+        const p95 = percentile(responseSamples, 0.95);
+        const p99 = percentile(responseSamples, 0.99);
+        const materializeP99 = percentile(materializeSamples, 0.99);
+        const damageP99 = damageRatios.length > 0 ? percentile(damageRatios, 0.99) : 1;
+        const longTaskCount = longTasks.filter((duration) => duration >= 50).length;
+        const softwareFallback =
+          new URLSearchParams(location.search).get("software_renderer") === "1";
+        const softwareReported = root.dataset.kaelGpuSoftwareEmulated === "true";
+        if (!softwareFallback && softwareReported) {
+          throw new Error(
+            `Kael hardware performance gate selected a software renderer ` +
+              `(${root.dataset.kaelGpuDevice ?? "unknown device"})`,
+          );
+        }
+        // Hardware is the performance release gate. The deliberately forced
+        // CI software rasterizer remains a correctness/liveness gate because
+        // its timing tracks host contention rather than an end user's GPU.
+        const p95Budget = softwareFallback ? 1_000 : 80;
+        const p99Budget = softwareFallback ? 2_000 : 160;
+        const longTaskBudget = softwareFallback ? 24 : 1;
+        const passed =
+          p95 <= p95Budget &&
+          p99 <= p99Budget &&
+          materializeP99 <= 20_000 &&
+          longTaskCount <= longTaskBudget &&
+          peakMountedRows > 1 &&
+          peakMountedRows <= 64;
+        const attributes = {
+          kaelVirtualPerformance: passed ? "passed" : "failed",
+          kaelVirtualPerformanceClass: softwareFallback
+            ? "software-fallback-liveness"
+            : "hardware-performance",
+          kaelVirtualPerformanceP95BudgetMs: String(p95Budget),
+          kaelVirtualPerformanceP99BudgetMs: String(p99Budget),
+          kaelVirtualPerformanceLongTaskBudget: String(longTaskBudget),
+          kaelVirtualPerformanceSamples: String(responseSamples.length),
+          kaelVirtualScrollP50Ms: p50.toFixed(3),
+          kaelVirtualScrollP95Ms: p95.toFixed(3),
+          kaelVirtualScrollP99Ms: p99.toFixed(3),
+          kaelVirtualMaterializeP99Us: materializeP99.toFixed(0),
+          kaelVirtualDamageP99Ratio: damageP99.toFixed(6),
+          kaelVirtualDamageRegionSamples: String(damageModes.region),
+          kaelVirtualDamageFullSamples: String(damageModes.full),
+          kaelVirtualDamageNoneSamples: String(damageModes.none),
+          kaelVirtualLongTasks: String(longTaskCount),
+          kaelVirtualLongTaskObserver: observer ? "supported" : "unavailable",
+          kaelVirtualPeakMountedRows: String(peakMountedRows),
+        };
+        for (const [name, value] of Object.entries(attributes)) {
+          root.dataset[name] = value;
+        }
+        if (!passed) {
+          throw new Error(
+            `Kael million-row performance budgets failed ` +
+              `(p95=${p95.toFixed(3)}ms, p99=${p99.toFixed(3)}ms, ` +
+              `materialize-p99=${materializeP99.toFixed(0)}us, ` +
+              `long-tasks=${longTaskCount}, peak-mounted=${peakMountedRows}, ` +
+              `damage-p99=${damageP99.toFixed(3)}, ` +
+              `damage=${damageModes.region}/${damageModes.full}/${damageModes.none}, ` +
+              `class=${softwareFallback ? "software-fallback" : "hardware"})`,
+          );
+        }
+      }
+
+      async function verifyContextRecovery(canvas) {
+        const gl = canvas.getContext("webgl2");
+        if (!gl) {
+          throw new Error("Kael's canvas no longer exposes its WebGL2 context");
+        }
+        const contextLoss = gl.getExtension("WEBGL_lose_context");
+        if (!contextLoss) {
+          throw new Error("Chrome did not expose WEBGL_lose_context for the release smoke");
+        }
+
+        const frameBeforeLoss = Number(canvas.dataset.kaelFrameCount ?? 0);
+        const hashBeforeLoss = canvas.dataset.kaelPixelHash ?? "missing";
+        if (!/^[0-9a-f]{16}$/.test(hashBeforeLoss)) {
+          throw new Error(`Kael did not expose a current pre-loss framebuffer hash (${hashBeforeLoss})`);
+        }
+        const errorBeforeLoss = gl.getError();
+        if (errorBeforeLoss !== gl.NO_ERROR) {
+          throw new Error(
+            `WebGL2 reported error 0x${errorBeforeLoss.toString(16)} before context loss`,
+          );
+        }
+        canvas.dataset.kaelContextPrelossHash = hashBeforeLoss;
+        canvas.dataset.kaelContextPrelossFrame = String(frameBeforeLoss);
+        await new Promise((resolve, reject) => {
+          const deadline = performance.now() + 5_000;
+          let sawLoss = false;
+          let restoredHash = "pending";
+          let restoredDifference = "pending";
+          let timeout;
+
+          const cleanup = () => {
+            clearTimeout(timeout);
+            canvas.removeEventListener("webglcontextlost", onLost);
+            canvas.removeEventListener("webglcontextrestored", onRestored);
+          };
+          const fail = (message) => {
+            cleanup();
+            reject(new Error(message));
+          };
+          const recoveryState = () =>
+            `context=${canvas.dataset.kaelWebglContext ?? "missing"}, ` +
+            `readback=${canvas.dataset.kaelPixelReadback ?? "missing"}, ` +
+            `hash=${hashBeforeLoss}->${restoredHash}, ` +
+            `differing_bytes=${restoredDifference}, ` +
+            `frames=${frameBeforeLoss}->${canvas.dataset.kaelFrameCount ?? "missing"}`;
+          const waitForRestoredFrame = () => {
+            const frameCount = Number(canvas.dataset.kaelFrameCount ?? 0);
+            restoredHash = canvas.dataset.kaelPixelHash ?? "pending";
+            restoredDifference = canvas.dataset.kaelContextDifferingBytes ?? "pending";
+            const recovered =
+              canvas.dataset.kaelWebglContext === "restored" &&
+              canvas.dataset.kaelPixelReadback === "verified" &&
+              Number(canvas.dataset.kaelPixelChanged ?? 0) >= 64 &&
+              Number(canvas.dataset.kaelPixelLumaRange ?? 0) >= 8 &&
+              restoredHash === hashBeforeLoss &&
+              restoredDifference === "0" &&
+              frameCount > frameBeforeLoss;
+            if (recovered) {
+              const restoredError = gl.getError();
+              if (restoredError !== gl.NO_ERROR) {
+                fail(
+                  `Restored WebGL2 context reported error 0x${restoredError.toString(16)} ` +
+                    `(${recoveryState()})`,
+                );
+                return;
+              }
+              canvas.dataset.kaelContextRecoveryHash = restoredHash;
+              cleanup();
+              resolve();
+            } else if (performance.now() >= deadline) {
+              fail(
+                `Kael did not present verified pixels after WebGL2 restoration ` +
+                  `(${recoveryState()})`,
+              );
+            } else {
+              requestAnimationFrame(waitForRestoredFrame);
+            }
+          };
+          const onLost = () => {
+            sawLoss = true;
+            setTimeout(() => contextLoss.restoreContext(), 50);
+          };
+          const onRestored = () => {
+            if (!sawLoss) {
+              fail("WebGL2 restoration fired without a preceding context loss");
+              return;
+            }
+            requestAnimationFrame(waitForRestoredFrame);
+          };
+
+          canvas.addEventListener("webglcontextlost", onLost, { once: true });
+          canvas.addEventListener("webglcontextrestored", onRestored, { once: true });
+          timeout = setTimeout(
+            () =>
+              fail(
+                `WebGL2 context loss/restoration did not complete within 5 seconds ` +
+                  `(${recoveryState()})`,
+              ),
+            5_000,
+          );
+          contextLoss.loseContext();
+        });
+        canvas.dataset.kaelContextRecovery = "verified";
+      }
+
+      try {
+        await init({ module_or_path: "./browser_smoke_bg.wasm" });
+        const canvas = document.querySelector("#blade");
+        await verifyImeBridge();
+        await verifyAccessibilityBridge(canvas);
+        await new Promise((resolve, reject) => {
+          const deadline = performance.now() + 10_000;
+          const stableForMilliseconds = 300;
+          let stableSince = 0;
+          let stableSignature = "";
+          const waitForPresentedFrame = () => {
+            const messageCount = Number(
+              document.documentElement.dataset.kaelWebviewMessageCount ?? 0,
+            );
+            const virtualLogicalRows = Number(
+              document.documentElement.dataset.kaelVirtualLogicalRows ?? 0,
+            );
+            const virtualMountedRows = Number(
+              document.documentElement.dataset.kaelVirtualMountedRows ?? 0,
+            );
+            const virtualRangeStart = Number(
+              document.documentElement.dataset.kaelVirtualRangeStart ?? -1,
+            );
+            const virtualRangeEnd = Number(
+              document.documentElement.dataset.kaelVirtualRangeEndExclusive ?? -1,
+            );
+            const virtualMountBound = Number(
+              document.documentElement.dataset.kaelVirtualMountBound ?? 0,
+            );
+            const virtualMaterializeMicros = Number(
+              document.documentElement.dataset.kaelVirtualMaterializeUs ?? NaN,
+            );
+            const signature = [
+              canvas.dataset.kaelFrameCount ?? "0",
+              canvas.dataset.kaelPixelReadback ?? "pending",
+              canvas.dataset.kaelPixelHash ?? "pending",
+              document.documentElement.dataset.kaelWebviewMessageFrame ?? "0",
+              String(messageCount),
+              document.documentElement.dataset.kaelWebviewCount ?? "0",
+              document.documentElement.dataset.kaelVirtualTable ?? "pending",
+              document.documentElement.dataset.kaelVirtualJump ?? "pending",
+              document.documentElement.dataset.kaelVirtualScrollbar ?? "pending",
+              document.documentElement.dataset.kaelImeProbe ?? "pending",
+              document.documentElement.dataset.kaelClipboardProbe ?? "pending",
+              document.documentElement.dataset.kaelClipboardBounds ?? "pending",
+              document.documentElement.dataset.kaelAccessibilityProbe ?? "pending",
+              document.documentElement.dataset.kaelAccessibilityAction ?? "pending",
+              document.documentElement.dataset.kaelPrintProbe ?? "pending",
+              String(virtualLogicalRows),
+              String(virtualMountedRows),
+              String(virtualRangeStart),
+              String(virtualRangeEnd),
+              String(virtualMaterializeMicros),
+            ].join(":");
+            const virtualTableComplete =
+              document.documentElement.dataset.kaelVirtualTable === "verified" &&
+              document.documentElement.dataset.kaelVirtualJump === "last-row-visible" &&
+              document.documentElement.dataset.kaelVirtualScrollbar === "always-visible" &&
+              virtualLogicalRows === 1_000_000 &&
+              Number.isInteger(virtualMountedRows) &&
+              virtualMountedRows > 1 &&
+              virtualMountedRows <= virtualMountBound &&
+              virtualMountBound === 64 &&
+              Number.isInteger(virtualRangeStart) &&
+              virtualRangeStart >= 0 &&
+              Number.isInteger(virtualRangeEnd) &&
+              virtualRangeEnd <= virtualLogicalRows &&
+              virtualRangeEnd - virtualRangeStart === virtualMountedRows &&
+              Number.isFinite(virtualMaterializeMicros) &&
+              virtualMaterializeMicros >= 0;
+            const clipboardComplete =
+              (document.documentElement.dataset.kaelClipboardInput === "passed" &&
+                document.documentElement.dataset.kaelClipboardProbe === "passed" &&
+                document.documentElement.dataset.kaelClipboardBounds === "passed") ||
+              (document.documentElement.dataset.kaelClipboardInput ===
+                "automation-unavailable" &&
+                document.documentElement.dataset.kaelClipboardProbe ===
+                  "automation-unavailable" &&
+                document.documentElement.dataset.kaelClipboardBounds ===
+                  "automation-unavailable");
+            const complete =
+              canvas.dataset.kaelFrame === "presented" &&
+              canvas.dataset.kaelPixelReadback === "verified" &&
+              Number(canvas.dataset.kaelPixelChanged ?? 0) >= 64 &&
+              Number(canvas.dataset.kaelPixelLumaRange ?? 0) >= 8 &&
+              document.documentElement.dataset.kaelWebviewCount === "1" &&
+              document.documentElement.dataset.kaelWebviewMessage === "received" &&
+              document.documentElement.dataset.kaelTextShaper === "cosmic-text" &&
+              document.documentElement.dataset.kaelTextProbe === "passed" &&
+              document.documentElement.dataset.kaelImeProbe === "passed" &&
+              clipboardComplete &&
+              document.documentElement.dataset.kaelAccessibilityProbe === "passed" &&
+              document.documentElement.dataset.kaelAccessibilityAction === "passed" &&
+              document.documentElement.dataset.kaelPrintProbe === "available" &&
+              virtualTableComplete &&
+              messageCount === 1 &&
+              Number(canvas.dataset.kaelFrameCount ?? 0) >=
+                Number(document.documentElement.dataset.kaelWebviewMessageFrame ?? Infinity);
+            if (complete && signature === stableSignature) {
+              if (performance.now() - stableSince >= stableForMilliseconds) {
+                resolve();
+                return;
+              }
+            } else if (complete) {
+              stableSignature = signature;
+              stableSince = performance.now();
+            } else {
+              stableSignature = "";
+              stableSince = 0;
+            }
+            if (performance.now() >= deadline) {
+              reject(
+                new Error(
+                  `Kael did not reach a stable WebGL2/WebView/virtual-table frame within 10 seconds ` +
+                    `(last state ${signature})`,
+                ),
+              );
+            } else {
+              requestAnimationFrame(waitForPresentedFrame);
+            }
+          };
+          waitForPresentedFrame();
+        });
+        await verifyMillionRowPerformance(canvas);
+        await verifyContextRecovery(canvas);
+        document.documentElement.dataset.kaelReady = "true";
+      } catch (error) {
+        document.querySelector("#failure").textContent =
+          `Kael browser startup failed:\n${error?.stack ?? error}`;
+        throw error;
+      }
+    </script>
+  </body>
+</html>

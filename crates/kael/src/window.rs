@@ -6,22 +6,23 @@ use crate::{
     BorderStyle, Bounds, BoxShadow, Capslock, ColorFilter, Context, Corners, CursorStyle,
     Decorations, DefiniteLength, DevicePixels, DispatchActionListener, DispatchNodeId,
     DispatchTree, DisplayId, Edges, Effect, Entity, EntityId, EventEmitter, FileDropEvent, FontId,
-    Global, GlobalElementId, GlyphId, GlyphRasterMode, GpuSpecs, Hsla, InputHandler, IsZero,
-    KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId,
-    LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite, MouseButton, MouseEvent,
-    MouseMoveEvent, MouseUpEvent, POLYCHROME_SPRITE_KIND_COLOR,
+    GameInputCapabilities, GameInputError, GamepadFrameControl, GamepadFrameSubscription,
+    GamepadSnapshot, Global, GlobalElementId, GlyphId, GlyphRasterMode, GpuSpecs, Hsla, Image,
+    InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
+    KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
+    MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, POLYCHROME_SPRITE_KIND_COLOR,
     POLYCHROME_SPRITE_KIND_CONTENT_BLURRED, POLYCHROME_SPRITE_KIND_CONTENT_SHADOW,
     POLYCHROME_SPRITE_KIND_PREMULTIPLIED, POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT, Path, Pixels,
     PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
-    PolychromeSprite, PowerMode, PrintDialogMode, PrintJob, PrintRequest, ProgressBarState,
-    PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage, RenderImageParams,
-    RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X,
-    SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle,
-    Style, SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap,
-    TaffyLayoutEngine, Task, TextStyle, TextStyleRefinement, TooltipAlign, TooltipAnchor,
-    TooltipSide, TransformationMatrix, Underline, UnderlineStyle, UndoRedoManager,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations,
-    WindowOptions, WindowParams, WindowState, WindowTextSystem, point,
+    PointerInputEvent, PointerLockStatus, PolychromeSprite, PowerMode, PrintDialogMode, PrintJob,
+    PrintRequest, ProgressBarState, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams,
+    RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
+    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
+    StrikethroughStyle, Style, SubscriberSet, Subscription, SystemWindowTab,
+    SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextStyle, TextStyleRefinement,
+    TooltipAlign, TooltipAnchor, TooltipSide, TransformationMatrix, Underline, UnderlineStyle,
+    UndoRedoManager, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControls,
+    WindowDecorations, WindowOptions, WindowParams, WindowState, WindowTextSystem, point,
     prelude::*,
     px, rems, size, transparent_black,
     webview::{PlatformWebView, PlatformWebViewCommand},
@@ -56,11 +57,12 @@ use std::{
         Arc, Weak,
         atomic::{AtomicUsize, Ordering::SeqCst},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 use util::post_inc;
 use util::{ResultExt, measure};
 use uuid::Uuid;
+use web_time::Instant;
 
 mod prompts;
 
@@ -1455,6 +1457,29 @@ pub enum WindowContentProtectionMode {
     ExcludeFromCapture,
     /// Request that captured output is obscured when full exclusion is unavailable.
     ObscureWhenCaptured,
+}
+
+/// A typed failure returned when exporting the rendered window scene.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum WindowCaptureError {
+    /// The window's checked content-protection policy forbids app-owned capture.
+    #[error("window content protection blocks app-owned capture")]
+    Protected,
+    /// Hosted DOM/native WebView overlays cannot be represented by the scene renderer.
+    #[error("window capture cannot include hosted WebView surfaces")]
+    HostedSurface,
+    /// A live video or externally-updated surface cannot be captured atomically.
+    #[error("window capture cannot include live external surfaces")]
+    LiveSurface,
+    /// The selected backend does not implement rendered-scene capture.
+    #[error("rendered-scene capture is unsupported on {platform}")]
+    Unsupported {
+        /// Stable platform label for diagnostics and fallback routing.
+        platform: &'static str,
+    },
+    /// The backend rejected the render or pixel encoding operation.
+    #[error("window capture failed: {0}")]
+    Backend(String),
 }
 
 impl WindowContentProtectionMode {
@@ -2885,6 +2910,31 @@ pub struct DismissEvent;
 
 type FrameCallback = Box<dyn FnOnce(&mut Window, &mut App)>;
 
+type GamepadFrameCallback = dyn FnMut(
+    std::result::Result<GamepadSnapshot, GameInputError>,
+    &mut Window,
+    &mut App,
+) -> GamepadFrameControl;
+
+fn schedule_gamepad_frame(
+    window: &Window,
+    active: Rc<Cell<bool>>,
+    callback: Rc<RefCell<Box<GamepadFrameCallback>>>,
+) {
+    window.on_next_frame(move |window, cx| {
+        if !active.get() {
+            return;
+        }
+        let snapshot = window.gamepads();
+        let control = callback.borrow_mut()(snapshot, window, cx);
+        if active.get() && control == GamepadFrameControl::Continue {
+            schedule_gamepad_frame(window, active, callback);
+        } else {
+            active.set(false);
+        }
+    });
+}
+
 pub(crate) type AnyMouseListener =
     Box<dyn FnMut(&dyn Any, DispatchPhase, &mut Window, &mut App) + 'static>;
 
@@ -3310,6 +3360,7 @@ pub struct Window {
     pub(crate) next_tooltip_id: TooltipId,
     pub(crate) tooltip_bounds: Option<TooltipBounds>,
     next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>>,
+    pending_animation_frame_entities: Rc<RefCell<FxHashSet<EntityId>>>,
     pub(crate) dirty_views: FxHashSet<EntityId>,
     focus_listeners: SubscriberSet<(), AnyWindowFocusListener>,
     pub(crate) focus_lost_listeners: SubscriberSet<(), AnyObserver>,
@@ -3413,6 +3464,11 @@ fn default_bounds(display_id: Option<DisplayId>, cx: &mut App) -> Bounds<Pixels>
         })
 }
 
+fn finalize_closed_window(handle: AnyWindowHandle, window_id: WindowId, cx: &mut App) {
+    let _ = handle.update(cx, |_, window, _| window.remove_window());
+    SystemWindowTabController::remove_tab(cx, window_id);
+}
+
 impl Window {
     pub(crate) fn new(
         handle: AnyWindowHandle,
@@ -3491,6 +3547,7 @@ impl Window {
         let hovered = Rc::new(Cell::new(platform_window.is_hovered()));
         let needs_present = Rc::new(Cell::new(false));
         let next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>> = Default::default();
+        let pending_animation_frame_entities = Rc::new(RefCell::new(FxHashSet::default()));
         let last_input_timestamp = Rc::new(Cell::new(Instant::now()));
         let power_mode = cx.power_mode();
         let reduce_motion = cx.reduce_motion();
@@ -3509,12 +3566,37 @@ impl Window {
 
         platform_window.on_close(Box::new({
             let window_id = handle.window_id();
-            let mut cx = cx.to_async();
+            let cx = cx.to_async();
             move || {
-                let _ = handle.update(&mut cx, |_, window, _| window.remove_window());
-                let _ = cx.update(|cx| {
-                    SystemWindowTabController::remove_tab(cx, window_id);
-                });
+                if cx
+                    .update(|cx| finalize_closed_window(handle, window_id, cx))
+                    .is_ok()
+                {
+                    return;
+                }
+
+                // Browser accessibility and custom-titlebar actions can request a close
+                // while the application is already dispatching an input event. Retry on a
+                // later event-loop turn instead of re-entering AppCell or dropping cleanup.
+                let retry_cx = cx.clone();
+                let retry_executor = cx.background_executor().clone();
+                cx.foreground_executor()
+                    .spawn(async move {
+                        const MAX_CLOSE_RETRIES: usize = 8;
+                        for _ in 0..MAX_CLOSE_RETRIES {
+                            retry_executor.timer(Duration::from_millis(1)).await;
+                            if retry_cx
+                                .update(|cx| finalize_closed_window(handle, window_id, cx))
+                                .is_ok()
+                            {
+                                return;
+                            }
+                        }
+                        log::error!(
+                            "failed to finalize window {window_id:?} after {MAX_CLOSE_RETRIES} contended event-loop turns"
+                        );
+                    })
+                    .detach();
             }
         }));
         platform_window.on_request_frame(Box::new({
@@ -3549,7 +3631,8 @@ impl Window {
                 // last input to prevent the display from underclocking the refresh rate.
                 let needs_present = request_frame_options.require_presentation
                     || needs_present.get()
-                    || (active.get()
+                    || (!cfg!(target_arch = "wasm32")
+                        && active.get()
                         && last_input_timestamp.get().elapsed() < Duration::from_secs(1));
 
                 if !frame_throttled
@@ -3752,6 +3835,7 @@ impl Window {
             rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
             next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
             next_frame_callbacks,
+            pending_animation_frame_entities,
             next_hitbox_id: HitboxId(0),
             next_tooltip_id: TooltipId::default(),
             tooltip_bounds: None,
@@ -4055,11 +4139,12 @@ impl Window {
         self.invalidator.is_dirty()
             || !self.next_frame_callbacks.borrow().is_empty()
             || self.needs_present.get()
-            || (self.active.get()
+            || (!cfg!(target_arch = "wasm32")
+                && self.active.get()
                 && self.last_input_timestamp.get().elapsed() < Duration::from_secs(1))
     }
 
-    fn update_frame_polling(&self) {
+    pub(crate) fn update_frame_polling(&self) {
         self.platform_window
             .set_frame_polling(self.should_poll_for_frames());
     }
@@ -4145,7 +4230,7 @@ impl Window {
     }
 
     /// Return a stable identity for an accessible element without an explicit id.
-    pub(crate) fn next_anonymous_accessibility_id(&mut self) -> crate::AccessibilityId {
+    pub fn next_anonymous_accessibility_id(&mut self) -> crate::AccessibilityId {
         let parent = self
             .accessibility_parent_stack
             .last()
@@ -4636,6 +4721,70 @@ impl Window {
         self.update_frame_polling();
     }
 
+    /// Report pointer-lock and controller availability for this window.
+    pub fn game_input_capabilities(&self) -> GameInputCapabilities {
+        self.platform_window.game_input_capabilities()
+    }
+
+    /// Return the current pointer-lock lifecycle state.
+    ///
+    /// Browser and Wayland requests are asynchronous: a successful request
+    /// first reports [`PointerLockStatus::Requesting`] and changes to
+    /// [`PointerLockStatus::Locked`] only after the browser or compositor
+    /// confirms ownership. Other native backends acquire synchronously.
+    pub fn pointer_lock_status(&self) -> PointerLockStatus {
+        self.platform_window.pointer_lock_status()
+    }
+
+    /// Request relative pointer input for this window.
+    ///
+    /// Browsers require this call to run directly inside a trusted click or key
+    /// handler. Native backends require an active window; Wayland also requires
+    /// compositor protocol support and pointer focus. While locked,
+    /// [`PointerInputEvent::movement`] contains the unbounded relative mouse
+    /// delta even though its absolute position stays constrained to the window.
+    pub fn request_pointer_lock(&self) -> std::result::Result<(), GameInputError> {
+        self.platform_window.request_pointer_lock()
+    }
+
+    /// Release pointer lock owned by this window.
+    pub fn exit_pointer_lock(&self) -> std::result::Result<(), GameInputError> {
+        self.platform_window.exit_pointer_lock()
+    }
+
+    /// Return the most recent synchronous or asynchronous pointer-lock failure, if any.
+    pub fn pointer_lock_error(&self) -> Option<GameInputError> {
+        self.platform_window.pointer_lock_error()
+    }
+
+    /// Sample all connected controllers at the current display-frame boundary.
+    ///
+    /// The snapshot and native event drain are bounded by the `MAX_GAMEPAD_*`
+    /// constants. This method never starts a timer or a background polling loop.
+    pub fn gamepads(&self) -> std::result::Result<GamepadSnapshot, GameInputError> {
+        self.platform_window.gamepads()
+    }
+
+    /// Sample controllers once per display frame until cancelled or stopped.
+    ///
+    /// Keep the returned subscription alive for as long as input is wanted.
+    /// Dropping it prevents the already-coalesced next-frame callback from
+    /// polling or invoking the consumer.
+    pub fn on_gamepad_frame(
+        &self,
+        callback: impl FnMut(
+            std::result::Result<GamepadSnapshot, GameInputError>,
+            &mut Window,
+            &mut App,
+        ) -> GamepadFrameControl
+        + 'static,
+    ) -> GamepadFrameSubscription {
+        let active = Rc::new(Cell::new(true));
+        let callback = Rc::new(RefCell::new(Box::new(callback) as Box<GamepadFrameCallback>));
+        schedule_gamepad_frame(self, active.clone(), callback);
+        GamepadFrameSubscription::new(active)
+    }
+
     /// Returns the current system power mode snapshot for this frame.
     pub fn power_mode(&self) -> PowerMode {
         self.power_mode
@@ -4662,7 +4811,23 @@ impl Window {
     /// If called from within a view, it will notify that view on the next frame. Otherwise, it will refresh the entire window.
     pub fn request_animation_frame(&self) {
         let entity = self.current_view();
-        self.on_next_frame(move |_, cx| cx.notify(entity));
+        if !self
+            .pending_animation_frame_entities
+            .borrow_mut()
+            .insert(entity)
+        {
+            return;
+        }
+        let pending = self.pending_animation_frame_entities.clone();
+        self.on_next_frame(move |_, cx| {
+            pending.borrow_mut().remove(&entity);
+            cx.notify(entity);
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_animation_frame_request_count(&self) -> usize {
+        self.pending_animation_frame_entities.borrow().len()
     }
 
     /// Spawn the future returned by the given closure on the application thread pool.
@@ -4682,6 +4847,8 @@ impl Window {
     }
 
     fn bounds_changed(&mut self, cx: &mut App) {
+        #[cfg(target_arch = "wasm32")]
+        self.text_system.clear_browser_font_caches();
         self.scale_factor = self.platform_window.scale_factor();
         self.viewport_size = self.platform_window.content_size();
         self.display_id = self.platform_window.display().map(|display| display.id());
@@ -4911,6 +5078,30 @@ impl Window {
     /// Return the current checked content-protection policy, if enabled.
     pub fn content_protection(&self) -> Option<&WindowContentProtection> {
         self.content_protection.as_ref()
+    }
+
+    /// Export the current Kael-rendered window scene as a PNG image.
+    ///
+    /// This captures the GPU scene at device-pixel resolution. It deliberately
+    /// returns a typed error when content protection is active, or when WebView
+    /// overlays/live external surfaces would otherwise be silently omitted.
+    /// Platform-owned chrome and the system cursor are not part of the image.
+    pub fn export_frame_png(&self) -> std::result::Result<Image, WindowCaptureError> {
+        if self
+            .content_protection
+            .as_ref()
+            .is_some_and(WindowContentProtection::blocks_app_window_capture)
+        {
+            return Err(WindowCaptureError::Protected);
+        }
+        if !self.rendered_frame.webviews.is_empty() {
+            return Err(WindowCaptureError::HostedSurface);
+        }
+        if self.rendered_frame.scene.has_live_surfaces() {
+            return Err(WindowCaptureError::LiveSurface);
+        }
+        self.platform_window
+            .export_scene_png(&self.rendered_frame.scene)
     }
 
     /// Validate and apply native window content-protection intent.
@@ -5358,9 +5549,10 @@ impl Window {
         // frame containing any is never skipped and resets the tracker.
         if self.rendered_frame.scene.has_live_surfaces() {
             self.frame_skip.invalidate();
-        } else if self
-            .frame_skip
-            .should_skip(self.rendered_frame.scene.structural_checksum())
+        } else if self.frame_skip.is_enabled()
+            && self
+                .frame_skip
+                .should_skip(self.rendered_frame.scene.structural_checksum())
         {
             self.needs_present.set(false);
             return;
@@ -7576,6 +7768,13 @@ impl Window {
     /// and keyboard event dispatch for the element.
     ///
     /// This method should only be called as part of the prepaint phase of element drawing.
+    /// Register a focus handle as a tab stop for the current frame. Used by
+    /// custom elements that manage focus without going through a Div.
+    pub fn insert_tab_stop(&mut self, handle: &FocusHandle) {
+        self.next_frame.tab_stops.insert(handle);
+    }
+
+    /// Set the focus handle for the current node.
     pub fn set_focus_handle(&mut self, focus_handle: &FocusHandle, _: &App) {
         self.invalidator.debug_assert_prepaint();
         if focus_handle.is_focused(self) {
@@ -7671,6 +7870,19 @@ impl Window {
                 }
             },
         )));
+    }
+
+    /// Register a rich mouse, touch, and pen listener for the next rendered frame.
+    ///
+    /// Unlike the compatibility mouse events, [`PointerInputEvent`] preserves
+    /// pointer identity, device type, pressure, tilt, twist, simultaneous button
+    /// state, and coalesced high-frequency samples. The listener participates in
+    /// the same capture and bubble phases as [`Self::on_mouse_event`].
+    pub fn on_pointer_event(
+        &mut self,
+        handler: impl FnMut(&PointerInputEvent, DispatchPhase, &mut Window, &mut App) + 'static,
+    ) {
+        self.on_mouse_event(handler);
     }
 
     /// Register a key event listener on the window for the next frame. The type of event
@@ -7829,6 +8041,14 @@ impl Window {
             let event = match event {
                 // Track the mouse position with our own state, since accessing the platform
                 // API for the mouse position can only occur on the main thread.
+                PlatformInput::Pointer(pointer) => {
+                    self.mouse_position = pointer.position;
+                    self.modifiers = pointer.modifiers;
+                    if matches!(pointer.phase, crate::PointerPhase::Down) {
+                        self.keyboard_navigation_active = false;
+                    }
+                    PlatformInput::Pointer(pointer)
+                }
                 PlatformInput::MouseMove(mouse_move) => {
                     self.mouse_position = mouse_move.position;
                     self.modifiers = mouse_move.modifiers;
@@ -7929,10 +8149,47 @@ impl Window {
                 PlatformInput::KeyUp(key_up) => PlatformInput::KeyUp(key_up),
             };
 
-            if let Some(any_mouse_event) = event.mouse_event() {
-                self.dispatch_mouse_event(any_mouse_event, cx);
-            } else if let Some(any_key_event) = event.keyboard_event() {
-                self.dispatch_key_event(any_key_event, cx);
+            match &event {
+                PlatformInput::Pointer(pointer) => {
+                    self.dispatch_mouse_event(pointer, cx);
+                    if cx.propagate_event
+                        && let Some(legacy) = pointer.legacy_mouse_event()
+                        && let Some(legacy_event) = legacy.mouse_event()
+                    {
+                        self.dispatch_mouse_event(legacy_event, cx);
+                    }
+                }
+                PlatformInput::MouseDown(event) => {
+                    self.dispatch_mouse_event(&PointerInputEvent::from(event), cx);
+                    if cx.propagate_event {
+                        self.dispatch_mouse_event(event, cx);
+                    }
+                }
+                PlatformInput::MouseMove(event) => {
+                    self.dispatch_mouse_event(&PointerInputEvent::from(event), cx);
+                    if cx.propagate_event {
+                        self.dispatch_mouse_event(event, cx);
+                    }
+                }
+                PlatformInput::MouseUp(event) => {
+                    self.dispatch_mouse_event(&PointerInputEvent::from(event), cx);
+                    if cx.propagate_event {
+                        self.dispatch_mouse_event(event, cx);
+                    }
+                }
+                PlatformInput::MouseExited(event) => {
+                    self.dispatch_mouse_event(&PointerInputEvent::from(event), cx);
+                    if cx.propagate_event {
+                        self.dispatch_mouse_event(event, cx);
+                    }
+                }
+                _ => {
+                    if let Some(any_mouse_event) = event.mouse_event() {
+                        self.dispatch_mouse_event(any_mouse_event, cx);
+                    } else if let Some(any_key_event) = event.keyboard_event() {
+                        self.dispatch_key_event(any_key_event, cx);
+                    }
+                }
             }
 
             self.update_frame_polling();
@@ -8859,7 +9116,9 @@ impl Window {
     }
 
     /// Read information about the GPU backing this window.
-    /// Currently returns None on Mac and Windows.
+    ///
+    /// macOS currently returns `None`; Windows, Linux, FreeBSD, and browser
+    /// backends report the adapter selected by their renderer.
     pub fn gpu_specs(&self) -> Option<GpuSpecs> {
         self.platform_window.gpu_specs()
     }

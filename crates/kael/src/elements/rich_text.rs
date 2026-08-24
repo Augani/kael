@@ -480,7 +480,7 @@ impl Element for RichText {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let (segments, inline_elements) = self.take_segments();
         let request_state = RichTextRequestState::new(inline_elements);
-        let base_line_height = window.text_style().line_height_in_pixels(window.rem_size());
+        let base_line_height = window.line_height();
         {
             let mut inline_elements = request_state.inline_elements.borrow_mut();
             measure_inline_elements(&mut inline_elements, base_line_height, window, cx);
@@ -872,8 +872,10 @@ impl RichTextLayout {
                 } else {
                     None
                 };
-                let font_size = base_style.font_size.to_pixels(window.rem_size());
-                let line_height = base_style.line_height_in_pixels(window.rem_size());
+                let font_size = window.ui_length_in_pixels(base_style.font_size);
+                let line_height = window
+                    .ui_definite_length_in_pixels(base_style.line_height, font_size)
+                    .round();
                 let mut inline_elements = inline_elements.borrow_mut();
                 let effective_line_height =
                     inline_elements.iter().fold(line_height, |height, inline| {

@@ -21,7 +21,7 @@ when constructing or extending very large trees benefits from Rayon:
 
 ```toml
 [dependencies]
-kael_sum_tree = { version = "0.3", features = ["parallel"] }
+kael_sum_tree = { version = "0.4", features = ["parallel"] }
 ```
 
 This crate is part of the [Kael](https://github.com/Augani/kael) native application framework.

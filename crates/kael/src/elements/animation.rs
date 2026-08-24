@@ -1,4 +1,5 @@
-use std::{cell::Cell, rc::Rc, time::Instant};
+use std::{cell::Cell, rc::Rc};
+use web_time::Instant;
 
 use crate::{
     AnyElement, App, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, Styled,
@@ -195,10 +196,11 @@ impl<E: IntoElement + 'static> Element for AnimationElement<E> {
                 start: Instant::now(),
             });
 
-            let cancelled = self.cancel_handle.as_ref().map_or(false, |h| h.get());
+            let cancelled = self.cancel_handle.as_ref().is_some_and(|h| h.get());
+            let animations_disabled = !window.animations_enabled();
             let elapsed = state.start.elapsed();
             let element = self.element.take().expect("should only be called once");
-            let (element, done) = if cancelled {
+            let (element, done) = if cancelled || animations_disabled {
                 let element = self
                     .animations
                     .iter()
@@ -260,5 +262,46 @@ impl<E: IntoElement + 'static> Element for AnimationElement<E> {
         cx: &mut App,
     ) {
         element.paint(window, cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Context, Render, TestAppContext, div};
+    use std::{cell::Cell, rc::Rc, time::Duration};
+
+    struct AnimatedHost {
+        sampled: Rc<Cell<f32>>,
+    }
+
+    impl Render for AnimatedHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let sampled = self.sampled.clone();
+            div().with_animation(
+                "reduced-motion-animation",
+                Animation::new(Duration::from_secs(60)),
+                move |element, delta| {
+                    sampled.set(delta);
+                    element
+                },
+            )
+        }
+    }
+
+    #[kael::test]
+    fn reduced_motion_finishes_explicit_animations_without_polling(cx: &mut TestAppContext) {
+        cx.set_reduce_motion(true);
+        let sampled = Rc::new(Cell::new(0.0));
+        let (_view, window) = cx.add_window_view({
+            let sampled = sampled.clone();
+            move |_, _| AnimatedHost { sampled }
+        });
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(window.pending_animation_frame_request_count(), 0);
+        });
+        assert_eq!(sampled.get(), 1.0);
     }
 }

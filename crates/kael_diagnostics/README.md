@@ -1,12 +1,19 @@
 # kael_diagnostics
 
-Bounded diagnostics, metrics, tracing, and crash reporting for desktop
-applications built with Kael primitives or any other UI stack.
+Bounded diagnostics, metrics, tracing, and crash reporting for desktop and
+browser applications built with Kael primitives or any other UI stack.
 
 The crate keeps its hot paths in memory, applies fixed retention and payload
 limits, writes reports atomically, and treats upload as an explicit application
 decision. Rust panics and native crashes are persisted locally; native signal or
 exception handlers and network submission are opt-in.
+
+On `wasm32-unknown-unknown`, recoverable errors and Rust panic-hook reports use
+bounded origin-local browser storage and remain enumerable/uploadable through
+the same `CrashReporter` API. Chrome Trace JSON uses browser-safe monotonic
+clocks. Browsers do not expose OS signals, process identifiers, or native file
+paths: `install_native` and `Tracer::write_to_file` return precise errors, while
+`Tracer::export_to_chrome_json` pairs with Kael's browser file-export API.
 
 ## Quick start
 
@@ -61,6 +68,9 @@ desired.
 - `before_send` may redact or reject a report before it is persisted.
 - Call `mark_clean_exit` during orderly shutdown after installing native crash
   capture, otherwise the next launch correctly treats the session as unclean.
+- Browser report paths are virtual identifiers backed by origin-local storage;
+  they are not native filesystem paths. Storage denial or quota exhaustion is
+  returned to the application instead of silently dropping a report.
 
 The API reference is available on
 [docs.rs](https://docs.rs/kael_diagnostics). Repository-level architecture and

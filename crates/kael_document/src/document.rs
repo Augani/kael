@@ -15,7 +15,7 @@ use anyhow::{Context as _, Result, anyhow};
 use parking_lot::Mutex;
 
 use crate::{
-    AutosaveConfig, FileType, RecentDocument, Subscription, autosave,
+    AutosaveConfig, DocumentExport, FileType, RecentDocument, Subscription, autosave,
     file_type::{default_file_type_index, file_type_index_for_path},
     recent::RecentDocumentStore,
     versions::{DocumentVersion, VersionStore},
@@ -137,6 +137,14 @@ impl<D: Document> DocumentController<D> {
         Self::new_in(app_id, root)
     }
 
+    /// Creates a controller with durable platform persistence.
+    ///
+    /// Native controllers are persistent by default; this async constructor mirrors the browser
+    /// API so shared application initialization can use one code path.
+    pub async fn new_persistent(app_id: impl Into<String>) -> Result<Self> {
+        Self::new(app_id)
+    }
+
     /// Creates a controller rooted at an explicit storage directory.
     pub fn new_in(app_id: impl Into<String>, storage_root: impl AsRef<Path>) -> Result<Self> {
         let app_id = app_id.into();
@@ -218,6 +226,58 @@ impl<D: Document> DocumentController<D> {
             file_operation_lock: Arc::new(smol::lock::Mutex::new(())),
             recovery_lock: Arc::new(Mutex::new(())),
         }
+    }
+
+    /// Parses file-picker, drag-and-drop, or network bytes without requiring a source path.
+    pub fn open_bytes(
+        &self,
+        file_name: impl Into<String>,
+        data: &[u8],
+    ) -> Result<DocumentHandle<D>> {
+        autosave::ensure_size(u64::try_from(data.len()).unwrap_or(u64::MAX))?;
+        let file_name = file_name.into();
+        let file_types = D::file_types();
+        let file_type_index = file_type_index_for_path(Path::new(&file_name), file_types)
+            .or_else(|| default_file_type_index(file_types))
+            .ok_or_else(|| {
+                anyhow!(
+                    "document type {} does not define any file types",
+                    std::any::type_name::<D>()
+                )
+            })?;
+        let content = Arc::new(D::read(data, &file_types[file_type_index])?);
+        let name = Path::new(&file_name)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("document")
+            .to_string();
+        let autosave_path = autosave::autosave_path(
+            &self.inner.app_id,
+            &self.inner.autosave_config.location,
+            None,
+            &name,
+        );
+
+        Ok(DocumentHandle {
+            controller: self.inner.clone(),
+            state: Arc::new(Mutex::new(DocumentState {
+                name,
+                content: content.clone(),
+                last_saved_snapshot: Some(content),
+                last_saved_digest: Some(autosave::content_digest(data)),
+                file_path: None,
+                file_type_index,
+                dirty: false,
+                autosave_path,
+                undo_stack: VecDeque::new(),
+                redo_stack: VecDeque::new(),
+                next_listener_id: 0,
+                change_listeners: BTreeMap::new(),
+                dirty_listeners: BTreeMap::new(),
+            })),
+            file_operation_lock: Arc::new(smol::lock::Mutex::new(())),
+            recovery_lock: Arc::new(Mutex::new(())),
+        })
     }
 
     /// Opens an existing document.
@@ -412,6 +472,38 @@ impl<D: Document> DocumentHandle<D> {
     /// Returns the current on-disk path for the document if one exists.
     pub fn file_path(&self) -> Option<PathBuf> {
         self.state.lock().file_path.clone()
+    }
+
+    /// Serializes the current content without writing a native path.
+    pub fn export_bytes(&self) -> Result<DocumentExport> {
+        let state = self.state.lock();
+        let file_type = selected_file_type::<D>(&state)?;
+        let bytes = D::write(state.content.as_ref(), file_type)?;
+        autosave::ensure_size(u64::try_from(bytes.len()).unwrap_or(u64::MAX))?;
+        Ok(DocumentExport {
+            file_name: file_name_with_extension(&state.name, file_type),
+            mime_type: file_type.mime,
+            bytes,
+        })
+    }
+
+    /// Serializes the current content using an explicit supported file type.
+    pub fn export_as(
+        &self,
+        file_type_index: usize,
+        file_name: impl Into<String>,
+    ) -> Result<DocumentExport> {
+        let file_type = D::file_types()
+            .get(file_type_index)
+            .ok_or_else(|| anyhow!("invalid file type index {file_type_index}"))?;
+        let content = self.state.lock().content.clone();
+        let bytes = D::write(content.as_ref(), file_type)?;
+        autosave::ensure_size(u64::try_from(bytes.len()).unwrap_or(u64::MAX))?;
+        Ok(DocumentExport {
+            file_name: file_name_with_extension(&file_name.into(), file_type),
+            mime_type: file_type.mime,
+            bytes,
+        })
     }
 
     /// Saves the document back to its current path.
@@ -853,6 +945,26 @@ fn compute_dirty<D: Document>(state: &DocumentState<D>) -> bool {
         .as_ref()
         .map(|saved| saved.as_ref() != state.content.as_ref())
         .unwrap_or(true)
+}
+
+fn file_name_with_extension(name: &str, file_type: &FileType) -> String {
+    let extension = file_type
+        .extensions
+        .iter()
+        .map(|extension| extension.trim_start_matches('.'))
+        .find(|extension| !extension.is_empty());
+    let Some(extension) = extension else {
+        return name.to_string();
+    };
+    if Path::new(name)
+        .extension()
+        .and_then(|candidate| candidate.to_str())
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(extension))
+    {
+        name.to_string()
+    } else {
+        format!("{name}.{extension}")
+    }
 }
 
 fn push_history_entry<T>(history: &mut VecDeque<T>, entry: T, max_depth: usize) {

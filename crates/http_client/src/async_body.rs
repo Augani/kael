@@ -116,7 +116,7 @@ impl From<&'static str> for AsyncBody {
     }
 }
 
-#[cfg(feature = "reqwest")]
+#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 impl TryFrom<reqwest::Body> for AsyncBody {
     type Error = anyhow::Error;
 

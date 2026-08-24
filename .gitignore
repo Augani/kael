@@ -1,4 +1,9 @@
 /target
+**/target/
+/target-linux-gtk4/
+/target-linux-gtk4-debian/
+**/__pycache__/
+**/*.py[cod]
 /benchmark-results.json
 crates/kael/benchmark-results.json
 **/.cargo-ok

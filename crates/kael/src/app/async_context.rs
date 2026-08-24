@@ -28,13 +28,13 @@ impl AppContext for AsyncApp {
         build_entity: impl FnOnce(&mut Context<T>) -> T,
     ) -> Self::Result<Entity<T>> {
         let app = self.app.upgrade().context("app was released")?;
-        let mut app = app.borrow_mut();
+        let mut app = app.try_borrow_mut()?;
         Ok(app.new(build_entity))
     }
 
     fn reserve_entity<T: 'static>(&mut self) -> Result<Reservation<T>> {
         let app = self.app.upgrade().context("app was released")?;
-        let mut app = app.borrow_mut();
+        let mut app = app.try_borrow_mut()?;
         Ok(app.reserve_entity())
     }
 
@@ -44,7 +44,7 @@ impl AppContext for AsyncApp {
         build_entity: impl FnOnce(&mut Context<T>) -> T,
     ) -> Result<Entity<T>> {
         let app = self.app.upgrade().context("app was released")?;
-        let mut app = app.borrow_mut();
+        let mut app = app.try_borrow_mut()?;
         Ok(app.insert_entity(reservation, build_entity))
     }
 
@@ -54,7 +54,7 @@ impl AppContext for AsyncApp {
         update: impl FnOnce(&mut T, &mut Context<T>) -> R,
     ) -> Self::Result<R> {
         let app = self.app.upgrade().context("app was released")?;
-        let mut app = app.borrow_mut();
+        let mut app = app.try_borrow_mut()?;
         Ok(app.update_entity(handle, update))
     }
 
@@ -76,7 +76,7 @@ impl AppContext for AsyncApp {
         T: 'static,
     {
         let app = self.app.upgrade().context("app was released")?;
-        let lock = app.borrow();
+        let lock = app.try_borrow_mut()?;
         Ok(lock.read_entity(handle, callback))
     }
 
@@ -98,7 +98,7 @@ impl AppContext for AsyncApp {
         T: 'static,
     {
         let app = self.app.upgrade().context("app was released")?;
-        let lock = app.borrow();
+        let lock = app.try_borrow_mut()?;
         lock.read_window(window, read)
     }
 
@@ -114,7 +114,7 @@ impl AppContext for AsyncApp {
         G: Global,
     {
         let app = self.app.upgrade().context("app was released")?;
-        let mut lock = app.borrow_mut();
+        let mut lock = app.try_borrow_mut()?;
         Ok(lock.update(|this| this.read_global(callback)))
     }
 }
@@ -123,7 +123,7 @@ impl AsyncApp {
     /// Schedules all windows in the application to be redrawn.
     pub fn refresh(&self) -> Result<()> {
         let app = self.app.upgrade().context("app was released")?;
-        let mut lock = app.borrow_mut();
+        let mut lock = app.try_borrow_mut()?;
         lock.refresh_windows();
         Ok(())
     }
@@ -141,7 +141,7 @@ impl AsyncApp {
     /// Invoke the given function in the context of the app, then flush any effects produced during its invocation.
     pub fn update<R>(&self, f: impl FnOnce(&mut App) -> R) -> Result<R> {
         let app = self.app.upgrade().context("app was released")?;
-        let mut lock = app.borrow_mut();
+        let mut lock = app.try_borrow_mut()?;
         Ok(lock.update(f))
     }
 
@@ -157,7 +157,7 @@ impl AsyncApp {
         Event: 'static,
     {
         let app = self.app.upgrade().context("app was released")?;
-        let mut lock = app.borrow_mut();
+        let mut lock = app.try_borrow_mut()?;
         let subscription = lock.subscribe(entity, on_event);
         Ok(subscription)
     }
@@ -172,7 +172,7 @@ impl AsyncApp {
         V: 'static + Render,
     {
         let app = self.app.upgrade().context("app was released")?;
-        let mut lock = app.borrow_mut();
+        let mut lock = app.try_borrow_mut()?;
         lock.open_window(options, build_root_view)
     }
 
@@ -192,7 +192,7 @@ impl AsyncApp {
     /// Returns an error if the `App` has been dropped.
     pub fn has_global<G: Global>(&self) -> Result<bool> {
         let app = self.app.upgrade().context("app was released")?;
-        let app = app.borrow_mut();
+        let app = app.try_borrow_mut()?;
         Ok(app.has_global::<G>())
     }
 
@@ -202,7 +202,7 @@ impl AsyncApp {
     /// Returns an error if the `App` has been dropped.
     pub fn read_global<G: Global, R>(&self, read: impl FnOnce(&G, &App) -> R) -> Result<R> {
         let app = self.app.upgrade().context("app was released")?;
-        let app = app.borrow_mut();
+        let app = app.try_borrow_mut()?;
         Ok(read(app.global(), &app))
     }
 
@@ -214,7 +214,7 @@ impl AsyncApp {
     /// Returns an error if no state of the specified type has been assigned the `App` has been dropped.
     pub fn try_read_global<G: Global, R>(&self, read: impl FnOnce(&G, &App) -> R) -> Option<R> {
         let app = self.app.upgrade()?;
-        let app = app.borrow_mut();
+        let app = app.try_borrow_mut().ok()?;
         Some(read(app.try_global()?, &app))
     }
 
@@ -228,7 +228,7 @@ impl AsyncApp {
         read: impl FnOnce(&G, &App) -> R,
     ) -> Result<R> {
         let app = self.app.upgrade().context("app was released")?;
-        let mut app = app.borrow_mut();
+        let mut app = app.try_borrow_mut()?;
         app.update(|cx| {
             cx.default_global::<G>();
         });
@@ -242,7 +242,7 @@ impl AsyncApp {
         update: impl FnOnce(&mut G, &mut App) -> R,
     ) -> Result<R> {
         let app = self.app.upgrade().context("app was released")?;
-        let mut app = app.borrow_mut();
+        let mut app = app.try_borrow_mut()?;
         Ok(app.update(|cx| cx.update_global(update)))
     }
 

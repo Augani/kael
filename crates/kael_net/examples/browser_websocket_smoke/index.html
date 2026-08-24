@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en" data-kael-websocket-probe="requested">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Kael portable WebSocket smoke</title>
+    <style>
+      body {
+        margin: 0;
+        display: grid;
+        min-height: 100vh;
+        place-items: center;
+        background: #0f172a;
+        color: #e2e8f0;
+        font: 16px/1.5 system-ui, sans-serif;
+      }
+      main { max-width: 44rem; padding: 2rem; }
+      code { color: #86efac; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Kael portable WebSocket probe</h1>
+      <p id="status">Checking policy, backpressure, protocol, text, binary, close, and errors…</p>
+    </main>
+    <script type="module">
+      import init from "./browser_websocket_smoke.js";
+
+      const status = document.querySelector("#status");
+      try {
+        await init();
+        const deadline = performance.now() + 20_000;
+        while (
+          document.documentElement.dataset.kaelWebsocketProbe !== "passed" &&
+          document.documentElement.dataset.kaelWebsocketProbe !== "failed" &&
+          performance.now() < deadline
+        ) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+        if (document.documentElement.dataset.kaelWebsocketProbe !== "passed") {
+          throw new Error(
+            document.documentElement.dataset.kaelWebsocketErrorDetail ??
+              "Kael WebSocket probe timed out",
+          );
+        }
+        status.innerHTML = "Passed: <code>kael.smoke.v1</code>, ordered text/binary, bounded queues, policy, explicit close, and oversize rejection.";
+        void fetch(
+          "./?__kael_websocket_pass__=1&protocol=passed&text=passed&binary=passed" +
+            "&ordered=passed&close=passed&error=passed&cancellation=passed" +
+            "&backpressure=passed&policy=passed&size=passed&reconnect=passed",
+        ).catch(() => {});
+      } catch (error) {
+        document.documentElement.dataset.kaelWebsocketProbe = "failed";
+        document.documentElement.dataset.kaelWebsocketErrorDetail = String(error);
+        status.textContent = `Failed: ${error}`;
+        void fetch(
+          `./?__kael_websocket_failed__=1&message=${encodeURIComponent(String(error))}`,
+        ).catch(() => {});
+        throw error;
+      }
+    </script>
+  </body>
+</html>

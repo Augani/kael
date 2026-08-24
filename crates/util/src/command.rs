@@ -29,7 +29,7 @@ pub fn new_smol_command(program: impl AsRef<OsStr>) -> smol::process::Command {
     command
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), not(target_arch = "wasm32")))]
 /// Creates an asynchronous process command.
 pub fn new_smol_command(program: impl AsRef<OsStr>) -> smol::process::Command {
     smol::process::Command::new(program)

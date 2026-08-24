@@ -2,19 +2,25 @@
 //!
 //! This module uses the [ashpd] crate
 
+#[cfg(any(feature = "wayland", feature = "x11"))]
 use ashpd::desktop::settings::{ColorScheme, Settings};
+#[cfg(any(feature = "wayland", feature = "x11"))]
 use calloop::channel::Channel;
+#[cfg(any(feature = "wayland", feature = "x11"))]
 use calloop::{EventSource, Poll, PostAction, Readiness, Token, TokenFactory};
+#[cfg(any(feature = "wayland", feature = "x11"))]
 use smol::stream::StreamExt;
 
 use crate::media_capture::{
     CaptureBackend, CaptureConfig, CaptureDeviceInfo, CaptureDeviceKind, CaptureSession,
     CaptureSessionState, DeviceEnumerator, FrameCallback,
 };
+#[cfg(any(feature = "wayland", feature = "x11"))]
 use crate::{BackgroundExecutor, WindowAppearance};
 use anyhow::{Result, anyhow};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(any(feature = "wayland", feature = "x11"))]
 pub enum Event {
     WindowAppearance(WindowAppearance),
     #[cfg_attr(feature = "x11", allow(dead_code))]
@@ -23,10 +29,12 @@ pub enum Event {
     CursorSize(u32),
 }
 
+#[cfg(any(feature = "wayland", feature = "x11"))]
 pub struct XDPEventSource {
     channel: Channel<Event>,
 }
 
+#[cfg(any(feature = "wayland", feature = "x11"))]
 impl XDPEventSource {
     pub fn new(executor: &BackgroundExecutor) -> Self {
         let (sender, channel) = calloop::channel::channel();
@@ -109,6 +117,7 @@ impl XDPEventSource {
     }
 }
 
+#[cfg(any(feature = "wayland", feature = "x11"))]
 impl EventSource for XDPEventSource {
     type Event = Event;
     type Metadata = ();
@@ -160,6 +169,7 @@ impl EventSource for XDPEventSource {
     }
 }
 
+#[cfg(any(feature = "wayland", feature = "x11"))]
 impl WindowAppearance {
     fn from_native(cs: ColorScheme) -> WindowAppearance {
         match cs {

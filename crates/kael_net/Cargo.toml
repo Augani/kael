@@ -1,5 +1,6 @@
 [package]
 name = "kael_net"
+autoexamples = false
 rust-version.workspace = true
 authors.workspace = true
 homepage.workspace = true
@@ -12,11 +13,49 @@ categories = ["network-programming"]
 readme = "README.md"
 repository.workspace = true
 license.workspace = true
+exclude = ["examples/browser_websocket_smoke/"]
+
+[[example]]
+name = "browser_websocket_smoke"
+path = "examples/browser_websocket_smoke.rs"
+required-features = ["browser"]
+
+[[example]]
+name = "websocket_echo_server"
+path = "examples/websocket_echo_server.rs"
+
+[features]
+default = []
+browser = []
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 anyhow.workspace = true
 fastrand = "2"
-kael_secrets = { path = "../kael_secrets", version = "0.3.1" }
+kael_secrets = { path = "../kael_secrets", version = "0.4.0" }
 zeroize = { version = "1.8", features = ["derive"] }
+url = "2.5"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-native-roots"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "=0.2.122"
+web-sys = { version = "0.3", features = [
+    "BinaryType",
+    "CloseEvent",
+    "Document",
+    "Element",
+    "Event",
+    "MessageEvent",
+    "WebSocket",
+    "Window",
+] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[lints]
+workspace = true

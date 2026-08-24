@@ -20,7 +20,7 @@ path = "src/lib.rs"
 [dependencies.anyhow]
 workspace = true
 
-[dependencies.smol]
+[dependencies.thiserror]
 workspace = true
 
 [dependencies.url]
@@ -31,6 +31,34 @@ workspace = true
 
 [dev-dependencies.tempfile]
 version = "3"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies.wasm-bindgen-test]
+version = "0.3"
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.smol]
+workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.js-sys]
+version = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.wasm-bindgen]
+version = "=0.2.122"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.wasm-bindgen-futures]
+version = "0.4"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3"
+features = [
+    "Blob",
+    "DomException",
+    "File",
+    "FilePropertyBag",
+    "Navigator",
+    "ShareData",
+    "UserActivation",
+    "Window",
+]
 
 [target.'cfg(target_os = "macos")'.dependencies.objc2]
 version = "0.6"

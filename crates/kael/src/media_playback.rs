@@ -19,10 +19,11 @@ use std::{
     path::PathBuf,
     rc::Rc,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use thiserror::Error;
 use util::ResultExt;
+use web_time::Instant;
 
 use kael_media::VideoFrameStream;
 pub use kael_media::{
@@ -67,9 +68,18 @@ impl Asset for VideoAssetLoader {
         source: Self::Source,
         _cx: &mut App,
     ) -> impl Future<Output = Self::Output> + Send + 'static {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            return async move {
+                smol::unblock(move || load_video_asset(source))
+                    .await
+                    .map_err(|error| ImageCacheError::from(anyhow!(error.to_string())))
+            };
+        }
+
+        #[cfg(target_arch = "wasm32")]
         async move {
-            smol::unblock(move || load_video_asset(source))
-                .await
+            load_video_asset(source)
                 .map_err(|error| ImageCacheError::from(anyhow!(error.to_string())))
         }
     }
@@ -4313,6 +4323,25 @@ fn push_ready_state_events(state: &mut VideoControllerState, ready_state: VideoR
 /// through FFmpeg, but browser-managed streaming manifests such as HLS and DASH
 /// are better routed through WebView until native streaming backends land.
 pub fn recommended_video_playback_route(source: &MediaSource) -> VideoPlaybackRoute {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let reason = match source {
+            MediaSource::Url(_) => {
+                "WebAssembly playback uses the browser media element instead of native FFmpeg"
+            }
+            MediaSource::File(_) => {
+                "WebAssembly playback has no native file decoder; use an accessible URL with the browser media element"
+            }
+            MediaSource::Bytes(_) | MediaSource::Reader(_) => {
+                "WebAssembly playback cannot hand byte or reader sources to the browser media element; provide a URL"
+            }
+        };
+        return VideoPlaybackRoute::WebViewRecommended {
+            reason: reason.into(),
+        };
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     match media_manifest_extension(source).as_deref() {
         Some("m3u8") => VideoPlaybackRoute::WebViewRecommended {
             reason: "HLS playlists need browser/WebView media support until native streaming backends land".into(),
@@ -4329,7 +4358,18 @@ pub fn recommended_video_playback_route(source: &MediaSource) -> VideoPlaybackRo
 /// This is useful when a server exposes a streaming manifest behind an
 /// extensionless URL but the app already has a `Content-Type` header.
 pub fn recommended_video_playback_route_for_type(mime_type: &str) -> VideoPlaybackRoute {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = mime_type;
+        return VideoPlaybackRoute::WebViewRecommended {
+            reason: "WebAssembly playback uses the browser media element instead of native FFmpeg"
+                .into(),
+        };
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     let essence = media_mime_essence(mime_type);
+    #[cfg(not(target_arch = "wasm32"))]
     match essence.as_str() {
         "application/vnd.apple.mpegurl"
         | "application/x-mpegurl"
@@ -4351,8 +4391,16 @@ pub fn recommended_video_playback_route_for_type(mime_type: &str) -> VideoPlayba
 /// Return native playback confidence for a MIME type, similar to
 /// `media can-play checks`.
 pub fn can_play_video_type(mime_type: &str) -> VideoCanPlay {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = mime_type;
+        return VideoCanPlay::No;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     let essence = media_mime_essence(mime_type);
 
+    #[cfg(not(target_arch = "wasm32"))]
     match essence.as_str() {
         "application/vnd.apple.mpegurl"
         | "application/x-mpegurl"
@@ -4370,6 +4418,13 @@ pub fn can_play_video_type(mime_type: &str) -> VideoCanPlay {
 
 /// Return native playback confidence for a concrete media source.
 pub fn can_play_video_source(source: &MediaSource) -> VideoCanPlay {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = source;
+        return VideoCanPlay::No;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     match media_manifest_extension(source).as_deref() {
         Some("m3u8" | "mpd") => VideoCanPlay::No,
         Some("mp4" | "m4v" | "mov" | "webm" | "mkv") => VideoCanPlay::Probably,
@@ -4395,7 +4450,15 @@ pub fn webview_video_player_url(
 ) -> Option<SharedString> {
     let src = match source {
         MediaSource::Url(url) => url.as_ref().to_owned(),
-        MediaSource::File(path) => file_url_for_path(path)?,
+        MediaSource::File(path) => {
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = path;
+                return None;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            file_url_for_path(path)?
+        }
         MediaSource::Bytes(_) | MediaSource::Reader(_) => return None,
     };
     Some(
@@ -4562,6 +4625,7 @@ fn webview_video_player_html(src: &str, options: &WebViewVideoOptions) -> String
     )
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn file_url_for_path(path: &std::path::Path) -> Option<String> {
     let path = path.to_str()?;
     Some(format!("file://{}", percent_encode_path(path)))
@@ -4589,6 +4653,7 @@ fn escape_css_value(value: &str) -> String {
         .collect::<String>()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn percent_encode_path(value: &str) -> String {
     percent_encode_with(value, |byte| {
         matches!(byte, b'/' | b':' | b'-' | b'_' | b'.' | b'~')
@@ -4611,6 +4676,7 @@ fn percent_encode_with(value: &str, allow: impl Fn(u8) -> bool) -> String {
     encoded
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn media_manifest_extension(source: &MediaSource) -> Option<String> {
     match source {
         MediaSource::File(path) => path
@@ -4640,6 +4706,7 @@ fn media_mime_essence(mime_type: &str) -> String {
         .to_ascii_lowercase()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn url_manifest_extension(url: &str) -> Option<String> {
     let path = url
         .split(['?', '#'])
@@ -5523,7 +5590,7 @@ impl Element for Video {
             if let Length::Auto = style.size.width {
                 style.size.width = match style.size.height {
                     Length::Definite(DefiniteLength::Absolute(abs_length)) => {
-                        let height_px = abs_length.to_pixels(window.rem_size());
+                        let height_px = window.unscaled_ui_length_in_pixels(abs_length);
                         Length::Definite(
                             px(video.width().0 * height_px.0 / video.height().0).into(),
                         )
@@ -5535,7 +5602,7 @@ impl Element for Video {
             if let Length::Auto = style.size.height {
                 style.size.height = match style.size.width {
                     Length::Definite(DefiniteLength::Absolute(abs_length)) => {
-                        let width_px = abs_length.to_pixels(window.rem_size());
+                        let width_px = window.unscaled_ui_length_in_pixels(abs_length);
                         Length::Definite(px(video.height().0 * width_px.0 / video.width().0).into())
                     }
                     _ => Length::Definite(video.height().into()),
@@ -5610,9 +5677,8 @@ impl Element for Video {
         };
 
         let draw_bounds = self.object_fit.get_bounds(bounds, frame.size(0));
-        let corner_radii = style
-            .corner_radii
-            .to_pixels(window.rem_size())
+        let corner_radii = window
+            .ui_corners_in_pixels(style.corner_radii)
             .clamp_radii_for_quad_size(draw_bounds.size);
         window
             .paint_image(draw_bounds, corner_radii, frame, 0, false)

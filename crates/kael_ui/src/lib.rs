@@ -23,6 +23,7 @@ pub mod responsive;
 pub mod scroll_physics;
 pub mod spring;
 pub mod styled_ext;
+pub mod suite_workloads;
 pub mod theme;
 pub mod transitions;
 pub mod virtual_list;
@@ -63,6 +64,7 @@ pub fn init(cx: &mut kael::App) {
     components::combobox::init_combobox(cx);
     components::date_picker::init(cx);
     components::drawer_navigation::init_drawer_navigation(cx);
+    #[cfg(feature = "editor")]
     components::editor::init(cx);
     components::image_viewer::init_image_viewer(cx);
     components::inline_edit::init(cx);

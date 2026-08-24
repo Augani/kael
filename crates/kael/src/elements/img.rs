@@ -1,9 +1,9 @@
 use crate::{
-    AnyElement, AnyImageCache, App, Asset, AssetLogger, Bounds, DefiniteLength, Element, ElementId,
-    Entity, GlobalElementId, Hitbox, Image, ImageCache, InspectorElementId, InteractiveElement,
-    Interactivity, IntoElement, LayoutId, Length, ObjectFit, Pixels, RenderImage, Resource,
-    SMOOTH_SVG_SCALE_FACTOR, SharedString, SharedUri, StyleRefinement, Styled, SvgSize, Task,
-    Window,
+    AnyElement, AnyImageCache, App, Asset, AssetLogger, Bounds, ContentMask, DefiniteLength,
+    Element, ElementId, Entity, GlobalElementId, Hitbox, Image, ImageCache, InspectorElementId,
+    InteractiveElement, Interactivity, IntoElement, LayoutId, Length, ObjectFit, Pixels,
+    RenderImage, Resource, SMOOTH_SVG_SCALE_FACTOR, SharedString, SharedUri, StyleRefinement,
+    Styled, SvgSize, Task, Window,
     assets::{
         MAX_IMAGE_SOURCE_BYTES, checked_image_frame_len, collect_animation_frames,
         decode_static_image, image_decode_limits, validate_image_source_bytes,
@@ -25,10 +25,11 @@ use std::{
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use thiserror::Error;
 use util::ResultExt;
+use web_time::Instant;
 
 use super::{Stateful, StatefulInteractiveElement};
 
@@ -241,11 +242,12 @@ pub fn img(source: impl Into<ImageSource>) -> Img {
 impl Img {
     /// A list of all format extensions currently supported by this image element.
     ///
-    /// AVIF and OpenEXR extensions are present only when the `image-avif` and
-    /// `image-exr` crate features are enabled, respectively.
+    /// AVIF is present on native targets when `image-avif` is enabled. Browser builds deliberately
+    /// leave AVIF to DOM-backed surfaces until Kael's raster pipeline can decode it without the
+    /// native dav1d library. OpenEXR is present when `image-exr` is enabled.
     pub fn extensions() -> &'static [&'static str] {
         &[
-            #[cfg(feature = "image-avif")]
+            #[cfg(all(feature = "image-avif", not(target_arch = "wasm32")))]
             "avif",
             "jpg",
             "jpeg",
@@ -427,7 +429,8 @@ impl Element for Img {
                             if let Length::Auto = style.size.width {
                                 style.size.width = match style.size.height {
                                     Length::Definite(DefiniteLength::Absolute(abs_length)) => {
-                                        let height_px = abs_length.to_pixels(window.rem_size());
+                                        let height_px =
+                                            window.unscaled_ui_length_in_pixels(abs_length);
                                         Length::Definite(
                                             px(image_size.width.0 * height_px.0
                                                 / image_size.height.0)
@@ -441,7 +444,8 @@ impl Element for Img {
                             if let Length::Auto = style.size.height {
                                 style.size.height = match style.size.width {
                                     Length::Definite(DefiniteLength::Absolute(abs_length)) => {
-                                        let width_px = abs_length.to_pixels(window.rem_size());
+                                        let width_px =
+                                            window.unscaled_ui_length_in_pixels(abs_length);
                                         Length::Definite(
                                             px(image_size.height.0 * width_px.0
                                                 / image_size.width.0)
@@ -557,18 +561,24 @@ impl Element for Img {
                         .style
                         .object_fit
                         .get_bounds(bounds, data.size(layout_state.frame_index));
-                    let corner_radii = style
-                        .corner_radii
-                        .to_pixels(window.rem_size())
+                    let corner_radii = window
+                        .ui_corners_in_pixels(style.corner_radii)
                         .clamp_radii_for_quad_size(new_bounds.size);
+                    // `ObjectFit::Cover` and `ObjectFit::None` may deliberately
+                    // produce draw bounds larger than the replaced element. CSS
+                    // object-fit semantics still clip that content to the
+                    // element's box; without this mask a landscape image can
+                    // paint across adjacent text and controls.
                     window
-                        .paint_image(
-                            new_bounds,
-                            corner_radii,
-                            data,
-                            layout_state.frame_index,
-                            self.style.grayscale,
-                        )
+                        .with_content_mask(Some(ContentMask { bounds }), |window| {
+                            window.paint_image(
+                                new_bounds,
+                                corner_radii,
+                                data,
+                                layout_state.frame_index,
+                                self.style.grayscale,
+                            )
+                        })
                         .log_err();
                 } else if let Some(replacement) = &mut layout_state.replacement {
                     replacement.paint(window, cx);
@@ -791,7 +801,10 @@ mod tests {
         for extension in ["jpg", "png", "gif", "webp", "tiff", "bmp", "qoi", "svg"] {
             assert!(extensions.contains(&extension));
         }
-        assert_eq!(extensions.contains(&"avif"), cfg!(feature = "image-avif"));
+        assert_eq!(
+            extensions.contains(&"avif"),
+            cfg!(all(feature = "image-avif", not(target_arch = "wasm32")))
+        );
         assert_eq!(extensions.contains(&"exr"), cfg!(feature = "image-exr"));
     }
 
@@ -824,7 +837,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "image-avif")]
+    #[cfg(all(feature = "image-avif", not(target_arch = "wasm32")))]
     #[test]
     fn image_avif_feature_enables_decoder() {
         let result = image::codecs::avif::AvifDecoder::new(std::io::Cursor::new(&[]));

@@ -14,6 +14,7 @@ pub(crate) struct SubtreeCacheState {
     pub(crate) paint_range: Range<PaintIndex>,
     pub(crate) cache_key: SubtreeCacheKey,
     pub(crate) accessed_entities: FxHashSet<EntityId>,
+    pub(crate) accessibility_nodes: Vec<crate::AccessibilityNode>,
     pub(crate) surface: Option<CachedSurface>,
     tracked_entity_generations: TrackedEntityGenerations,
 }
@@ -57,6 +58,7 @@ impl SubtreeCacheState {
             cache_key,
             prepaint_range,
             paint_range: PaintIndex::default()..PaintIndex::default(),
+            accessibility_nodes: Vec::new(),
             surface: None,
         }
     }

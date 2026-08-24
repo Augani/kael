@@ -2,11 +2,8 @@ use crate::{
     AnyElement, AnyView, Context, EventEmitter, IntoElement, ParentElement, Render, SharedString,
     StyleRefinement, Styled, Window, div, relative,
 };
-use std::{
-    any::Any,
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{any::Any, rc::Rc, time::Duration};
+use web_time::Instant;
 
 const SLIDE_TRANSITION_DURATION: Duration = Duration::from_millis(220);
 const FADE_TRANSITION_DURATION: Duration = Duration::from_millis(180);

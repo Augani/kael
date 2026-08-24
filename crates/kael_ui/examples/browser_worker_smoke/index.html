@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en" data-kael-worker-probe="requested">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Kael browser worker smoke</title>
+    <style>
+      body {
+        margin: 0;
+        display: grid;
+        min-height: 100vh;
+        place-items: center;
+        background: #111827;
+        color: #e5e7eb;
+        font: 16px/1.5 system-ui, sans-serif;
+      }
+      main {
+        max-width: 42rem;
+        padding: 2rem;
+      }
+      code { color: #86efac; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Kael typed Web Worker probe</h1>
+      <p id="status">Running versioned handshake, progress, million-item CPU work, and termination…</p>
+    </main>
+    <script type="module">
+      import init from "./browser_worker_smoke.js";
+
+      const status = document.querySelector("#status");
+      try {
+        await init();
+        const deadline = performance.now() + 15_000;
+        while (
+          document.documentElement.dataset.kaelWorkerProbe !== "passed" &&
+          document.documentElement.dataset.kaelWorkerProbe !== "failed" &&
+          performance.now() < deadline
+        ) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+        if (document.documentElement.dataset.kaelWorkerProbe !== "passed") {
+          throw new Error(
+            document.documentElement.dataset.kaelWorkerError ??
+              "Kael browser worker probe timed out",
+          );
+        }
+        status.innerHTML =
+          "Passed: protocol <code>v1</code>, typed progress, " +
+          "<code>1,000,000</code> items, and explicit termination.";
+        void fetch(
+          "./?__kael_worker_pass__=1&protocol=1&items=1000000" +
+            "&progress=passed&ui_thread=responsive&terminated=passed",
+        ).catch(() => {});
+      } catch (error) {
+        document.documentElement.dataset.kaelWorkerProbe = "failed";
+        document.documentElement.dataset.kaelWorkerError = String(error);
+        status.textContent = `Failed: ${error}`;
+        void fetch(
+          `./?__kael_worker_failed__=1&message=${encodeURIComponent(String(error))}`,
+        ).catch(() => {});
+        throw error;
+      }
+    </script>
+  </body>
+</html>

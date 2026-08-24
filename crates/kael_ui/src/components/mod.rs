@@ -31,6 +31,7 @@ pub mod confirm_dialog;
 pub mod context_menu;
 pub mod dialog;
 pub mod drag_drop;
+#[cfg(feature = "editor")]
 pub mod editor;
 pub mod input;
 pub mod input_group;

@@ -25,7 +25,7 @@ impl CopyButtonState {
         cx.notify();
 
         cx.spawn_in(window, async move |this, cx| {
-            smol::Timer::after(Duration::from_secs(2)).await;
+            Timer::after(Duration::from_secs(2)).await;
             let _ = this.update(cx, |state, cx| {
                 state.copied = false;
                 cx.notify();

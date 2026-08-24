@@ -5213,7 +5213,7 @@ impl Render for AstryxShowcase {
         .when(show_fb_notifications, |section| {
             section.child(
                 div().flex().justify_end().child(
-                    NotificationCenter::new(self.fb_notifications.clone())
+                    kael_ui::prelude::NotificationCenter::new(self.fb_notifications.clone())
                         .id("fb-notification-center")
                         .max_visible(3),
                 ),

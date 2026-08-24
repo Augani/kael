@@ -2,16 +2,17 @@
 
 use std::{
     cell::RefCell,
+    collections::HashMap,
     num::NonZeroIsize,
     path::PathBuf,
     rc::{Rc, Weak},
     str::FromStr,
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicIsize, Ordering},
+    },
     time::{Duration, Instant},
 };
-
-#[cfg(feature = "webview")]
-use std::collections::HashMap;
 
 use ::util::ResultExt;
 use anyhow::{Context as _, Result};
@@ -24,7 +25,10 @@ use windows::{
         Foundation::*,
         Graphics::Gdi::*,
         System::{Com::*, LibraryLoader::*, Memory::*, Ole::*, SystemServices::*},
-        UI::{Controls::*, HiDpi::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
+        UI::{
+            Controls::*, HiDpi::*, Input::KeyboardAndMouse::*, Input::*, Shell::*,
+            WindowsAndMessaging::*,
+        },
     },
     core::*,
 };
@@ -38,6 +42,10 @@ use super::webview::WindowsWebViewHost;
 use crate::webview::{PlatformWebView, PlatformWebViewCommand};
 
 const MAX_NATIVE_TEXT_BYTES: usize = 16 * 1024 * 1024;
+
+/// Raw-input registration and cursor clipping are process-global Win32
+/// resources. Only the HWND stored here may mutate or release them.
+static WINDOWS_POINTER_LOCK_OWNER: AtomicIsize = AtomicIsize::new(0);
 
 struct GlobalMemoryLock(HGLOBAL);
 
@@ -60,6 +68,7 @@ pub struct WindowsWindowState {
     pub appearance: WindowAppearance,
     pub scale_factor: f32,
     pub restore_from_minimized: Option<Box<dyn FnMut(RequestFrameOptions)>>,
+    pub frame_polling_requested: bool,
 
     pub callbacks: Callbacks,
     pub input_handler: Option<PlatformInputHandler>,
@@ -76,6 +85,10 @@ pub struct WindowsWindowState {
     pub current_cursor: Option<HCURSOR>,
     pub nc_button_pressed: Option<u32>,
     pub window_opacity: f32,
+    pub(crate) pointer_lock: crate::game_input::NativePointerLockState,
+    pub(crate) pointer_lock_saved_position: Option<POINT>,
+    pub(crate) pointer_lock_absolute_position: Option<(i32, i32)>,
+    pub(crate) active_pointers: HashMap<u32, PointerInputEvent>,
 
     pub display: WindowsDisplay,
     fullscreen: Option<StyleAndBounds>,
@@ -98,6 +111,7 @@ pub(crate) struct WindowsWindowInner {
     pub(crate) validation_number: usize,
     pub(crate) main_receiver: crossbeam_channel::Receiver<Runnable>,
     pub(crate) platform_window_handle: HWND,
+    pub(crate) frame_polling_windows: Arc<FramePollingWindows>,
     pub(crate) tab_manager: WindowTabManager,
     pub(crate) uia_provider: windows::core::ComObject<GpuiUiaProvider>,
 }
@@ -131,6 +145,7 @@ impl WindowsWindowState {
         };
         let border_offset = WindowBorderOffset::default();
         let restore_from_minimized = None;
+        let frame_polling_requested = false;
         let renderer = DirectXRenderer::new(hwnd, directx_devices, disable_direct_composition)
             .context("Creating DirectX renderer")?;
         let callbacks = Callbacks::default();
@@ -155,6 +170,7 @@ impl WindowsWindowState {
             appearance,
             scale_factor,
             restore_from_minimized,
+            frame_polling_requested,
             min_size,
             callbacks,
             input_handler,
@@ -169,6 +185,10 @@ impl WindowsWindowState {
             current_cursor,
             nc_button_pressed,
             window_opacity,
+            pointer_lock: crate::game_input::NativePointerLockState::new(true),
+            pointer_lock_saved_position: None,
+            pointer_lock_absolute_position: None,
+            active_pointers: HashMap::default(),
             display,
             fullscreen,
             initial_placement,
@@ -264,9 +284,239 @@ impl WindowsWindowInner {
             validation_number: context.validation_number,
             main_receiver: context.main_receiver.clone(),
             platform_window_handle: context.platform_window_handle,
+            frame_polling_windows: context.frame_polling_windows.clone(),
             tab_manager,
             uia_provider,
         }))
+    }
+
+    fn pointer_lock_owner_id(&self) -> isize {
+        self.hwnd.0 as isize
+    }
+
+    fn pointer_clip_rect(&self) -> std::result::Result<RECT, GameInputError> {
+        let mut rect = RECT::default();
+        unsafe { GetClientRect(self.hwnd, &mut rect) }.map_err(|error| {
+            GameInputError::new(
+                GameInputErrorKind::Platform,
+                format!("Windows failed to query the pointer-lock client bounds: {error}"),
+            )
+        })?;
+        let mut top_left = POINT {
+            x: rect.left,
+            y: rect.top,
+        };
+        let mut bottom_right = POINT {
+            x: rect.right,
+            y: rect.bottom,
+        };
+        unsafe { ClientToScreen(self.hwnd, &mut top_left) }
+            .ok()
+            .map_err(|error| {
+                GameInputError::new(
+                    GameInputErrorKind::Platform,
+                    format!("Windows failed to map the pointer-lock origin: {error}"),
+                )
+            })?;
+        unsafe { ClientToScreen(self.hwnd, &mut bottom_right) }
+            .ok()
+            .map_err(|error| {
+                GameInputError::new(
+                    GameInputErrorKind::Platform,
+                    format!("Windows failed to map the pointer-lock extent: {error}"),
+                )
+            })?;
+        if bottom_right.x <= top_left.x || bottom_right.y <= top_left.y {
+            return Err(GameInputError::new(
+                GameInputErrorKind::Rejected,
+                "Windows cannot lock the pointer to an empty or minimized client area",
+            ));
+        }
+        Ok(RECT {
+            left: top_left.x,
+            top: top_left.y,
+            right: bottom_right.x,
+            bottom: bottom_right.y,
+        })
+    }
+
+    fn unregister_raw_pointer(&self) -> windows::core::Result<()> {
+        unsafe {
+            RegisterRawInputDevices(
+                &[RAWINPUTDEVICE {
+                    usUsagePage: 0x01,
+                    usUsage: 0x02,
+                    dwFlags: RIDEV_REMOVE,
+                    hwndTarget: HWND::default(),
+                }],
+                std::mem::size_of::<RAWINPUTDEVICE>() as u32,
+            )
+        }
+    }
+
+    pub(super) fn request_native_pointer_lock(&self) -> std::result::Result<(), GameInputError> {
+        {
+            let mut state = self.state.borrow_mut();
+            if !state.pointer_lock.begin_request()? {
+                return Ok(());
+            }
+        }
+
+        if unsafe { GetForegroundWindow() } != self.hwnd {
+            let error = GameInputError::new(
+                GameInputErrorKind::Rejected,
+                "Windows pointer lock requires the Kael window to be active",
+            );
+            return Err(self.state.borrow_mut().pointer_lock.fail(error));
+        }
+
+        let owner_id = self.pointer_lock_owner_id();
+        if WINDOWS_POINTER_LOCK_OWNER
+            .compare_exchange(0, owner_id, Ordering::AcqRel, Ordering::Acquire)
+            .is_err_and(|owner| owner != owner_id)
+        {
+            let error = GameInputError::new(
+                GameInputErrorKind::Rejected,
+                "another Kael window currently owns the Windows pointer lock",
+            );
+            return Err(self.state.borrow_mut().pointer_lock.fail(error));
+        }
+
+        let mut saved_position = POINT::default();
+        if let Err(error) = unsafe { GetCursorPos(&mut saved_position) } {
+            WINDOWS_POINTER_LOCK_OWNER.store(0, Ordering::Release);
+            let error = GameInputError::new(
+                GameInputErrorKind::Platform,
+                format!("Windows failed to save the cursor position: {error}"),
+            );
+            return Err(self.state.borrow_mut().pointer_lock.fail(error));
+        }
+
+        let register_result = unsafe {
+            RegisterRawInputDevices(
+                &[RAWINPUTDEVICE {
+                    usUsagePage: 0x01,
+                    usUsage: 0x02,
+                    dwFlags: RAWINPUTDEVICE_FLAGS::default(),
+                    hwndTarget: self.hwnd,
+                }],
+                std::mem::size_of::<RAWINPUTDEVICE>() as u32,
+            )
+        };
+        if let Err(error) = register_result {
+            WINDOWS_POINTER_LOCK_OWNER.store(0, Ordering::Release);
+            let error = GameInputError::new(
+                GameInputErrorKind::InitializationFailed,
+                format!("Windows failed to register raw mouse input: {error}"),
+            );
+            return Err(self.state.borrow_mut().pointer_lock.fail(error));
+        }
+
+        let clip_rect = match self.pointer_clip_rect() {
+            Ok(rect) => rect,
+            Err(error) => {
+                self.unregister_raw_pointer().log_err();
+                WINDOWS_POINTER_LOCK_OWNER.store(0, Ordering::Release);
+                return Err(self.state.borrow_mut().pointer_lock.fail(error));
+            }
+        };
+        if let Err(error) = unsafe { ClipCursor(Some(&clip_rect)) } {
+            self.unregister_raw_pointer().log_err();
+            WINDOWS_POINTER_LOCK_OWNER.store(0, Ordering::Release);
+            let error = GameInputError::new(
+                GameInputErrorKind::Platform,
+                format!("Windows failed to confine the pointer: {error}"),
+            );
+            return Err(self.state.borrow_mut().pointer_lock.fail(error));
+        }
+
+        unsafe { SetCursor(None) };
+        let mut state = self.state.borrow_mut();
+        state.pointer_lock_saved_position = Some(saved_position);
+        state.pointer_lock_absolute_position = None;
+        state.pointer_lock.lock();
+        Ok(())
+    }
+
+    pub(super) fn release_native_pointer_lock(&self) -> std::result::Result<(), GameInputError> {
+        let owner_id = self.pointer_lock_owner_id();
+        let owns_global_lock = WINDOWS_POINTER_LOCK_OWNER.load(Ordering::Acquire) == owner_id;
+        let mut first_error = None;
+
+        if owns_global_lock {
+            if let Err(error) = self.unregister_raw_pointer() {
+                first_error = Some(GameInputError::new(
+                    GameInputErrorKind::Platform,
+                    format!("Windows failed to unregister raw mouse input: {error}"),
+                ));
+            }
+            if let Err(error) = unsafe { ClipCursor(None) }
+                && first_error.is_none()
+            {
+                first_error = Some(GameInputError::new(
+                    GameInputErrorKind::Platform,
+                    format!("Windows failed to release pointer confinement: {error}"),
+                ));
+            }
+
+            let (saved_position, cursor) = {
+                let mut state = self.state.borrow_mut();
+                state.pointer_lock_absolute_position = None;
+                (
+                    state.pointer_lock_saved_position.take(),
+                    state.current_cursor,
+                )
+            };
+            if let Some(position) = saved_position
+                && let Err(error) = unsafe { SetCursorPos(position.x, position.y) }
+                && first_error.is_none()
+            {
+                first_error = Some(GameInputError::new(
+                    GameInputErrorKind::Platform,
+                    format!("Windows failed to restore the cursor position: {error}"),
+                ));
+            }
+            unsafe { SetCursor(cursor) };
+            let _ = WINDOWS_POINTER_LOCK_OWNER.compare_exchange(
+                owner_id,
+                0,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        } else {
+            let mut state = self.state.borrow_mut();
+            state.pointer_lock_saved_position = None;
+            state.pointer_lock_absolute_position = None;
+        }
+
+        let mut state = self.state.borrow_mut();
+        if let Some(error) = first_error {
+            return Err(state.pointer_lock.fail(error));
+        }
+        state.pointer_lock.unlock();
+        Ok(())
+    }
+
+    pub(super) fn refresh_native_pointer_clip(&self) -> std::result::Result<(), GameInputError> {
+        if !self.is_native_pointer_locked() {
+            return Ok(());
+        }
+        let rect = self.pointer_clip_rect()?;
+        unsafe { ClipCursor(Some(&rect)) }.map_err(|error| {
+            GameInputError::new(
+                GameInputErrorKind::Platform,
+                format!("Windows failed to update pointer confinement: {error}"),
+            )
+        })
+    }
+
+    pub(super) fn is_native_pointer_locked(&self) -> bool {
+        self.state.borrow().pointer_lock.status() == PointerLockStatus::Locked
+    }
+
+    pub(super) fn fail_native_pointer_lock(&self, error: GameInputError) {
+        self.release_native_pointer_lock().log_err();
+        self.state.borrow_mut().pointer_lock.fail(error);
     }
 
     fn toggle_fullscreen(&self) {
@@ -384,6 +634,7 @@ struct WindowCreateContext {
     disable_direct_composition: bool,
     directx_devices: DirectXDevices,
     tab_manager_state: Arc<std::sync::Mutex<TabManagerState>>,
+    frame_polling_windows: Arc<FramePollingWindows>,
 }
 
 impl WindowsWindow {
@@ -405,6 +656,7 @@ impl WindowsWindow {
             directx_devices,
             tab_manager_state,
             owner_window,
+            frame_polling_windows,
         } = creation_info;
         register_window_class(icon)?;
         let hide_title_bar = params
@@ -481,6 +733,7 @@ impl WindowsWindow {
             disable_direct_composition,
             directx_devices,
             tab_manager_state,
+            frame_polling_windows,
         };
         let creation_result = unsafe {
             CreateWindowExW(
@@ -550,6 +803,10 @@ impl rwh::HasDisplayHandle for WindowsWindow {
 
 impl Drop for WindowsWindow {
     fn drop(&mut self) {
+        if let Err(error) = self.0.release_native_pointer_lock() {
+            log::error!("failed to release Windows pointer lock while dropping window: {error}");
+        }
+        self.0.frame_polling_windows.set(self.0.hwnd, false);
         // Clean up tab manager tracking for this window.
         self.0.tab_manager.remove_window();
         #[cfg(feature = "webview")]
@@ -891,6 +1148,14 @@ impl PlatformWindow for WindowsWindow {
         }
     }
 
+    fn set_frame_polling(&self, active: bool) {
+        self.0.state.borrow_mut().frame_polling_requested = active;
+        let eligible = active
+            && unsafe { IsWindowVisible(self.0.hwnd).as_bool() }
+            && !unsafe { IsIconic(self.0.hwnd).as_bool() };
+        self.0.frame_polling_windows.set(self.0.hwnd, eligible);
+    }
+
     fn close(&self) {
         unsafe {
             PostMessageW(
@@ -937,6 +1202,31 @@ impl PlatformWindow for WindowsWindow {
         self.0.state.borrow_mut().callbacks.input = Some(callback);
     }
 
+    fn game_input_capabilities(&self) -> GameInputCapabilities {
+        let gamepads = if cfg!(feature = "game-input") {
+            GameInputAvailability::Available
+        } else {
+            GameInputAvailability::DisabledAtCompileTime
+        };
+        GameInputCapabilities::new(GameInputAvailability::Available, gamepads)
+    }
+
+    fn pointer_lock_status(&self) -> PointerLockStatus {
+        self.0.state.borrow().pointer_lock.status()
+    }
+
+    fn request_pointer_lock(&self) -> std::result::Result<(), GameInputError> {
+        self.0.request_native_pointer_lock()
+    }
+
+    fn exit_pointer_lock(&self) -> std::result::Result<(), GameInputError> {
+        self.0.release_native_pointer_lock()
+    }
+
+    fn pointer_lock_error(&self) -> Option<GameInputError> {
+        self.0.state.borrow().pointer_lock.error()
+    }
+
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>) {
         self.0.state.borrow_mut().callbacks.active_status_change = Some(callback);
     }
@@ -977,6 +1267,30 @@ impl PlatformWindow for WindowsWindow {
     #[cfg(feature = "webview")]
     fn dispatch_webview_command(&mut self, command: PlatformWebViewCommand) -> anyhow::Result<()> {
         super::webview::dispatch_webview_command(&self.0, command)
+    }
+
+    fn print(&mut self, job: PlatformPrintJob) -> anyhow::Result<()> {
+        super::print::print_job(self.0.hwnd, job, false)
+    }
+
+    fn show_print_dialog(&mut self, job: PlatformPrintJob) -> anyhow::Result<()> {
+        super::print::print_job(self.0.hwnd, job, true)
+    }
+
+    fn export_scene_png(&self, scene: &Scene) -> std::result::Result<Image, WindowCaptureError> {
+        let readback = self
+            .0
+            .state
+            .borrow_mut()
+            .renderer
+            .render_scene_to_bgra(scene)
+            .map_err(|error| WindowCaptureError::Backend(error.to_string()))?;
+        crate::platform::encode_premultiplied_bgra_png(
+            readback.width,
+            readback.height,
+            readback.premultiplied_bgra,
+        )
+        .map_err(|error| WindowCaptureError::Backend(error.to_string()))
     }
 
     fn draw(&self, scene: &Scene) {
@@ -1142,7 +1456,7 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn display_refresh_rate(&self) -> Option<f32> {
-        super::vsync::get_display_refresh_rate_hz()
+        self.0.state.borrow().display.refresh_rate()
     }
 
     fn set_tabbing_identifier(&self, identifier: Option<String>) {

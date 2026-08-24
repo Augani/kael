@@ -11,7 +11,7 @@ pub mod tab_manager;
 pub mod window_positioner;
 
 #[cfg(all(
-    feature = "webview",
+    any(feature = "webview", feature = "webview-wayland-gtk4"),
     any(target_os = "linux", target_os = "freebsd", target_os = "windows")
 ))]
 mod webview_common;
@@ -40,13 +40,30 @@ mod tests;
 #[cfg(target_os = "windows")]
 mod windows;
 
+#[cfg(all(target_arch = "wasm32", feature = "browser"))]
+mod web;
+
+#[cfg(any(
+    test,
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+pub(crate) mod print_pdf;
+
+#[cfg(any(test, all(target_arch = "wasm32", feature = "browser")))]
+mod web_clipboard_limits;
+
+#[cfg(any(test, all(target_arch = "wasm32", feature = "browser")))]
+mod web_scene_math;
+
 #[cfg(all(
     feature = "screen-capture",
     any(
         target_os = "windows",
         all(
             any(target_os = "linux", target_os = "freebsd"),
-            any(feature = "wayland", feature = "x11"),
+            feature = "linux-platform",
         )
     )
 ))]
@@ -54,11 +71,12 @@ pub(crate) mod scap_screen_capture;
 
 use crate::{
     Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,
-    DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, Font, FontFeature, FontId, FontMetrics,
-    FontRun, ForegroundExecutor, GlyphId, GpuSpecs, ImageSource, Keymap, LineLayout, Pixels,
-    PlatformInput, Point, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams,
-    Scene, ShapedGlyph, ShapedRun, SharedString, Size, SvgRenderer, SvgSize, SystemWindowTab, Task,
-    TaskLabel, Window, WindowControlArea, WindowPlacement,
+    DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, ExternalFile, Font, FontFeature,
+    FontId, FontMetrics, FontRun, ForegroundExecutor, GlyphId, GpuSpecs, ImageSource, Keymap,
+    LineLayout, Pixels, PlatformInput, Point, RenderGlyphParams, RenderImage, RenderImageParams,
+    RenderSvgParams, Scene, ShapedGlyph, ShapedRun, SharedString, Size, SvgRenderer, SvgSize,
+    SystemWindowTab, Task, TaskLabel, Window, WindowCaptureError, WindowControlArea,
+    WindowPlacement,
     assets::{
         checked_image_frame_len, collect_animation_frames, decode_static_image,
         image_decode_limits, validate_image_source_bytes,
@@ -83,7 +101,7 @@ use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 use std::ops;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{
     fmt::{self, Debug},
     ops::Range,
@@ -93,6 +111,7 @@ use std::{
 };
 use strum::EnumIter;
 use uuid::Uuid;
+use web_time::Instant;
 
 pub use app_menu::*;
 pub use keyboard::*;
@@ -106,6 +125,8 @@ pub(crate) use mac::*;
 pub use semantic_version::SemanticVersion;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use test::*;
+#[cfg(all(target_arch = "wasm32", feature = "browser"))]
+pub(crate) use web::*;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::*;
 
@@ -172,12 +193,17 @@ pub(crate) fn try_current_platform(headless: bool) -> anyhow::Result<Rc<dyn Plat
     }
 
     match guess_compositor() {
-        #[cfg(feature = "wayland")]
+        #[cfg(feature = "webview-wayland-gtk4")]
+        "Wayland" | "X11" => Ok(Rc::new(Gtk4Client::new().map_err(|error| {
+            anyhow::anyhow!("failed to initialize the GTK4 Linux host: {error:#}")
+        })?)),
+
+        #[cfg(all(feature = "wayland", not(feature = "webview-wayland-gtk4")))]
         "Wayland" => Ok(Rc::new(WaylandClient::new().map_err(|error| {
             anyhow::anyhow!("failed to initialize Wayland: {error:#}")
         })?)),
 
-        #[cfg(feature = "x11")]
+        #[cfg(all(feature = "x11", not(feature = "webview-wayland-gtk4")))]
         "X11" => Ok(Rc::new(X11Client::new().map_err(|error| {
             anyhow::anyhow!("failed to initialize X11: {error:#}")
         })?)),
@@ -196,25 +222,113 @@ pub fn guess_compositor() -> &'static str {
         return "Headless";
     }
 
-    #[cfg(feature = "wayland")]
+    let kael_backend =
+        std::env::var_os("KAEL_LINUX_BACKEND").and_then(|value| value.into_string().ok());
+
+    #[cfg(feature = "linux-wayland-protocols")]
     let wayland_display = std::env::var_os("WAYLAND_DISPLAY");
-    #[cfg(not(feature = "wayland"))]
+    #[cfg(not(feature = "linux-wayland-protocols"))]
     let wayland_display: Option<std::ffi::OsString> = None;
 
-    #[cfg(feature = "x11")]
+    #[cfg(feature = "linux-x11-protocols")]
     let x11_display = std::env::var_os("DISPLAY");
-    #[cfg(not(feature = "x11"))]
+    #[cfg(not(feature = "linux-x11-protocols"))]
     let x11_display: Option<std::ffi::OsString> = None;
 
     let use_wayland = wayland_display.is_some_and(|display| !display.is_empty());
     let use_x11 = x11_display.is_some_and(|display| !display.is_empty());
 
-    if use_wayland {
+    #[cfg(feature = "webview-wayland-gtk4")]
+    let gdk_backend = std::env::var("GDK_BACKEND")
+        .ok()
+        .and_then(|value| preferred_gdk_linux_backend(&value, use_wayland, use_x11));
+    #[cfg(not(feature = "webview-wayland-gtk4"))]
+    let gdk_backend: Option<&'static str> = None;
+    let selected_backend = kael_backend.as_deref().or(gdk_backend);
+
+    select_linux_backend(selected_backend, use_wayland, use_x11)
+}
+
+/// Resolve the Linux window backend without connecting to a display server.
+///
+/// The maintained GTK4/GSK host supports both Wayland and X11/XWayland. An
+/// explicit backend always wins; otherwise native Wayland is preferred when it
+/// is available.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn select_linux_backend(
+    explicit_backend: Option<&str>,
+    wayland_available: bool,
+    x11_available: bool,
+) -> &'static str {
+    if let Some(selection) = explicit_backend.and_then(explicit_linux_backend) {
+        return selection;
+    }
+
+    if wayland_available {
         "Wayland"
-    } else if use_x11 {
+    } else if x11_available {
         "X11"
     } else {
         "Headless"
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn explicit_linux_backend(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "auto" => None,
+        "x11" => Some("X11"),
+        "wayland" => Some("Wayland"),
+        "headless" => Some("Headless"),
+        _ => Some("Invalid KAEL_LINUX_BACKEND value"),
+    }
+}
+
+/// Resolve GDK's ordered backend list to the display it can actually open.
+/// `KAEL_LINUX_BACKEND` remains the higher-priority application override.
+#[cfg(all(
+    any(target_os = "linux", target_os = "freebsd"),
+    any(feature = "webview-wayland-gtk4", test)
+))]
+fn preferred_gdk_linux_backend(
+    value: &str,
+    wayland_available: bool,
+    x11_available: bool,
+) -> Option<&'static str> {
+    value
+        .split(',')
+        .map(|backend| backend.trim().to_ascii_lowercase())
+        .find_map(|backend| match backend.as_str() {
+            "wayland" if wayland_available => Some("wayland"),
+            "x11" if x11_available => Some("x11"),
+            _ => None,
+        })
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "freebsd")))]
+mod linux_backend_selection_tests {
+    use super::{preferred_gdk_linux_backend, select_linux_backend};
+
+    #[test]
+    fn gdk_backend_order_tracks_the_display_gtk_will_open() {
+        assert_eq!(
+            preferred_gdk_linux_backend("x11,wayland", true, true),
+            Some("x11")
+        );
+        assert_eq!(
+            preferred_gdk_linux_backend("wayland,x11", true, true),
+            Some("wayland")
+        );
+        assert_eq!(
+            preferred_gdk_linux_backend("wayland,x11", false, true),
+            Some("x11")
+        );
+    }
+
+    #[test]
+    fn kael_override_remains_authoritative() {
+        assert_eq!(select_linux_backend(Some("x11"), true, true), "X11");
+        assert_eq!(select_linux_backend(Some("wayland"), true, true), "Wayland");
     }
 }
 
@@ -228,6 +342,16 @@ pub(crate) fn current_platform(_headless: bool) -> Rc<dyn Platform> {
 #[cfg(target_os = "windows")]
 pub(crate) fn try_current_platform(_headless: bool) -> anyhow::Result<Rc<dyn Platform>> {
     Ok(Rc::new(WindowsPlatform::new()?))
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "browser"))]
+pub(crate) fn current_platform(_headless: bool) -> Rc<dyn Platform> {
+    try_current_platform(false).expect("failed to initialize the browser platform")
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "browser"))]
+pub(crate) fn try_current_platform(_headless: bool) -> anyhow::Result<Rc<dyn Platform>> {
+    Ok(WebPlatform::new()?)
 }
 
 pub(crate) trait Platform: 'static {
@@ -292,11 +416,126 @@ pub(crate) trait Platform: 'static {
         &self,
         options: PathPromptOptions,
     ) -> oneshot::Receiver<Result<Option<Vec<PathBuf>>>>;
+    /// Prompt for portable file bytes instead of filesystem paths.
+    ///
+    /// Native backends adapt their existing path picker and read the selected
+    /// files off the UI thread. Browser backends override this with a DOM file
+    /// picker because browsers never expose native paths.
+    fn prompt_for_files(
+        &self,
+        options: PathPromptOptions,
+    ) -> oneshot::Receiver<Result<Option<Vec<ExternalFile>>>> {
+        let paths = self.prompt_for_paths(options);
+        let (tx, rx) = oneshot::channel();
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = std::thread::spawn(move || {
+            const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
+            const MAX_SELECTION_BYTES: u64 = 512 * 1024 * 1024;
+            let result = match futures::executor::block_on(paths) {
+                Ok(Ok(Some(paths))) => {
+                    let mut selection_bytes = 0_u64;
+                    let files = paths
+                        .into_iter()
+                        .map(|path| {
+                            let name = path
+                                .file_name()
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("unnamed")
+                                .to_string();
+                            let unavailable = |message: String| {
+                                ExternalFile::unavailable(
+                                    name.clone(),
+                                    None::<String>,
+                                    message,
+                                )
+                                .with_source_path(path.clone())
+                            };
+                            let byte_len = match std::fs::metadata(&path) {
+                                Ok(metadata) if metadata.is_file() => metadata.len(),
+                                Ok(_) => return unavailable("selected path is not a file".into()),
+                                Err(error) => return unavailable(error.to_string()),
+                            };
+                            if byte_len > MAX_FILE_BYTES {
+                                return unavailable(format!(
+                                    "file exceeds the portable {MAX_FILE_BYTES}-byte limit"
+                                ));
+                            }
+                            if selection_bytes.saturating_add(byte_len) > MAX_SELECTION_BYTES {
+                                return unavailable(format!(
+                                    "selection exceeds the portable {MAX_SELECTION_BYTES}-byte limit"
+                                ));
+                            }
+                            match std::fs::read(&path) {
+                                Ok(bytes) => {
+                                    selection_bytes =
+                                        selection_bytes.saturating_add(bytes.len() as u64);
+                                    ExternalFile::from_bytes(name, bytes).with_source_path(path)
+                                }
+                                Err(error) => unavailable(error.to_string()),
+                            }
+                        })
+                        .collect();
+                    Ok(Some(files))
+                }
+                Ok(Ok(None)) => Ok(None),
+                Ok(Err(error)) => Err(error),
+                Err(error) => Err(error.into()),
+            };
+            tx.send(result).ok();
+        });
+        #[cfg(target_arch = "wasm32")]
+        {
+            drop(paths);
+            tx.send(Err(anyhow::anyhow!(
+                "portable browser file picking requires the browser platform backend"
+            )))
+            .ok();
+        }
+        rx
+    }
     fn prompt_for_new_path(
         &self,
         directory: &Path,
         suggested_name: Option<&str>,
     ) -> oneshot::Receiver<Result<Option<PathBuf>>>;
+    /// Save portable bytes through the platform's user-selected file flow.
+    ///
+    /// The default desktop implementation shows the native Save As dialog and
+    /// writes on a background thread. Browser backends override this with a
+    /// Blob download because they cannot return or write arbitrary paths.
+    fn save_file_bytes(
+        &self,
+        directory: PathBuf,
+        suggested_name: Option<String>,
+        mime_type: String,
+        bytes: Arc<[u8]>,
+    ) -> oneshot::Receiver<Result<bool>> {
+        let path = self.prompt_for_new_path(&directory, suggested_name.as_deref());
+        let (tx, rx) = oneshot::channel();
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = std::thread::spawn(move || {
+            let result = match futures::executor::block_on(path) {
+                Ok(Ok(Some(path))) => std::fs::write(path, bytes.as_ref())
+                    .map(|_| true)
+                    .map_err(Into::into),
+                Ok(Ok(None)) => Ok(false),
+                Ok(Err(error)) => Err(error),
+                Err(error) => Err(error.into()),
+            };
+            tx.send(result).ok();
+        });
+        #[cfg(target_arch = "wasm32")]
+        {
+            drop((path, mime_type, bytes));
+            tx.send(Err(anyhow::anyhow!(
+                "portable browser saving requires the browser platform backend"
+            )))
+            .ok();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        drop(mime_type);
+        rx
+    }
     fn can_select_mixed_files_and_dirs(&self) -> bool;
     fn reveal_path(&self, path: &Path);
     fn open_with_system(&self, path: &Path);
@@ -559,6 +798,24 @@ pub trait ScreenCaptureStream {
 /// A frame of video captured from a screen.
 pub struct ScreenCaptureFrame(pub PlatformScreenCaptureFrame);
 
+/// An RGBA frame produced by the browser display-capture picker.
+///
+/// Browsers do not expose a native texture handle for a captured surface. Kael
+/// therefore presents a bounded, tightly packed RGBA buffer so the retained
+/// screen-capture API has the same callback shape on desktop and the web.
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlatformScreenCaptureFrame {
+    /// Width of the captured frame in physical pixels.
+    pub width: u32,
+    /// Height of the captured frame in physical pixels.
+    pub height: u32,
+    /// Tightly packed RGBA8 pixels, row-major from the top-left corner.
+    pub rgba: Arc<Vec<u8>>,
+    /// Browser presentation timestamp in milliseconds.
+    pub timestamp_ms: u64,
+}
+
 /// An opaque identifier for a hardware display
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
 pub struct DisplayId(pub(crate) u32);
@@ -794,6 +1051,39 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn is_fullscreen(&self) -> bool;
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>);
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>);
+    /// Report pointer-lock and controller availability for this window.
+    fn game_input_capabilities(&self) -> crate::GameInputCapabilities {
+        let gamepads = if cfg!(feature = "game-input") {
+            crate::GameInputAvailability::Available
+        } else {
+            crate::GameInputAvailability::DisabledAtCompileTime
+        };
+        crate::GameInputCapabilities::new(crate::GameInputAvailability::Unsupported, gamepads)
+    }
+    /// Return this window's pointer-lock lifecycle state.
+    fn pointer_lock_status(&self) -> crate::PointerLockStatus {
+        crate::PointerLockStatus::Unsupported
+    }
+    /// Request pointer lock. Platforms without a safe implementation reject it.
+    fn request_pointer_lock(&self) -> std::result::Result<(), crate::GameInputError> {
+        Err(crate::GameInputError::unsupported(
+            "pointer lock is unsupported by this window backend",
+        ))
+    }
+    /// Release pointer lock owned by this window.
+    fn exit_pointer_lock(&self) -> std::result::Result<(), crate::GameInputError> {
+        Err(crate::GameInputError::unsupported(
+            "pointer lock is unsupported by this window backend",
+        ))
+    }
+    /// Return the most recent synchronous or asynchronous pointer-lock failure.
+    fn pointer_lock_error(&self) -> Option<crate::GameInputError> {
+        None
+    }
+    /// Sample connected controllers on the caller's display frame.
+    fn gamepads(&self) -> std::result::Result<crate::GamepadSnapshot, crate::GameInputError> {
+        crate::game_input::native_gamepads()
+    }
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>);
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>);
     fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32)>);
@@ -821,6 +1111,11 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         Err(anyhow::anyhow!(
             "printing is not supported on this platform"
         ))
+    }
+    fn export_scene_png(&self, _scene: &Scene) -> std::result::Result<Image, WindowCaptureError> {
+        Err(WindowCaptureError::Unsupported {
+            platform: std::env::consts::OS,
+        })
     }
     fn draw(&self, scene: &Scene);
     fn completed_frame(&self) {}
@@ -1147,17 +1442,42 @@ pub(crate) enum AtlasKey {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        feature = "webview-wayland-gtk4",
+        not(any(feature = "wayland", feature = "x11"))
+    ),
+    allow(dead_code)
+)]
 pub(crate) enum AtlasAllocationClass {
     Shared,
     SharedSmallImage,
     DedicatedLargeImage,
 }
 
+#[cfg_attr(
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        feature = "webview-wayland-gtk4",
+        not(any(feature = "wayland", feature = "x11"))
+    ),
+    allow(dead_code)
+)]
 pub(crate) const SMALL_IMAGE_ATLAS_MAX_SIZE: Size<DevicePixels> = Size {
     width: DevicePixels(128),
     height: DevicePixels(128),
 };
 
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        feature = "webview-wayland-gtk4",
+        not(any(feature = "wayland", feature = "x11"))
+    ),
+    allow(dead_code)
+)]
 pub(crate) const SMALL_IMAGE_ATLAS_PAGE_SIZE: Size<DevicePixels> = Size {
     width: DevicePixels(512),
     height: DevicePixels(512),
@@ -1166,6 +1486,14 @@ pub(crate) const SMALL_IMAGE_ATLAS_PAGE_SIZE: Size<DevicePixels> = Size {
 pub(crate) const MAX_ATLAS_TEXTURE_DIMENSION: i32 = 16_384;
 
 #[cfg(any(target_os = "linux", test))]
+#[cfg_attr(
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        feature = "webview-wayland-gtk4",
+        not(any(feature = "wayland", feature = "x11"))
+    ),
+    allow(dead_code)
+)]
 pub(crate) fn safe_gpu_dimension(value: f32) -> u32 {
     if !value.is_finite() {
         return 1;
@@ -1258,6 +1586,14 @@ impl AtlasKey {
         }
     }
 
+    #[cfg_attr(
+        all(
+            any(target_os = "linux", target_os = "freebsd"),
+            feature = "webview-wayland-gtk4",
+            not(any(feature = "wayland", feature = "x11"))
+        ),
+        allow(dead_code)
+    )]
     pub(crate) fn allocation_class(&self, size: Size<DevicePixels>) -> AtlasAllocationClass {
         match self {
             AtlasKey::IconAtlas(_) => AtlasAllocationClass::DedicatedLargeImage,
@@ -1274,6 +1610,15 @@ impl AtlasKey {
 }
 
 impl AtlasAllocationClass {
+    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg_attr(
+        all(
+            any(target_os = "linux", target_os = "freebsd"),
+            feature = "webview-wayland-gtk4",
+            not(any(feature = "wayland", feature = "x11"))
+        ),
+        allow(dead_code)
+    )]
     pub(crate) fn texture_size(
         self,
         min_size: Size<DevicePixels>,
@@ -1327,6 +1672,10 @@ pub(crate) trait PlatformAtlas: Send + Sync {
         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
     ) -> Result<Option<AtlasTile>>;
     fn remove(&self, key: &AtlasKey);
+
+    /// Remove all cached atlas entries, for example after browser fonts change.
+    #[cfg(target_arch = "wasm32")]
+    fn clear(&self) {}
 }
 
 struct AtlasTextureList<T> {
@@ -1465,6 +1814,7 @@ pub(crate) struct PlatformInputHandler {
     ),
     allow(dead_code)
 )]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 impl PlatformInputHandler {
     pub fn new(cx: AsyncWindowContext, handler: Box<dyn InputHandler>) -> Self {
         Self { cx, handler }
@@ -1756,6 +2106,7 @@ pub struct WindowOptions {
     ),
     allow(dead_code)
 )]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) struct WindowParams {
     pub bounds: Bounds<Pixels>,
 
@@ -7802,6 +8153,115 @@ impl Image {
     }
 }
 
+#[cfg_attr(
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        feature = "webview-wayland-gtk4",
+        not(any(feature = "wayland", feature = "x11"))
+    ),
+    allow(dead_code)
+)]
+pub(crate) fn encode_rgba_png(width: u32, height: u32, rgba: Vec<u8>) -> Result<Image> {
+    let expected = checked_image_frame_len(width, height)?;
+    anyhow::ensure!(
+        rgba.len() == expected,
+        "RGBA capture buffer length does not match its dimensions"
+    );
+    let buffer = image::RgbaImage::from_raw(width, height, rgba)
+        .ok_or_else(|| anyhow::anyhow!("RGBA capture buffer is malformed"))?;
+    let mut encoded = Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(buffer)
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .map_err(|error| anyhow::anyhow!("failed to encode captured scene as PNG: {error}"))?;
+    Ok(Image::from_bytes(ImageFormat::Png, encoded.into_inner()))
+}
+
+#[cfg(any(
+    test,
+    target_os = "windows",
+    all(target_os = "macos", not(feature = "macos-blade"))
+))]
+pub(crate) fn encode_premultiplied_bgra_png(
+    width: u32,
+    height: u32,
+    bgra: Vec<u8>,
+) -> Result<Image> {
+    encode_bgra_png(width, height, bgra, true)
+}
+
+#[cfg(any(
+    test,
+    target_os = "windows",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "macos"
+))]
+#[cfg_attr(
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        feature = "webview-wayland-gtk4",
+        not(any(feature = "wayland", feature = "x11"))
+    ),
+    allow(dead_code)
+)]
+pub(crate) fn encode_bgra_png(
+    width: u32,
+    height: u32,
+    mut bgra: Vec<u8>,
+    premultiplied_alpha: bool,
+) -> Result<Image> {
+    let expected = checked_image_frame_len(width, height)?;
+    anyhow::ensure!(
+        bgra.len() == expected,
+        "BGRA capture buffer length does not match its dimensions"
+    );
+    for pixel in bgra.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+        let alpha = u32::from(pixel[3]);
+        if premultiplied_alpha && alpha != 0 && alpha != 255 {
+            for channel in &mut pixel[..3] {
+                *channel = ((u32::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
+    }
+    encode_rgba_png(width, height, bgra)
+}
+
+#[cfg(test)]
+mod scene_capture_image_tests {
+    use super::*;
+
+    #[test]
+    fn rgba_scene_capture_encodes_real_png_pixels() {
+        let rgba = vec![255, 0, 0, 255, 0, 128, 255, 64];
+        let image = encode_rgba_png(2, 1, rgba.clone()).unwrap();
+        assert_eq!(image.format(), ImageFormat::Png);
+        assert!(image.bytes().starts_with(b"\x89PNG\r\n\x1a\n"));
+        let decoded = image::load_from_memory_with_format(image.bytes(), image::ImageFormat::Png)
+            .unwrap()
+            .into_rgba8();
+        assert_eq!(decoded.as_raw(), &rgba);
+    }
+
+    #[test]
+    fn scene_capture_converts_premultiplied_bgra() {
+        let image = encode_premultiplied_bgra_png(1, 1, vec![0, 0, 128, 128]).unwrap();
+        let decoded = image::load_from_memory_with_format(image.bytes(), image::ImageFormat::Png)
+            .unwrap()
+            .into_rgba8();
+        assert_eq!(decoded.as_raw(), &[255, 0, 0, 128]);
+    }
+
+    #[test]
+    fn scene_capture_preserves_straight_bgra_alpha() {
+        let image = encode_bgra_png(1, 1, vec![10, 20, 30, 128], false).unwrap();
+        let decoded = image::load_from_memory_with_format(image.bytes(), image::ImageFormat::Png)
+            .unwrap()
+            .into_rgba8();
+        assert_eq!(decoded.as_raw(), &[30, 20, 10, 128]);
+    }
+}
+
 /// A clipboard item that should be copied to the clipboard
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClipboardString {
@@ -7894,7 +8354,10 @@ impl ClipboardString {
         Ok(())
     }
 
-    #[cfg_attr(any(target_os = "linux", target_os = "freebsd"), allow(dead_code))]
+    #[cfg_attr(
+        any(target_arch = "wasm32", target_os = "linux", target_os = "freebsd"),
+        allow(dead_code)
+    )]
     pub(crate) fn text_hash(text: &str) -> u64 {
         let mut hasher = SeaHasher::new();
         text.hash(&mut hasher);

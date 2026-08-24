@@ -8,7 +8,7 @@ use zbus::{
 
 use crate::{
     action::NotificationAction,
-    local::{LocalNotification, NotificationPayload},
+    local::{DEFAULT_NOTIFICATION_ACTION_ID, LocalNotification, NotificationPayload},
 };
 
 use super::{NotificationBackend, PlatformNotificationSupport};
@@ -19,6 +19,12 @@ pub(crate) const SUPPORT: PlatformNotificationSupport = PlatformNotificationSupp
     delivery_backend: "freedesktop-notifications-dbus",
     action_backend: "freedesktop-action-invoked",
     push_backend: "not-implemented",
+    asynchronous_permission: false,
+    immediate_delivery: true,
+    interval_triggers: true,
+    system_triggers: false,
+    actions: true,
+    cancellation: false,
 };
 
 impl NotificationBackend for PlatformBackend {
@@ -30,11 +36,18 @@ impl NotificationBackend for PlatformBackend {
         on_action: Option<Arc<dyn Fn(String) + Send + Sync + 'static>>,
     ) -> Result<()> {
         let body = body(notification);
-        if actions.is_empty() || on_action.is_none() {
+        if on_action.is_none() {
             let connection =
                 Connection::session().context("failed to connect to the D-Bus session")?;
             let proxy = notification_proxy(&connection)?;
-            send_notification(&proxy, &payload.title, &body, &notification.sound, actions)?;
+            send_notification(
+                &proxy,
+                &payload.title,
+                &body,
+                &notification.sound,
+                actions,
+                false,
+            )?;
             return Ok(());
         }
 
@@ -96,11 +109,17 @@ fn send_notification(
     body: &str,
     sound: &Option<crate::local::NotificationSound>,
     actions: &[NotificationAction],
+    include_default_action: bool,
 ) -> Result<u32> {
-    let actions = actions
-        .iter()
-        .flat_map(|action| [action.identifier.as_str(), action.title.as_str()])
-        .collect::<Vec<_>>();
+    let mut platform_actions = Vec::with_capacity(actions.len() * 2 + 2);
+    if include_default_action {
+        platform_actions.extend([DEFAULT_NOTIFICATION_ACTION_ID, "Open"]);
+    }
+    platform_actions.extend(
+        actions
+            .iter()
+            .flat_map(|action| [action.identifier.as_str(), action.title.as_str()]),
+    );
     let mut hints = HashMap::<&str, Value<'_>>::new();
     match sound {
         Some(crate::local::NotificationSound::Named(name)) => {
@@ -114,7 +133,16 @@ fn send_notification(
     proxy
         .call(
             "Notify",
-            &("Kael", 0_u32, "", title, body, actions, hints, -1_i32),
+            &(
+                "Kael",
+                0_u32,
+                "",
+                title,
+                body,
+                platform_actions,
+                hints,
+                -1_i32,
+            ),
         )
         .context("failed to show notification")
 }
@@ -130,7 +158,7 @@ fn prepare_action_listener(
     let signals = proxy
         .receive_all_signals()
         .context("failed to subscribe to notification lifecycle events")?;
-    let notification_id = send_notification(&proxy, title, body, sound, actions)?;
+    let notification_id = send_notification(&proxy, title, body, sound, actions, true)?;
     Ok((proxy, signals, notification_id))
 }
 

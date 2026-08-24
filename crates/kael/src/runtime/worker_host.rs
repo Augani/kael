@@ -6,8 +6,8 @@ use crate::{
     ipc_transport::TypedTransport,
     process_model::{
         BootstrapMessage, ProcessClass, ProcessInfo, ProcessSpawnOptions,
-        ProcessSpawnOptionsBuilder, SupervisorEvent, WorkerError, WorkerProgress, WorkerRequest,
-        WorkerResponse,
+        ProcessSpawnOptionsBuilder, SupervisorEvent, WORKER_PROTOCOL_VERSION, WorkerError,
+        WorkerProgress, WorkerRequest, WorkerResponse,
     },
     supervisor::ProcessSupervisor,
     worker_api::WorkerHandle,
@@ -31,6 +31,7 @@ pub struct WorkerHost {
     supervisor: ProcessSupervisor,
     #[allow(dead_code)]
     socket_dir: PathBuf,
+    capabilities: Vec<String>,
 }
 
 impl WorkerHost {
@@ -39,6 +40,7 @@ impl WorkerHost {
         Self {
             supervisor: ProcessSupervisor::new(),
             socket_dir: socket_dir.into(),
+            capabilities: vec!["file-io".to_string(), "network".to_string()],
         }
     }
 
@@ -51,6 +53,21 @@ impl WorkerHost {
     pub fn with_tracer(mut self, tracer: Tracer) -> Self {
         self.supervisor = self.supervisor.with_tracer(tracer);
         self
+    }
+
+    /// Set the exact capabilities required during the worker handshake.
+    pub fn with_capabilities<I, S>(mut self, capabilities: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.capabilities = capabilities.into_iter().map(Into::into).collect();
+        BootstrapMessage::Handshake {
+            version: WORKER_PROTOCOL_VERSION,
+            capabilities: self.capabilities.clone(),
+        }
+        .validate()?;
+        Ok(self)
     }
 
     /// Register a callback to receive supervisor lifecycle events.
@@ -132,12 +149,12 @@ impl WorkerHost {
         let setup = (|| -> Result<WorkerHandle> {
             #[cfg(not(target_os = "windows"))]
             let (transport, timeout_control) = {
-                let deadline = std::time::Instant::now() + WORKER_BOOTSTRAP_TIMEOUT;
+                let deadline = web_time::Instant::now() + WORKER_BOOTSTRAP_TIMEOUT;
                 let stream = loop {
                     match listener.accept() {
                         Ok((stream, _)) => break stream,
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            if std::time::Instant::now() >= deadline {
+                            if web_time::Instant::now() >= deadline {
                                 return Err(anyhow!("timed out waiting for worker connection"));
                             }
                             if matches!(
@@ -179,12 +196,12 @@ impl WorkerHost {
 
             let mut bootstrap =
                 TypedTransport::<BootstrapMessage, BootstrapMessage, (), String>::new(transport);
-            let requested_capabilities = vec!["file-io".to_string(), "network".to_string()];
+            let requested_capabilities = self.capabilities.clone();
 
             bootstrap.send_request(
                 1,
                 BootstrapMessage::Handshake {
-                    version: 1,
+                    version: WORKER_PROTOCOL_VERSION,
                     capabilities: requested_capabilities.clone(),
                 },
             )?;
@@ -212,6 +229,10 @@ impl WorkerHost {
                             .iter()
                             .all(|capability| requested_capabilities.contains(capability)),
                         "worker granted an unrequested capability"
+                    );
+                    anyhow::ensure!(
+                        granted_capabilities.len() == requested_capabilities.len(),
+                        "worker did not grant all required capabilities"
                     );
                 }
                 _ => return Err(anyhow!("unexpected bootstrap response: {summary}")),
@@ -241,6 +262,16 @@ impl WorkerHost {
                 Err(error)
             }
         }
+    }
+
+    /// Stop a worker by identifier and reap its child process.
+    pub fn terminate_worker(&mut self, id: crate::process_model::ProcessId) -> Result<()> {
+        self.supervisor.stop(id)
+    }
+
+    /// Number of processes currently tracked by the worker supervisor.
+    pub fn worker_count(&self) -> usize {
+        self.supervisor.processes().len()
     }
 
     /// Access the underlying supervisor.

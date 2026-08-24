@@ -149,6 +149,14 @@ impl DrawContext {
         self.commands.is_empty()
     }
 
+    /// Reserve command storage for a known batch size.
+    ///
+    /// Real-time canvases should call this before emitting large, similarly
+    /// sized batches to avoid growing the command buffer during a frame.
+    pub fn reserve_commands(&mut self, additional: usize) {
+        self.commands.reserve(additional);
+    }
+
     /// Number of queued path commands.
     pub fn path_count(&self) -> usize {
         self.commands
@@ -274,6 +282,15 @@ impl DrawContext {
         self.fill_rounded_rect(bounds, px(0.), fill);
     }
 
+    /// Queue a batch of axis-aligned rectangles with one command-buffer reservation.
+    pub fn fill_rects(&mut self, rects: impl IntoIterator<Item = (Bounds<Pixels>, Background)>) {
+        let rects = rects.into_iter();
+        self.commands.reserve(rects.size_hint().0);
+        for (bounds, fill) in rects {
+            self.fill_rect(bounds, fill);
+        }
+    }
+
     /// Fill a rounded rectangle.
     pub fn fill_rounded_rect(
         &mut self,
@@ -329,23 +346,37 @@ impl DrawContext {
         radius: Pixels,
         fill: impl Into<Background>,
     ) {
-        if let Some(path) = build_circle_path(PathBuilder::fill(), center, radius) {
-            self.commands.push(DrawCommand::Path {
-                path,
-                fill: fill.into(),
-                state: self.current_state.clone(),
-            });
+        if radius > px(0.) {
+            let diameter = radius * 2.0;
+            self.fill_rounded_rect(
+                Bounds::new(center - point(radius, radius), size(diameter, diameter)),
+                radius,
+                fill,
+            );
+        }
+    }
+
+    /// Queue a batch of filled circles through the renderer's rounded-quad fast path.
+    pub fn fill_circles(
+        &mut self,
+        circles: impl IntoIterator<Item = (Point<Pixels>, Pixels, Background)>,
+    ) {
+        let circles = circles.into_iter();
+        self.commands.reserve(circles.size_hint().0);
+        for (center, radius, fill) in circles {
+            self.fill_circle(center, radius, fill);
         }
     }
 
     /// Stroke a circle.
     pub fn stroke_circle(&mut self, center: Point<Pixels>, radius: Pixels, stroke: Stroke) {
-        if let Some(path) = build_circle_path(configure_stroke_builder(&stroke), center, radius) {
-            self.commands.push(DrawCommand::Path {
-                path,
-                fill: stroke.color.into(),
-                state: self.current_state.clone(),
-            });
+        if radius > px(0.) && stroke.width > px(0.) {
+            let diameter = radius * 2.0;
+            self.stroke_rounded_rect(
+                Bounds::new(center - point(radius, radius), size(diameter, diameter)),
+                radius,
+                stroke,
+            );
         }
     }
 
@@ -726,24 +757,6 @@ impl Styled for CanvasDraw {
     }
 }
 
-fn build_circle_path(
-    mut builder: PathBuilder,
-    center: Point<Pixels>,
-    radius: Pixels,
-) -> Option<Path<Pixels>> {
-    if radius <= px(0.) {
-        return None;
-    }
-
-    let right = point(center.x + radius, center.y);
-    let left = point(center.x - radius, center.y);
-    builder.move_to(right);
-    builder.arc_to(point(radius, radius), px(0.), true, true, left);
-    builder.arc_to(point(radius, radius), px(0.), true, true, right);
-    builder.close();
-    builder.build().ok()
-}
-
 fn build_ellipse_path(
     mut builder: PathBuilder,
     center: Point<Pixels>,
@@ -902,6 +915,41 @@ fn paint_text_line(
 mod tests {
     use super::{StrokeDash, stroke, transform_bounds};
     use crate::{Bounds, PathBuilder, point, px, size};
+
+    #[test]
+    fn real_time_shape_batches_use_quad_fast_paths() {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(200.), px(200.)));
+        let mask = crate::ContentMask { bounds };
+        let mut cx = super::DrawContext::new(bounds, mask);
+
+        cx.reserve_commands(4);
+        cx.fill_rects([
+            (
+                Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.))),
+                crate::Background::from(crate::red()),
+            ),
+            (
+                Bounds::new(point(px(12.), px(0.)), size(px(10.), px(10.))),
+                crate::Background::from(crate::blue()),
+            ),
+        ]);
+        cx.fill_circles([
+            (
+                point(px(20.), px(40.)),
+                px(8.),
+                crate::Background::from(crate::red()),
+            ),
+            (
+                point(px(50.), px(40.)),
+                px(8.),
+                crate::Background::from(crate::blue()),
+            ),
+        ]);
+
+        assert_eq!(cx.command_count(), 4);
+        assert_eq!(cx.quad_count(), 4);
+        assert_eq!(cx.path_count(), 0);
+    }
 
     #[test]
     fn save_restore_round_trips_transform_and_alpha() {

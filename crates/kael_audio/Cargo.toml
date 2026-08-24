@@ -1,6 +1,7 @@
 [package]
 edition.workspace = true
 name = "kael_audio"
+autoexamples = false
 rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
@@ -13,43 +14,115 @@ authors.workspace = true
 repository.workspace = true
 readme = "README.md"
 license.workspace = true
+exclude = ["examples/"]
 
 [package.metadata.docs.rs]
 default-target = "x86_64-unknown-linux-gnu"
-targets = []
+targets = ["wasm32-unknown-unknown"]
 
 [lib]
 name = "kael_audio"
 path = "src/lib.rs"
 
+[features]
+default = ["native"]
+native = []
+browser = []
+
 [dependencies.anyhow]
 workspace = true
-
-[dependencies.cpal]
-version = "0.15"
-
-[dependencies.crossbeam-channel]
-version = "0.5"
 
 [dependencies.log]
 workspace = true
 
-[dependencies.kael_media]
-path = "../kael-media"
-package = "kael-media"
-version = "0.3.1"
-
 [dependencies.parking_lot]
 version = "0.12.1"
-
-[dependencies.smol]
-workspace = true
 
 [dependencies.url]
 version = "2.2"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.cpal]
+version = "0.15"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.crossbeam-channel]
+version = "0.5"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.kael_media]
+path = "../kael-media"
+package = "kael-media"
+version = "0.4.0"
+default-features = false
+features = ["native-media"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.smol]
+workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.futures-channel]
+version = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.js-sys]
+version = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.kael_media]
+path = "../kael-media"
+package = "kael-media"
+version = "0.4.0"
+default-features = false
+features = ["native-media"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.wasm-bindgen]
+version = "0.2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.wasm-bindgen-futures]
+version = "0.4"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3"
+features = [
+    "AudioContext",
+    "AudioContextOptions",
+    "AudioContextState",
+    "AudioDestinationNode",
+    "AudioNode",
+    "AudioWorklet",
+    "AudioWorkletNode",
+    "AudioWorkletNodeOptions",
+    "BaseAudioContext",
+    "Blob",
+    "BlobPropertyBag",
+    "Document",
+    "Element",
+    "Event",
+    "EventTarget",
+    "HtmlAudioElement",
+    "HtmlMediaElement",
+    "Location",
+    "MediaDeviceInfo",
+    "MediaDeviceKind",
+    "MediaDevices",
+    "MediaError",
+    "MediaStream",
+    "MediaStreamAudioSourceNode",
+    "MediaStreamConstraints",
+    "MediaStreamTrack",
+    "MessageEvent",
+    "MessagePort",
+    "Navigator",
+    "Url",
+    "Window",
+    "Worklet",
+]
+
 [dev-dependencies.futures]
 workspace = true
 
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies.wasm-bindgen-test]
+version = "0.3"
+
 [lints]
 workspace = true
+
+[[example]]
+name = "browser_audio_smoke"
+path = "examples/browser_audio_smoke.rs"
+required-features = ["browser"]

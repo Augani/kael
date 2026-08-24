@@ -96,7 +96,7 @@ pub fn add_scroll_elasticity(overscroll: Pixels, delta: Pixels) -> Pixels {
 /// (within `0.25px`), at which point `last_advance` is reset.
 pub fn advance_scroll_elasticity(
     overscroll: &mut Pixels,
-    last_advance: &mut Option<std::time::Instant>,
+    last_advance: &mut Option<web_time::Instant>,
 ) -> bool {
     const DECAY_RATE: f32 = 12.0;
     const STOP_EPSILON: f32 = 0.25;
@@ -111,7 +111,7 @@ pub fn advance_scroll_elasticity(
         return false;
     }
 
-    let now = std::time::Instant::now();
+    let now = web_time::Instant::now();
     let dt = last_advance
         .map(|prev| now.saturating_duration_since(prev).as_secs_f32().min(0.05))
         .unwrap_or(1.0 / 60.0);

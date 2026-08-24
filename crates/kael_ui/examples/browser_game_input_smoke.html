@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="data:,">
+    <title>Kael UI portable game-input smoke</title>
+    <style>
+      html, body, #blade { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+      #blade { display: block; }
+    </style>
+  </head>
+  <body>
+    <canvas id="blade"></canvas>
+    <script type="module">
+      const mockGamepad = {
+        id: `Kael deterministic controller ${"🎮".repeat(100)}`,
+        index: 3,
+        connected: true,
+        timestamp: 42,
+        mapping: "standard",
+        axes: [0.25, -0.5, 2, -2, Number.NaN],
+        buttons: [
+          { value: 2, pressed: true, touched: true },
+          ...Array.from({ length: 80 }, () => ({ value: 0, pressed: false, touched: false })),
+        ],
+      };
+      Object.defineProperty(navigator, "getGamepads", {
+        configurable: true,
+        value: () => [mockGamepad, null],
+      });
+
+      let lockedElement = null;
+      Object.defineProperty(document, "pointerLockElement", {
+        configurable: true,
+        get: () => lockedElement,
+      });
+      Object.defineProperty(document, "exitPointerLock", {
+        configurable: true,
+        value: () => {
+          lockedElement = null;
+          document.dispatchEvent(new Event("pointerlockchange"));
+        },
+      });
+      Object.defineProperty(HTMLCanvasElement.prototype, "requestPointerLock", {
+        configurable: true,
+        value() {
+          if (globalThis.__kaelThrowPointerLock) {
+            globalThis.__kaelThrowPointerLock = false;
+            throw new DOMException(
+              "trusted activation is required",
+              "NotAllowedError",
+            );
+          }
+          if (globalThis.__kaelRejectPointerLock) {
+            globalThis.__kaelRejectPointerLock = false;
+            document.dispatchEvent(new Event("pointerlockerror"));
+            return;
+          }
+          lockedElement = this;
+          document.dispatchEvent(new Event("pointerlockchange"));
+          setTimeout(() => {
+            this.dispatchEvent(new PointerEvent("pointermove", {
+              pointerId: 1,
+              pointerType: "mouse",
+              isPrimary: true,
+              movementX: 7,
+              movementY: -4,
+              clientX: 20,
+              clientY: 20,
+            }));
+          }, 0);
+        },
+      });
+
+      import init from "./browser_game_input_smoke.js";
+      init().catch((error) => {
+        console.error(error);
+        window.location.search = "?__kael_game_input_failed__=1&bootstrap=failed";
+      });
+    </script>
+  </body>
+</html>

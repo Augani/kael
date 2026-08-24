@@ -1,7 +1,6 @@
 //! Toast notification component with auto-dismiss.
 
 use kael::{prelude::FluentBuilder as _, *};
-use smol::Timer;
 use std::{panic::Location, rc::Rc, time::Duration};
 
 use crate::animations::easings;

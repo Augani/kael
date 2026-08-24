@@ -1,4 +1,5 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 const MIN_DT: f32 = 0.001;
 const MAX_DT: f32 = 0.05;

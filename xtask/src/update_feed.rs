@@ -1,12 +1,14 @@
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use kael_release::update::{
     UpdateChannel, UpdateManifest, sign_manifest, signature_to_base64, signing_key_from_hex,
-    verify_manifest,
+    verify_manifest, verifying_key_from_hex,
 };
 
 use crate::{DistConfig, MAX_METADATA_FILE_BYTES, atomic_write, read_bounded_utf8_file};
@@ -41,28 +43,32 @@ pub fn run(
     artifacts: &[PathBuf],
     options: &FeedOptions,
 ) -> Result<()> {
-    let feed = build_feed(config, artifacts, options.signing_key.as_deref())?;
+    let feed = build_feed(
+        config,
+        artifacts,
+        options.signing_key.as_deref(),
+        options.dry_run,
+    )?;
 
     let json = serde_json::to_string_pretty(&feed)?;
 
     if options.dry_run {
         println!("dry-run: would write update feed to {}", output.display());
         println!("{}", json);
+        println!("dry-run: update metadata preview generated");
     } else {
         atomic_write(output, json.as_bytes())
             .with_context(|| format!("failed to write update feed: {}", output.display()))?;
+        println!("update feed generated: {}", output.display());
     }
-
-    println!("update feed generated: {}", output.display());
     Ok(())
 }
 
-pub fn verify(feed_path: &Path, signing_key_hex: &str) -> Result<()> {
+pub fn verify(feed_path: &Path, public_key_hex: &str) -> Result<()> {
     use base64::Engine as _;
 
-    let signing_key = signing_key_from_hex(signing_key_hex)
-        .context("KAEL_UPDATE_SIGNING_KEY is not a valid ed25519 key")?;
-    let verifying_key = signing_key.verifying_key();
+    let verifying_key = verifying_key_from_hex(public_key_hex)
+        .context("update public key is not a valid ed25519 key")?;
 
     let json = read_bounded_utf8_file(feed_path, MAX_METADATA_FILE_BYTES)
         .with_context(|| format!("failed to read update feed: {}", feed_path.display()))?;
@@ -117,6 +123,44 @@ pub fn verify(feed_path: &Path, signing_key_hex: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate the updater-specific prerequisites required before uploading a
+/// real release. This intentionally does not run during metadata simulation:
+/// CI can preview planned paths without production signing credentials, but a
+/// real publication must prove that every selected updater package produces a
+/// non-placeholder manifest signed by the key embedded in the application.
+pub(crate) fn validate_publish_readiness(
+    config: &DistConfig,
+    artifacts: &[PathBuf],
+    signing_key_hex: &str,
+) -> Result<()> {
+    let updater = config
+        .updater
+        .as_ref()
+        .context("updater config is required for updater publication")?;
+    let configured_public_key = updater
+        .public_key
+        .as_deref()
+        .filter(|key| !key.trim().is_empty())
+        .context("updater.public_key must be configured before publishing")?;
+    let signing_key = signing_key_from_hex(signing_key_hex)
+        .context("KAEL_UPDATE_SIGNING_KEY is not a valid ed25519 private key")?;
+    let verifying_key = verifying_key_from_hex(configured_public_key)
+        .context("updater.public_key is not a valid ed25519 public key")?;
+    anyhow::ensure!(
+        signing_key.verifying_key().to_bytes() == verifying_key.to_bytes(),
+        "KAEL_UPDATE_SIGNING_KEY does not match updater.public_key"
+    );
+
+    let feed = build_feed(config, artifacts, Some(signing_key_hex), false)?;
+    anyhow::ensure!(
+        feed.platforms.iter().all(|entry| {
+            entry.signature.is_some() && entry.size_bytes > 0 && entry.checksum != "0".repeat(64)
+        }),
+        "updater metadata is unsigned or contains placeholder artifact metadata"
+    );
+    Ok(())
+}
+
 fn ed25519_signature(bytes: &[u8; 64]) -> kael_release::ed25519_dalek::Signature {
     kael_release::ed25519_dalek::Signature::from_bytes(bytes)
 }
@@ -140,6 +184,7 @@ fn build_feed(
     config: &DistConfig,
     artifacts: &[PathBuf],
     signing_key_hex: Option<&str>,
+    allow_planned_artifacts: bool,
 ) -> Result<UpdateFeed> {
     let updater = config
         .updater
@@ -161,22 +206,63 @@ fn build_feed(
         }
     };
 
+    anyhow::ensure!(
+        !artifacts.is_empty(),
+        "at least one update artifact is required"
+    );
+
+    let mut seen_platforms = HashSet::new();
     let platforms = artifacts
         .iter()
         .map(|artifact| {
             let platform = detect_platform(artifact);
+            anyhow::ensure!(
+                platform != "unknown",
+                "cannot infer update platform from artifact name: {}",
+                artifact.display()
+            );
+            anyhow::ensure!(
+                seen_platforms.insert(platform.clone()),
+                "multiple update artifacts were supplied for platform {platform}; select one canonical updater package"
+            );
+            let file_name = artifact
+                .file_name()
+                .and_then(|name| name.to_str())
+                .with_context(|| {
+                    format!(
+                        "update artifact must have a UTF-8 file name: {}",
+                        artifact.display()
+                    )
+                })?;
             let url = format!(
                 "{}/{}",
-                updater.feed_url.trim_end_matches('/'),
-                artifact.file_name().unwrap_or_default().to_string_lossy()
+                updater.artifact_base_url.trim_end_matches('/'),
+                percent_encode_path_segment(file_name)
             );
-            let (checksum, size_bytes) = if artifact.exists() {
-                let size = fs::metadata(artifact)
-                    .with_context(|| format!("failed to stat artifact: {}", artifact.display()))?
-                    .len();
-                (sha256_file(artifact)?, size)
-            } else {
-                ("0".repeat(64), 0)
+            let (checksum, size_bytes) = match fs::symlink_metadata(artifact) {
+                Ok(metadata) => {
+                    anyhow::ensure!(
+                        metadata.file_type().is_file(),
+                        "update artifact must be a regular file: {}",
+                        artifact.display()
+                    );
+                    anyhow::ensure!(
+                        allow_planned_artifacts || metadata.len() > 0,
+                        "update artifact must not be empty: {}",
+                        artifact.display()
+                    );
+                    (sha256_file(artifact)?, metadata.len())
+                }
+                Err(error)
+                    if error.kind() == ErrorKind::NotFound && allow_planned_artifacts =>
+                {
+                    ("0".repeat(64), 0)
+                }
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("failed to inspect update artifact: {}", artifact.display())
+                    });
+                }
             };
 
             let signature = match signing_key.as_ref() {
@@ -220,6 +306,21 @@ fn build_feed(
         pub_date: now_rfc3339(),
         platforms,
     })
+}
+
+fn percent_encode_path_segment(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[(byte >> 4) as usize]));
+            encoded.push(char::from(HEX[(byte & 0x0f) as usize]));
+        }
+    }
+    encoded
 }
 
 fn detect_platform(artifact: &Path) -> String {
@@ -329,7 +430,7 @@ mod tests {
     use base64::Engine as _;
     use kael_release::update::{generate_keypair, verifying_key_from_hex};
 
-    fn dist_config_with_artifact(artifact_url: &str, version: &str) -> DistConfig {
+    fn dist_config_with_artifact(artifact_base_url: &str, version: &str) -> DistConfig {
         DistConfig {
             app_id: "com.kael.testapp".to_string(),
             name: "Test App".to_string(),
@@ -348,7 +449,8 @@ mod tests {
             },
             signing: None,
             updater: Some(UpdaterConfig {
-                feed_url: artifact_url.to_string(),
+                feed_url: "https://updates.kael.dev/feed.json".to_string(),
+                artifact_base_url: artifact_base_url.to_string(),
                 public_key: None,
                 channel: Some("stable".to_string()),
             }),
@@ -375,11 +477,15 @@ mod tests {
     fn unsigned_feed_when_no_key() {
         let artifact = temp_artifact(b"payload", "Test-macos.zip");
         let config = dist_config_with_artifact("https://dl.kael.dev/feed", "1.2.3");
-        let feed = build_feed(&config, std::slice::from_ref(&artifact), None).unwrap();
+        let feed = build_feed(&config, std::slice::from_ref(&artifact), None, false).unwrap();
         assert_eq!(feed.version, "1.2.3");
         assert_eq!(feed.channel, "stable");
         assert_eq!(feed.platforms.len(), 1);
         assert_eq!(feed.platforms[0].platform, "macos");
+        assert_eq!(
+            feed.platforms[0].url,
+            "https://dl.kael.dev/feed/Test-macos.zip"
+        );
         assert_eq!(feed.platforms[0].size_bytes, 7);
         assert!(feed.platforms[0].signature.is_none());
         let _ = fs::remove_dir_all(artifact.parent().unwrap());
@@ -391,8 +497,13 @@ mod tests {
         let config = dist_config_with_artifact("https://dl.kael.dev/feed", "2.0.0");
         let (private_hex, public_hex) = generate_keypair();
 
-        let feed =
-            build_feed(&config, std::slice::from_ref(&artifact), Some(&private_hex)).unwrap();
+        let feed = build_feed(
+            &config,
+            std::slice::from_ref(&artifact),
+            Some(&private_hex),
+            false,
+        )
+        .unwrap();
         let entry = &feed.platforms[0];
         let signature_b64 = entry.signature.as_ref().expect("feed must be signed");
 
@@ -421,18 +532,23 @@ mod tests {
         let artifact = temp_artifact(b"verify me end to end", "Test-macos.zip");
         let dir = artifact.parent().unwrap().to_path_buf();
         let config = dist_config_with_artifact("https://dl.kael.dev/feed", "3.1.4");
-        let (private_hex, _public_hex) = generate_keypair();
+        let (private_hex, public_hex) = generate_keypair();
 
-        let feed =
-            build_feed(&config, std::slice::from_ref(&artifact), Some(&private_hex)).unwrap();
+        let feed = build_feed(
+            &config,
+            std::slice::from_ref(&artifact),
+            Some(&private_hex),
+            false,
+        )
+        .unwrap();
         let feed_path = dir.join("update-feed.json");
         fs::write(&feed_path, serde_json::to_string_pretty(&feed).unwrap()).unwrap();
 
-        verify(&feed_path, &private_hex).unwrap();
+        verify(&feed_path, &public_hex).unwrap();
 
         // A feed signed by a different key must be rejected.
-        let (other_private, _) = generate_keypair();
-        assert!(verify(&feed_path, &other_private).is_err());
+        let (_, other_public) = generate_keypair();
+        assert!(verify(&feed_path, &other_public).is_err());
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -441,8 +557,98 @@ mod tests {
     fn invalid_signing_key_is_an_error() {
         let artifact = temp_artifact(b"x", "Test-macos.zip");
         let config = dist_config_with_artifact("https://dl.kael.dev/feed", "1.0.0");
-        let result = build_feed(&config, std::slice::from_ref(&artifact), Some("not-hex"));
+        let result = build_feed(
+            &config,
+            std::slice::from_ref(&artifact),
+            Some("not-hex"),
+            false,
+        );
         assert!(result.is_err());
+        let _ = fs::remove_dir_all(artifact.parent().unwrap());
+    }
+
+    #[test]
+    fn artifact_urls_use_the_separate_base_and_encode_file_names() {
+        let artifact = temp_artifact(b"payload", "Test App-macos #1.zip");
+        let config = dist_config_with_artifact("https://dl.kael.dev/releases/1.2.3/", "1.2.3");
+        let feed = build_feed(&config, std::slice::from_ref(&artifact), None, false).unwrap();
+
+        assert_eq!(feed.url, "https://updates.kael.dev/feed.json");
+        assert_eq!(
+            feed.platforms[0].url,
+            "https://dl.kael.dev/releases/1.2.3/Test%20App-macos%20%231.zip"
+        );
+        let _ = fs::remove_dir_all(artifact.parent().unwrap());
+    }
+
+    #[test]
+    fn directories_and_duplicate_platform_packages_are_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let app_bundle = directory.path().join("Test.app");
+        fs::create_dir(&app_bundle).unwrap();
+        let config = dist_config_with_artifact("https://dl.kael.dev/releases", "1.2.3");
+        let directory_result = build_feed(&config, std::slice::from_ref(&app_bundle), None, false);
+        assert!(directory_result.is_err());
+
+        let dmg = directory.path().join("Test.dmg");
+        let zip = directory.path().join("Test-macos.zip");
+        fs::write(&dmg, b"dmg").unwrap();
+        fs::write(&zip, b"zip").unwrap();
+        assert!(build_feed(&config, &[dmg, zip], None, false).is_err());
+    }
+
+    #[test]
+    fn only_metadata_simulation_allows_missing_planned_artifacts() {
+        let directory = tempfile::tempdir().unwrap();
+        let planned = directory.path().join("Test-macos.dmg");
+        let config = dist_config_with_artifact("https://dl.kael.dev/releases", "1.2.3");
+
+        assert!(build_feed(&config, std::slice::from_ref(&planned), None, false).is_err());
+        let feed = build_feed(&config, std::slice::from_ref(&planned), None, true).unwrap();
+        assert_eq!(feed.platforms[0].checksum, "0".repeat(64));
+        assert_eq!(feed.platforms[0].size_bytes, 0);
+    }
+
+    #[test]
+    fn strict_publish_readiness_requires_matching_configured_keys_and_real_bytes() {
+        let artifact = temp_artifact(b"release payload", "Test-macos.dmg");
+        let (private_hex, public_hex) = generate_keypair();
+        let mut config = dist_config_with_artifact("https://dl.kael.dev/releases", "1.2.3");
+
+        assert!(
+            validate_publish_readiness(&config, std::slice::from_ref(&artifact), &private_hex)
+                .is_err()
+        );
+
+        config.updater.as_mut().unwrap().public_key = Some(public_hex);
+        assert!(
+            validate_publish_readiness(&config, std::slice::from_ref(&artifact), &private_hex)
+                .is_ok()
+        );
+
+        let (wrong_private_hex, _) = generate_keypair();
+        assert!(
+            validate_publish_readiness(
+                &config,
+                std::slice::from_ref(&artifact),
+                &wrong_private_hex
+            )
+            .is_err()
+        );
+        let _ = fs::remove_dir_all(artifact.parent().unwrap());
+    }
+
+    #[test]
+    fn strict_publish_readiness_rejects_empty_artifacts() {
+        let artifact = temp_artifact(b"", "Test-macos.dmg");
+        let (private_hex, public_hex) = generate_keypair();
+        let mut config = dist_config_with_artifact("https://dl.kael.dev/releases", "1.2.3");
+        config.updater.as_mut().unwrap().public_key = Some(public_hex);
+
+        assert!(
+            validate_publish_readiness(&config, std::slice::from_ref(&artifact), &private_hex)
+                .is_err()
+        );
         let _ = fs::remove_dir_all(artifact.parent().unwrap());
     }
 }

@@ -2,6 +2,8 @@
 #![deny(missing_docs)]
 
 mod async_body;
+#[cfg(all(feature = "reqwest", any(test, target_arch = "wasm32")))]
+mod browser_fetch;
 
 pub use anyhow::{Result, anyhow};
 pub use async_body::AsyncBody;
@@ -9,7 +11,7 @@ use derive_more::Deref;
 use http::HeaderValue;
 pub use http::{self, Method, Request, Response, StatusCode, Uri};
 
-#[cfg(feature = "reqwest")]
+#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 use futures::StreamExt as _;
 use futures::future::BoxFuture;
 use http::request::Builder;
@@ -18,20 +20,20 @@ use parking_lot::Mutex;
 use parking_lot::RwLock;
 #[cfg(feature = "test-support")]
 use std::fmt;
-#[cfg(feature = "reqwest")]
+#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 use std::sync::OnceLock;
-#[cfg(feature = "reqwest")]
+#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 use std::time::Duration;
 use std::{any::type_name, sync::Arc};
 pub use url::Url;
 
-/// Maximum body size buffered by the optional reqwest adapter for a request or response.
+/// Maximum body size buffered by the built-in native or browser transport.
 #[cfg(feature = "reqwest")]
 pub const MAX_BUFFERED_HTTP_BODY_BYTES: usize = 256 * 1024 * 1024;
 
-#[cfg(feature = "reqwest")]
+#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-#[cfg(feature = "reqwest")]
+#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// Controls how an HTTP request handles redirects.
@@ -354,7 +356,7 @@ pub fn read_no_proxy_from_env() -> Option<String> {
 /// This adapter is useful for applications and examples that want a
 /// batteries-included HTTP client without wiring a custom transport.
 #[derive(Clone)]
-#[cfg(feature = "reqwest")]
+#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 pub struct ReqwestClient {
     user_agent: HeaderValue,
     proxy: Option<Url>,
@@ -363,7 +365,7 @@ pub struct ReqwestClient {
     follow_all_client: reqwest::Client,
 }
 
-#[cfg(feature = "reqwest")]
+#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 impl ReqwestClient {
     /// Creates a reqwest-backed client with the given user agent.
     ///
@@ -514,7 +516,7 @@ impl ReqwestClient {
     }
 }
 
-#[cfg(feature = "reqwest")]
+#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 impl HttpClient for ReqwestClient {
     fn type_name(&self) -> &'static str {
         type_name::<Self>()
@@ -559,6 +561,50 @@ impl HttpClient for ReqwestClient {
 
     fn proxy(&self) -> Option<&Url> {
         self.proxy.as_ref()
+    }
+}
+
+/// Browser Fetch-backed variant of the native reqwest transport.
+///
+/// This preserves cross-target application setup while using the browser's
+/// security model for CORS, credentials, forbidden headers, and redirects.
+/// The configured user agent remains available for diagnostics, but browsers
+/// do not permit applications to replace the actual `User-Agent` header.
+#[derive(Clone, Debug)]
+#[cfg(all(feature = "reqwest", target_arch = "wasm32"))]
+pub struct ReqwestClient {
+    user_agent: HeaderValue,
+}
+
+#[cfg(all(feature = "reqwest", target_arch = "wasm32"))]
+impl ReqwestClient {
+    /// Creates a Fetch-backed browser client with the requested diagnostic user agent.
+    pub fn user_agent(user_agent: impl AsRef<str>) -> Result<Self> {
+        Ok(Self {
+            user_agent: HeaderValue::from_str(user_agent.as_ref())?,
+        })
+    }
+}
+
+#[cfg(all(feature = "reqwest", target_arch = "wasm32"))]
+impl HttpClient for ReqwestClient {
+    fn type_name(&self) -> &'static str {
+        type_name::<Self>()
+    }
+
+    fn user_agent(&self) -> Option<&HeaderValue> {
+        Some(&self.user_agent)
+    }
+
+    fn send(
+        &self,
+        req: Request<AsyncBody>,
+    ) -> BoxFuture<'static, anyhow::Result<Response<AsyncBody>>> {
+        browser_fetch::send(req)
+    }
+
+    fn proxy(&self) -> Option<&Url> {
+        None
     }
 }
 

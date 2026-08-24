@@ -103,6 +103,15 @@ thread_local! {
 const LONG_TIMEOUT_DUR: Duration = Duration::from_millis(4000);
 const SHORT_TIMEOUT_DUR: Duration = Duration::from_millis(10);
 
+/// Maximum payload accepted from an untrusted X11 selection owner.
+///
+/// This matches Kael's macOS and Windows clipboard ceiling and the Linux
+/// external-file-descriptor ceiling used by Wayland clipboard reads. X11's
+/// `long_length` is expressed in four-byte units, not bytes.
+const MAX_CLIPBOARD_DATA_BYTES: usize = 256 * 1024 * 1024;
+const MAX_CLIPBOARD_PROPERTY_LONG_LENGTH: u32 = MAX_CLIPBOARD_DATA_BYTES.div_ceil(4) as u32;
+const MAX_INCR_INITIAL_RESERVE_BYTES: usize = 64 * 1024;
+
 #[derive(Debug, PartialEq, Eq)]
 enum ManagerHandoverState {
     Idle,
@@ -120,6 +129,29 @@ struct GlobalClipboard {
 struct XContext {
     conn: RustConnection,
     win_id: u32,
+}
+
+/// Always clear the private transfer property, including on malformed-owner,
+/// allocation-failure, and timeout exits. Each read has its own private window,
+/// so this cannot delete another concurrent reader's transfer.
+struct ReadPropertyCleanup<'a> {
+    reader: &'a XContext,
+    property: Atom,
+}
+
+impl Drop for ReadPropertyCleanup<'_> {
+    fn drop(&mut self) {
+        if let Err(error) = self
+            .reader
+            .conn
+            .delete_property(self.reader.win_id, self.property)
+        {
+            log::debug!("failed to clear X11 clipboard transfer property: {error}");
+        }
+        if let Err(error) = self.reader.conn.flush() {
+            log::debug!("failed to flush X11 clipboard transfer cleanup: {error}");
+        }
+    }
 }
 
 struct Inner {
@@ -306,10 +338,7 @@ impl Inner {
                 }
                 Ok(ClipboardData { bytes, format }) => {
                     if format == self.atoms.ATOM {
-                        let available_formats = Self::parse_formats(&bytes);
-                        formats
-                            .iter()
-                            .find(|format| available_formats.contains(format))
+                        Self::first_supported_format(formats, &bytes)?
                     } else {
                         log::trace!(
                             "Unexpected clipboard TARGETS format {}",
@@ -320,7 +349,7 @@ impl Inner {
                 }
             };
 
-        if let Some(&format) = highest_precedence_format {
+        if let Some(format) = highest_precedence_format {
             let data = self.read_single(&reader, selection, format)?;
             if !formats.contains(&data.format) {
                 // This shouldn't happen since the format is from the TARGETS list.
@@ -362,11 +391,29 @@ impl Inner {
         Err(Error::ContentNotAvailable)
     }
 
-    fn parse_formats(bytes: &[u8]) -> Vec<Atom> {
-        bytes
-            .chunks_exact(4)
-            .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-            .collect()
+    fn first_supported_format(formats: &[Atom], bytes: &[u8]) -> Result<Option<Atom>> {
+        let mut precedence = HashMap::new();
+        precedence
+            .try_reserve(formats.len())
+            .map_err(|error| allocation_error("TARGETS precedence table", error))?;
+        for (index, format) in formats.iter().copied().enumerate() {
+            precedence.entry(format).or_insert(index);
+        }
+
+        let mut best: Option<(usize, Atom)> = None;
+        for chunk in bytes.chunks_exact(4) {
+            let atom = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            let Some(&index) = precedence.get(&atom) else {
+                continue;
+            };
+            if best.is_none_or(|(best_index, _)| index < best_index) {
+                best = Some((index, atom));
+                if index == 0 {
+                    break;
+                }
+            }
+        }
+        Ok(best.map(|(_, atom)| atom))
     }
 
     fn read_single(
@@ -381,6 +428,10 @@ impl Inner {
             .conn
             .delete_property(reader.win_id, self.atoms.ARBOARD_CLIPBOARD)
             .map_err(into_unknown)?;
+        let _property_cleanup = ReadPropertyCleanup {
+            reader,
+            property: self.atoms.ARBOARD_CLIPBOARD,
+        };
 
         // request to convert the clipboard selection to our data type(s)
         reader
@@ -543,7 +594,11 @@ impl Inner {
 
         // According to: https://tronche.com/gui/x/icccm/sec-2.html#s-2.4
         // the target must be set to the same as what we requested.
-        if event.property == NONE || event.target != target_format {
+        if event.requestor != reader.win_id
+            || event.property == NONE
+            || event.property != self.atoms.ARBOARD_CLIPBOARD
+            || event.target != target_format
+        {
             return Err(Error::ContentNotAvailable);
         }
         if self.kind_of(event.selection).is_none() {
@@ -556,57 +611,66 @@ impl Inner {
             log::warn!("Received a SelectionNotify while already expecting INCR segments.");
             return Ok(ReadSelNotifyResult::EventNotRecognized);
         }
-        // Accept any property type. The property type will typically match the format type except
-        // when it is `TARGETS` in which case it is `ATOM`. `ANY` is provided to handle the case
-        // where the clipboard is not convertible to the requested format. In this case
-        // `reply.type_` will have format information, but `bytes` will only be non-empty if `ANY`
-        // is provided.
-        let property_type = AtomEnum::ANY;
-        // request the selection
-        let mut reply = reader
+        // Probe only the property metadata first. Fetching with an unbounded
+        // `long_length` would let a hostile owner make x11rb allocate its entire
+        // property before Kael had a chance to inspect the type or size.
+        let probe = reader
             .conn
-            .get_property(
-                true,
-                event.requestor,
-                event.property,
-                property_type,
-                0,
-                u32::MAX / 4,
-            )
+            .get_property(false, event.requestor, event.property, AtomEnum::ANY, 0, 0)
             .map_err(into_unknown)?
             .reply()
             .map_err(into_unknown)?;
 
-        // we found something
-        if reply.type_ == self.atoms.INCR {
-            // Note that we call the get_property again because we are
-            // indicating that we are ready to receive the data by deleting the
-            // property, however deleting only works if the type matches the
-            // property type. But the type didn't match in the previous call.
-            reply = reader
+        if probe.type_ == NONE {
+            return Err(Error::ContentNotAvailable);
+        }
+
+        if probe.type_ == self.atoms.INCR {
+            let reply = reader
+                .conn
+                .get_property(true, event.requestor, event.property, self.atoms.INCR, 0, 1)
+                .map_err(into_unknown)?
+                .reply()
+                .map_err(into_unknown)?;
+            if reply.type_ != self.atoms.INCR
+                || reply.format != 32
+                || reply.value.len() != 4
+                || reply.bytes_after != 0
+            {
+                return Err(Error::ConversionFailure);
+            }
+            let advertised_len = reply
+                .value32()
+                .and_then(|mut values| values.next())
+                .ok_or(Error::ConversionFailure)? as usize;
+            let reserve_len = incr_initial_reserve_len(advertised_len)?;
+            incr_data
+                .try_reserve(reserve_len)
+                .map_err(|error| allocation_error("incremental clipboard buffer", error))?;
+            log::trace!("Receiving INCR segments");
+            *using_incr = true;
+            Ok(ReadSelNotifyResult::IncrStarted)
+        } else {
+            if probe.bytes_after as usize > MAX_CLIPBOARD_DATA_BYTES {
+                return Err(Error::ContentTooLarge);
+            }
+            let reply = reader
                 .conn
                 .get_property(
                     true,
                     event.requestor,
                     event.property,
-                    self.atoms.INCR,
+                    probe.type_,
                     0,
-                    u32::MAX / 4,
+                    MAX_CLIPBOARD_PROPERTY_LONG_LENGTH,
                 )
                 .map_err(into_unknown)?
                 .reply()
                 .map_err(into_unknown)?;
-            log::trace!("Receiving INCR segments");
-            *using_incr = true;
-            if reply.value_len == 4 {
-                let min_data_len = reply
-                    .value32()
-                    .and_then(|mut vals| vals.next())
-                    .unwrap_or(0);
-                incr_data.reserve(min_data_len as usize);
+            if reply.type_ != probe.type_ {
+                return Err(Error::ConversionFailure);
             }
-            Ok(ReadSelNotifyResult::IncrStarted)
-        } else {
+            validate_property_payload(reply.value.len(), reply.bytes_after)?;
             Ok(ReadSelNotifyResult::GotData(ClipboardData {
                 bytes: reply.value,
                 format: reply.type_,
@@ -624,7 +688,10 @@ impl Inner {
         timeout_end: &mut Instant,
         event: PropertyNotifyEvent,
     ) -> Result<bool> {
-        if event.atom != self.atoms.ARBOARD_CLIPBOARD || event.state != Property::NEW_VALUE {
+        if event.window != reader.win_id
+            || event.atom != self.atoms.ARBOARD_CLIPBOARD
+            || event.state != Property::NEW_VALUE
+        {
             return Ok(false);
         }
         if !using_incr {
@@ -644,18 +711,28 @@ impl Inner {
                     target_format
                 },
                 0,
-                u32::MAX / 4,
+                MAX_CLIPBOARD_PROPERTY_LONG_LENGTH,
             )
             .map_err(into_unknown)?
             .reply()
             .map_err(into_unknown)?;
 
+        let expected_type = if target_format == self.atoms.TARGETS {
+            self.atoms.ATOM
+        } else {
+            target_format
+        };
+        if reply.type_ != expected_type {
+            return Err(Error::ConversionFailure);
+        }
+        validate_property_payload(reply.value.len(), reply.bytes_after)?;
+
         // log::trace!("Received segment. value_len {}", reply.value_len,);
-        if reply.value_len == 0 {
+        if reply.value.is_empty() {
             // This indicates that all the data has been sent.
             return Ok(true);
         }
-        incr_data.extend(reply.value);
+        append_incr_chunk(incr_data, &reply.value)?;
 
         // Let's reset our timeout, since we received a valid chunk.
         *timeout_end = Instant::now() + SHORT_TIMEOUT_DUR;
@@ -1156,6 +1233,49 @@ fn into_unknown<E: std::fmt::Display>(error: E) -> Error {
     }
 }
 
+fn allocation_error(context: &str, error: std::collections::TryReserveError) -> Error {
+    Error::unknown(format!(
+        "failed to allocate {context} within the {MAX_CLIPBOARD_DATA_BYTES}-byte clipboard limit: {error}"
+    ))
+}
+
+fn validate_property_payload(value_len: usize, bytes_after: u32) -> Result<()> {
+    if value_len > MAX_CLIPBOARD_DATA_BYTES || bytes_after != 0 {
+        return Err(Error::ContentTooLarge);
+    }
+    Ok(())
+}
+
+fn checked_clipboard_growth(current_len: usize, incoming_len: usize) -> Result<usize> {
+    let next_len = current_len
+        .checked_add(incoming_len)
+        .ok_or(Error::ContentTooLarge)?;
+    if next_len > MAX_CLIPBOARD_DATA_BYTES {
+        return Err(Error::ContentTooLarge);
+    }
+    Ok(next_len)
+}
+
+fn incr_initial_reserve_len(advertised_len: usize) -> Result<usize> {
+    if advertised_len > MAX_CLIPBOARD_DATA_BYTES {
+        return Err(Error::ContentTooLarge);
+    }
+    // ICCCM defines this value as a lower-bound hint. Validate it, but cap the
+    // eager allocation so a hostile owner cannot force a 256 MiB allocation
+    // before sending its first byte.
+    Ok(advertised_len.min(MAX_INCR_INITIAL_RESERVE_BYTES))
+}
+
+fn append_incr_chunk(buffer: &mut Vec<u8>, chunk: &[u8]) -> Result<()> {
+    let next_len = checked_clipboard_growth(buffer.len(), chunk.len())?;
+    let additional = next_len - buffer.len();
+    buffer
+        .try_reserve(additional)
+        .map_err(|error| allocation_error("incremental clipboard chunk", error))?;
+    buffer.extend_from_slice(chunk);
+    Ok(())
+}
+
 /// Clipboard selection
 ///
 /// Linux has a concept of clipboard "selections" which tend to be used in different contexts. This
@@ -1222,6 +1342,11 @@ pub enum Error {
     /// converted to the appropriate format.
     ConversionFailure,
 
+    /// The selection owner offered more data than Kael's portable clipboard
+    /// safety ceiling. The transfer is rejected and its temporary property is
+    /// deleted before returning this error.
+    ContentTooLarge,
+
     /// Any error that doesn't fit the other error types.
     ///
     /// The `description` field is only meant to help the developer and should not be relied on as a
@@ -1235,6 +1360,7 @@ impl std::fmt::Display for Error {
 			Error::ContentNotAvailable => f.write_str("The clipboard contents were not available in the requested format or the clipboard is empty."),
 			Error::ClipboardOccupied => f.write_str("The native clipboard is not accessible due to being held by an other party."),
 			Error::ConversionFailure => f.write_str("The image or the text that was about the be transferred to/from the clipboard could not be converted to the appropriate format."),
+			Error::ContentTooLarge => f.write_fmt(format_args!("The clipboard contents exceeded the {MAX_CLIPBOARD_DATA_BYTES}-byte safety limit.")),
 			Error::Unknown { description } => f.write_fmt(format_args!("Unknown error while interacting with the clipboard: {description}")),
 		}
     }
@@ -1258,6 +1384,7 @@ impl std::fmt::Debug for Error {
             ContentNotAvailable,
             ClipboardOccupied,
             ConversionFailure,
+            ContentTooLarge,
             Unknown { .. }
         );
         f.write_fmt(format_args!("{name} - \"{self}\""))
@@ -1269,5 +1396,92 @@ impl Error {
         Error::Unknown {
             description: message.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn is_too_large<T>(result: Result<T>) -> bool {
+        matches!(result, Err(Error::ContentTooLarge))
+    }
+
+    #[test]
+    fn property_request_is_bounded_in_x11_four_byte_units() {
+        assert_eq!(
+            MAX_CLIPBOARD_PROPERTY_LONG_LENGTH as usize * 4,
+            MAX_CLIPBOARD_DATA_BYTES
+        );
+    }
+
+    #[test]
+    fn single_property_rejects_truncation_and_oversized_payloads() {
+        assert!(validate_property_payload(MAX_CLIPBOARD_DATA_BYTES, 0).is_ok());
+        assert!(is_too_large(validate_property_payload(
+            MAX_CLIPBOARD_DATA_BYTES + 1,
+            0
+        )));
+        assert!(is_too_large(validate_property_payload(1, 1)));
+    }
+
+    #[test]
+    fn incremental_growth_uses_checked_arithmetic_and_exact_ceiling() {
+        assert_eq!(
+            checked_clipboard_growth(MAX_CLIPBOARD_DATA_BYTES - 1, 1).unwrap(),
+            MAX_CLIPBOARD_DATA_BYTES
+        );
+        assert!(is_too_large(checked_clipboard_growth(
+            MAX_CLIPBOARD_DATA_BYTES,
+            1
+        )));
+        assert!(is_too_large(checked_clipboard_growth(usize::MAX, 1)));
+    }
+
+    #[test]
+    fn hostile_incr_hint_is_validated_without_large_eager_allocation() {
+        assert_eq!(incr_initial_reserve_len(0).unwrap(), 0);
+        assert_eq!(incr_initial_reserve_len(1024).unwrap(), 1024);
+        assert_eq!(
+            incr_initial_reserve_len(MAX_CLIPBOARD_DATA_BYTES).unwrap(),
+            MAX_INCR_INITIAL_RESERVE_BYTES
+        );
+        assert!(is_too_large(incr_initial_reserve_len(
+            MAX_CLIPBOARD_DATA_BYTES + 1
+        )));
+    }
+
+    #[test]
+    fn incremental_chunk_append_preserves_normal_payloads() {
+        let mut bytes = vec![1, 2];
+        append_incr_chunk(&mut bytes, &[3, 4]).unwrap();
+        assert_eq!(bytes, [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn targets_scan_preserves_caller_precedence_without_copying_owner_list() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&5_u32.to_ne_bytes());
+        bytes.extend_from_slice(&7_u32.to_ne_bytes());
+        bytes.extend_from_slice(&[0xaa, 0xbb]);
+
+        assert_eq!(
+            Inner::first_supported_format(&[9, 7, 5], &bytes).unwrap(),
+            Some(7)
+        );
+        assert_eq!(
+            Inner::first_supported_format(&[9, 8], &bytes).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn oversized_error_reports_the_portable_limit() {
+        assert_eq!(
+            Error::ContentTooLarge.to_string(),
+            format!(
+                "The clipboard contents exceeded the {MAX_CLIPBOARD_DATA_BYTES}-byte safety limit."
+            )
+        );
     }
 }

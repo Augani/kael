@@ -431,6 +431,12 @@ impl ThreatModel {
                 Capability::ClipboardRead,
                 Capability::ClipboardWrite,
                 Capability::Notification,
+                Capability::FilesystemRead {
+                    scope: PathScope::UserSelected,
+                },
+                Capability::FilesystemWrite {
+                    scope: PathScope::UserSelected,
+                },
             ],
             worker_defaults: vec![
                 Capability::FilesystemRead {
@@ -1454,6 +1460,16 @@ impl NetworkPolicy {
     }
 }
 
+impl kael_net::WebSocketHostPolicy for NetworkPolicy {
+    fn is_valid(&self) -> bool {
+        self.validate().is_ok()
+    }
+
+    fn allows_host(&self, host: &str) -> bool {
+        self.check(host)
+    }
+}
+
 /// Builder for checked outbound network policies.
 #[derive(Debug, Clone, Default)]
 pub struct NetworkPolicyBuilder {
@@ -2007,6 +2023,32 @@ pub struct AppRealtimeConnection {
     network_policy: Option<NetworkPolicy>,
 }
 
+/// Failure to turn a checked realtime descriptor into a portable live transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AppRealtimeTransportError {
+    /// The descriptor itself did not pass its security and bounds checks.
+    #[error("invalid realtime connection descriptor")]
+    InvalidDescriptor,
+    /// Server-sent events remain a descriptor-only boundary in this release.
+    #[error("server-sent events do not yet have a portable Kael transport")]
+    ServerSentEventsUnsupported,
+    /// Browser WebSockets cannot attach application-controlled handshake headers.
+    #[error("portable WebSocket transports cannot attach custom handshake headers")]
+    CustomHeadersUnsupported,
+    /// Browser WebSockets cannot originate protocol ping frames.
+    #[error("portable WebSocket transports cannot schedule protocol heartbeat frames")]
+    ProtocolHeartbeatUnsupported,
+    /// A live transport must have an explicit checked host policy.
+    #[error("portable WebSocket transports require an explicit network policy")]
+    MissingNetworkPolicy,
+    /// The bounded transport configuration could not be built.
+    #[error("invalid portable WebSocket transport configuration")]
+    InvalidTransportConfig,
+    /// The policy or platform rejected transport startup.
+    #[error("portable WebSocket transport could not be started")]
+    TransportStartRejected,
+}
+
 impl AppRealtimeConnection {
     /// Start a WebSocket descriptor.
     pub fn websocket(url: impl Into<String>) -> AppRealtimeConnectionBuilder {
@@ -2186,6 +2228,72 @@ impl AppRealtimeConnection {
             );
         }
         Ok(())
+    }
+
+    /// Build the bounded, cross-platform WebSocket configuration represented by
+    /// this checked descriptor.
+    ///
+    /// Custom handshake headers are rejected because browser WebSockets do not
+    /// expose them. This preserves one-codebase behavior instead of silently
+    /// applying headers on native only. Protocol heartbeat schedules are also
+    /// rejected because browser WebSockets cannot originate ping frames.
+    /// Server-sent events remain an explicit typed unsupported boundary.
+    pub fn websocket_transport_config(
+        &self,
+    ) -> std::result::Result<kael_net::WebSocketConfig, AppRealtimeTransportError> {
+        self.validate()
+            .map_err(|_| AppRealtimeTransportError::InvalidDescriptor)?;
+        if self.kind != AppRealtimeConnectionKind::WebSocket {
+            return Err(AppRealtimeTransportError::ServerSentEventsUnsupported);
+        }
+        if !self.headers.is_empty() {
+            return Err(AppRealtimeTransportError::CustomHeadersUnsupported);
+        }
+        if self.heartbeat_interval.is_some() {
+            return Err(AppRealtimeTransportError::ProtocolHeartbeatUnsupported);
+        }
+
+        let mut builder =
+            kael_net::WebSocketConfig::builder(self.url.clone()).protocols(self.protocols.clone());
+        if let Some(max_message_bytes) = self.max_message_bytes {
+            let max_message_bytes = usize::try_from(max_message_bytes)
+                .map_err(|_| AppRealtimeTransportError::InvalidTransportConfig)?;
+            let aggregate_bytes = max_message_bytes.saturating_mul(2).min(512 * 1024 * 1024);
+            builder = builder
+                .max_message_bytes(max_message_bytes)
+                .max_inbound_bytes(aggregate_bytes)
+                .max_outbound_bytes(aggregate_bytes);
+        }
+        if let Some(policy) = self.reconnect_policy {
+            if policy.reconnects() {
+                let reconnect = kael_net::WebSocketReconnectPolicy::new(
+                    u16::from(policy.max_attempts()),
+                    policy.initial_delay(),
+                    policy.max_delay(),
+                )
+                .map_err(|_| AppRealtimeTransportError::InvalidTransportConfig)?;
+                builder = builder.reconnect_policy(reconnect);
+            }
+        }
+        builder
+            .build()
+            .map_err(|_| AppRealtimeTransportError::InvalidTransportConfig)
+    }
+
+    /// Open this descriptor through Kael's real native/browser WebSocket client.
+    ///
+    /// A descriptor-local [`NetworkPolicy`] is mandatory at the side-effect
+    /// boundary even when descriptor validation was performed earlier.
+    pub fn open_websocket_transport(
+        &self,
+    ) -> std::result::Result<kael_net::WebSocketClient, AppRealtimeTransportError> {
+        let policy = self
+            .network_policy
+            .as_ref()
+            .ok_or(AppRealtimeTransportError::MissingNetworkPolicy)?;
+        let config = self.websocket_transport_config()?;
+        kael_net::WebSocketClient::connect(config, policy)
+            .map_err(|_| AppRealtimeTransportError::TransportStartRejected)
     }
 }
 
@@ -3406,6 +3514,19 @@ mod tests {
         assert!(!model.media_defaults.is_empty());
         assert!(model.extension_defaults.is_empty());
 
+        assert!(model.ui_defaults.contains(&Capability::FilesystemRead {
+            scope: PathScope::UserSelected,
+        }));
+        assert!(model.ui_defaults.contains(&Capability::FilesystemWrite {
+            scope: PathScope::UserSelected,
+        }));
+        assert!(!model.ui_defaults.contains(&Capability::FilesystemRead {
+            scope: PathScope::Any,
+        }));
+        assert!(!model.ui_defaults.contains(&Capability::FilesystemWrite {
+            scope: PathScope::Any,
+        }));
+
         let strict = ThreatModel::strict();
         assert!(
             strict
@@ -4413,6 +4534,76 @@ mod tests {
         );
         assert!(connection.has_network_policy());
         assert!(connection.network_policy().is_some());
+    }
+
+    #[test]
+    fn realtime_descriptor_builds_real_portable_websocket_transport_config() {
+        let policy = NetworkPolicyBuilder::new()
+            .allow_host("127.0.0.1")
+            .build_checked()
+            .unwrap();
+        let connection = AppRealtimeConnection::websocket("ws://127.0.0.1:8128/collab")
+            .protocol("kael.collab.v1")
+            .max_message_bytes(1_024 * 1_024)
+            .reconnect_policy(AppRealtimeReconnectPolicy::conservative())
+            .network_policy(policy.clone())
+            .build_checked()
+            .unwrap();
+
+        let config = connection.websocket_transport_config().unwrap();
+        assert_eq!(config.host(), "127.0.0.1");
+        assert_eq!(config.protocols(), &["kael.collab.v1"]);
+        assert_eq!(config.max_message_bytes(), 1_024 * 1_024);
+        assert_eq!(config.max_inbound_bytes(), 2 * 1_024 * 1_024);
+        assert_eq!(config.max_outbound_bytes(), 2 * 1_024 * 1_024);
+        assert_eq!(config.reconnect_policy().unwrap().max_attempts(), 5);
+        assert!(kael_net::WebSocketHostPolicy::is_valid(&policy));
+        assert!(kael_net::WebSocketHostPolicy::allows_host(
+            &policy,
+            config.host()
+        ));
+    }
+
+    #[test]
+    fn realtime_transport_keeps_browser_parity_and_sse_boundaries_typed() {
+        let policy = NetworkPolicy::AllowAll;
+        let headers = AppRealtimeConnection::websocket("wss://events.example.com/collab")
+            .header("Authorization", "Bearer secret")
+            .network_policy(policy.clone())
+            .build_checked()
+            .unwrap();
+        assert_eq!(
+            headers.websocket_transport_config().unwrap_err(),
+            AppRealtimeTransportError::CustomHeadersUnsupported
+        );
+
+        let heartbeat = AppRealtimeConnection::websocket("wss://events.example.com/collab")
+            .heartbeat_interval(Duration::from_secs(30))
+            .network_policy(NetworkPolicy::AllowAll)
+            .build_checked()
+            .unwrap();
+        assert_eq!(
+            heartbeat.websocket_transport_config().unwrap_err(),
+            AppRealtimeTransportError::ProtocolHeartbeatUnsupported
+        );
+
+        let sse =
+            AppRealtimeConnection::server_sent_events("https://events.example.com/collab/events")
+                .network_policy(policy)
+                .build_checked()
+                .unwrap();
+        assert_eq!(
+            sse.websocket_transport_config().unwrap_err(),
+            AppRealtimeTransportError::ServerSentEventsUnsupported
+        );
+
+        let missing_policy = AppRealtimeConnection::websocket("wss://events.example.com/collab")
+            .build_checked()
+            .unwrap();
+        assert_eq!(
+            missing_policy.open_websocket_transport().unwrap_err(),
+            AppRealtimeTransportError::MissingNetworkPolicy
+        );
     }
 
     #[test]

@@ -5,6 +5,7 @@ pub mod bidi;
 pub mod canvas;
 pub mod crash_report;
 pub mod dashboard;
+pub mod game_loop;
 pub mod ide;
 pub mod linebreak;
 pub mod undo;

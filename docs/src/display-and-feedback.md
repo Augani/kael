@@ -189,12 +189,28 @@ impl Render for MyApp {
 GPU-accelerated custom drawing surface:
 
 ```rust
-use kael::canvas;
+use kael::{Bounds, canvas, point, px, rgb, size};
 
-canvas(|bounds, window, cx| {
-    // Custom painting with window.paint_quad(), window.paint_path(), etc.
-    window.paint_quad(fill(bounds, rgb(0x1E1E1E)));
+canvas(size(px(400.0), px(300.0)), |draw, _window, _cx| {
+    draw.reserve_commands(3);
+    draw.fill_rects([
+        (
+            Bounds::new(point(px(16.0), px(40.0)), size(px(72.0), px(180.0))),
+            rgb(0x2563eb).into(),
+        ),
+        (
+            Bounds::new(point(px(104.0), px(80.0)), size(px(72.0), px(140.0))),
+            rgb(0x60a5fa).into(),
+        ),
+    ]);
+    draw.fill_circles([(
+        point(px(280.0), px(110.0)),
+        px(36.0),
+        rgb(0xf59e0b).into(),
+    )]);
 })
-.w(px(400.0))
-.h(px(300.0))
 ```
+
+`fill_rects` batches axis-aligned quads. `fill_circles` uses the rounded-quad
+fast path rather than path tessellation, and `reserve_commands` avoids command
+buffer growth during predictable real-time frames.
