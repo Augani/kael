@@ -275,7 +275,7 @@ mod linux {
 
         let surface_state = state.clone();
         let surface_application = application.clone();
-        let retained_for_map = retained_surface.clone();
+        let retained_for_map = retained_surface;
         webview.connect_map(move |webview| {
             let retained_native = retained_for_map.native();
             let webview_native = webview.native();
@@ -301,7 +301,7 @@ mod linux {
             }
         });
 
-        let allocation_state = state.clone();
+        let allocation_state = state;
         let allocation_application = application.clone();
         webview.add_tick_callback(move |webview, _| {
             if webview.width() < 400 || webview.height() < 300 || !webview.is_visible() {

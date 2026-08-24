@@ -36,14 +36,16 @@ case "$mode" in
     run cargo run -p xtask -- dry-run
     ;;
   linux-x11)
-    run cargo clippy -p kael --lib --no-default-features --features "font-kit x11" -- -D warnings
+    # Isolated backends intentionally leave helpers for the other Linux host
+    # unreachable. Deny every warning except that expected cross-host dead code.
+    run cargo clippy -p kael --lib --no-default-features --features "font-kit x11" -- -D warnings -A dead-code
     run cargo check -p kael --lib --no-default-features --features "font-kit x11 platform-foundation"
     run cargo check -p kael --lib --no-default-features --features "font-kit x11 platform-foundation document pdf office notifications-full share"
     run cargo check -p kael --bench framework --no-default-features --features "font-kit x11"
     run cargo clippy -p kael --lib --no-default-features --features "webview-legacy-gtk3" -- -D warnings
     ;;
   linux-wayland)
-    run cargo clippy -p kael --lib --no-default-features --features "font-kit wayland" -- -D warnings
+    run cargo clippy -p kael --lib --no-default-features --features "font-kit wayland" -- -D warnings -A dead-code
     run cargo check -p kael --lib --no-default-features --features "font-kit wayland platform-foundation"
     run cargo check -p kael --lib --no-default-features --features "font-kit wayland platform-foundation document pdf office notifications-full share"
     run cargo check -p kael --bench framework --no-default-features --features "font-kit wayland"

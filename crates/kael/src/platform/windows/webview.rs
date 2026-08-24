@@ -101,25 +101,42 @@ struct WindowsWebViewSignature {
 
 pub(crate) fn sync_webviews(window: &Rc<WindowsWindowInner>, webviews: &[PlatformWebView]) {
     let mut active_ids: HashSet<SharedString> = HashSet::default();
-    let mut state = window.state.borrow_mut();
 
     for webview in webviews {
         let webview_id = webview.instance_id.clone();
         active_ids.insert(webview_id.clone());
 
-        let needs_recreate = state
-            .webviews
-            .get(&webview_id)
-            .is_some_and(|host| host.needs_recreate(webview));
-        if needs_recreate {
-            state.webviews.remove(&webview_id);
-        }
+        let scale_factor = {
+            let mut state = window.state.borrow_mut();
+            let needs_recreate = state
+                .webviews
+                .get(&webview_id)
+                .is_some_and(|host| host.needs_recreate(webview));
+            if needs_recreate {
+                state.webviews.remove(&webview_id);
+            }
 
-        let scale_factor = state.scale_factor;
-        if let Some(host) = state.webviews.get_mut(&webview_id) {
-            host.update_desired(webview.clone(), scale_factor);
-        } else {
-            match WindowsWebViewHost::new(window, webview.clone(), scale_factor) {
+            let scale_factor = state.scale_factor;
+            if let Some(host) = state.webviews.get_mut(&webview_id) {
+                host.update_desired(webview.clone(), scale_factor);
+                None
+            } else if state.creating_webviews.contains(&webview_id) {
+                None
+            } else {
+                state.creating_webviews.insert(webview_id.clone());
+                Some(scale_factor)
+            }
+        };
+
+        if let Some(scale_factor) = scale_factor {
+            // WebView2 creates its controller synchronously and pumps Win32
+            // messages while it waits. Never hold the platform state borrow
+            // across that nested event loop: cursor, visibility, and paint
+            // messages must remain free to inspect the parent window.
+            let result = WindowsWebViewHost::new(window, webview.clone(), scale_factor);
+            let mut state = window.state.borrow_mut();
+            state.creating_webviews.remove(&webview_id);
+            match result {
                 Ok(host) => {
                     state.webviews.insert(webview_id, host);
                 }
@@ -130,12 +147,15 @@ pub(crate) fn sync_webviews(window: &Rc<WindowsWindowInner>, webviews: &[Platfor
         }
     }
 
-    let stale_ids = state
+    let stale_ids = window
+        .state
+        .borrow()
         .webviews
         .keys()
         .filter(|webview_id| !active_ids.contains(*webview_id))
         .cloned()
         .collect::<Vec<_>>();
+    let mut state = window.state.borrow_mut();
     for webview_id in stale_ids {
         state.webviews.remove(&webview_id);
     }

@@ -501,7 +501,7 @@ fn main() -> anyhow::Result<()> {
             feature = "webview-wayland-gtk4",
             any(target_os = "linux", target_os = "freebsd")
         ))]
-        let progress_for_capture = progress.clone();
+        let progress_for_capture = progress;
         cx.spawn(async move |cx| {
             let deadline = std::time::Instant::now() + Duration::from_secs(15);
             #[cfg(all(

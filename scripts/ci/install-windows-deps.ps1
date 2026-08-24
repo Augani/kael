@@ -16,12 +16,17 @@ if (-not $binaryCache) {
 }
 [void][System.IO.Directory]::CreateDirectory($binaryCache)
 
-& $vcpkg install 'ffmpeg[dav1d]:x64-windows' 'pkgconf:x64-windows' --clean-after-build
+$installedRoot = Join-Path $vcpkgRoot 'installed\x64-windows'
+$installRoot = Join-Path $vcpkgRoot 'installed'
+& $vcpkg install `
+    --triplet x64-windows `
+    "--x-manifest-root=$PSScriptRoot" `
+    "--x-install-root=$installRoot" `
+    --clean-after-build
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-$installedRoot = Join-Path $vcpkgRoot 'installed\x64-windows'
 $pkgconf = Join-Path $installedRoot 'tools\pkgconf\pkgconf.exe'
 if (-not (Test-Path $pkgconf)) {
     throw "pkgconf.exe was not found under $installedRoot"

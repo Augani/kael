@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "kael-ci-windows-dependencies",
+  "version-string": "0.4.0",
+  "builtin-baseline": "39ec37c17d122da0c98c3279e6a6b0f4efb75c4a",
+  "dependencies": [
+    {
+      "name": "ffmpeg",
+      "features": [
+        "dav1d"
+      ]
+    },
+    "pkgconf"
+  ],
+  "overrides": [
+    {
+      "name": "ffmpeg",
+      "version": "8.1.2#3"
+    }
+  ]
+}

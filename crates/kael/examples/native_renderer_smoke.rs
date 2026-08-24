@@ -291,8 +291,22 @@ mod native {
             "capture dimensions are too small"
         );
 
+        // Preserve the frame even when a later visual assertion fails. Hosted
+        // GPU evidence must remain inspectable instead of reducing a rendering
+        // regression to an opaque pixel-count message.
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create capture directory {}", parent.display()))?;
+        }
+        fs::write(output, image.bytes())
+            .with_context(|| format!("write native renderer proof to {}", output.display()))?;
+
         let pixel_count = u64::from(width) * u64::from(height);
         let mut opaque_or_visible = 0_u64;
+        let mut transparent = 0_u64;
+        let mut partial_alpha = 0_u64;
+        let mut opaque = 0_u64;
+        let mut non_black_rgb = 0_u64;
         let mut minimum_luma = u16::MAX;
         let mut maximum_luma = 0_u16;
         let mut colors = HashSet::with_capacity(64);
@@ -300,6 +314,14 @@ mod native {
             let [red, green, blue, alpha] = pixel.0;
             if alpha != 0 {
                 opaque_or_visible += 1;
+            }
+            match alpha {
+                0 => transparent += 1,
+                255 => opaque += 1,
+                _ => partial_alpha += 1,
+            }
+            if red != 0 || green != 0 || blue != 0 {
+                non_black_rgb += 1;
             }
             let luma = (u16::from(red) * 54 + u16::from(green) * 183 + u16::from(blue) * 19) / 256;
             minimum_luma = minimum_luma.min(luma);
@@ -334,7 +356,7 @@ mod native {
         );
         ensure!(
             opaque_or_visible >= pixel_count * 9 / 10,
-            "capture contains too few visible pixels ({opaque_or_visible}/{pixel_count})"
+            "capture contains too few visible pixels ({opaque_or_visible}/{pixel_count}; alpha transparent={transparent}, partial={partial_alpha}, opaque={opaque}; non_black_rgb={non_black_rgb})"
         );
         ensure!(
             colors.len() >= 16,
@@ -345,13 +367,6 @@ mod native {
             maximum_luma.saturating_sub(minimum_luma) >= 80,
             "capture luminance range is too narrow ({minimum_luma}..={maximum_luma})"
         );
-
-        if let Some(parent) = output.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("create capture directory {}", parent.display()))?;
-        }
-        fs::write(output, image.bytes())
-            .with_context(|| format!("write native renderer proof to {}", output.display()))?;
 
         Ok(VerifiedFrame {
             output: output.to_path_buf(),

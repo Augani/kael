@@ -1530,7 +1530,19 @@ impl WindowsWindowInner {
         self.frame_polling_windows
             .set(handle, visible && frame_polling_requested);
         if visible {
-            self.draw_window(handle, false);
+            // ShowWindow dispatches WM_SHOWWINDOW synchronously. Requesting a
+            // frame inline can re-enter the App while the caller still holds
+            // its window update borrow (and WebView2 also pumps messages while
+            // creating a controller), so queue the initial frame instead.
+            unsafe {
+                PostMessageW(
+                    Some(handle),
+                    WM_GPUI_FORCE_UPDATE_WINDOW,
+                    WPARAM(0),
+                    LPARAM(0),
+                )
+                .log_err();
+            }
         }
         None
     }

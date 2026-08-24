@@ -21,7 +21,14 @@ cleanup() {
   kill "${http_pid}" 2>/dev/null || true
   wait "${http_pid}" 2>/dev/null || true
   if [[ "${browser_profile}" == /tmp/kael-game-input-smoke.* ]]; then
-    rm -rf "${browser_profile}"
+    # Chromium can briefly recreate profile files while its child processes
+    # finish exiting. Cleanup is best-effort and must not turn a passed runtime
+    # proof into a false CI failure.
+    for _cleanup_attempt in {1..3}; do
+      rm -rf -- "${browser_profile}" 2>/dev/null || true
+      [[ ! -e "${browser_profile}" ]] && break
+      sleep 0.1
+    done
   fi
 }
 trap cleanup EXIT

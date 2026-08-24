@@ -165,6 +165,19 @@ jobs:
           if (-not (Test-Path $vcpkg)) {
             throw "vcpkg.exe was not found under $vcpkgRoot"
           }
+          $manifestPath = Join-Path $env:GITHUB_WORKSPACE "scripts\ci\vcpkg.json"
+          $manifest = Get-Content -Raw $manifestPath | ConvertFrom-Json
+          $baseline = $manifest.'builtin-baseline'
+          git -C $vcpkgRoot cat-file -e "$baseline^{commit}" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            # Hosted images may carry a shallow vcpkg checkout. Fetch the exact
+            # versioned registry snapshot required by the manifest without
+            # changing the runner's checked-out revision.
+            git -C $vcpkgRoot fetch --depth 1 https://github.com/microsoft/vcpkg.git $baseline
+            if ($LASTEXITCODE -ne 0) {
+              throw "failed to fetch pinned vcpkg baseline $baseline"
+            }
+          }
           $revision = git -C $vcpkgRoot rev-parse HEAD
           if ($LASTEXITCODE -ne 0) {
             throw "failed to determine the vcpkg revision"
@@ -179,7 +192,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~\AppData\Local\vcpkg\archives
-          key: vcpkg-${{ runner.os }}-x64-windows-${{ steps.windows-vcpkg.outputs.revision }}-${{ hashFiles('scripts/ci/install-windows-deps.ps1') }}
+          key: vcpkg-${{ runner.os }}-x64-windows-${{ steps.windows-vcpkg.outputs.revision }}-${{ hashFiles('scripts/ci/install-windows-deps.ps1', 'scripts/ci/vcpkg.json') }}
           restore-keys: |
             vcpkg-${{ runner.os }}-x64-windows-
 

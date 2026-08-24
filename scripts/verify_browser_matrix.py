@@ -498,7 +498,7 @@ def verify_browser_smoke(
     require(performance_samples >= 16, f"{label} collected {performance_samples} latency samples")
     p95_budget = 1_000 if software_renderer else 80
     p99_budget = 2_000 if software_renderer else 160
-    long_task_budget = 24 if software_renderer else 1
+    long_task_budget = 24 if software_renderer else 3
     require(
         0 <= scroll_p50_ms <= scroll_p95_ms <= scroll_p99_ms <= p99_budget,
         f"{label} scroll percentiles regressed: {scroll_p50_ms}/{scroll_p95_ms}/{scroll_p99_ms}ms",

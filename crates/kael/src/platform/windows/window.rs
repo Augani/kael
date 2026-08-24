@@ -114,6 +114,8 @@ pub struct WindowsWindowState {
     hwnd: HWND,
     #[cfg(feature = "webview")]
     pub(crate) webviews: HashMap<SharedString, WindowsWebViewHost>,
+    #[cfg(feature = "webview")]
+    pub(crate) creating_webviews: std::collections::HashSet<SharedString>,
 }
 
 pub(crate) struct WindowsWindowInner {
@@ -213,6 +215,8 @@ impl WindowsWindowState {
             hwnd,
             #[cfg(feature = "webview")]
             webviews: HashMap::default(),
+            #[cfg(feature = "webview")]
+            creating_webviews: std::collections::HashSet::default(),
         })
     }
 

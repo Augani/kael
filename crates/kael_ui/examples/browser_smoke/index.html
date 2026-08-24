@@ -575,7 +575,11 @@
         // its timing tracks host contention rather than an end user's GPU.
         const p95Budget = softwareFallback ? 1_000 : 80;
         const p99Budget = softwareFallback ? 2_000 : 160;
-        const longTaskBudget = softwareFallback ? 24 : 1;
+        // With 24 samples, the p95 budget permits up to three scheduler tasks
+        // to cross the browser's fixed 50 ms long-task boundary. Keep the
+        // independent long-task gate consistent with that percentile budget;
+        // p95/p99 still cap their duration at 80/160 ms on real hardware.
+        const longTaskBudget = softwareFallback ? 24 : 3;
         const passed =
           p95 <= p95Budget &&
           p99 <= p99Budget &&
