@@ -42,6 +42,7 @@ use webview2_com::{
 };
 use windows::Win32::{
     Foundation::{COLORREF, HWND},
+    Graphics::Gdi::{RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RedrawWindow},
     UI::WindowsAndMessaging::{
         GWL_EXSTYLE, GetWindowLongW, LWA_ALPHA, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE,
         SWP_NOZORDER, SetLayeredWindowAttributes, SetWindowLongW, SetWindowPos, WS_EX_LAYERED,
@@ -868,8 +869,24 @@ fn apply_webview_opacity(webview: &WebView, opacity: f32) -> Result<()> {
 
     unsafe {
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+        if alpha == u8::MAX {
+            if ex_style & WS_EX_LAYERED.0 as i32 != 0 {
+                let _ = SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style & !(WS_EX_LAYERED.0 as i32));
+                let _ = RedrawWindow(
+                    Some(hwnd),
+                    None,
+                    None,
+                    RDW_ERASE | RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN,
+                );
+            }
+            return Ok(());
+        }
         if ex_style & WS_EX_LAYERED.0 as i32 == 0 {
             let _ = SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED.0 as i32);
+            anyhow::ensure!(
+                GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED.0 as i32 != 0,
+                "Windows rejected WS_EX_LAYERED for the WebView child window"
+            );
             SetWindowPos(
                 hwnd,
                 None,

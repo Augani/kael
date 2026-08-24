@@ -400,11 +400,17 @@ impl WebPlatform {
     }
 
     fn install_platform_listeners(self: &Rc<Self>) -> Result<()> {
-        for name in ["popstate", "hashchange"] {
-            self.add_platform_listener(name, |platform, _| {
-                platform.dispatch_current_url();
-            })?;
-        }
+        self.add_platform_listener("popstate", |platform, _| {
+            // A page can call pushState without emitting an event, then traverse
+            // back to the URL most recently delivered to the app. Popstate still
+            // represents a real navigation and must not be suppressed as a
+            // duplicate; the following hashchange (when present) will be.
+            platform.last_dispatched_url.borrow_mut().take();
+            platform.dispatch_current_url();
+        })?;
+        self.add_platform_listener("hashchange", |platform, _| {
+            platform.dispatch_current_url();
+        })?;
         self.add_platform_listener("pageshow", |platform, _| {
             platform.application_hidden.set(false);
             platform.sync_window_visibilities();

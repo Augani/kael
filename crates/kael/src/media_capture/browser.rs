@@ -311,10 +311,20 @@ async fn initialize_runtime(
     video
         .set_attribute("aria-hidden", "true")
         .map_err(js_error)?;
-    video
-        .style()
-        .set_property("display", "none")
-        .map_err(js_error)?;
+    for (property, value) in [
+        ("position", "fixed"),
+        ("width", "1px"),
+        ("height", "1px"),
+        ("left", "-2px"),
+        ("top", "-2px"),
+        ("opacity", "0"),
+        ("pointer-events", "none"),
+    ] {
+        video
+            .style()
+            .set_property(property, value)
+            .map_err(js_error)?;
+    }
     video.set_autoplay(true);
     video.set_muted(true);
     video.set_src_object(Some(&stream));

@@ -27,11 +27,40 @@ fn main() {
             macos::build();
         }
         Ok("windows") => {
+            #[cfg(feature = "windows-manifest")]
+            embed_windows_resource();
             #[cfg(target_os = "windows")]
             windows::build();
         }
         _ => (),
     };
+}
+
+#[cfg(feature = "windows-manifest")]
+fn embed_windows_resource() {
+    let manifest = Path::new("resources/windows/kael.manifest.xml");
+    let rc_file = Path::new("resources/windows/kael.rc");
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    println!("cargo:rerun-if-changed={}", rc_file.display());
+    embed_resource::compile_for(rc_file, std::iter::empty::<&str>(), embed_resource::NONE)
+        .manifest_required()
+        .unwrap();
+
+    // Resource objects have no referenced symbols, so a normal static-library
+    // link can discard them. Wrapping the object and forcing the archive into
+    // the final binary also propagates the manifest to applications that use
+    // Kael as a dependency instead of only embedding it in Kael-owned binaries.
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));
+    let resource_object = [out_dir.join("kael.lib"), out_dir.join("libkael.a")]
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .expect("embed-resource did not produce the Kael Windows resource object");
+    cc::Build::new()
+        .cargo_metadata(false)
+        .object(resource_object)
+        .compile("kael_windows_resource");
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
+    println!("cargo:rustc-link-lib=static:+whole-archive=kael_windows_resource");
 }
 
 fn generate_icon_atlases() {
@@ -421,21 +450,6 @@ mod windows {
         // Compile HLSL shaders
         #[cfg(not(debug_assertions))]
         compile_shaders();
-
-        // Embed the Windows manifest and resource file
-        #[cfg(feature = "windows-manifest")]
-        embed_resource();
-    }
-
-    #[cfg(feature = "windows-manifest")]
-    fn embed_resource() {
-        let manifest = std::path::Path::new("resources/windows/kael.manifest.xml");
-        let rc_file = std::path::Path::new("resources/windows/kael.rc");
-        println!("cargo:rerun-if-changed={}", manifest.display());
-        println!("cargo:rerun-if-changed={}", rc_file.display());
-        embed_resource::compile(rc_file, embed_resource::NONE)
-            .manifest_required()
-            .unwrap();
     }
 
     /// You can set the `KAEL_FXC_PATH` environment variable to specify the path to the fxc.exe compiler.

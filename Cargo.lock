@@ -4065,6 +4065,7 @@ dependencies = [
  "calloop",
  "calloop-wayland-source",
  "cbindgen",
+ "cc",
  "console_error_panic_hook",
  "core-foundation 0.10.1",
  "core-foundation-sys",

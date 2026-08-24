@@ -34,7 +34,7 @@
             globalThis.__kaelRejectNextCapture = false;
             throw new DOMException("mock picker denied", "NotAllowedError");
           }
-          return stream.clone();
+          return stream;
         },
       });
       if (!navigator.mediaDevices) {
