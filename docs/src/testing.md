@@ -25,6 +25,9 @@ Use `KAEL_BROWSER_MATRIX_ENGINES=firefox` for one-engine diagnosis.
 display-capture lifecycle fixture. Release CI uses none of these reductions.
 The report records pointer activation, the retained frames scheduled by the
 component ripple, IME state, virtual-scroll latency, and renderer identity.
+Hardware runs require multiple post-click frames. Software-fallback runs require
+one post-click frame because a loaded SwiftShader frame can outlast the ripple;
+the report stores both the observed and required frame counts.
 Evidence is written to `target/browser-matrix`.
 
 ## Generated project parity

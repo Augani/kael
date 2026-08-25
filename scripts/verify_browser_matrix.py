@@ -395,7 +395,9 @@ def exercise_file_apis(page: Page, engine: str, output_dir: Path) -> dict[str, A
     return result
 
 
-def exercise_semantic_input(page: Page, engine: str) -> dict[str, Any]:
+def exercise_semantic_input(
+    page: Page, engine: str, software_renderer: bool
+) -> dict[str, Any]:
     button = page.get_by_role("button", name="Test pointer, text, and animation")
     require(button.count() == 1, f"{engine} did not expose the semantic pointer target")
     before = int(dataset(page).get("data-kael-accessibility-action-count", "0"))
@@ -409,9 +411,10 @@ def exercise_semantic_input(page: Page, engine: str) -> dict[str, Any]:
         arg=before,
         timeout=10_000,
     )
+    required_frames = 1 if software_renderer else 2
     page.wait_for_function(
-        "count => Number(document.querySelector('#blade')?.dataset.kaelFrameCount ?? 0) >= count + 2",
-        arg=before_frames,
+        "probe => Number(document.querySelector('#blade')?.dataset.kaelFrameCount ?? 0) >= probe.before + probe.required",
+        arg={"before": before_frames, "required": required_frames},
         timeout=10_000,
     )
     after_frames = page.evaluate(
@@ -426,6 +429,7 @@ def exercise_semantic_input(page: Page, engine: str) -> dict[str, Any]:
             dataset(page).get("data-kael-accessibility-action-count", "0")
         ),
         "animation_frames": after_frames - before_frames,
+        "animation_required_frames": required_frames,
         "animation_observation_ms": round(
             (time.monotonic() - animation_started) * 1_000, 3
         ),
@@ -564,7 +568,9 @@ def verify_browser_smoke(
         "diagnostics": diagnostics,
     }
     if interactive:
-        result["semantic_input"] = exercise_semantic_input(page, engine)
+        result["semantic_input"] = exercise_semantic_input(
+            page, engine, software_renderer
+        )
         result["files"] = exercise_file_apis(page, engine, output_dir)
     assert_clean_runtime_diagnostics(page, diagnostics, label)
     screenshot = output_dir / f"{engine}-browser-smoke-{viewport['width']}x{viewport['height']}.png"

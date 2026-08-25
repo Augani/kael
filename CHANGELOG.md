@@ -32,7 +32,9 @@ stabilised — minor version bumps may include breaking changes.
   customizable component layer.
 - Browser matrix reports now record the retained frames and observation time of
   a real component ripple, so animation scheduling is measured alongside
-  pointer activation instead of inferred from a static rendered frame.
+  pointer activation instead of inferred from a static rendered frame. Hardware
+  runs require multiple post-click frames, while software-fallback liveness runs
+  require one and record the threshold beside the observation.
 
 ### Fixed
 
