@@ -399,11 +399,23 @@ def exercise_semantic_input(page: Page, engine: str) -> dict[str, Any]:
     button = page.get_by_role("button", name="Test pointer, text, and animation")
     require(button.count() == 1, f"{engine} did not expose the semantic pointer target")
     before = int(dataset(page).get("data-kael-accessibility-action-count", "0"))
+    before_frames = page.evaluate(
+        "() => Number(document.querySelector('#blade')?.dataset.kaelFrameCount ?? 0)"
+    )
+    animation_started = time.monotonic()
     button.click(force=True)
     page.wait_for_function(
         "count => Number(document.documentElement.dataset.kaelAccessibilityActionCount) > count",
         arg=before,
         timeout=10_000,
+    )
+    page.wait_for_function(
+        "count => Number(document.querySelector('#blade')?.dataset.kaelFrameCount ?? 0) >= count + 2",
+        arg=before_frames,
+        timeout=10_000,
+    )
+    after_frames = page.evaluate(
+        "() => Number(document.querySelector('#blade')?.dataset.kaelFrameCount ?? 0)"
     )
     ime = page.locator('[data-kael-ime-input="true"]')
     require(ime.count() == 1, f"{engine} did not retain the IME bridge")
@@ -412,6 +424,10 @@ def exercise_semantic_input(page: Page, engine: str) -> dict[str, Any]:
     return {
         "pointer_action_count": int(
             dataset(page).get("data-kael-accessibility-action-count", "0")
+        ),
+        "animation_frames": after_frames - before_frames,
+        "animation_observation_ms": round(
+            (time.monotonic() - animation_started) * 1_000, 3
         ),
         "ime": dataset(page).get("data-kael-ime-probe"),
         "clipboard": dataset(page).get("data-kael-clipboard-probe"),

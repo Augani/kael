@@ -85,7 +85,7 @@ async fn run() {
         frames.load(Ordering::Acquire) > 0
     })
     .await;
-    let delivered = valid_frame.load(Ordering::Acquire)
+    let mut delivered = valid_frame.load(Ordering::Acquire)
         && frames.load(Ordering::Acquire) > 0
         && session.state() == CaptureSessionState::Running;
     let synthetic_fixture_limited = !delivered && live_undecodable_canvas_fixture();
@@ -101,6 +101,12 @@ async fn run() {
     .await;
     let resumed_delivery = frames.load(Ordering::Acquire) > before_pause;
     let resumed_running = session.state() == CaptureSessionState::Running;
+    // Some browser capture pipelines do not expose the first decodable video
+    // frame until playback has been resumed once. Count that verified frame as
+    // delivery instead of freezing the result at the pre-pause observation.
+    delivered |= valid_frame.load(Ordering::Acquire)
+        && frames.load(Ordering::Acquire) > 0
+        && resumed_running;
     let stopped = session.stop().is_ok() && session.state() == CaptureSessionState::Stopped;
     let lifecycle = paused
         && pause_held

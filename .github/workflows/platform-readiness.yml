@@ -106,8 +106,7 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: |
           cargo install mdbook --version 0.4.52 --locked --no-default-features
-          mdbook build docs
-          test -s target/book/index.html
+          bash scripts/ci/verify-docs.sh
           DOCS_RS=1 RUSTDOCFLAGS='--cfg docsrs -D warnings' \
             cargo doc -p kael --features "agent-tools runtime_shaders" --no-deps
           DOCS_RS=1 RUSTDOCFLAGS='--cfg docsrs -D warnings' \
@@ -298,6 +297,8 @@ jobs:
           cargo check -p kael_ui --lib --target wasm32-unknown-unknown \
             --no-default-features \
             --features browser,editor-languages,markdown,html-render,http,media,audio,screen-capture
+          cargo check --locked -p kael_ui --example docs_quickstart \
+            --target wasm32-unknown-unknown --no-default-features --features browser
           cargo check -p kael_markdown --lib --target wasm32-unknown-unknown
           cargo check -p kael_engines --lib --target wasm32-unknown-unknown \
             --no-default-features

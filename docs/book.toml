@@ -9,10 +9,10 @@ language = "en"
 build-dir = "../target/book"
 
 [output.html]
-default-theme = "navy"
-preferred-dark-theme = "navy"
+default-theme = "light"
+preferred-dark-theme = "coal"
 git-repository-url = "https://github.com/Augani/kael"
 edit-url-template = "https://github.com/Augani/kael/edit/main/docs/{path}"
 additional-css = ["custom/kael.css"]
 additional-js = ["custom/llm-copy.js"]
-no-section-label = false
+no-section-label = true

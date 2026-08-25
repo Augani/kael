@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Kael generated project shell</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./app.css" />
+  </head>
+  <body>
+    <canvas id="blade" aria-label="Kael generated application"></canvas>
+    <pre id="kael-error" role="alert"></pre>
+    <script type="module">
+      import init from "./app.js";
+      try {
+        await init({ module_or_path: "./app_bg.wasm" });
+        document.documentElement.dataset.kaelReady = "true";
+      } catch (error) {
+        document.querySelector("#kael-error").textContent = String(error);
+        throw error;
+      }
+    </script>
+  </body>
+</html>

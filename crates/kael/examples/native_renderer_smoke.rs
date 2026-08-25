@@ -427,6 +427,9 @@ mod native {
 
             cx.activate(true);
             if let Err(error) = window.update(cx, |_, window, _| {
+                // The release proof must remain drawable when launched from an
+                // automated terminal whose own window may otherwise occlude it.
+                window.set_always_on_top(true);
                 window.show_window();
                 window.activate_window();
                 window.refresh();
@@ -440,9 +443,9 @@ mod native {
             let outcome = app_outcome.clone();
             let render_count = render_count.clone();
             cx.spawn(async move |cx| {
-                let deadline = Instant::now() + SMOKE_TIMEOUT;
+                let initial_deadline = Instant::now() + SMOKE_TIMEOUT;
                 while render_count.load(Ordering::Acquire) == 0 {
-                    if Instant::now() >= deadline {
+                    if Instant::now() >= initial_deadline {
                         eprintln!(
                             "NATIVE_RENDERER_SMOKE_FAIL: timed out waiting for the initial retained frame"
                         );
@@ -454,12 +457,21 @@ mod native {
                         .timer(Duration::from_millis(16))
                         .await;
                 }
+                println!(
+                    "NATIVE_RENDERER_SMOKE_STAGE: initial render_calls={}",
+                    render_count.load(Ordering::Acquire)
+                );
                 for revision in 1..REQUIRED_RENDER_REVISIONS {
+                    let revision_deadline = Instant::now() + SMOKE_TIMEOUT;
                     let prior_count = render_count.load(Ordering::Acquire);
                     if let Err(error) = window.update(cx, |view, window, cx| {
                         view.revision = revision;
                         cx.notify();
-                        window.refresh();
+                        // A native resize requests an immediate frame on macOS,
+                        // so this remains deterministic even when AppKit pauses
+                        // the display link for an occluded automation window.
+                        // It also proves retained redraws survive viewport changes.
+                        window.resize(size(px(WIDTH + revision as f32), px(HEIGHT)));
                     }) {
                         eprintln!(
                             "NATIVE_RENDERER_SMOKE_FAIL: schedule revision {revision}: {error:#}"
@@ -468,8 +480,12 @@ mod native {
                         let _ = cx.update(|cx| cx.quit());
                         return;
                     }
+                    println!(
+                        "NATIVE_RENDERER_SMOKE_STAGE: scheduled revision={revision} prior_render_calls={prior_count} current_render_calls={}",
+                        render_count.load(Ordering::Acquire)
+                    );
                     while render_count.load(Ordering::Acquire) <= prior_count {
-                        if Instant::now() >= deadline {
+                        if Instant::now() >= revision_deadline {
                             eprintln!(
                                 "NATIVE_RENDERER_SMOKE_FAIL: timed out waiting for retained frame revision {revision}"
                             );

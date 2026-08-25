@@ -1,80 +1,119 @@
-# Kael
+<div class="kael-home">
+  <section class="home-hero" aria-labelledby="kael-title">
+    <p class="eyebrow">Kael 0.4 · Rust application framework</p>
+    <h1 id="kael-title">One codebase.<br>Every serious surface.</h1>
+    <p class="hero-lede">Kael is a retained, GPU-accelerated framework for building ambitious applications in Rust. Design the interface once, keep the product logic once, and run it as a native desktop app or a WebAssembly application in the browser.</p>
+    <div class="hero-actions">
+      <a class="button-primary" href="getting-started.html">Start building</a>
+      <a class="button-secondary" href="framework-today.html">Explore the framework <span aria-hidden="true">→</span></a>
+      <a class="button-secondary" href="https://github.com/Augani/kael" target="_blank" rel="noopener noreferrer">View on GitHub <span aria-hidden="true">↗</span></a>
+    </div>
+    <p class="platform-line" aria-label="Supported targets"><span>macOS</span><span>Windows</span><span>Linux</span><span>Browser</span></p>
+  </section>
 
-**Build ambitious desktop software that does more with less.**
+  <section class="architecture-figure" aria-label="One application architecture targeting four renderers">
+    <div class="architecture-source">
+      <p class="figure-label">Your application</p>
+      <strong>Views · State · Product logic</strong>
+      <span>One typed Rust architecture</span>
+    </div>
+    <div class="architecture-flow" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+    <div class="architecture-targets">
+      <div><span>macOS</span><strong>Metal</strong></div>
+      <div><span>Windows</span><strong>Direct3D 11</strong></div>
+      <div><span>Linux</span><strong>Vulkan</strong></div>
+      <div><span>Browser</span><strong>WebGL2</strong></div>
+    </div>
+    <p class="figure-caption">The same retained scene, adapted at the platform boundary.</p>
+  </section>
 
-Kael is a GPU-accelerated application framework for Rust. It combines a
-retained renderer, reactive application state, native platform services,
-production tooling, and optional product batteries in one coherent system for
-macOS, Windows, Linux, and WebAssembly/WebGL2 browsers.
+  <section class="home-chapter founder-chapter" aria-labelledby="why-title">
+    <div class="chapter-index">01</div>
+    <div class="chapter-heading">
+      <p class="eyebrow">Why I created Kael</p>
+      <h2 id="why-title">Powerful software should not need a stack of runtimes.</h2>
+    </div>
+    <div class="chapter-copy">
+      <p>I wanted a foundation for the kind of applications I care about building: documents, sheets, presentations, whiteboards, creative tools, engines, and workspaces that stay fast as they become more capable.</p>
+      <p>I also wanted the web build to be the same product, not a second interface maintained beside the first. Kael keeps rendering, state, input, accessibility, documents, platform services, testing, and release engineering inside one Rust system.</p>
+      <p class="signature">Augustus Otu<br><span>Creator of Kael</span></p>
+      <a class="text-link" href="why-kael.html">Read the full story <span aria-hidden="true">→</span></a>
+    </div>
+  </section>
 
-The goal is not merely to render a window. Kael is for long-lived PC
-applications—editors, agent workspaces, communication products, dashboards,
-media tools, and creative software—that must remain responsive as their data,
-windows, background work, and feature surface grow.
+  <section class="home-chapter today-chapter" aria-labelledby="today-title">
+    <div class="chapter-index">02</div>
+    <div class="chapter-heading">
+      <p class="eyebrow">What Kael is today</p>
+      <h2 id="today-title">A complete application foundation, from first pixel to signed release.</h2>
+    </div>
+    <div class="capability-rows">
+      <a href="core-concepts.html"><span>Foundation</span><strong>Retained UI, reactive entities, layout, text, input, windows, accessibility</strong><i aria-hidden="true">01</i></a>
+      <a href="lists-and-data.html"><span>Scale</span><strong>Virtualization, bounded caches, frame skipping, damage tracking, GPU budgets</strong><i aria-hidden="true">02</i></a>
+      <a href="platform-apis.html"><span>Product</span><strong>Files, storage, documents, networking, media, WebViews, notifications, sharing</strong><i aria-hidden="true">03</i></a>
+      <a href="releasing.html"><span>Delivery</span><strong>Testing, diagnostics, packaging, signing, updates, platform release gates</strong><i aria-hidden="true">04</i></a>
+    </div>
+    <a class="text-link" href="framework-today.html">See every framework layer <span aria-hidden="true">→</span></a>
+  </section>
 
-> Kael began as a fork of
-> [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), created by
-> Zed Industries, and was previously distributed as the adabraka GPUI fork.
-> Kael is an independent project and is not affiliated with or endorsed by Zed
-> Industries.
+  <section class="proof-chapter" aria-labelledby="proof-title">
+    <div class="proof-intro">
+      <p class="eyebrow">Proof, not promises</p>
+      <h2 id="proof-title">Scale is part of the release contract.</h2>
+      <p>Kael’s maintained workloads exercise the actual retained rendering path on native and browser targets. The limits are checked in release tooling, not estimated from isolated widgets.</p>
+    </div>
+    <div class="proof-grid">
+      <div><strong>1,000,000</strong><span>logical table rows</span><small>64 or fewer mounted</small></div>
+      <div><strong>100,000</strong><span>whiteboard shapes</span><small>spatially culled</small></div>
+      <div><strong>34</strong><span>publishable crates</span><small>one release line</small></div>
+      <div><strong>4</strong><span>GPU render targets</span><small>one retained scene</small></div>
+    </div>
+    <a class="text-link" href="suite-scale-apps.html">Inspect the suite-scale workload <span aria-hidden="true">→</span></a>
+  </section>
 
-## Two layers, one foundation
+  <section class="home-chapter parity-chapter" aria-labelledby="parity-title">
+    <div class="chapter-index">03</div>
+    <div class="chapter-heading">
+      <p class="eyebrow">Desktop and web</p>
+      <h2 id="parity-title">Shared by default. Explicit at the boundary.</h2>
+    </div>
+    <div class="chapter-copy">
+      <p>Application state, layout, components, painting, virtualization, animation, document bytes, workers, and most product services compile from the same source. Native-only abilities remain visible through typed capability reports, so fallbacks are intentional.</p>
+      <div class="parity-list">
+        <p><span>Shared</span> Views, state, scenes, components, input, files, documents, realtime networking</p>
+        <p><span>Adapted</span> Windows, GPU presentation, storage, printing, capture, audio, WebViews</p>
+        <p><span>Explicit</span> Subprocesses, arbitrary native paths, system keychains, detached OS windows</p>
+      </div>
+      <a class="text-link" href="one-codebase.html">Understand the portability contract <span aria-hidden="true">→</span></a>
+    </div>
+  </section>
 
-| Layer | Use it for |
-| --- | --- |
-| `kael` | Rendering, entities, elements, layout, text, input, accessibility, windows, async work, and native platform primitives |
-| `kael_ui` | Brandable controls, data surfaces, editors, charts, navigation, overlays, feedback, media controls, and responsive layouts |
+  <section class="quickstart-chapter" aria-labelledby="start-title">
+    <div>
+      <p class="eyebrow">Start with a real app</p>
+      <h2 id="start-title">From an empty directory to two targets.</h2>
+      <p>Kael’s CLI generates a project whose entry point is already arranged for native and browser builds.</p>
+    </div>
+    <pre aria-label="Kael quick start commands"><code><span>$</span> cargo install kael-cli<br><span>$</span> kael new my_app<br><span>$</span> cd my_app<br><br><span class="comment"># Native desktop</span><br><span>$</span> cargo run<br><br><span class="comment"># Browser</span><br><span>$</span> kael web serve</code></pre>
+    <div class="quickstart-actions">
+      <a class="button-primary" href="getting-started.html">Open the guide</a>
+      <a class="button-secondary" href="https://docs.rs/kael">Browse the Rust API <span aria-hidden="true">→</span></a>
+    </div>
+  </section>
 
-`kael_ui` depends on `kael`; the primitive crate never depends on the component
-crate. A product can use Kael with its own design system, adopt the complete UI
-library, or mix the two.
+  <section class="paths-chapter" aria-labelledby="paths-title">
+    <p class="eyebrow">Choose your path</p>
+    <h2 id="paths-title">Build the product, not the plumbing.</h2>
+    <div class="path-links">
+      <a href="component-library.html"><span>Design a product UI</span><small>Components, themes, editors, charts, overlays</small></a>
+      <a href="browser.html"><span>Ship to the browser</span><small>WebAssembly, WebGL2, IME, accessibility, workers</small></a>
+      <a href="suite-scale-apps.html"><span>Build a productivity suite</span><small>Docs, sheets, slides, whiteboards, large data</small></a>
+      <a href="game-input.html"><span>Build an engine or simulation</span><small>Fixed-step clocks, rich input, retained scenes</small></a>
+    </div>
+  </section>
 
-## Designed for efficient, capable applications
-
-- Retained rendering, invalidation, frame skipping, virtualization, bounded
-  caches, and GPU budgets avoid work that does not improve the current frame.
-- Rust types flow through UI, state, async tasks, platform services,
-  diagnostics, packaging, and updates without a second application runtime.
-- Capability reports expose platform differences rather than hiding them behind
-  APIs that may not work on a user's machine.
-- Focused support crates add storage, networking, secrets, Office/PDF documents,
-  diagnostics, notifications, sharing, media, release services, and application
-  engines without forcing every app to compile every battery.
-- Styling primitives and design tokens keep the final product's identity in the
-  application's hands.
-
-## Start building
-
-Create an application with the CLI:
-
-```bash
-cargo install kael-cli
-kael new my_app
-cd my_app
-cargo run
-```
-
-Or choose the layers directly:
-
-```toml
-[dependencies]
-kael = "0.4"
-kael_ui = "0.4" # optional
-```
-
-Continue with [Getting Started](getting-started.md), then read
-[Core Concepts](core-concepts.md). Use [Choosing Kael](why-kael.md) for tradeoffs
-and [Native Capability Bridge](native-capability-bridge.md) for platform-aware
-product planning.
-
-## Documentation map
-
-- [API Documentation](api-documentation.md) — docs.rs, feature flags, and module map
-- [Component Library](component-library.md) — the optional brandable UI layer
-- [Platform APIs](platform-apis.md) — operating-system integrations
-- [Testing](testing.md) — headless, behavioral, and platform testing
-- [Benchmarking Evidence](benchmarking.md) — measuring resource use and responsiveness
-- [Examples Gallery](examples.md) — Astryx and application templates
-
-Kael 0.4 is pre-1.0. Pin a compatible minor version, validate the platform
-capabilities your product depends on, and expect API refinement before 1.0.
+  <footer class="home-footer">
+    <p><strong>Kael</strong> is open source under Apache-2.0. <a href="https://github.com/Augani/kael" target="_blank" rel="noopener noreferrer">View the source on GitHub</a>.</p>
+    <p>Kael began as a fork of GPUI by Zed Industries and is now an independent project. It is not affiliated with or endorsed by Zed Industries.</p>
+  </footer>
+</div>

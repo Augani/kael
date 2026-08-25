@@ -181,11 +181,24 @@ Optional support crates keep product concerns out of the core dependency graph:
 | `kael_audio`, `kael-media`, `kael_media_engines` | Audio, playback, and opt-in media engines |
 | `kael_render_graph`, `kael_gpu_budget` | Render scheduling and GPU memory budgets |
 
-## Astryx showcase
+## Design inspiration: Astryx
 
-Kael keeps one maintained UI showcase instead of maintaining hundreds of small
-example targets. Astryx groups actions, inputs, data display, charts, feedback,
-navigation, overlays, typography, media, and layout into sections of one app:
+The visual direction behind `kael_ui` is inspired by
+[Astryx](https://astryx.atmeta.com/), an open source design system built around
+customizable foundations, clear application workflows, and fast composition.
+It is the reference for how Kael's components should feel together: calm,
+precise, adaptable, and capable of carrying dense product interfaces without
+losing hierarchy.
+
+Kael UI translates that direction into native Rust theme tokens and reusable
+components rather than a fixed Astryx skin. Applications can use the defaults,
+reshape them for their own identity, or build directly on Kael's lower-level
+primitives. The core `kael` crate remains visually neutral and never depends on
+`kael_ui`.
+
+The repository's maintained Astryx showcase applies this direction across
+actions, inputs, data display, charts, feedback, navigation, overlays,
+typography, media, and layout in one application:
 
 ```bash
 git clone https://github.com/Augani/kael.git

@@ -6,6 +6,7 @@ target_dir="${workspace_dir}/target"
 evidence_dir="${target_dir}/generated-project-parity-evidence"
 python_bin="${KAEL_PLAYWRIGHT_PYTHON:-python3}"
 http_port="${KAEL_GENERATED_PARITY_PORT:-8162}"
+skip_browser="${KAEL_GENERATED_PARITY_SKIP_BROWSER:-0}"
 temporary_dir=""
 http_pid=""
 
@@ -27,7 +28,8 @@ sha256_file() {
     "$1"
 }
 
-if ! "${python_bin}" -c 'import playwright' >/dev/null 2>&1; then
+if [[ "${skip_browser}" != "1" ]] && \
+  ! "${python_bin}" -c 'import playwright' >/dev/null 2>&1; then
   echo "Playwright 1.62.0 is required for generated-project browser proof" >&2
   exit 2
 fi
@@ -83,14 +85,35 @@ cmp "${manifest}" "${manifest_snapshot}"
 
 (
   cd "${project_dir}"
-  export CARGO_NET_OFFLINE=true
-  "${cli}" web build --out-dir "${evidence_dir}/web"
+  CARGO_NET_OFFLINE=true "${cli}" web build \
+    --out-dir "${evidence_dir}/web-default"
 ) 2>&1 | tee "${evidence_dir}/web-build.log"
 grep -Fq "Optimized WebAssembly with Binaryen 132:" \
   "${evidence_dir}/web-build.log"
 for artifact in index.html app.js app_bg.wasm; do
+  if [[ ! -s "${evidence_dir}/web-default/${artifact}" ]]; then
+    echo "generated-project parity is missing web-default/${artifact}" >&2
+    exit 1
+  fi
+done
+
+mkdir -p "${project_dir}/web/assets"
+cp "${workspace_dir}/scripts/fixtures/generated-project-web/index.html" \
+  "${project_dir}/web/index.html"
+cp "${workspace_dir}/scripts/fixtures/generated-project-web/assets/app.css" \
+  "${project_dir}/web/assets/app.css"
+(
+  cd "${project_dir}"
+  CARGO_NET_OFFLINE=true "${cli}" web build \
+    --out-dir "${evidence_dir}/web" \
+    --html web/index.html \
+    --assets web/assets
+) 2>&1 | tee "${evidence_dir}/web-custom-build.log"
+grep -Fq "Kael generated project shell" "${evidence_dir}/web/index.html"
+cmp "${project_dir}/web/assets/app.css" "${evidence_dir}/web/app.css"
+for artifact in index.html app.css app.js app_bg.wasm; do
   if [[ ! -s "${evidence_dir}/web/${artifact}" ]]; then
-    echo "generated-project parity is missing web/${artifact}" >&2
+    echo "generated-project parity is missing custom web/${artifact}" >&2
     exit 1
   fi
 done
@@ -99,6 +122,11 @@ bash "${workspace_dir}/scripts/verify-browser-artifact-budget.sh" \
   | tee "${evidence_dir}/artifact-budget.log"
 cmp "${main_source}" "${main_snapshot}"
 cmp "${manifest}" "${manifest_snapshot}"
+
+if [[ "${skip_browser}" == "1" ]]; then
+  echo "Generated project native/browser packaging passed; browser execution skipped by request."
+  exit 0
+fi
 
 "${python_bin}" -u -m http.server "${http_port}" --bind 127.0.0.1 \
   --directory "${evidence_dir}/web" > "${evidence_dir}/http.log" 2>&1 &

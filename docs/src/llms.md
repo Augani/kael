@@ -1,22 +1,23 @@
 # For LLMs
 
-This page explains how to use Kael's LLM integration features.
+Kael publishes an [`llms.txt`](https://augani.github.io/kael/llms.txt) file at
+the site root. It gives an assistant the current architecture, platform limits,
+browser build contract, and the right source files to inspect.
 
-## llms.txt
+Use it as context when an assistant writes or reviews a Kael application:
 
-Kael provides an [`llms.txt`](https://augani.github.io/kael/llms.txt) file at the site root following the [llms.txt standard](https://llmstxt.org/). It is a concise architecture and source-routing index rather than a duplicate of the entire API reference.
-
-**Use it when:**
-- Pasting into ChatGPT, Claude, or other LLMs as context for building Kael apps
-- Integrating with AI coding assistants that support llms.txt
-- Building MCP servers or tool definitions that reference Kael
-
-## Copy for LLM button
-
-Every page on this site has a **"Copy for LLM"** button in the bottom-right corner. Click it to copy the page content as clean markdown, ready to paste into any LLM conversation.
-
-## Direct link
-
-```
+```text
 https://augani.github.io/kael/llms.txt
 ```
+
+Every guide page also has a **Copy page** action in the top bar. It copies clean
+Markdown for a focused question. Use `llms.txt` for framework wide context and
+Copy page for the guide you are working from.
+
+Useful entry points:
+
+* [Object guide](object-guide.md)
+* [One codebase](one-codebase.md)
+* [Browser and WebAssembly](browser.md)
+* [Web build and deployment](web-deployment.md)
+* [What remains](remaining-work.md)

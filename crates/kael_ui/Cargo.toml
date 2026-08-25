@@ -150,6 +150,10 @@ path = "examples/astryx_showcase.rs"
 required-features = ["media"]
 
 [[example]]
+name = "docs_quickstart"
+path = "examples/docs_quickstart.rs"
+
+[[example]]
 name = "browser_smoke"
 path = "examples/browser_smoke.rs"
 required-features = ["browser"]

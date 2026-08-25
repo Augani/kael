@@ -23,6 +23,8 @@ Use `KAEL_BROWSER_MATRIX_ENGINES=firefox` for one-engine diagnosis.
 `KAEL_BROWSER_MATRIX_SKIP_REALTIME=1` are diagnostic-only reductions.
 `KAEL_BROWSER_MATRIX_SKIP_CAPTURE=1` omits only the injected canvas-backed
 display-capture lifecycle fixture. Release CI uses none of these reductions.
+The report records pointer activation, the retained frames scheduled by the
+component ripple, IME state, virtual-scroll latency, and renderer identity.
 Evidence is written to `target/browser-matrix`.
 
 ## Generated project parity
@@ -36,16 +38,26 @@ KAEL_PLAYWRIGHT_PYTHON=target/browser-matrix-venv/bin/python \
   bash scripts/verify-generated-project-parity.sh
 ```
 
+For a fast local compiler and packager preflight without launching Chromium:
+
+```sh
+KAEL_GENERATED_PARITY_SKIP_BROWSER=1 \
+  bash scripts/verify-generated-project-parity.sh
+```
+
+Release CI never uses that reduction.
+
 The verifier creates a temporary nested workspace under `target`, applies
 `kael` and `kael_ui` through a parent workspace `[patch.crates-io]` table, seeds
 resolution from the repository `Cargo.lock`, and deletes only that temporary
 workspace on exit. This lets release CI prove the next unpublished Kael version
 without rewriting the generated project or selecting an unrelated fresh set of
 transitive versions. It checks the native target, fetches the locked wasm graph,
-then packages the unchanged binary offline through `kael web build`. The gate
+then packages the unchanged binary offline through `kael web build`. It tests
+both the default host page and a source-owned HTML and asset shell. The gate
 requires the pinned `wasm-bindgen` and Binaryen optimization pass before it
-applies the release artifact budget and launches the static output in pinned
-Chromium. The browser proof requires successful Wasm initialization, at least
+applies the release artifact budget and launches the custom static output in
+pinned Chromium. The browser proof requires successful Wasm initialization, at least
 two retained frames, non-blank composited pixels, a viewport-filling canvas,
 and no page or request errors.
 The untouched generated source and manifest, metadata, hashes, logs, packaged
@@ -198,7 +210,7 @@ the `test-support` feature so `TestAppContext` is in scope during tests.
 ```toml
 # crates/kael_ui/Cargo.toml
 [dev-dependencies]
-kael = { path = "../kael", version = "0.4.0", features = ["test-support"] }
+kael = { path = "../kael", version = "0.4.1", features = ["test-support"] }
 ```
 
 > `test-support` is platform-agnostic: the test platform mocks the windowing

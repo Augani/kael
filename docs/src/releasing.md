@@ -15,12 +15,18 @@ bash scripts/ci/verify-cross-targets.sh
 bash scripts/ci/audit-dependencies.sh
 bash scripts/ci/verify-kael.sh default
 bash scripts/publish-all.sh --preflight
-mdbook build docs
+bash scripts/ci/verify-docs.sh
 ```
 
 On macOS, these commands require full Xcode rather than Command Line Tools for
 the package archive's default Metal shader build. Select it either system-wide
 with `xcode-select` or per shell with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
+
+The documentation gate builds every page, copies `llms.txt`, rejects orphaned
+pages, broken local links, duplicate HTML IDs, stale LLM routes, oversized font
+assets, and guides that stop including the compiled quick-start source. The
+quick-start example is compiled on native and Wasm targets in Platform
+Readiness.
 
 The publication preflight selects all 34 crates in dependency order, checks
 their license and package contents, builds the actual `.crate` archives as one
@@ -74,8 +80,8 @@ After all crates are visible, create the annotated version tag on the exact
 published commit and push only that tag:
 
 ```sh
-git tag -a v0.4.0 <published-commit-sha> -m "Kael 0.4.0"
-git push origin v0.4.0
+git tag -a v0.4.1 <published-commit-sha> -m "Kael 0.4.1"
+git push origin v0.4.1
 ```
 
 ## macOS distribution order

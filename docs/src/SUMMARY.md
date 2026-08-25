@@ -1,61 +1,65 @@
 # Summary
 
-[Introduction](index.md)
-[Choosing Kael](why-kael.md)
-[API Documentation](api-documentation.md)
-[Native Capability Bridge](native-capability-bridge.md)
-[Benchmarking Evidence](benchmarking.md)
+# Start here
 
-# Guides
+- [Welcome to Kael](index.md)
+- [Why Kael exists](why-kael.md)
+- [What Kael is today](framework-today.md)
+- [Object guide](object-guide.md)
+- [Getting started](getting-started.md)
+- [One codebase, desktop and web](one-codebase.md)
+- [What remains](remaining-work.md)
 
-- [Getting Started](getting-started.md)
-- [Core Concepts](core-concepts.md)
-- [State Management](state-management.md)
-- [Async & Data Fetching](async-data.md)
-- [Layout & Styling](layout-and-styling.md)
-- [Animations](animations.md)
-- [Navigation](navigation.md)
-- [Authoring Components](authoring-components.md)
+# Build an interface
+
+- [Core concepts](core-concepts.md)
+- [State management](state-management.md)
+- [Async and data fetching](async-data.md)
+- [Layout and styling](layout-and-styling.md)
+- [Authoring components](authoring-components.md)
+- [Component library](component-library.md)
+  - [Form controls](form-controls.md)
+  - [Display and feedback](display-and-feedback.md)
+  - [Containers and overlays](containers.md)
+  - [Navigation](navigation.md)
 - [Theming](theming.md)
 - [Accessibility](accessibility.md)
 
-# Widget Reference
+# Build at scale
 
-- [Component Library (kael_ui)](component-library.md)
-- [Form Controls](form-controls.md)
-- [Display & Feedback](display-and-feedback.md)
-- [Canvas & Graphics](graphics.md)
-- [Containers & Overlays](containers.md)
-- [Lists & Data](lists-and-data.md)
-- [Suite-scale Applications](suite-scale-apps.md)
-
-# Platform
-
-- [Browser (WebAssembly)](browser.md)
-- [Browser Audio](browser-audio.md)
-- [Browser Workers](browser-workers.md)
-- [Game Input](game-input.md)
-- [Realtime Networking](realtime-networking.md)
-- [Platform APIs](platform-apis.md)
-- [Office and PDF Document Bytes](office-documents.md)
-- [Linux WebView Hosting](linux-webviews.md)
-- [Crash Reporting](crash-reporting.md)
-- [Examples Gallery](examples.md)
-
-# Advanced
-
+- [Lists and large data](lists-and-data.md)
+- [Suite-scale applications](suite-scale-apps.md)
+- [Animations](animations.md)
+- [Canvas and graphics](graphics.md)
+- [Game input](game-input.md)
 - [Gestures](advanced/gestures.md)
-- [Actions & Keybindings](actions-and-keybindings.md)
-- [Plugins & Extensions](advanced/plugins.md)
-- [Multi-Process & IPC](advanced/multi-process.md)
-- [Security & Permissions](advanced/security.md)
+- [Benchmarking evidence](benchmarking.md)
 
-# Developer Tools
+# Add product capabilities
 
-- [Inspector & Frame Stats](devtools.md)
+- [Platform APIs](platform-apis.md)
+- [Native capability bridge](native-capability-bridge.md)
+- [Browser and WebAssembly](browser.md)
+  - [Web build and deployment](web-deployment.md)
+  - [Browser workers](browser-workers.md)
+  - [Browser audio](browser-audio.md)
+- [Office and PDF documents](office-documents.md)
+- [Realtime networking](realtime-networking.md)
+- [Actions and keybindings](actions-and-keybindings.md)
+- [Plugins and extensions](advanced/plugins.md)
+- [Multi-process and IPC](advanced/multi-process.md)
+- [Security and permissions](advanced/security.md)
+- [Linux WebView hosting](linux-webviews.md)
+- [Crash reporting](crash-reporting.md)
+
+# Test and ship
+
+- [Developer tools](devtools.md)
 - [Testing](testing.md)
-- [Release Process](releasing.md)
+- [Release process](releasing.md)
+- [Showcase and starters](examples.md)
 
----
+# Reference
 
-[For LLMs](llms.md)
+- [API documentation](api-documentation.md)
+- [For LLMs](llms.md)

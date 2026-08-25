@@ -1,133 +1,93 @@
 # Kael
 
-> GPU-accelerated application framework for building capable,
-> resource-efficient Rust software for native desktops and an opt-in
-> WebAssembly/WebGL2 browser canvas. Kael 0.4 is a pre-1.0 production
-> candidate using Rust 1.97.1 and Rust 2024.
+> Kael is a GPU accelerated Rust application framework for native desktop and
+> WebAssembly/WebGL2. Kael 0.4 is a pre 1.0 production candidate using Rust
+> 1.97.1 and Rust 2024.
 
-## Primary references
+## Start here
 
-- Repository: https://github.com/Augani/kael
 - Guide: https://augani.github.io/kael/
+- Why Kael: https://augani.github.io/kael/why-kael.html
+- Framework today: https://augani.github.io/kael/framework-today.html
+- Object guide: https://augani.github.io/kael/object-guide.html
+- One codebase: https://augani.github.io/kael/one-codebase.html
+- Remaining work: https://augani.github.io/kael/remaining-work.html
 - Core API: https://docs.rs/kael
 - Component API: https://docs.rs/kael_ui
-- API documentation map: https://augani.github.io/kael/api-documentation.html
-- Getting started: https://augani.github.io/kael/getting-started.html
-- Core concepts: https://augani.github.io/kael/core-concepts.html
-- Component library: https://augani.github.io/kael/component-library.html
-- Platform APIs: https://augani.github.io/kael/platform-apis.html
-- Capability bridge: https://augani.github.io/kael/native-capability-bridge.html
+- Repository: https://github.com/Augani/kael
 
 ## Architecture
 
-- `kael`: renderer, application runtime, entities, elements, styling, text,
-  layout, input, accessibility, windows, native platform primitives, and the
-  opt-in browser backend.
-- `kael_ui`: optional, brandable component system built on `kael`.
-- `kael` never depends on `kael_ui`.
-- Focused `kael_*` crates provide storage, secrets, networking, documents,
-  diagnostics, notifications, sharing, release, media, and engine services.
-- WebView is an optional compatibility island, not the default UI model.
-
-## Dependency choices
-
-Core primitives:
-
-```toml
-[dependencies]
-kael = "0.4"
-```
-
-Core plus ready-made components:
-
-```toml
-[dependencies]
-kael = "0.4"
-kael_ui = "0.4"
-```
-
-Lean Linux X11 build without WebView:
-
-```toml
-[dependencies]
-kael = { version = "0.4", default-features = false, features = ["font-kit", "x11"] }
-```
-
-## Minimal application shape
-
-```rust
-use kael_ui::prelude::*;
-
-struct AppView;
-
-impl Render for AppView {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(Button::new("hello", "Hello, Kael!"))
-    }
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    Application::try_new()?.run(|cx| {
-        kael_ui::init(cx);
-        install_theme(cx, Theme::dark());
-        if let Err(error) = cx.open_window(WindowOptions::default(), |_, cx| {
-            cx.new(|_| AppView)
-        }) {
-            eprintln!("failed to open window: {error}");
-            cx.quit();
-        }
-    });
-    Ok(())
-}
-```
+- `kael` owns the application runtime, entities, elements, retained rendering,
+  layout, text, input, accessibility, windows, and platform backends.
+- `kael_ui` is the optional component system. `kael` never depends on it.
+- Focused `kael_*` crates cover storage, networking, documents, diagnostics,
+  media, sharing, notifications, release, and engine services.
+- WebView is an optional compatibility island. It is not the default UI model.
 
 ## Working model
 
-- Implement `Render` for application views.
-- Store reactive state in `Entity<T>` values created with `cx.new`.
-- Mutate entities with `entity.update(cx, |state, cx| { ... })` and call
-  `cx.notify()` when the view must render again.
-- Use `div()` and the `Styled` methods for primitive layout and appearance.
-- Call `kael_ui::init(cx)` once when using the component crate.
-- Read the active component theme with `Theme::of(cx)`.
+- Start the runtime with `Application::try_new()?.run(...)`.
+- Implement `Render` for views.
+- Put retained state in `Entity<T>` values created with `cx.new`.
+- Update with `entity.update(cx, |state, cx| { ... })` and call `cx.notify()`
+  when the view must render again.
+- Use `div()` and `Styled` for primitive layout.
+- Call `kael_ui::init(cx)` once when using `kael_ui`.
+- Read component tokens with `Theme::of(cx)`.
 
-## Platform accuracy rules
+## Browser target
 
-- Query `CapabilityReport::current()` for platform-dependent workflows.
-- `Full` means a usable Kael backend exists.
-- `Partial` and `RequiresInit` need an explicit setup/fallback path.
-- `Unsupported` means an OS API or checked descriptor may exist, but Kael does
-  not implement the native operation.
-- `Disabled` means a required compile-time feature, such as `webview`, is off.
-- A request builder validates intent; it is not proof of backend support.
+The browser uses the same Rust state, view, layout, input, virtualization, and
+animation code. It renders the retained scene with WebGL2. Pointer, wheel,
+keyboard, IME, clipboard, drag and drop, accessibility, and animation frames are
+interactive.
 
-Kael 0.4 does not provide native push registration, geolocation,
-USB/HID/serial/Bluetooth discovery and I/O, native spellchecking, file-promise
-drag sources, app-window snapshot backends, or share-receiver registration.
-Do not generate code that claims these are complete.
+Normal Kael applications do not need product JavaScript. `kael web build`
+generates `app.js` as Wasm bootstrap glue. Custom JavaScript is needed only for
+unwrapped Web APIs, service workers, vendor SDKs, DOM widgets, or host page
+integration.
 
-## Source routing
+Build references:
 
-- Core exports and module map: `crates/kael/src/kael.rs`
-- Application/entity runtime: `crates/kael/src/app.rs`
+- Browser runtime: https://augani.github.io/kael/browser.html
+- Deployment: https://augani.github.io/kael/web-deployment.html
+- Install `wasm32-unknown-unknown`, `wasm-bindgen-cli` 0.2.122, and Binaryen 132.
+- Run `kael web serve --debug` for development.
+- Run `kael web build` for optimized `dist/web` output.
+- Use `--html <file>` and `--assets <directory>` for a product web shell and assets.
+- Deploy `index.html`, `app.js`, and `app_bg.wasm` together.
+- Serve Wasm as `application/wasm`.
+
+## Platform accuracy
+
+Query `CapabilityReport::current()` before using an operating system service.
+`Full` is ready. `Partial` and `RequiresInit` need a fallback or setup path.
+`Unsupported` has no backend. `Disabled` needs a compile time feature.
+
+Do not claim that Kael 0.4 provides native push registration, spellcheck,
+geolocation, USB, HID, serial, Bluetooth, outbound promised file drag, share
+receivers, or a complete server sent events transport. Browser native paths,
+subprocesses, keychain access, global hotkeys, and detached OS windows are also
+unavailable.
+
+Kael document crates work with Office and PDF bytes. They are not complete
+Office layout, spreadsheet calculation, slide playback, or PDF authoring
+engines. `PortableScene2d` is a 2D foundation, not a complete 3D game engine.
+
+## Source map
+
+- Exports: `crates/kael/src/kael.rs`
+- Application and entities: `crates/kael/src/app.rs`
 - Elements: `crates/kael/src/elements/`
 - Platform backends: `crates/kael/src/platform/`
-- Capability truth table: `crates/kael/src/platform_caps.rs`
-- Component exports: `crates/kael_ui/src/lib.rs` and `prelude.rs`
+- Capability table: `crates/kael/src/platform_caps.rs`
+- Browser CLI: `crates/kael-cli/src/web.rs`
+- UI exports: `crates/kael_ui/src/lib.rs` and `prelude.rs`
 - Components: `crates/kael_ui/src/components/`, `display/`, `navigation/`,
   `overlays/`, and `charts/`
-- Single repository-only showcase: `crates/kael_ui/examples/astryx_showcase.rs`
+- Showcase: `crates/kael_ui/examples/astryx_showcase.rs`
 
-## Agent guidance
-
-Prefer the smallest API that performs the requested operation. Do not introduce
-a handoff, plan, manager, or abstraction for a one-step workflow. Preserve
-fallible boundaries and platform errors. Use WebView only for an intentionally
-web-owned surface. The optional `kael/agent-tools` feature contains structured
-planning metadata, but agents can build applications directly from the public
-Rust APIs without enabling it.
+Prefer the smallest public API that performs the task. Preserve fallible
+boundaries and platform errors. Use WebView only for an intentionally web owned
+surface.

@@ -1,64 +1,46 @@
-(function() {
+(function () {
     'use strict';
 
     function findContent() {
-        return document.querySelector('main')
-            || document.querySelector('.content')
-            || document.getElementById('mdbook-content')
-            || document.getElementById('content');
+        return document.querySelector('.content main');
     }
 
     function buildMarkdown(main) {
         var title = document.title.replace(/\s*[-–]\s*Kael Documentation\s*$/, '');
-        var text = '# ' + title + '\n\n';
-        text += 'Source: ' + window.location.href + '\n\n';
-
+        var text = '# ' + title + '\n\nSource: ' + window.location.href + '\n\n';
         var elements = main.querySelectorAll('h1, h2, h3, h4, p, pre, ul, ol, table, blockquote');
-        elements.forEach(function(el) {
-            if (el.tagName === 'H1') {
-                return;
-            } else if (el.tagName === 'H2') {
-                text += '\n## ' + el.textContent.trim() + '\n\n';
-            } else if (el.tagName === 'H3') {
-                text += '\n### ' + el.textContent.trim() + '\n\n';
-            } else if (el.tagName === 'H4') {
-                text += '\n#### ' + el.textContent.trim() + '\n\n';
-            } else if (el.tagName === 'PRE') {
-                var code = el.querySelector('code');
-                var lang = '';
-                if (code && code.className) {
-                    var match = code.className.match(/language-(\w+)/);
-                    if (match) lang = match[1];
-                }
-                text += '```' + lang + '\n' + el.textContent.trim() + '\n```\n\n';
-            } else if (el.tagName === 'TABLE') {
-                var rows = el.querySelectorAll('tr');
-                rows.forEach(function(row, i) {
+
+        elements.forEach(function (element) {
+            var tag = element.tagName;
+            if (tag === 'H1') {
+                text += '# ' + element.textContent.trim() + '\n\n';
+            } else if (/^H[2-4]$/.test(tag)) {
+                text += '\n' + '#'.repeat(Number(tag.slice(1))) + ' ' + element.textContent.trim() + '\n\n';
+            } else if (tag === 'PRE') {
+                var code = element.querySelector('code');
+                var match = code && code.className.match(/language-(\w+)/);
+                text += '```' + (match ? match[1] : '') + '\n' + element.textContent.trim() + '\n```\n\n';
+            } else if (tag === 'TABLE') {
+                element.querySelectorAll('tr').forEach(function (row, index) {
                     var cells = row.querySelectorAll('th, td');
-                    var line = '| ';
-                    cells.forEach(function(cell) {
-                        line += cell.textContent.trim() + ' | ';
-                    });
-                    text += line + '\n';
-                    if (i === 0) {
-                        text += '| ';
-                        cells.forEach(function() { text += '--- | '; });
-                        text += '\n';
-                    }
+                    text += '| ' + Array.from(cells).map(function (cell) {
+                        return cell.textContent.trim();
+                    }).join(' | ') + ' |\n';
+                    if (index === 0) text += '| ' + Array.from(cells).map(function () { return '---'; }).join(' | ') + ' |\n';
                 });
                 text += '\n';
-            } else if (el.tagName === 'UL' || el.tagName === 'OL') {
-                el.querySelectorAll('li').forEach(function(li, i) {
-                    var prefix = el.tagName === 'OL' ? (i + 1) + '. ' : '- ';
-                    text += prefix + li.textContent.trim() + '\n';
+            } else if (tag === 'UL' || tag === 'OL') {
+                Array.from(element.children).forEach(function (item, index) {
+                    text += (tag === 'OL' ? (index + 1) + '. ' : '- ') + item.textContent.trim() + '\n';
                 });
                 text += '\n';
-            } else if (el.tagName === 'BLOCKQUOTE') {
-                text += '> ' + el.textContent.trim() + '\n\n';
-            } else {
-                text += el.textContent.trim() + '\n\n';
+            } else if (tag === 'BLOCKQUOTE') {
+                text += '> ' + element.textContent.trim() + '\n\n';
+            } else if (!element.closest('li, blockquote, td, th')) {
+                text += element.textContent.trim() + '\n\n';
             }
         });
+
         return text;
     }
 
@@ -66,67 +48,87 @@
         if (navigator.clipboard && navigator.clipboard.writeText) {
             return navigator.clipboard.writeText(text);
         }
-        return new Promise(function(resolve, reject) {
-            try {
-                var ta = document.createElement('textarea');
-                ta.value = text;
-                ta.setAttribute('readonly', '');
-                ta.style.position = 'fixed';
-                ta.style.top = '-1000px';
-                ta.style.opacity = '0';
-                document.body.appendChild(ta);
-                ta.select();
-                var ok = document.execCommand('copy');
-                document.body.removeChild(ta);
-                ok ? resolve() : reject(new Error('execCommand copy failed'));
-            } catch (err) {
-                reject(err);
-            }
+
+        return new Promise(function (resolve, reject) {
+            var textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.setAttribute('readonly', '');
+            textarea.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            var copied = document.execCommand('copy');
+            textarea.remove();
+            copied ? resolve() : reject(new Error('Copy failed'));
         });
     }
 
-    function flash(btn, label, cls) {
-        btn.textContent = label;
-        btn.classList.remove('copied', 'copy-failed');
-        if (cls) btn.classList.add(cls);
-        setTimeout(function() {
-            btn.textContent = 'Copy for LLM';
-            btn.classList.remove('copied', 'copy-failed');
-        }, 2000);
+    function flash(button, label, className) {
+        button.textContent = label;
+        button.classList.remove('copied', 'copy-failed');
+        if (className) button.classList.add(className);
+        window.setTimeout(function () {
+            button.textContent = 'Copy page';
+            button.classList.remove('copied', 'copy-failed');
+        }, 1800);
     }
 
-    function addCopyLlmButton() {
+    function addWordmark() {
+        var scrollbox = document.querySelector('.sidebar-scrollbox');
+        if (!scrollbox || scrollbox.querySelector('.kael-wordmark')) return;
+
+        var mark = document.createElement('a');
+        mark.className = 'kael-wordmark';
+        mark.href = (window.path_to_root || '') + 'index.html';
+        mark.innerHTML = 'Kael <span>Documentation · 0.4</span>';
+        scrollbox.prepend(mark);
+    }
+
+    function refineChrome() {
+        document.body.classList.toggle('is-home', Boolean(document.querySelector('.kael-home')));
+        document.body.classList.toggle('is-object-guide', /\/object-guide\.html$/.test(window.location.pathname));
+
+        var title = document.querySelector('.menu-title');
+        if (title && !title.querySelector('span')) title.innerHTML = 'Kael <span>Documentation</span>';
+
+        addWordmark();
+    }
+
+    function addCopyButton() {
         if (document.querySelector('.copy-llm-btn')) return;
+        var host = document.querySelector('#menu-bar .right-buttons');
+        if (!host) return;
 
-        var btn = document.createElement('button');
-        btn.className = 'copy-llm-btn';
-        btn.type = 'button';
-        btn.textContent = 'Copy for LLM';
-        btn.title = 'Copy this page as markdown for pasting into an LLM';
-
-        btn.addEventListener('click', function() {
+        var button = document.createElement('button');
+        button.className = 'copy-llm-btn';
+        button.type = 'button';
+        button.textContent = 'Copy page';
+        button.title = 'Copy this page as Markdown';
+        button.setAttribute('aria-label', 'Copy this page as Markdown');
+        button.addEventListener('click', function () {
             var main = findContent();
             if (!main) {
-                flash(btn, 'Copy failed', 'copy-failed');
+                flash(button, 'Copy failed', 'copy-failed');
                 return;
             }
-            var text = buildMarkdown(main);
-            copyText(text).then(function() {
-                flash(btn, 'Copied!', 'copied');
-            }).catch(function() {
-                flash(btn, 'Copy failed', 'copy-failed');
+            copyText(buildMarkdown(main)).then(function () {
+                flash(button, 'Copied', 'copied');
+            }).catch(function () {
+                flash(button, 'Copy failed', 'copy-failed');
             });
         });
+        host.appendChild(button);
+    }
 
-        document.body.appendChild(btn);
+    function enhance() {
+        refineChrome();
+        addCopyButton();
     }
 
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', addCopyLlmButton);
+        document.addEventListener('DOMContentLoaded', enhance, { once: true });
     } else {
-        addCopyLlmButton();
+        enhance();
     }
 
-    var observer = new MutationObserver(addCopyLlmButton);
-    observer.observe(document.body, { childList: true, subtree: true });
+    new MutationObserver(enhance).observe(document.body, { childList: true, subtree: true });
 })();

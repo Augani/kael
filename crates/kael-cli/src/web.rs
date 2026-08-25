@@ -49,6 +49,8 @@ struct WebOptions {
     command: WebCommand,
     release: bool,
     out_dir: PathBuf,
+    html: Option<PathBuf>,
+    assets: Option<PathBuf>,
     package: Option<String>,
     bin: Option<String>,
     port: u16,
@@ -100,6 +102,8 @@ USAGE:
 OPTIONS:
     --debug              Build without release optimizations
     --out-dir <path>     Output directory (default: dist/web)
+    --html <file>        Use a source-owned HTML shell
+    --assets <directory> Copy product web assets into the output
     --package <name>     Select a package in a Cargo workspace
     --bin <name>         Select a binary target
     --port <number>      Local serve port (default: 8000)
@@ -119,6 +123,8 @@ fn parse_options(args: &[String]) -> Result<WebOptions, String> {
         command,
         release: true,
         out_dir: PathBuf::from("dist/web"),
+        html: None,
+        assets: None,
         package: None,
         bin: None,
         port: 8_000,
@@ -132,6 +138,14 @@ fn parse_options(args: &[String]) -> Result<WebOptions, String> {
             "--out-dir" => {
                 index += 1;
                 options.out_dir = required_value(args, index, "--out-dir")?.into();
+            }
+            "--html" => {
+                index += 1;
+                options.html = Some(required_value(args, index, "--html")?.into());
+            }
+            "--assets" => {
+                index += 1;
+                options.assets = Some(required_value(args, index, "--assets")?.into());
             }
             "--package" => {
                 index += 1;
@@ -232,12 +246,121 @@ fn build(current_dir: &Path, options: &WebOptions) -> Result<PathBuf, String> {
         optimize_wasm(&output.join("app_bg.wasm"))?;
     }
 
+    if let Some(assets) = options.assets.as_deref() {
+        let assets = resolve_input_path(current_dir, assets);
+        copy_web_assets(&assets, &output)?;
+    }
+
     let index = output.join("index.html");
-    if !index.exists() {
+    if let Some(html) = options.html.as_deref() {
+        let html = resolve_input_path(current_dir, html);
+        if !html.is_file() {
+            return Err(format!("web HTML shell is not a file: {}", html.display()));
+        }
+        fs::copy(&html, &index).map_err(|error| {
+            format!(
+                "failed to copy web HTML shell {} to {}: {error}",
+                html.display(),
+                index.display()
+            )
+        })?;
+    } else if !index.exists() {
         fs::write(&index, DEFAULT_INDEX)
             .map_err(|error| format!("failed to write {}: {error}", index.display()))?;
     }
     Ok(output)
+}
+
+fn resolve_input_path(current_dir: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        current_dir.join(path)
+    }
+}
+
+fn copy_web_assets(source: &Path, output: &Path) -> Result<(), String> {
+    if !source.is_dir() {
+        return Err(format!(
+            "web asset source is not a directory: {}",
+            source.display()
+        ));
+    }
+    let source = source
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve {}: {error}", source.display()))?;
+    let output = output
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve {}: {error}", output.display()))?;
+    if output.starts_with(&source) {
+        return Err(format!(
+            "web output {} cannot be inside asset source {}",
+            output.display(),
+            source.display()
+        ));
+    }
+    copy_web_asset_directory(&source, &source, &output)
+}
+
+fn copy_web_asset_directory(root: &Path, directory: &Path, output: &Path) -> Result<(), String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("failed to read web assets {}: {error}", directory.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "failed to inspect web assets {}: {error}",
+                directory.display()
+            )
+        })?;
+        let source = entry.path();
+        let metadata = fs::symlink_metadata(&source)
+            .map_err(|error| format!("failed to inspect {}: {error}", source.display()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "web asset symlinks are not supported: {}",
+                source.display()
+            ));
+        }
+        let relative = source.strip_prefix(root).map_err(|error| {
+            format!("failed to resolve web asset {}: {error}", source.display())
+        })?;
+        if matches!(
+            relative.to_str(),
+            Some("index.html" | "app.js" | "app_bg.wasm")
+        ) {
+            return Err(format!(
+                "web asset source cannot replace reserved output {}",
+                relative.display()
+            ));
+        }
+        let destination = output.join(relative);
+        if metadata.is_dir() {
+            fs::create_dir_all(&destination).map_err(|error| {
+                format!(
+                    "failed to create web asset directory {}: {error}",
+                    destination.display()
+                )
+            })?;
+            copy_web_asset_directory(root, &source, output)?;
+        } else if metadata.is_file() {
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent).map_err(|error| {
+                    format!(
+                        "failed to create web asset directory {}: {error}",
+                        parent.display()
+                    )
+                })?;
+            }
+            fs::copy(&source, &destination).map_err(|error| {
+                format!(
+                    "failed to copy web asset {} to {}: {error}",
+                    source.display(),
+                    destination.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn discover_target(
@@ -569,10 +692,22 @@ fn mime_type(path: &Path) -> &'static str {
         Some("wasm") => "application/wasm",
         Some("css") => "text/css; charset=utf-8",
         Some("json") => "application/json; charset=utf-8",
+        Some("map") => "application/json; charset=utf-8",
+        Some("webmanifest") => "application/manifest+json; charset=utf-8",
+        Some("txt") => "text/plain; charset=utf-8",
+        Some("xml") => "application/xml; charset=utf-8",
         Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("webp") => "image/webp",
+        Some("avif") => "image/avif",
+        Some("gif") => "image/gif",
+        Some("ico") => "image/x-icon",
+        Some("mp3") => "audio/mpeg",
+        Some("wav") => "audio/wav",
+        Some("ogg") => "audio/ogg",
+        Some("mp4") => "video/mp4",
+        Some("webm") => "video/webm",
         Some("woff") => "font/woff",
         Some("woff2") => "font/woff2",
         _ => "application/octet-stream",
@@ -623,6 +758,17 @@ mod tests {
         assert_eq!(build.command, WebCommand::Build);
         assert!(!build.release);
         assert_eq!(build.bin.as_deref(), Some("demo"));
+
+        let custom = parse_options(&[
+            "build".into(),
+            "--html".into(),
+            "web/index.html".into(),
+            "--assets".into(),
+            "web/assets".into(),
+        ])
+        .unwrap();
+        assert_eq!(custom.html, Some(PathBuf::from("web/index.html")));
+        assert_eq!(custom.assets, Some(PathBuf::from("web/assets")));
 
         let serve = parse_options(&[
             "serve".into(),
@@ -682,5 +828,50 @@ mod tests {
         assert!(DEFAULT_INDEX.contains("./app.js"));
         assert!(DEFAULT_INDEX.contains("./app_bg.wasm"));
         assert!(DEFAULT_INDEX.contains("module_or_path"));
+    }
+
+    #[test]
+    fn serves_common_product_assets_with_browser_mime_types() {
+        assert_eq!(mime_type(Path::new("app_bg.wasm")), "application/wasm");
+        assert_eq!(
+            mime_type(Path::new("site.webmanifest")),
+            "application/manifest+json; charset=utf-8"
+        );
+        assert_eq!(mime_type(Path::new("font.woff2")), "font/woff2");
+        assert_eq!(mime_type(Path::new("image.avif")), "image/avif");
+        assert_eq!(mime_type(Path::new("clip.webm")), "video/webm");
+    }
+
+    #[test]
+    fn copies_nested_web_assets_without_replacing_packager_outputs() {
+        let temp =
+            std::env::temp_dir().join(format!("kael-web-copy-assets-{}", std::process::id()));
+        let source = temp.join("source");
+        let output = temp.join("output");
+        fs::create_dir_all(source.join("fonts")).unwrap();
+        fs::create_dir_all(&output).unwrap();
+        fs::write(source.join("fonts/inter.woff"), b"font").unwrap();
+        fs::write(source.join("manifest.webmanifest"), b"{}").unwrap();
+
+        copy_web_assets(&source, &output).unwrap();
+
+        assert_eq!(fs::read(output.join("fonts/inter.woff")).unwrap(), b"font");
+        assert_eq!(
+            fs::read(output.join("manifest.webmanifest")).unwrap(),
+            b"{}"
+        );
+        fs::write(source.join("app.js"), b"replacement").unwrap();
+        assert!(copy_web_assets(&source, &output).is_err());
+        fs::remove_dir_all(temp).ok();
+    }
+
+    #[test]
+    fn rejects_output_nested_inside_web_assets() {
+        let temp =
+            std::env::temp_dir().join(format!("kael-web-nested-assets-{}", std::process::id()));
+        let output = temp.join("dist");
+        fs::create_dir_all(&output).unwrap();
+        assert!(copy_web_assets(&temp, &output).is_err());
+        fs::remove_dir_all(temp).ok();
     }
 }

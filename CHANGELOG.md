@@ -9,6 +9,43 @@ stabilised — minor version bumps may include breaking changes.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-25
+
+### Added
+
+- Added source-owned web packaging to `kael web build` and `kael web serve`.
+  `--html` preserves an application's host page and `--assets` copies a
+  symlink-free product asset tree without overwriting generated Wasm loader
+  files. The unchanged generated-project gate proves default and customized
+  deployments in a real browser.
+- Rebuilt the documentation and `llms.txt` around the current one-codebase
+  desktop/browser architecture, object-oriented task guides, WebAssembly
+  interactivity and deployment, platform boundaries, release evidence, and
+  remaining work. The docs gate now compiles the shared quick start on native
+  and Wasm targets and rejects broken routes, orphaned pages, stale LLM links,
+  duplicate IDs, and unlicensed or oversized font assets.
+
+### Changed
+
+- Documented Astryx as the design inspiration for `kael_ui` while preserving
+  the boundary between Kael's visually neutral core and its optional,
+  customizable component layer.
+- Browser matrix reports now record the retained frames and observation time of
+  a real component ripple, so animation scheduling is measured alongside
+  pointer activation instead of inferred from a static rendered frame.
+
+### Fixed
+
+- Fixed the browser display-capture release proof freezing its delivery result
+  before a valid frame that arrived after resume. The gate now accepts that
+  frame only after validating its dimensions, RGBA format, byte length, alpha,
+  running state, and pause/resume lifecycle.
+- Fixed the macOS native renderer proof sharing one timeout across initial
+  activation and every retained revision. Each required revision now has its
+  own bounded deadline and is driven through the real native resize path, so a
+  loaded or occluded automation host cannot consume later frame budgets while
+  resize synchronization and immediate retained redraws remain covered.
+
 ## [0.4.0] - 2026-08-24
 
 ### Added
@@ -595,6 +632,7 @@ captures everything landed on `main` between `0.1.1` and `0.1.2`.
 - `cargo fmt --all --check`, `cargo clippy -p kael`, and
   `cargo test -p kael --lib platform::mac` (9/9) all clean.
 
+[0.4.1]: https://github.com/Augani/kael/releases/tag/v0.4.1
 [0.4.0]: https://github.com/Augani/kael/releases/tag/v0.4.0
 [0.3.1]: https://github.com/Augani/kael/releases/tag/v0.3.1
 [0.3.0]: https://github.com/Augani/kael/releases/tag/v0.3.0
