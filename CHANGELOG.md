@@ -45,6 +45,9 @@ stabilised — minor version bumps may include breaking changes.
   own bounded deadline and is driven through the real native resize path, so a
   loaded or occluded automation host cannot consume later frame budgets while
   resize synchronization and immediate retained redraws remain covered.
+- Fixed browser smoke cleanup races where Chromium child processes could
+  briefly recreate a temporary profile after a successful proof and turn the
+  hosted release gate red during EXIT cleanup.
 
 ## [0.4.0] - 2026-08-24
 

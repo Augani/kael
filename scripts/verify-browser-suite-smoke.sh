@@ -33,7 +33,9 @@ cleanup() {
   kill "${server_pid}" 2>/dev/null || true
   wait "${server_pid}" 2>/dev/null || true
   if [[ "${browser_profile}" == /tmp/kael-suite-smoke.* ]]; then
-    rm -rf "${browser_profile}"
+    # Chromium child processes can briefly recreate profile files after the
+    # launcher exits. Temporary cleanup must not override a passed proof.
+    rm -rf -- "${browser_profile}" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT

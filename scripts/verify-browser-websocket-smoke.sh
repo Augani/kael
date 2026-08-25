@@ -34,7 +34,9 @@ cleanup() {
   kill "${websocket_pid}" 2>/dev/null || true
   wait "${websocket_pid}" 2>/dev/null || true
   if [[ "${browser_profile}" == /tmp/kael-websocket-smoke.* ]]; then
-    rm -rf "${browser_profile}"
+    # Chromium child processes can briefly recreate profile files after the
+    # launcher exits. Temporary cleanup must not override a passed proof.
+    rm -rf -- "${browser_profile}" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
