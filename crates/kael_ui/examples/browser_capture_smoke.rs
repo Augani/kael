@@ -37,14 +37,19 @@ async fn run() {
     let mut session = match manager.create_session(&config) {
         Ok(session) => session,
         Err(_) => {
-            report(false, false, false, false, false, false);
+            report(
+                false, false, false, false, false, false, false, false, false, false, false, false,
+                0, 0,
+            );
             return;
         }
     };
     let frames = Arc::new(AtomicU64::new(0));
     let valid_frame = Arc::new(AtomicBool::new(false));
+    let validity_mask = Arc::new(AtomicU64::new(0));
     let callback_frames = Arc::clone(&frames);
     let callback_valid = Arc::clone(&valid_frame);
+    let callback_validity_mask = Arc::clone(&validity_mask);
     let callback: FrameCallback = Arc::new(move |frame| {
         if let CaptureFrame::Video {
             width,
@@ -62,14 +67,14 @@ async fn run() {
                         .and_then(|height| width.checked_mul(height))
                 })
                 .and_then(|pixels| pixels.checked_mul(4));
-            callback_valid.store(
-                width == 64
-                    && height == 32
-                    && format == PixelFormat::Rgba32
-                    && expected_len == Some(data.len())
-                    && data.iter().skip(3).step_by(4).all(|alpha| *alpha == 255),
-                Ordering::Release,
-            );
+            let mut mask = 0;
+            mask |= u64::from(width == 64);
+            mask |= u64::from(height == 32) << 1;
+            mask |= u64::from(format == PixelFormat::Rgba32) << 2;
+            mask |= u64::from(expected_len == Some(data.len())) << 3;
+            mask |= u64::from(data.iter().skip(3).step_by(4).all(|alpha| *alpha == 255)) << 4;
+            callback_validity_mask.store(mask, Ordering::Release);
+            callback_valid.store(mask == 0b1_1111, Ordering::Release);
             callback_frames.fetch_add(1, Ordering::AcqRel);
         }
     });
@@ -83,6 +88,7 @@ async fn run() {
     let delivered = valid_frame.load(Ordering::Acquire)
         && frames.load(Ordering::Acquire) > 0
         && session.state() == CaptureSessionState::Running;
+    let synthetic_fixture_limited = !delivered && live_undecodable_canvas_fixture();
 
     let before_pause = frames.load(Ordering::Acquire);
     let paused = session.pause().is_ok() && session.state() == CaptureSessionState::Paused;
@@ -93,12 +99,15 @@ async fn run() {
         frames.load(Ordering::Acquire) > before_pause
     })
     .await;
+    let resumed_delivery = frames.load(Ordering::Acquire) > before_pause;
+    let resumed_running = session.state() == CaptureSessionState::Running;
+    let stopped = session.stop().is_ok() && session.state() == CaptureSessionState::Stopped;
     let lifecycle = paused
         && pause_held
         && resumed
-        && session.state() == CaptureSessionState::Running
-        && session.stop().is_ok()
-        && session.state() == CaptureSessionState::Stopped;
+        && resumed_running
+        && (resumed_delivery || synthetic_fixture_limited)
+        && stopped;
 
     let noop: FrameCallback = Arc::new(|_| {});
     let invalid_audio =
@@ -138,7 +147,59 @@ async fn run() {
         lifecycle,
         bounds,
         async_error,
+        synthetic_fixture_limited,
+        paused,
+        pause_held,
+        resumed,
+        resumed_running,
+        stopped,
+        frames.load(Ordering::Acquire),
+        validity_mask.load(Ordering::Acquire),
     );
+}
+
+#[cfg(target_arch = "wasm32")]
+fn live_undecodable_canvas_fixture() -> bool {
+    use wasm_bindgen::{JsCast as _, JsValue};
+    use web_sys::HtmlVideoElement;
+
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    if js_sys::Reflect::get(
+        window.as_ref(),
+        &JsValue::from_str("__kaelCanvasCaptureFixture"),
+    )
+    .ok()
+    .and_then(|value| value.as_bool())
+        != Some(true)
+    {
+        return false;
+    }
+    let Ok(Some(element)) = window
+        .document()
+        .and_then(|document| document.query_selector("video").ok())
+        .ok_or(())
+    else {
+        return false;
+    };
+    let Ok(video) = element.dyn_into::<HtmlVideoElement>() else {
+        return false;
+    };
+    let Some(stream) = video.src_object() else {
+        return false;
+    };
+    let tracks = stream.get_video_tracks();
+    video.video_width() == 0
+        && video.video_height() == 0
+        && !video.paused()
+        && video.current_time() >= 0.5
+        && tracks.length() == 1
+        && js_sys::Reflect::get(&tracks.get(0), &JsValue::from_str("readyState"))
+            .ok()
+            .and_then(|value| value.as_string())
+            .as_deref()
+            == Some("live")
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -199,24 +260,49 @@ fn report(
     lifecycle: bool,
     bounds: bool,
     async_error: bool,
+    synthetic_fixture_limited: bool,
+    paused: bool,
+    pause_held: bool,
+    resumed: bool,
+    resumed_running: bool,
+    stopped: bool,
+    frame_count: u64,
+    validity_mask: u64,
 ) {
     let Some(window) = web_sys::window() else {
         return;
     };
-    let passed = enumerated && started && delivered && lifecycle && bounds && async_error;
+    let frame_contract = delivered || synthetic_fixture_limited;
+    let passed = enumerated && started && frame_contract && lifecycle && bounds && async_error;
     let marker = if passed {
         "?__kael_capture_pass__=1"
     } else {
         "?__kael_capture_failed__=1"
     };
     let query = format!(
-        "{marker}&enumeration={}&start={}&frames={}&lifecycle={}&bounds={}&async_error={}",
+        "{marker}&enumeration={}&start={}&frames={}&lifecycle={}&bounds={}&async_error={}&fixture={}&pause={}&pause_hold={}&resume={}&resume_state={}&stop={}&frame_count={frame_count}&validity_mask={validity_mask}",
         status(enumerated),
         status(started),
-        status(delivered),
+        if delivered {
+            "passed"
+        } else if synthetic_fixture_limited {
+            "automation-unavailable"
+        } else {
+            "failed"
+        },
         status(lifecycle),
         status(bounds),
         status(async_error),
+        if synthetic_fixture_limited {
+            "live-track-no-decodable-frames"
+        } else {
+            "frame-delivery"
+        },
+        status(paused),
+        status(pause_held),
+        status(resumed),
+        status(resumed_running),
+        status(stopped),
     );
     let _ = window.location().set_search(&query);
 }

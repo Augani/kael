@@ -52,10 +52,11 @@ The untouched generated source and manifest, metadata, hashes, logs, packaged
 web files, a screenshot, and the JSON report are retained in
 `target/generated-project-parity-evidence`.
 
-The publish workflow waits for the reusable platform-readiness workflow before
-starting its release preflight, so this proof is release-blocking. The native
-renderer jobs independently scaffold the same unchanged template on Windows and
-Linux to prove that the generated desktop binary launches there too.
+The publish workflow attests that the exact candidate SHA already has a
+successful Platform Readiness run, so this proof remains release-blocking
+without running the whole matrix twice. The native renderer jobs independently
+scaffold the same unchanged template on Windows and Linux to prove that the
+generated desktop binary launches there too.
 
 ## Native renderer runtime smoke
 

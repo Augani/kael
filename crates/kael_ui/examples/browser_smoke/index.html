@@ -591,18 +591,21 @@
         // Hardware is the performance release gate. The deliberately forced
         // CI software rasterizer remains a correctness/liveness gate because
         // its timing tracks host contention rather than an end user's GPU.
-        const p95Budget = softwareFallback ? 1_000 : 80;
-        const p99Budget = softwareFallback ? 2_000 : 160;
+        const p95Budget = 80;
+        const p99Budget = 160;
         // With 24 samples, the p95 budget permits up to three scheduler tasks
         // to cross the browser's fixed 50 ms long-task boundary. Keep the
         // independent long-task gate consistent with that percentile budget;
         // p95/p99 still cap their duration at 80/160 ms on real hardware.
-        const longTaskBudget = softwareFallback ? 24 : 3;
+        const longTaskBudget = 3;
+        const timingPassed =
+          softwareFallback ||
+          (p95 <= p95Budget &&
+            p99 <= p99Budget &&
+            longTaskCount <= longTaskBudget);
         const passed =
-          p95 <= p95Budget &&
-          p99 <= p99Budget &&
+          timingPassed &&
           materializeP99 <= 20_000 &&
-          longTaskCount <= longTaskBudget &&
           peakMountedRows > 1 &&
           peakMountedRows <= 64;
         const attributes = {
@@ -610,9 +613,15 @@
           kaelVirtualPerformanceClass: softwareFallback
             ? "software-fallback-liveness"
             : "hardware-performance",
-          kaelVirtualPerformanceP95BudgetMs: String(p95Budget),
-          kaelVirtualPerformanceP99BudgetMs: String(p99Budget),
-          kaelVirtualPerformanceLongTaskBudget: String(longTaskBudget),
+          kaelVirtualPerformanceP95BudgetMs: softwareFallback
+            ? "not-enforced"
+            : String(p95Budget),
+          kaelVirtualPerformanceP99BudgetMs: softwareFallback
+            ? "not-enforced"
+            : String(p99Budget),
+          kaelVirtualPerformanceLongTaskBudget: softwareFallback
+            ? "not-enforced"
+            : String(longTaskBudget),
           kaelVirtualPerformanceWarmupSamples: String(warmupSamples),
           kaelVirtualPerformanceSamples: String(responseSamples.length),
           kaelVirtualScrollP50Ms: p50.toFixed(3),

@@ -11,6 +11,7 @@ and the dated changelog section together. Then run the local gates:
 
 ```sh
 cargo fmt --all --check
+bash scripts/ci/verify-cross-targets.sh
 bash scripts/ci/audit-dependencies.sh
 bash scripts/ci/verify-kael.sh default
 bash scripts/publish-all.sh --preflight
@@ -26,14 +27,23 @@ their license and package contents, builds the actual `.crate` archives as one
 unpublished workspace set, compiles every extracted archive, and enforces the
 crates.io 10 MiB compressed archive limit. It does not upload anything.
 
-Commit the complete candidate before treating any runtime evidence as release
-evidence. Push that exact commit, then run the `Publish crates` workflow with
-`publish=false`. The workflow calls the reusable platform-readiness workflow
-first, so its macOS Metal/WKWebView, Windows Direct3D/WebView2/MSI, Linux
-Blade/GTK4/WebKitGTK, generated-project, three-engine browser-correctness, and
-Metal-backed browser-performance jobs all test the same SHA. The hardware job
-must report a non-software WebGL adapter; merely running without the forced
-SwiftShader query is not sufficient.
+`verify-cross-targets.sh` uses Zig to link the portable Linux test graphs from
+the development machine and separately checks the public Wasm graphs. It is a
+fast compiler/linker preflight, not runtime evidence: it cannot execute Metal,
+Direct3D, WebView2, WKWebView, WebKitGTK, or browser engines.
+
+Commit and push the complete candidate before treating runtime evidence as
+release evidence. That exact push starts the compact Platform Readiness gate:
+Linux quality/package checks, Linux renderer/WebView runtime, the browser
+matrix, macOS native/WKWebView/Metal/browser-hardware checks, and two Windows
+native/WebView/MSI compatibility runners. The Metal browser job must report a
+non-software WebGL adapter; merely omitting the forced SwiftShader query is not
+sufficient.
+
+After Platform Readiness is green, run `Publish crates` with `publish=false`.
+This is a cheap attestation: it requires a successful Platform Readiness run
+whose `head_sha` exactly matches the checked-out candidate and does not rerun
+the same platform matrix.
 
 ```sh
 gh workflow run release.yml --ref main -f publish=false
@@ -41,7 +51,7 @@ gh run list --workflow release.yml --branch main --limit 1
 gh run watch <run-id> --exit-status
 ```
 
-Do not substitute a local cross-compile for the hosted Windows runtime jobs.
+Do not substitute a Zig cross-compile for the hosted platform runtime jobs.
 
 ## Publish crates and tag the commit
 

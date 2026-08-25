@@ -26,6 +26,11 @@
       paint();
       setInterval(paint, 16);
       const stream = canvas.captureStream(30);
+      // Playwright's Linux WebKit port exposes a live, dimensioned
+      // CanvasCaptureMediaStreamTrack but cannot decode that synthetic track
+      // back into a video element. The Wasm smoke recognizes only that exact
+      // fixture state; trusted getDisplayMedia streams are never exempted.
+      globalThis.__kaelCanvasCaptureFixture = true;
       const mediaDevices = navigator.mediaDevices ?? {};
       Object.defineProperty(mediaDevices, "getDisplayMedia", {
         configurable: true,

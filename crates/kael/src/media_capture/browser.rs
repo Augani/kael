@@ -231,8 +231,8 @@ impl CaptureSession for BrowserCaptureSession {
             self.state() == CaptureSessionState::Running,
             "browser capture can only pause while running"
         );
-        self.set_state(CaptureSessionState::Paused);
         pause_runtime(self.id)?;
+        self.set_state(CaptureSessionState::Paused);
         Ok(())
     }
 
@@ -241,8 +241,8 @@ impl CaptureSession for BrowserCaptureSession {
             self.state() == CaptureSessionState::Paused,
             "browser capture can only resume while paused"
         );
+        resume_runtime(self.id)?;
         self.set_state(CaptureSessionState::Running);
-        resume_runtime(self.id, Arc::clone(&self.state), Arc::clone(&self.error))?;
         Ok(())
     }
 
@@ -354,11 +354,28 @@ async fn initialize_runtime(
         .map_err(|_| anyhow!("browser capture returned an invalid 2D context"))?;
 
     let play = video.play().map_err(js_error)?;
-    if let Err(play_error) = JsFuture::from(play).await {
-        stop_stream(&stream);
-        video.remove();
-        return Err(js_error(play_error).context("browser capture video could not start"));
-    }
+    let play_state = Arc::clone(&state);
+    let play_error = Arc::clone(&error);
+    spawn_local(async move {
+        if let Err(error) = JsFuture::from(play).await
+            && matches!(
+                load_state(&play_state),
+                CaptureSessionState::Starting
+                    | CaptureSessionState::Running
+                    | CaptureSessionState::Paused
+            )
+        {
+            set_async_error(
+                &play_state,
+                &play_error,
+                format!(
+                    "{:#}",
+                    js_error(error).context("browser capture video could not start")
+                ),
+            );
+            cleanup_runtime(id);
+        }
+    });
 
     let mut ended_callbacks = Vec::with_capacity(tracks.len());
     for track in &tracks {
@@ -566,12 +583,12 @@ fn request_next_frame(id: u64) -> Result<()> {
 }
 
 fn pause_runtime(id: u64) -> Result<()> {
-    let (video, frame_request) = BROWSER_CAPTURE_RUNTIMES.with(|runtimes| {
+    let frame_request = BROWSER_CAPTURE_RUNTIMES.with(|runtimes| {
         let mut runtimes = runtimes.borrow_mut();
         let runtime = runtimes
             .get_mut(&id)
             .ok_or_else(|| anyhow!("browser capture runtime is unavailable"))?;
-        Ok::<_, anyhow::Error>((runtime.video.clone(), runtime.frame_request.take()))
+        Ok::<_, anyhow::Error>(runtime.frame_request.take())
     })?;
     if let Some(request) = frame_request {
         web_sys::window()
@@ -579,24 +596,10 @@ fn pause_runtime(id: u64) -> Result<()> {
             .cancel_animation_frame(request)
             .map_err(js_error)?;
     }
-    video.pause().map_err(js_error)
+    Ok(())
 }
 
-fn resume_runtime(id: u64, state: Arc<AtomicU8>, error: Arc<Mutex<Option<String>>>) -> Result<()> {
-    let video = BROWSER_CAPTURE_RUNTIMES.with(|runtimes| {
-        runtimes
-            .borrow()
-            .get(&id)
-            .map(|runtime| runtime.video.clone())
-            .ok_or_else(|| anyhow!("browser capture runtime is unavailable"))
-    })?;
-    let play = video.play().map_err(js_error)?;
-    spawn_local(async move {
-        if let Err(play_error) = JsFuture::from(play).await {
-            set_async_error(&state, &error, format!("{:#}", js_error(play_error)));
-            cleanup_runtime(id);
-        }
-    });
+fn resume_runtime(id: u64) -> Result<()> {
     request_next_frame(id)
 }
 
