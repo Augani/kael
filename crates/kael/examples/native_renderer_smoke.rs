@@ -471,7 +471,10 @@ mod native {
                         // so this remains deterministic even when AppKit pauses
                         // the display link for an occluded automation window.
                         // It also proves retained redraws survive viewport changes.
+                        #[cfg(target_os = "macos")]
                         window.resize(size(px(WIDTH + revision as f32), px(HEIGHT)));
+                        #[cfg(not(target_os = "macos"))]
+                        window.refresh();
                     }) {
                         eprintln!(
                             "NATIVE_RENDERER_SMOKE_FAIL: schedule revision {revision}: {error:#}"
