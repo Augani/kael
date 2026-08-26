@@ -6,6 +6,14 @@ fewer runtime layers, and one coherent Rust codebase. The same retained UI and
 Scene renderer target native macOS, Windows, and Linux applications or a
 WebAssembly/WebGL2 canvas in the browser.
 
+**[Read the Kael documentation →](https://augani.github.io/kael/)**
+
+[Get started](https://augani.github.io/kael/getting-started.html) ·
+[Desktop and web](https://augani.github.io/kael/one-codebase.html) ·
+[Components](https://augani.github.io/kael/component-library.html) ·
+[Web deployment](https://augani.github.io/kael/web-deployment.html) ·
+[API reference](https://augani.github.io/kael/api-documentation.html)
+
 Kael is not defined by another application stack. It is a complete foundation
 for responsive PC applications: retained rendering, application state, native
 platform services, production tooling, and an optional component system that a
@@ -267,14 +275,21 @@ the default platform build plus explicit X11 and Wayland feature sets.
 
 ## Documentation
 
-- The [Kael guide](https://augani.github.io/kael/) explains architecture,
-  workflows, platform capabilities, testing, and production concerns.
-- The [`kael` API documentation](https://docs.rs/kael) covers framework
-  primitives, while [`kael_ui`](https://docs.rs/kael_ui) covers ready-made
-  components.
-- The [API documentation map](docs/src/api-documentation.md) points to the
-  modules and feature flags relevant to common application work.
-- [`llms.txt`](llms.txt) gives agents a concise, capability-aware entry point.
+Use the [Kael guide](https://augani.github.io/kael/) as the primary documentation.
+It covers the complete path from a first window to a deployed desktop and web
+application.
+
+| Goal | Guide |
+| --- | --- |
+| Understand the framework | [What Kael is today](https://augani.github.io/kael/framework-today.html) and [object guide](https://augani.github.io/kael/object-guide.html) |
+| Build a first application | [Getting started](https://augani.github.io/kael/getting-started.html) |
+| Share one codebase | [Desktop and web](https://augani.github.io/kael/one-codebase.html) |
+| Build an interface | [Components](https://augani.github.io/kael/component-library.html), [layout](https://augani.github.io/kael/layout-and-styling.html), and [theming](https://augani.github.io/kael/theming.html) |
+| Handle large workloads | [Lists and large data](https://augani.github.io/kael/lists-and-data.html) and [suite-scale applications](https://augani.github.io/kael/suite-scale-apps.html) |
+| Build and deploy for browsers | [Web build and deployment](https://augani.github.io/kael/web-deployment.html) |
+| Check platform support | [Platform APIs](https://augani.github.io/kael/platform-apis.html) and [current boundaries](https://augani.github.io/kael/remaining-work.html) |
+| Find Rust APIs | [`kael` on docs.rs](https://docs.rs/kael), [`kael_ui` on docs.rs](https://docs.rs/kael_ui), and the [API map](https://augani.github.io/kael/api-documentation.html) |
+| Give context to an agent | [`llms.txt`](https://raw.githubusercontent.com/Augani/kael/main/llms.txt) and the [LLM guide](https://augani.github.io/kael/llms.html) |
 
 ## Acknowledgements
 
