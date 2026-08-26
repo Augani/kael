@@ -152,7 +152,7 @@ impl Database {
     }
 
     /// Executes a SQL statement.
-    pub async fn execute(&self, sql: &str, params: &[&dyn ToSql]) -> Result<usize> {
+    pub async fn execute(&self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<usize> {
         let connection = self.connection.clone();
         let sql = sql.to_string();
         let params = clone_params(params)?;
@@ -180,7 +180,7 @@ impl Database {
     pub async fn query<T: FromRow + Send + 'static>(
         &self,
         sql: &str,
-        params: &[&dyn ToSql],
+        params: &[&(dyn ToSql + Sync)],
     ) -> Result<Vec<T>> {
         let connection = self.connection.clone();
         let sql = sql.to_string();
@@ -197,7 +197,7 @@ impl Database {
     pub async fn query_one<T: FromRow + Send + 'static>(
         &self,
         sql: &str,
-        params: &[&dyn ToSql],
+        params: &[&(dyn ToSql + Sync)],
     ) -> Result<T> {
         let connection = self.connection.clone();
         let sql = sql.to_string();
@@ -280,7 +280,7 @@ fn query_one_with_connection<T: FromRow, P: Params>(
     }
 }
 
-fn clone_params(params: &[&dyn ToSql]) -> Result<Vec<Value>> {
+fn clone_params(params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Value>> {
     params.iter().map(|param| clone_param(*param)).collect()
 }
 
