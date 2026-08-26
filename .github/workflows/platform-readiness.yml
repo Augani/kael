@@ -2,16 +2,10 @@ name: Platform Readiness
 
 on:
   pull_request:
-    paths-ignore:
-      - 'docs/**'
-      - 'llms.txt'
   push:
     branches:
       - main
       - master
-    paths-ignore:
-      - 'docs/**'
-      - 'llms.txt'
   workflow_dispatch:
 
 concurrency:
@@ -27,8 +21,59 @@ env:
   KAEL_HEADLESS: 1
 
 jobs:
+  changes:
+    name: Classify change
+    runs-on: ubuntu-latest
+    outputs:
+      code_changed: ${{ steps.classify.outputs.code_changed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Detect framework changes
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BASE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "code_changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            base="$PR_BASE"
+            head="$PR_HEAD"
+          else
+            base="$PUSH_BASE"
+            head="$CURRENT_SHA"
+          fi
+
+          if [[ -z "$base" || "$base" =~ ^0+$ ]] ||
+             ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "code_changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          code_changed=false
+          while IFS= read -r path; do
+            case "$path" in
+              docs/*|*.md|llms.txt|.github/workflows/docs.yml) ;;
+              *) code_changed=true; break ;;
+            esac
+          done < <(git diff --name-only "$base" "$head")
+
+          echo "code_changed=$code_changed" >> "$GITHUB_OUTPUT"
+
   verify:
     name: Quality / Native (${{ matrix.label }})
+    needs: changes
+    if: needs.changes.outputs.code_changed == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -185,6 +230,8 @@ jobs:
 
   linux-runtime:
     name: Linux Renderer / WebView Runtime
+    needs: changes
+    if: needs.changes.outputs.code_changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -240,6 +287,8 @@ jobs:
 
   browser:
     name: WebAssembly / WebGL2 Browser
+    needs: changes
+    if: needs.changes.outputs.code_changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -386,6 +435,8 @@ jobs:
 
   windows-runtime-and-msi:
     name: Windows Native / WebView / MSI (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.code_changed == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 100
     strategy:
@@ -489,3 +540,45 @@ jobs:
             target/windows-msi-verification
             target/windows-webview-smoke
           if-no-files-found: error
+
+  readiness:
+    name: Platform readiness
+    if: always()
+    needs:
+      - changes
+      - verify
+      - linux-runtime
+      - browser
+      - windows-runtime-and-msi
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce required build results
+        shell: bash
+        env:
+          CODE_CHANGED: ${{ needs.changes.outputs.code_changed }}
+          CLASSIFIER_RESULT: ${{ needs.changes.result }}
+          NATIVE_RESULT: ${{ needs.verify.result }}
+          LINUX_RESULT: ${{ needs.linux-runtime.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
+          WINDOWS_RESULT: ${{ needs.windows-runtime-and-msi.result }}
+        run: |
+          if [[ "$CLASSIFIER_RESULT" != "success" ]]; then
+            echo "Change classification failed." >&2
+            exit 1
+          fi
+
+          if [[ "$CODE_CHANGED" != "true" ]]; then
+            echo "Documentation-only change: platform builds are not required."
+            exit 0
+          fi
+
+          for result in \
+            "$NATIVE_RESULT" \
+            "$LINUX_RESULT" \
+            "$BROWSER_RESULT" \
+            "$WINDOWS_RESULT"; do
+            if [[ "$result" != "success" ]]; then
+              echo "A required platform job finished with: $result" >&2
+              exit 1
+            fi
+          done

@@ -4,6 +4,26 @@ Kael releases are made from one reviewed commit on `main`. Crate publication,
 native installers, updater metadata, and the Git tag must all identify that
 same commit and version. Never publish from a dirty worktree.
 
+## Documentation-only changes
+
+Documentation is not a framework release. Changes limited to `docs/**`,
+Markdown files such as `README.md` or crate READMEs, `llms.txt`, or the docs
+workflow do not require a workspace version bump, changelog release section,
+platform rebuild, crate publication, or Git tag.
+
+The Documentation workflow validates those changes on pull requests. A push to
+`main` builds and deploys the guide to GitHub Pages. Platform Readiness runs one
+small classifier for required-check compatibility, then skips the macOS, Linux,
+Windows, and browser build jobs. The stable `Platform readiness` check passes
+after classification, so documentation pull requests remain mergeable.
+
+Keep unreleased documentation improvements on `main`. They become part of the
+next crate release naturally when a later code change requires a new version.
+Do not dispatch `Publish crates` for a documentation-only commit.
+
+Changes to source, manifests, lockfiles, build scripts, fixtures, or platform
+workflows are not documentation-only and still require the normal code gates.
+
 ## Prepare the release candidate
 
 Update the workspace version, `kael.dist.toml`, scaffold dependency version,

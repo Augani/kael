@@ -1,22 +1,27 @@
 name: Deploy Documentation
 
 on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - '**/*.md'
+      - 'llms.txt'
+      - '.github/workflows/docs.yml'
   push:
     branches: [main]
     paths:
       - 'docs/**'
+      - '**/*.md'
       - 'llms.txt'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: "pages"
-  cancel-in-progress: false
+  group: docs-${{ github.event_name == 'push' && 'pages' || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -43,6 +48,10 @@ jobs:
           path: target/book
 
   deploy:
+    if: github.event_name == 'push'
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
