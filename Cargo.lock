@@ -4507,9 +4507,11 @@ name = "kael_secrets"
 version = "0.4.1"
 dependencies = [
  "anyhow",
+ "core-foundation 0.10.1",
  "parking_lot",
  "secret-service",
  "security-framework",
+ "security-framework-sys",
  "windows 0.62.2",
  "zeroize",
 ]
