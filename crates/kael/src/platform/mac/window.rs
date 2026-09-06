@@ -328,12 +328,6 @@ const NSPopUpWindowLevel: NSInteger = 101;
 /// equivalent to wlr-layer-shell's `Wallpaper`/background layer.
 #[allow(non_upper_case_globals)]
 const NSDesktopWindowLevel: NSInteger = -2147483648;
-/// `kCGFloatingWindowLevel` - above normal windows. Used as `Top`'s level: macOS has
-/// no unentitled API to reserve screen space the way `_NET_WM_STRUT`/AppBar do (see
-/// the platform match below), so this only elevates the window, it doesn't push
-/// other windows out of the way.
-#[allow(non_upper_case_globals)]
-const NSFloatingWindowLevel: NSInteger = 3;
 #[allow(non_upper_case_globals)]
 const NSTrackingMouseEnteredAndExited: NSUInteger = 0x01;
 #[allow(non_upper_case_globals)]
@@ -3750,14 +3744,18 @@ impl MacWindow {
             }
 
             let native_window: id = match kind {
-                // Bottom/Wallpaper/Top are wlr-layer-shell-only kinds with no macOS
+                // Bottom/Wallpaper are wlr-layer-shell-only kinds with no macOS
                 // equivalent; fall back to a regular window, matching what the wayland
                 // backend does when the compositor itself lacks layer-shell support.
                 WindowKind::Normal | WindowKind::Floating | WindowKind::Bottom(_)
-                | WindowKind::Wallpaper(_) | WindowKind::Top(_) => {
+                | WindowKind::Wallpaper(_) => {
                     msg_send![WINDOW_CLASS, alloc]
                 }
-                WindowKind::PopUp | WindowKind::Overlay(_) => {
+                // Top has no real macOS equivalent either - unlike X11's struts or
+                // Windows' AppBars, there's no unentitled way to reserve screen space
+                // - so it's treated the same as Overlay rather than inventing a third,
+                // equally non-reserving elevated level.
+                WindowKind::PopUp | WindowKind::Overlay(_) | WindowKind::Top(_) => {
                     style_mask |= NSWindowStyleMaskNonactivatingPanel;
                     msg_send![PANEL_CLASS, alloc]
                 }
@@ -3927,20 +3925,17 @@ impl MacWindow {
             native_window.makeFirstResponder_(native_view);
 
             match kind {
-                // Bottom/Wallpaper/Top are wlr-layer-shell-only kinds with no direct
+                // Bottom/Wallpaper are wlr-layer-shell-only kinds with no direct
                 // macOS equivalent; each gets the closest native window level instead.
-                // Wallpaper -> kCGDesktopWindowLevel, behind desktop icons. Top ->
-                // kCGFloatingWindowLevel: elevated only, since macOS has no unentitled
-                // API to reserve screen space the way X11's struts or Windows' AppBars
-                // do (see NSFloatingWindowLevel's doc comment). Bottom stays at the
-                // normal level - macOS has no level strictly between desktop and
-                // normal - and relies on avoiding activation (focus: false) plus an
-                // explicit orderBack below to stay out of the way.
+                // Wallpaper -> kCGDesktopWindowLevel, behind desktop icons. Bottom
+                // stays at the normal level - macOS has no level strictly between
+                // desktop and normal - and relies on avoiding activation (focus:
+                // false) plus an explicit orderBack below to stay out of the way.
+                // (Top is handled in the Overlay arm below - see its comment.)
                 WindowKind::Normal | WindowKind::Floating | WindowKind::Bottom(_)
-                | WindowKind::Wallpaper(_) | WindowKind::Top(_) => {
+                | WindowKind::Wallpaper(_) => {
                     let level = match kind {
                         WindowKind::Wallpaper(_) => NSDesktopWindowLevel,
-                        WindowKind::Top(_) => NSFloatingWindowLevel,
                         _ => NSNormalWindowLevel,
                     };
                     native_window.setLevel_(level);
@@ -3978,7 +3973,12 @@ impl MacWindow {
                             | NSWindowCollectionBehavior::FullScreenAuxiliary,
                     );
                 }
-                WindowKind::Overlay(_) => {
+                // Top has no real macOS equivalent: unlike X11's struts or Windows'
+                // AppBars, there's no unentitled API to reserve screen space, so
+                // rather than invent a third elevated level that's equally unable to
+                // push other windows out of the way, it just gets Overlay's treatment
+                // directly.
+                WindowKind::Overlay(_) | WindowKind::Top(_) => {
                     let tracking_area: id = msg_send![lookup_class(c"NSTrackingArea"), alloc];
                     let _: () = msg_send![
                         tracking_area,
