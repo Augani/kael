@@ -2467,38 +2467,50 @@ impl WindowOptionsBuilder {
     }
 
     /// Create an overlay window with default options.
+    #[cfg(not(feature = "wayland"))]
     pub fn overlay(self) -> Self {
         self.kind(WindowKind::Overlay(LayerShellOptions::default()))
     }
 
-    ///Create an overlay window with given LayerShellOptions
-    pub fn overlay_opts(self, options: LayerShellOptions) -> Self {
+    /// Create an overlay window with the given wlr-layer-shell options.
+    #[cfg(feature = "wayland")]
+    pub fn overlay(self, options: LayerShellOptions) -> Self {
         self.kind(WindowKind::Overlay(options))
     }
-    ///Create a wallpaper (background-layer) window with default options
+
+    /// Create a wallpaper (background-layer) window with default options.
+    #[cfg(not(feature = "wayland"))]
     pub fn wallpaper(self) -> Self {
-        self.kind(WindowKind::Background(LayerShellOptions::default()))
-    }
-    /// Create a wallpaper (background-layer) window with options
-    pub fn wallpaper_opts(self, options: LayerShellOptions) -> Self {
-        self.kind(WindowKind::Background(options))
+        self.kind(WindowKind::Wallpaper(LayerShellOptions::default()))
     }
 
-    ///Create bottom window with default options
+    /// Create a wallpaper (background-layer) window with the given wlr-layer-shell options.
+    #[cfg(feature = "wayland")]
+    pub fn wallpaper(self, options: LayerShellOptions) -> Self {
+        self.kind(WindowKind::Wallpaper(options))
+    }
+
+    /// Create a bottom window with default options.
+    #[cfg(not(feature = "wayland"))]
     pub fn bottom(self) -> Self {
         self.kind(WindowKind::Bottom(LayerShellOptions::default()))
     }
-    /// Create bottom window with options
-    pub fn bottom_opts(self, options: LayerShellOptions) -> Self {
+
+    /// Create a bottom window with the given wlr-layer-shell options.
+    #[cfg(feature = "wayland")]
+    pub fn bottom(self, options: LayerShellOptions) -> Self {
         self.kind(WindowKind::Bottom(options))
     }
 
-    ///Create top window with default options
+    /// Create a top window with default options.
+    #[cfg(not(feature = "wayland"))]
     pub fn top(self) -> Self {
         self.kind(WindowKind::Top(LayerShellOptions::default()))
     }
-    ///Create top window with options
-    pub fn top_opts(self, options: LayerShellOptions) -> Self {
+
+    /// Create a top window with the given wlr-layer-shell options.
+    #[cfg(feature = "wayland")]
+    pub fn top(self, options: LayerShellOptions) -> Self {
         self.kind(WindowKind::Top(options))
     }
 
@@ -2708,7 +2720,7 @@ pub enum WindowIntentKind {
     /// Bottom widget
     Bottom(LayerShellOptions),
     /// Wallpaper widget
-    Background(LayerShellOptions),
+    Wallpaper(LayerShellOptions),
     /// Top widget
     Top(LayerShellOptions),
 }
@@ -2724,7 +2736,7 @@ impl WindowIntentKind {
             Self::Popup => "popup",
             Self::Overlay(_) => "overlay",
             Self::Bottom(_) => "bottom",
-            Self::Background(_) => "background",
+            Self::Wallpaper(_) => "wallpaper",
             Self::Top(_) => "top",
         }
     }
@@ -2772,42 +2784,50 @@ impl WindowIntentBuilder {
     }
 
     /// Overlay/HUD intent.
+    #[cfg(not(feature = "wayland"))]
     pub fn overlay() -> Self {
         Self::new(WindowIntentKind::Overlay(LayerShellOptions::default()))
     }
 
-    /// Overlay/HUD intent with options.
-    pub fn overlay_opts(options: LayerShellOptions) -> Self {
+    /// Overlay/HUD intent with wlr-layer-shell options.
+    #[cfg(feature = "wayland")]
+    pub fn overlay(options: LayerShellOptions) -> Self {
         Self::new(WindowIntentKind::Overlay(options))
     }
 
-    /// Bottom widget intent
+    /// Bottom widget intent.
+    #[cfg(not(feature = "wayland"))]
     pub fn bottom() -> Self {
         Self::new(WindowIntentKind::Bottom(LayerShellOptions::default()))
     }
 
-    /// Bottom widget intent with options
-    pub fn bottom_opts(options: LayerShellOptions) -> Self {
+    /// Bottom widget intent with wlr-layer-shell options.
+    #[cfg(feature = "wayland")]
+    pub fn bottom(options: LayerShellOptions) -> Self {
         Self::new(WindowIntentKind::Bottom(options))
     }
 
-    /// Wallpaper widget intent
+    /// Wallpaper widget intent.
+    #[cfg(not(feature = "wayland"))]
     pub fn wallpaper() -> Self {
-        Self::new(WindowIntentKind::Background(LayerShellOptions::default()))
+        Self::new(WindowIntentKind::Wallpaper(LayerShellOptions::default()))
     }
 
-    /// Wallpaper widget intent with options
-    pub fn wallpaper_opts(options: LayerShellOptions) -> Self {
-        Self::new(WindowIntentKind::Background(options))
+    /// Wallpaper widget intent with wlr-layer-shell options.
+    #[cfg(feature = "wayland")]
+    pub fn wallpaper(options: LayerShellOptions) -> Self {
+        Self::new(WindowIntentKind::Wallpaper(options))
     }
 
-    /// Top widget intent
+    /// Top widget intent.
+    #[cfg(not(feature = "wayland"))]
     pub fn top() -> Self {
         Self::new(WindowIntentKind::Top(LayerShellOptions::default()))
     }
 
-    /// Top widget intent with options
-    pub fn top_opts(options: LayerShellOptions) -> Self {
+    /// Top widget intent with wlr-layer-shell options.
+    #[cfg(feature = "wayland")]
+    pub fn top(options: LayerShellOptions) -> Self {
         Self::new(WindowIntentKind::Top(options))
     }
 
@@ -2989,7 +3009,7 @@ impl WindowIntentBuilder {
             }
             WindowIntentKind::Bottom(kind_options) => {
                 anyhow::ensure!(
-                    options.kind == WindowKind::Background(kind_options),
+                    options.kind == WindowKind::Bottom(kind_options),
                     "bottom window intent must use bottom kind"
                 );
                 anyhow::ensure!(
@@ -2997,23 +3017,23 @@ impl WindowIntentBuilder {
                     "bottom window intent should not be minimizable"
                 );
             }
-            WindowIntentKind::Background(kind_options) => {
+            WindowIntentKind::Wallpaper(kind_options) => {
                 anyhow::ensure!(
-                    options.kind == WindowKind::Background(kind_options),
-                    "background window intent must use background kind"
+                    options.kind == WindowKind::Wallpaper(kind_options),
+                    "wallpaper window intent must use wallpaper kind"
                 );
                 anyhow::ensure!(
                     !options.is_minimizable,
-                    "background window intent should not be minimizable"
+                    "wallpaper window intent should not be minimizable"
                 );
                 anyhow::ensure!(
                     !options.is_resizable,
-                    "background windod intent should not be resizable"
+                    "wallpaper window intent should not be resizable"
                 );
 
                 anyhow::ensure!(
                     !options.focus,
-                    "background window intent should not be focusable"
+                    "wallpaper window intent should not be focusable"
                 );
             }
             WindowIntentKind::Top(kind_options) => {
@@ -3062,8 +3082,9 @@ fn window_intent_defaults(kind: WindowIntentKind) -> WindowOptionsBuilder {
             .minimizable(false)
             .movable(false)
             .client_decorations(),
+        #[cfg(feature = "wayland")]
         WindowIntentKind::Overlay(kind_options) => WindowOptionsBuilder::new()
-            .overlay_opts(kind_options)
+            .overlay(kind_options)
             .transparent_titlebar(true)
             .client_decorations()
             .resizable(false)
@@ -3071,8 +3092,19 @@ fn window_intent_defaults(kind: WindowIntentKind) -> WindowOptionsBuilder {
             .movable(false)
             .transparent_background()
             .no_titlebar(),
+        #[cfg(not(feature = "wayland"))]
+        WindowIntentKind::Overlay(_) => WindowOptionsBuilder::new()
+            .overlay()
+            .transparent_titlebar(true)
+            .client_decorations()
+            .resizable(false)
+            .minimizable(false)
+            .movable(false)
+            .transparent_background()
+            .no_titlebar(),
+        #[cfg(feature = "wayland")]
         WindowIntentKind::Bottom(kind_options) => WindowOptionsBuilder::new()
-            .bottom_opts(kind_options)
+            .bottom(kind_options)
             .transparent_titlebar(true)
             .client_decorations()
             .resizable(false)
@@ -3081,8 +3113,9 @@ fn window_intent_defaults(kind: WindowIntentKind) -> WindowOptionsBuilder {
             .focused(false)
             .transparent_background()
             .no_titlebar(),
-        WindowIntentKind::Background(kind_options) => WindowOptionsBuilder::new()
-            .wallpaper_opts(kind_options)
+        #[cfg(not(feature = "wayland"))]
+        WindowIntentKind::Bottom(_) => WindowOptionsBuilder::new()
+            .bottom()
             .transparent_titlebar(true)
             .client_decorations()
             .resizable(false)
@@ -3091,8 +3124,41 @@ fn window_intent_defaults(kind: WindowIntentKind) -> WindowOptionsBuilder {
             .focused(false)
             .transparent_background()
             .no_titlebar(),
+        #[cfg(feature = "wayland")]
+        WindowIntentKind::Wallpaper(kind_options) => WindowOptionsBuilder::new()
+            .wallpaper(kind_options)
+            .transparent_titlebar(true)
+            .client_decorations()
+            .resizable(false)
+            .minimizable(false)
+            .movable(false)
+            .focused(false)
+            .transparent_background()
+            .no_titlebar(),
+        #[cfg(not(feature = "wayland"))]
+        WindowIntentKind::Wallpaper(_) => WindowOptionsBuilder::new()
+            .wallpaper()
+            .transparent_titlebar(true)
+            .client_decorations()
+            .resizable(false)
+            .minimizable(false)
+            .movable(false)
+            .focused(false)
+            .transparent_background()
+            .no_titlebar(),
+        #[cfg(feature = "wayland")]
         WindowIntentKind::Top(kind_options) => WindowOptionsBuilder::new()
-            .top_opts(kind_options)
+            .top(kind_options)
+            .transparent_titlebar(true)
+            .client_decorations()
+            .resizable(false)
+            .minimizable(false)
+            .movable(false)
+            .transparent_background()
+            .no_titlebar(),
+        #[cfg(not(feature = "wayland"))]
+        WindowIntentKind::Top(_) => WindowOptionsBuilder::new()
+            .top()
             .transparent_titlebar(true)
             .client_decorations()
             .resizable(false)
@@ -3294,8 +3360,8 @@ pub enum WindowKind {
     Overlay(LayerShellOptions),
     /// An back window  that appears above the wallpaper, but ordinary applications (such as a browser or terminal) open on them.
     Bottom(LayerShellOptions),
-    ///An background layer that appears at the bottom, behind the behind all.
-    Background(LayerShellOptions),
+    ///A wallpaper layer that appears at the bottom, behind everything else.
+    Wallpaper(LayerShellOptions),
     ///An window that appears above normal windows, but more importantly – should take up space on the screen
     ///so that the other windows do not cover it when they are maximized.
     Top(LayerShellOptions),
@@ -3310,7 +3376,7 @@ impl WindowKind {
             Self::Floating => "floating",
             Self::Overlay(_) => "overlay",
             Self::Bottom(_) => "bottom",
-            Self::Background(_) => "background",
+            Self::Wallpaper(_) => "wallpaper",
             Self::Top(_) => "top",
         }
     }

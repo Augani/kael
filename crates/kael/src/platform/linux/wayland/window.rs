@@ -402,11 +402,11 @@ impl WaylandWindow {
                 Some(zwlr_layer_shell_v1::Layer::Bottom),
                 "kael-bottom",
             ),
-            WindowKind::Background(kind_options) => (
+            WindowKind::Wallpaper(kind_options) => (
                 true && globals.layer_shell.is_some(),
                 Some(kind_options),
                 Some(zwlr_layer_shell_v1::Layer::Background),
-                "kael-background",
+                "kael-wallpaper",
             ),
             _ => (false, None, None, ""),
         };
@@ -519,9 +519,9 @@ impl WaylandWindow {
                 );
             }
 
-            if let WindowKind::Background(_) = params.kind {
+            if let WindowKind::Wallpaper(_) = params.kind {
                 log::warn!(
-                    "Wayland: WindowKind::Background requested but the compositor does not \
+                    "Wayland: WindowKind::Wallpaper requested but the compositor does not \
                      implement wlr-layer-shell; falling back to a regular window. True \
                      behid all other windows and widgets is unavailable on this compositor."
                 );
