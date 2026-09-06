@@ -1030,6 +1030,25 @@ impl WindowsWindowInner {
         if !activated {
             self.release_native_pointer_lock().log_err();
         }
+        // Being activated normally raises a window in Z-order; a WindowKind::Bottom
+        // window should stay beneath everything else regardless, so immediately push
+        // it back down. There's no Win32 flag to pin a window at the bottom
+        // permanently the way HWND_TOPMOST pins one at the top - this has to be
+        // re-asserted whenever something might have raised it.
+        if activated && matches!(self.kind, WindowKind::Bottom(_)) {
+            unsafe {
+                SetWindowPos(
+                    self.hwnd,
+                    Some(HWND_BOTTOM),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                )
+            }
+            .log_err();
+        }
         let this = self.clone();
 
         // Fire UIA focus changed event when the window gains focus.
