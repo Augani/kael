@@ -105,9 +105,9 @@ pub struct WaylandWindowState {
     frame_callback_requested: bool,
     /// Forces the next `frame()` call to render past the `frame_callback_active` gate,
     /// regardless of `invalidator` dirty state. Set for a wlr-layer-shell surface's
-    /// mandatory first paint after `ack_configure`: frame_callback_active can't be
-    /// trusted to be true at that point, and the surface has no toplevel-activation/
-    /// keyboard-focus signal to re-arm it the way an xdg-toplevel window might.
+    /// mandatory first paint after `ack_configure` (frame_callback_active can't be
+    /// trusted at that point - see `handle_layer_surface_event`), and reused whenever
+    /// a window created with `show: false` shows its deferred first paint via `show()`.
     force_next_frame: bool,
     pub surface: wl_surface::WlSurface,
     decoration: Option<zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1>,
@@ -227,7 +227,7 @@ impl WaylandWindowState {
             in_progress_window_controls: None,
             window_controls: WindowControls::default(),
             client_inset: None,
-            visible: true,
+            visible: options.show,
             tab_manager: WindowTabManager::new(handle, tab_manager_state),
             accessibility_root: crate::platform::linux::accessibility::AtSpiAccessibleRoot::new(),
             pointer_lock: crate::game_input::NativePointerLockState::new(pointer_lock_supported),
@@ -435,7 +435,16 @@ impl WaylandWindow {
                     );
                 }
                 if layer_surface.version() >= 4 {
-                    match shell_options.keyboard_interactivity {
+                    // `focus: false` means the caller doesn't want this surface eligible
+                    // for keyboard focus on map. wlr-layer-shell has no separate "don't
+                    // focus me" hint, so the only lever is refusing keyboard interactivity
+                    // outright, overriding whatever `WindowKindOptions` requested.
+                    let keyboard_interactivity = if params.focus {
+                        shell_options.keyboard_interactivity
+                    } else {
+                        crate::KeyboardInteractivity::None
+                    };
+                    match keyboard_interactivity {
                         crate::KeyboardInteractivity::OnDemand => layer_surface
                             .set_keyboard_interactivity(
                                 zwlr_layer_surface_v1::KeyboardInteractivity::OnDemand,
@@ -779,10 +788,12 @@ impl WaylandWindowStatePtr {
                 window_geometry.size.height,
             );
 
-            let request_frame_callback = !state.acknowledged_first_configure;
-            if request_frame_callback {
-                state.acknowledged_first_configure = true;
-                drop(state);
+            // A window created with `show: false` defers its first real paint until
+            // `.show()` is called, which forces one through the same gate bypass.
+            let should_paint = !state.acknowledged_first_configure && state.visible;
+            state.acknowledged_first_configure = true;
+            drop(state);
+            if should_paint {
                 self.frame();
             }
         }
@@ -819,16 +830,18 @@ impl WaylandWindowStatePtr {
                     };
                 }
 
-                let request_frame_callback = !state.acknowledged_first_configure;
+                // A window created with `show: false` defers its first real paint until
+                // `.show()` is called, which forces one through the same gate bypass.
+                let should_paint = !state.acknowledged_first_configure && state.visible;
                 state.acknowledged_first_configure = true;
-                if request_frame_callback {
+                if should_paint {
                     state.force_next_frame = true;
                 }
                 drop(state);
                 if let Some(new_size) = new_size {
                     self.resize(new_size);
                 }
-                if request_frame_callback {
+                if should_paint {
                     self.frame();
                 }
                 false
@@ -1668,9 +1681,20 @@ impl PlatformWindow for WaylandWindow {
 
     fn show(&self) {
         let mut state = self.borrow_mut();
+        let was_hidden = !state.visible;
         state.visible = true;
-        state.surface.frame(&state.globals.qh, state.surface.id());
-        state.surface.commit();
+        // A window created with `show: false` skipped its first real paint (see
+        // `handle_xdg_surface_event`/`handle_layer_surface_event`). Force one through
+        // now via the same gate bypass, rather than requesting a plain frame callback:
+        // that would route through the frame_callback_active-gated path and could
+        // silently no-op for the same reason the layer-shell bootstrap used to.
+        if was_hidden && state.acknowledged_first_configure {
+            state.force_next_frame = true;
+        }
+        drop(state);
+        if was_hidden {
+            self.0.frame();
+        }
     }
 
     fn hide(&self) {
