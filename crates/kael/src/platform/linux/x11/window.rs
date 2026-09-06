@@ -629,7 +629,7 @@ impl X11WindowState {
                 )?;
             }
 
-            if params.kind == WindowKind::Overlay {
+            if let WindowKind::Overlay(_) = params.kind {
                 check_reply(
                     || "X11 ChangeProperty32 setting window type for overlay failed.",
                     xcb.change_property32(

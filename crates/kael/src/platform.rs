@@ -2466,9 +2466,40 @@ impl WindowOptionsBuilder {
         self.kind(WindowKind::Floating)
     }
 
-    /// Create an overlay window.
+    /// Create an overlay window with default options.
     pub fn overlay(self) -> Self {
-        self.kind(WindowKind::Overlay)
+        self.kind(WindowKind::Overlay(WindowKindOptions::default()))
+    }
+
+    ///Create an overlay window with given WindowKindOptions
+    pub fn overlay_opts(self, options: WindowKindOptions) -> Self {
+        self.kind(WindowKind::Overlay(options))
+    }
+    ///Create background window with default options
+    pub fn z_bg(self) -> Self {
+        self.kind(WindowKind::Background(WindowKindOptions::default()))
+    }
+    /// Create background window with options
+    pub fn z_bg_opts(self, options: WindowKindOptions) -> Self {
+        self.kind(WindowKind::Background(options))
+    }
+
+    ///Create bottom window with default options
+    pub fn z_bottom(self) -> Self {
+        self.kind(WindowKind::Bottom(WindowKindOptions::default()))
+    }
+    /// Create bottom window with options
+    pub fn z_bottom_opts(self, options: WindowKindOptions) -> Self {
+        self.kind(WindowKind::Bottom(options))
+    }
+
+    ///Create top window with default options
+    pub fn z_top(self) -> Self {
+        self.kind(WindowKind::Top(WindowKindOptions::default()))
+    }
+    ///Create top window with options
+    pub fn z_top_opts(self, options: WindowKindOptions) -> Self {
+        self.kind(WindowKind::Top(options))
     }
 
     /// Set whether the window is movable by the user.
@@ -2673,7 +2704,14 @@ pub enum WindowIntentKind {
     /// Context popup or short-lived popover window.
     Popup,
     /// Overlay/HUD window.
-    Overlay,
+    Overlay(WindowKindOptions),
+    /// Bottom widget
+    Bottom(WindowKindOptions),
+    /// Wallpaper widget
+    Background(WindowKindOptions),
+    /// Top widget
+    Top(WindowKindOptions),
+    
 }
 
 impl WindowIntentKind {
@@ -2685,7 +2723,10 @@ impl WindowIntentKind {
             Self::Utility => "utility",
             Self::Modal => "modal",
             Self::Popup => "popup",
-            Self::Overlay => "overlay",
+            Self::Overlay(_) => "overlay",
+            Self::Bottom(_) => "bottom",
+            Self::Background(_) => "background",
+            Self::Top(_) => "top",
         }
     }
 }
@@ -2733,7 +2774,42 @@ impl WindowIntentBuilder {
 
     /// Overlay/HUD intent.
     pub fn overlay() -> Self {
-        Self::new(WindowIntentKind::Overlay)
+        Self::new(WindowIntentKind::Overlay(WindowKindOptions::default()))
+    }
+
+    /// Overlay/HUD intent with options.
+    pub fn overlay_opts(options: WindowKindOptions) -> Self {
+        Self::new(WindowIntentKind::Overlay(options))
+    }
+    
+    /// Bottom widget intent
+    pub fn z_bottom() -> Self {
+        Self::new(WindowIntentKind::Bottom(WindowKindOptions::default()))
+    }
+    
+    /// Bottom widget intent with options
+    pub fn z_bottom_opts(options:WindowKindOptions) -> Self {
+        Self::new(WindowIntentKind::Bottom(options))
+    }
+    
+    /// Wallpaper widget intent
+    pub fn z_bg() -> Self {
+        Self::new(WindowIntentKind::Background(WindowKindOptions::default()))
+    }
+    
+    /// Wallpaper widget intent with options
+    pub fn z_bg_opts(options:WindowKindOptions) -> Self {
+        Self::new(WindowIntentKind::Background(options))
+    }
+
+    /// Top widget intent
+    pub fn z_top() -> Self {
+        Self::new(WindowIntentKind::Top(WindowKindOptions::default()))
+    }
+    
+    /// Top widget intent with options
+    pub fn z_top_opts(options:WindowKindOptions) -> Self {
+        Self::new(WindowIntentKind::Top(options))
     }
 
     /// Return this intent kind.
@@ -2902,14 +2978,54 @@ impl WindowIntentBuilder {
                     "popup window intent should not be resizable"
                 );
             }
-            WindowIntentKind::Overlay => {
+            WindowIntentKind::Overlay(kind_options) => {
                 anyhow::ensure!(
-                    options.kind == WindowKind::Overlay,
+                    options.kind == WindowKind::Overlay(kind_options),
                     "overlay window intent must use overlay kind"
                 );
                 anyhow::ensure!(
                     !options.is_minimizable,
                     "overlay window intent should not be minimizable"
+                );
+            }
+            WindowIntentKind::Bottom(kind_options) => {
+                anyhow::ensure!(
+                    options.kind == WindowKind::Background(kind_options),
+                    "bottom window intent must use bottom kind"
+                );
+                anyhow::ensure!(
+                    !options.is_minimizable,
+                    "bottom window intent should not be minimizable"
+                );
+            }
+            WindowIntentKind::Background(kind_options) => {
+                anyhow::ensure!(
+                    options.kind == WindowKind::Background(kind_options),
+                    "background window intent must use background kind"
+                );
+                anyhow::ensure!(
+                    !options.is_minimizable,
+                    "background window intent should not be minimizable"
+                );
+                anyhow::ensure!(
+                    !options.is_resizable,
+                    "background windod intent should not be resizable"
+                );
+
+                anyhow::ensure!(
+                    !options.focus,
+                    "background window intent should not be focusable"
+                );
+
+            }
+            WindowIntentKind::Top(kind_options) => {
+                anyhow::ensure!(
+                    options.kind == WindowKind::Top(kind_options),
+                    "top window intent must use overlay kind"
+                );
+                anyhow::ensure!(
+                    !options.is_minimizable,
+                    "top window intent should not be minimizable"
                 );
             }
         }
@@ -2948,13 +3064,45 @@ fn window_intent_defaults(kind: WindowIntentKind) -> WindowOptionsBuilder {
             .minimizable(false)
             .movable(false)
             .client_decorations(),
-        WindowIntentKind::Overlay => WindowOptionsBuilder::new()
-            .overlay()
+        WindowIntentKind::Overlay(kind_options) => WindowOptionsBuilder::new()
+            .overlay_opts(kind_options)
+            .transparent_titlebar(true)
+            .client_decorations()
             .resizable(false)
             .minimizable(false)
             .movable(false)
             .transparent_background()
             .no_titlebar(),
+        WindowIntentKind::Bottom(kind_options) => WindowOptionsBuilder::new()
+            .z_bottom_opts(kind_options)
+            .transparent_titlebar(true)
+            .client_decorations()
+            .resizable(false)
+            .minimizable(false)
+            .movable(false)
+            .focused(false)
+            .transparent_background()
+            .no_titlebar(),
+        WindowIntentKind::Background(kind_options) => WindowOptionsBuilder::new()
+            .z_bg_opts(kind_options)
+            .transparent_titlebar(true)
+            .client_decorations()
+            .resizable(false)
+            .minimizable(false)
+            .movable(false)
+            .focused(false)
+            .transparent_background()
+            .no_titlebar(),
+        WindowIntentKind::Top(kind_options) => WindowOptionsBuilder::new()
+            .z_top_opts(kind_options)
+            .transparent_titlebar(true)
+            .client_decorations()
+            .resizable(false)
+            .minimizable(false)
+            .movable(false)
+            .transparent_background()
+            .no_titlebar(),
+
     }
 }
 
@@ -3043,7 +3191,91 @@ impl TitlebarOptions {
     }
 }
 
-/// The kind of window to create
+#[cfg(feature = "wayland")]
+///wayland layer definition
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum Layer {
+    /// background
+    Background,
+    ///bottom
+    Bottom,
+    ///top
+    Top,
+    ///overlay
+    #[default]
+    Overlay,
+}
+
+#[cfg(feature = "wayland")]
+bitflags::bitflags! {
+    /// The options that can be configured for a window's decorations
+    #[derive(Copy,Clone,Debug,PartialEq,Eq,Default,Hash)]
+    pub struct Anchor: u32 {
+        ///top
+        const TOP = 1;
+         ///bottom
+        const BOTTOM = 2;
+        ///left
+        const LEFT = 4;
+        ///right
+        const RIGHT = 8;
+    }
+}
+
+#[cfg(feature = "wayland")]
+///Keyboard interactivity
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq,Hash)]
+pub enum KeyboardInteractivity {
+    ///none
+    None,
+    ///exclusive
+    Exclusive,
+    /// normal window
+    #[default]
+    OnDemand,
+}
+
+/// 1. Дефинираме LayerOption според платформата
+#[cfg(feature = "wayland")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct WindowKindOptions {
+    ///anchor
+    pub anchor: Anchor,
+    ///exclusive zone
+    pub exclusive_zone: Option<Pixels>,
+    ///exclusive edge
+    pub exclusive_edge: Option<Anchor>,
+    ///margin
+    pub margin: Option<(Pixels, Pixels, Pixels, Pixels)>,
+    ///keyboard interactivity
+    pub keyboard_interactivity: KeyboardInteractivity,
+}
+
+#[cfg(not(feature = "wayland"))]
+/// За останалите платформи е празна структура (заема 0 байта)
+pub struct WindowKindOptions;
+
+#[cfg(feature = "wayland")]
+impl Default for WindowKindOptions {
+    fn default() -> Self {
+        WindowKindOptions {
+            anchor: Anchor::empty(),
+            exclusive_zone: None,
+            exclusive_edge: None,
+            margin: None,
+            keyboard_interactivity: KeyboardInteractivity::OnDemand,
+        }
+    }
+}
+
+#[cfg(not(feature = "wayland"))]
+impl Default for WindowKindOptions {
+    fn default() -> Self {
+        WindowKindOptions
+    }
+}
+
+///Windows Kind
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum WindowKind {
     /// A normal application window
@@ -3057,7 +3289,14 @@ pub enum WindowKind {
     Floating,
 
     /// An overlay window that appears above all other windows, including fullscreen apps
-    Overlay,
+    Overlay(WindowKindOptions),
+    /// An back window  that appears above the wallpaper, but ordinary applications (such as a browser or terminal) open on them.
+    Bottom(WindowKindOptions),
+    ///An background layer that appears at the bottom, behind the behind all.
+    Background(WindowKindOptions),
+    ///An window that appears above normal windows, but more importantly – should take up space on the screen
+    ///so that the other windows do not cover it when they are maximized.
+    Top(WindowKindOptions),
 }
 
 impl WindowKind {
@@ -3067,7 +3306,10 @@ impl WindowKind {
             Self::Normal => "normal",
             Self::PopUp => "popup",
             Self::Floating => "floating",
-            Self::Overlay => "overlay",
+            Self::Overlay(_) => "overlay",
+            Self::Bottom(_) => "bottom",
+            Self::Background(_) => "background",
+            Self::Top(_) => "top",
         }
     }
 }
