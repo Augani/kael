@@ -375,19 +375,31 @@ impl WaylandWindow {
         // An overlay window is given a wlr-layer-shell surface on the overlay layer so it
         // renders above all other surfaces, including fullscreen ones. The role is mutually
         // exclusive with xdg-toplevel, so we create one or the other for a given wl_surface.
-        let (use_layer_shell,kind_options,layer,namespace) = match params.kind {
-            WindowKind::Overlay(kind_options) => {
-                (true && globals.layer_shell.is_some(),Some(kind_options),Some(zwlr_layer_shell_v1::Layer::Overlay),"kael-overlay")
-            }
-            WindowKind::Top(kind_options) => {
-                (true && globals.layer_shell.is_some(),Some(kind_options),Some(zwlr_layer_shell_v1::Layer::Top),"kael-top")
-            }
-            WindowKind::Bottom(kind_options) => {
-                (true && globals.layer_shell.is_some(),Some(kind_options),Some(zwlr_layer_shell_v1::Layer::Bottom),"kael-bottom")
-            }
-            WindowKind::Background(kind_options) => {
-                (true && globals.layer_shell.is_some(),Some(kind_options),Some(zwlr_layer_shell_v1::Layer::Background),"kael-background")
-            }   
+        let (use_layer_shell, kind_options, layer, namespace) = match params.kind {
+            WindowKind::Overlay(kind_options) => (
+                true && globals.layer_shell.is_some(),
+                Some(kind_options),
+                Some(zwlr_layer_shell_v1::Layer::Overlay),
+                "kael-overlay",
+            ),
+            WindowKind::Top(kind_options) => (
+                true && globals.layer_shell.is_some(),
+                Some(kind_options),
+                Some(zwlr_layer_shell_v1::Layer::Top),
+                "kael-top",
+            ),
+            WindowKind::Bottom(kind_options) => (
+                true && globals.layer_shell.is_some(),
+                Some(kind_options),
+                Some(zwlr_layer_shell_v1::Layer::Bottom),
+                "kael-bottom",
+            ),
+            WindowKind::Background(kind_options) => (
+                true && globals.layer_shell.is_some(),
+                Some(kind_options),
+                Some(zwlr_layer_shell_v1::Layer::Background),
+                "kael-background",
+            ),
             _ => (false, None, None, ""),
         };
 
@@ -413,17 +425,21 @@ impl WaylandWindow {
                 .map(|value| value.0.max(1) as u32);
             layer_surface.set_size(dp_size.width, dp_size.height);
 
-            if let Some(shell_options) = kind_options { 
+            if let Some(shell_options) = kind_options {
                 layer_surface.set_anchor(zwlr_layer_surface_v1::Anchor::from_bits_truncate(
                     shell_options.anchor.bits(),
                 ));
                 if layer_surface.version() >= 5 {
                     if let Some(exc_edge) = shell_options.exclusive_edge {
-                        Self::set_exclusive_edge(exc_edge, shell_options.anchor,&layer_surface);
+                        Self::set_exclusive_edge(exc_edge, shell_options.anchor, &layer_surface);
                     }
                 }
-                if let Some(exc_zone) = shell_options.exclusive_zone {
-                    layer_surface.set_exclusive_zone(f32::from(exc_zone) as i32);
+                match shell_options.exclusive_zone {
+                    crate::ExclusiveZone::Ignore => layer_surface.set_exclusive_zone(-1),
+                    crate::ExclusiveZone::None => layer_surface.set_exclusive_zone(0),
+                    crate::ExclusiveZone::Reserve(pix) => {
+                        layer_surface.set_exclusive_zone(u32::from(pix) as i32)
+                    }
                 }
 
                 if let Some((top, rigth, bottom, left)) = shell_options.margin {
@@ -431,7 +447,7 @@ impl WaylandWindow {
                         f32::from(top) as i32,
                         f32::from(rigth) as i32,
                         f32::from(bottom) as i32,
-                        f32::from(left) as i32, 
+                        f32::from(left) as i32,
                     );
                 }
                 if layer_surface.version() >= 4 {
@@ -481,28 +497,28 @@ impl WaylandWindow {
             }
 
             if let WindowKind::Top(_) = params.kind {
-                log::warn!("Wayland: WindowKind::Top requested but the compositor does not \
+                log::warn!(
+                    "Wayland: WindowKind::Top requested but the compositor does not \
                      implement wlr-layer-shell; falling back to a regular window. True \
                      always-on-top (above fullscreen) is unavailable on this compositor."
                 );
-
             }
             if let WindowKind::Bottom(_) = params.kind {
-                log::warn!("Wayland: WindowKind::Bottom requested but the compositor does not \
+                log::warn!(
+                    "Wayland: WindowKind::Bottom requested but the compositor does not \
                      implement wlr-layer-shell; falling back to a regular window. True \
                      behind other windows is unavailable on this compositor."
                 );
-
             }
-                    
+
             if let WindowKind::Background(_) = params.kind {
-                log::warn!("Wayland: WindowKind::Background requested but the compositor does not \
+                log::warn!(
+                    "Wayland: WindowKind::Background requested but the compositor does not \
                      implement wlr-layer-shell; falling back to a regular window. True \
                      behid all other windows and widgets is unavailable on this compositor."
                 );
-
             }
-                    
+
             if let Some(size) = params.window_min_size {
                 toplevel.set_min_size(size.width.0 as i32, size.height.0 as i32);
             }
@@ -1159,7 +1175,7 @@ impl WaylandWindowStatePtr {
         println!("window focus {}", focus);
         self.state.borrow_mut().active = focus;
 
-        if !focus  {
+        if !focus {
             self.release_native_pointer_lock().ok();
         }
         let mut callback = self.callbacks.borrow_mut().active_status_change.take();

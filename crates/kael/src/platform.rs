@@ -2711,7 +2711,6 @@ pub enum WindowIntentKind {
     Background(WindowKindOptions),
     /// Top widget
     Top(WindowKindOptions),
-    
 }
 
 impl WindowIntentKind {
@@ -2781,24 +2780,24 @@ impl WindowIntentBuilder {
     pub fn overlay_opts(options: WindowKindOptions) -> Self {
         Self::new(WindowIntentKind::Overlay(options))
     }
-    
+
     /// Bottom widget intent
     pub fn z_bottom() -> Self {
         Self::new(WindowIntentKind::Bottom(WindowKindOptions::default()))
     }
-    
+
     /// Bottom widget intent with options
-    pub fn z_bottom_opts(options:WindowKindOptions) -> Self {
+    pub fn z_bottom_opts(options: WindowKindOptions) -> Self {
         Self::new(WindowIntentKind::Bottom(options))
     }
-    
+
     /// Wallpaper widget intent
     pub fn z_bg() -> Self {
         Self::new(WindowIntentKind::Background(WindowKindOptions::default()))
     }
-    
+
     /// Wallpaper widget intent with options
-    pub fn z_bg_opts(options:WindowKindOptions) -> Self {
+    pub fn z_bg_opts(options: WindowKindOptions) -> Self {
         Self::new(WindowIntentKind::Background(options))
     }
 
@@ -2806,9 +2805,9 @@ impl WindowIntentBuilder {
     pub fn z_top() -> Self {
         Self::new(WindowIntentKind::Top(WindowKindOptions::default()))
     }
-    
+
     /// Top widget intent with options
-    pub fn z_top_opts(options:WindowKindOptions) -> Self {
+    pub fn z_top_opts(options: WindowKindOptions) -> Self {
         Self::new(WindowIntentKind::Top(options))
     }
 
@@ -3016,7 +3015,6 @@ impl WindowIntentBuilder {
                     !options.focus,
                     "background window intent should not be focusable"
                 );
-
             }
             WindowIntentKind::Top(kind_options) => {
                 anyhow::ensure!(
@@ -3102,7 +3100,6 @@ fn window_intent_defaults(kind: WindowIntentKind) -> WindowOptionsBuilder {
             .movable(false)
             .transparent_background()
             .no_titlebar(),
-
     }
 }
 
@@ -3224,7 +3221,7 @@ bitflags::bitflags! {
 
 #[cfg(feature = "wayland")]
 ///Keyboard interactivity
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq,Hash)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum KeyboardInteractivity {
     ///none
     None,
@@ -3235,14 +3232,35 @@ pub enum KeyboardInteractivity {
     OnDemand,
 }
 
+#[cfg(feature = "wayland")]
+/// A wlr-layer-shell surface's exclusive-zone request. Maps directly to
+/// `zwlr_layer_surface_v1::set_exclusive_zone`, whose protocol values are
+/// exactly the three states below - there is no meaningful value outside them.
+#[repr(i32)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ExclusiveZone {
+    /// Ignore every other surface's exclusive zone and don't impose one of its
+    /// own either; the surface is free to overlap bars/panels sharing its
+    /// anchored edge (protocol value -1).
+    Ignore = -1,
+    /// No reservation of its own, but still repositioned to avoid other
+    /// surfaces' exclusive zones (protocol value 0, the default).
+    #[default]
+    None = 0,
+    /// Reserve this many pixels along the anchored edge, pushing other
+    /// surfaces sharing that edge out of the way (protocol value > 0).
+    Reserve(Pixels),
+}
+
 /// 1. Дефинираме LayerOption според платформата
 #[cfg(feature = "wayland")]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct WindowKindOptions {
     ///anchor
     pub anchor: Anchor,
-    ///exclusive zone
-    pub exclusive_zone: Option<Pixels>,
+    /// How this surface's exclusive zone interacts with other layer-shell
+    /// surfaces sharing its anchored edge. See [`ExclusiveZone`].
+    pub exclusive_zone: ExclusiveZone,
     ///exclusive edge
     pub exclusive_edge: Option<Anchor>,
     ///margin
@@ -3260,7 +3278,7 @@ impl Default for WindowKindOptions {
     fn default() -> Self {
         WindowKindOptions {
             anchor: Anchor::empty(),
-            exclusive_zone: None,
+            exclusive_zone: ExclusiveZone::default(),
             exclusive_edge: None,
             margin: None,
             keyboard_interactivity: KeyboardInteractivity::OnDemand,
