@@ -2468,37 +2468,37 @@ impl WindowOptionsBuilder {
 
     /// Create an overlay window with default options.
     pub fn overlay(self) -> Self {
-        self.kind(WindowKind::Overlay(WindowKindOptions::default()))
+        self.kind(WindowKind::Overlay(LayerShellOptions::default()))
     }
 
-    ///Create an overlay window with given WindowKindOptions
-    pub fn overlay_opts(self, options: WindowKindOptions) -> Self {
+    ///Create an overlay window with given LayerShellOptions
+    pub fn overlay_opts(self, options: LayerShellOptions) -> Self {
         self.kind(WindowKind::Overlay(options))
     }
     ///Create background window with default options
     pub fn z_bg(self) -> Self {
-        self.kind(WindowKind::Background(WindowKindOptions::default()))
+        self.kind(WindowKind::Background(LayerShellOptions::default()))
     }
     /// Create background window with options
-    pub fn z_bg_opts(self, options: WindowKindOptions) -> Self {
+    pub fn z_bg_opts(self, options: LayerShellOptions) -> Self {
         self.kind(WindowKind::Background(options))
     }
 
     ///Create bottom window with default options
     pub fn z_bottom(self) -> Self {
-        self.kind(WindowKind::Bottom(WindowKindOptions::default()))
+        self.kind(WindowKind::Bottom(LayerShellOptions::default()))
     }
     /// Create bottom window with options
-    pub fn z_bottom_opts(self, options: WindowKindOptions) -> Self {
+    pub fn z_bottom_opts(self, options: LayerShellOptions) -> Self {
         self.kind(WindowKind::Bottom(options))
     }
 
     ///Create top window with default options
     pub fn z_top(self) -> Self {
-        self.kind(WindowKind::Top(WindowKindOptions::default()))
+        self.kind(WindowKind::Top(LayerShellOptions::default()))
     }
     ///Create top window with options
-    pub fn z_top_opts(self, options: WindowKindOptions) -> Self {
+    pub fn z_top_opts(self, options: LayerShellOptions) -> Self {
         self.kind(WindowKind::Top(options))
     }
 
@@ -2704,13 +2704,13 @@ pub enum WindowIntentKind {
     /// Context popup or short-lived popover window.
     Popup,
     /// Overlay/HUD window.
-    Overlay(WindowKindOptions),
+    Overlay(LayerShellOptions),
     /// Bottom widget
-    Bottom(WindowKindOptions),
+    Bottom(LayerShellOptions),
     /// Wallpaper widget
-    Background(WindowKindOptions),
+    Background(LayerShellOptions),
     /// Top widget
-    Top(WindowKindOptions),
+    Top(LayerShellOptions),
 }
 
 impl WindowIntentKind {
@@ -2773,41 +2773,41 @@ impl WindowIntentBuilder {
 
     /// Overlay/HUD intent.
     pub fn overlay() -> Self {
-        Self::new(WindowIntentKind::Overlay(WindowKindOptions::default()))
+        Self::new(WindowIntentKind::Overlay(LayerShellOptions::default()))
     }
 
     /// Overlay/HUD intent with options.
-    pub fn overlay_opts(options: WindowKindOptions) -> Self {
+    pub fn overlay_opts(options: LayerShellOptions) -> Self {
         Self::new(WindowIntentKind::Overlay(options))
     }
 
     /// Bottom widget intent
     pub fn z_bottom() -> Self {
-        Self::new(WindowIntentKind::Bottom(WindowKindOptions::default()))
+        Self::new(WindowIntentKind::Bottom(LayerShellOptions::default()))
     }
 
     /// Bottom widget intent with options
-    pub fn z_bottom_opts(options: WindowKindOptions) -> Self {
+    pub fn z_bottom_opts(options: LayerShellOptions) -> Self {
         Self::new(WindowIntentKind::Bottom(options))
     }
 
     /// Wallpaper widget intent
     pub fn z_bg() -> Self {
-        Self::new(WindowIntentKind::Background(WindowKindOptions::default()))
+        Self::new(WindowIntentKind::Background(LayerShellOptions::default()))
     }
 
     /// Wallpaper widget intent with options
-    pub fn z_bg_opts(options: WindowKindOptions) -> Self {
+    pub fn z_bg_opts(options: LayerShellOptions) -> Self {
         Self::new(WindowIntentKind::Background(options))
     }
 
     /// Top widget intent
     pub fn z_top() -> Self {
-        Self::new(WindowIntentKind::Top(WindowKindOptions::default()))
+        Self::new(WindowIntentKind::Top(LayerShellOptions::default()))
     }
 
     /// Top widget intent with options
-    pub fn z_top_opts(options: WindowKindOptions) -> Self {
+    pub fn z_top_opts(options: LayerShellOptions) -> Self {
         Self::new(WindowIntentKind::Top(options))
     }
 
@@ -3254,7 +3254,7 @@ pub enum ExclusiveZone {
 /// 1. Дефинираме LayerOption според платформата
 #[cfg(feature = "wayland")]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct WindowKindOptions {
+pub struct LayerShellOptions {
     ///anchor
     pub anchor: Anchor,
     /// How this surface's exclusive zone interacts with other layer-shell
@@ -3270,12 +3270,12 @@ pub struct WindowKindOptions {
 
 #[cfg(not(feature = "wayland"))]
 /// 0 bytes WindowsKindOptions for other platforms
-pub struct WindowKindOptions;
+pub struct LayerShellOptions;
 
 #[cfg(feature = "wayland")]
-impl Default for WindowKindOptions {
+impl Default for LayerShellOptions {
     fn default() -> Self {
-        WindowKindOptions {
+        LayerShellOptions {
             anchor: Anchor::empty(),
             exclusive_zone: ExclusiveZone::default(),
             exclusive_edge: None,
@@ -3286,9 +3286,9 @@ impl Default for WindowKindOptions {
 }
 
 #[cfg(not(feature = "wayland"))]
-impl Default for WindowKindOptions {
+impl Default for LayerShellOptions {
     fn default() -> Self {
-        WindowKindOptions
+        LayerShellOptions
     }
 }
 
@@ -3306,14 +3306,14 @@ pub enum WindowKind {
     Floating,
 
     /// An overlay window that appears above all other windows, including fullscreen apps
-    Overlay(WindowKindOptions),
+    Overlay(LayerShellOptions),
     /// An back window  that appears above the wallpaper, but ordinary applications (such as a browser or terminal) open on them.
-    Bottom(WindowKindOptions),
+    Bottom(LayerShellOptions),
     ///An background layer that appears at the bottom, behind the behind all.
-    Background(WindowKindOptions),
+    Background(LayerShellOptions),
     ///An window that appears above normal windows, but more importantly – should take up space on the screen
     ///so that the other windows do not cover it when they are maximized.
-    Top(WindowKindOptions),
+    Top(LayerShellOptions),
 }
 
 impl WindowKind {

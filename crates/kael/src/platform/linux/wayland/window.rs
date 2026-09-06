@@ -462,7 +462,7 @@ impl WaylandWindow {
                     // `focus: false` means the caller doesn't want this surface eligible
                     // for keyboard focus on map. wlr-layer-shell has no separate "don't
                     // focus me" hint, so the only lever is refusing keyboard interactivity
-                    // outright, overriding whatever `WindowKindOptions` requested.
+                    // outright, overriding whatever `LayerShellOptions` requested.
                     let keyboard_interactivity = if params.focus {
                         shell_options.keyboard_interactivity
                     } else {
