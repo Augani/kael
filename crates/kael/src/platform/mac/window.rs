@@ -324,6 +324,10 @@ const NSViewHeightSizable: NSAutoresizingMaskOptions = NSAutoresizingMaskOptions
 const NSNormalWindowLevel: NSInteger = 0;
 #[allow(non_upper_case_globals)]
 const NSPopUpWindowLevel: NSInteger = 101;
+/// `kCGDesktopWindowLevel` - the lowest level, behind desktop icons. macOS's nearest
+/// equivalent to wlr-layer-shell's `Wallpaper`/background layer.
+#[allow(non_upper_case_globals)]
+const NSDesktopWindowLevel: NSInteger = -2147483648;
 #[allow(non_upper_case_globals)]
 const NSTrackingMouseEnteredAndExited: NSUInteger = 0x01;
 #[allow(non_upper_case_globals)]
@@ -3739,12 +3743,21 @@ impl MacWindow {
                 style_mask = NSWindowStyleMask::Titled | NSWindowStyleMask::FullSizeContentView;
             }
 
-            let native_window: id = match kind {
-                WindowKind::Normal | WindowKind::Floating => msg_send![WINDOW_CLASS, alloc],
-                WindowKind::PopUp | WindowKind::Overlay => {
-                    style_mask |= NSWindowStyleMaskNonactivatingPanel;
-                    msg_send![PANEL_CLASS, alloc]
-                }
+            // Top has no real macOS equivalent either - unlike X11's struts or
+            // Windows' AppBars, there's no unentitled way to reserve screen space -
+            // so it's treated the same as Overlay rather than inventing a third,
+            // equally non-reserving elevated level.
+            let native_window: id = if matches!(kind, WindowKind::PopUp)
+                || kind.is_overlay()
+                || kind.is_top()
+            {
+                style_mask |= NSWindowStyleMaskNonactivatingPanel;
+                msg_send![PANEL_CLASS, alloc]
+            } else {
+                // Bottom/Wallpaper are wlr-layer-shell-only kinds with no macOS
+                // equivalent; fall back to a regular window, matching what the wayland
+                // backend does when the compositor itself lacks layer-shell support.
+                msg_send![WINDOW_CLASS, alloc]
             };
 
             let display = display_id
@@ -3910,64 +3923,75 @@ impl MacWindow {
             content_view.addSubview_(native_view.autorelease());
             native_window.makeFirstResponder_(native_view);
 
-            match kind {
-                WindowKind::Normal | WindowKind::Floating => {
-                    native_window.setLevel_(NSNormalWindowLevel);
-                    native_window.setAcceptsMouseMovedEvents_(YES);
+            if matches!(kind, WindowKind::PopUp) {
+                // Use a tracking area to allow receiving MouseMoved events even when
+                // the window or application aren't active, which is often the case
+                // e.g. for notification windows.
+                let tracking_area: id = msg_send![lookup_class(c"NSTrackingArea"), alloc];
+                let _: () = msg_send![
+                    tracking_area,
+                    initWithRect: NSRect::new(NSPoint::new(0., 0.), NSSize::new(0., 0.)),
+                    options: NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved | NSTrackingActiveAlways | NSTrackingInVisibleRect,
+                    owner: native_view,
+                    userInfo: nil
+                ];
+                let _: () = msg_send![native_view, addTrackingArea: tracking_area.autorelease()];
 
-                    if let Some(tabbing_identifier) = tabbing_identifier {
-                        let tabbing_id = ns_string(tabbing_identifier.as_str());
-                        let _: () = msg_send![native_window, setTabbingIdentifier: tabbing_id];
-                    } else {
-                        let _: () = msg_send![native_window, setTabbingIdentifier:nil];
-                    }
-                }
-                WindowKind::PopUp => {
-                    // Use a tracking area to allow receiving MouseMoved events even when
-                    // the window or application aren't active, which is often the case
-                    // e.g. for notification windows.
-                    let tracking_area: id = msg_send![lookup_class(c"NSTrackingArea"), alloc];
-                    let _: () = msg_send![
-                        tracking_area,
-                        initWithRect: NSRect::new(NSPoint::new(0., 0.), NSSize::new(0., 0.)),
-                        options: NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved | NSTrackingActiveAlways | NSTrackingInVisibleRect,
-                        owner: native_view,
-                        userInfo: nil
-                    ];
-                    let _: () =
-                        msg_send![native_view, addTrackingArea: tracking_area.autorelease()];
+                native_window.setLevel_(NSPopUpWindowLevel);
+                let _: () = msg_send![
+                    native_window,
+                    setAnimationBehavior: NSWindowAnimationBehaviorUtilityWindow
+                ];
+                native_window.setCollectionBehavior_(
+                    NSWindowCollectionBehavior::CanJoinAllSpaces
+                        | NSWindowCollectionBehavior::FullScreenAuxiliary,
+                );
+            } else if kind.is_overlay() || kind.is_top() {
+                // Top has no real macOS equivalent: unlike X11's struts or Windows'
+                // AppBars, there's no unentitled API to reserve screen space, so
+                // rather than invent a third elevated level that's equally unable to
+                // push other windows out of the way, it just gets Overlay's treatment
+                // directly.
+                let tracking_area: id = msg_send![lookup_class(c"NSTrackingArea"), alloc];
+                let _: () = msg_send![
+                    tracking_area,
+                    initWithRect: NSRect::new(NSPoint::new(0., 0.), NSSize::new(0., 0.)),
+                    options: NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved | NSTrackingActiveAlways | NSTrackingInVisibleRect,
+                    owner: native_view,
+                    userInfo: nil
+                ];
+                let _: () = msg_send![native_view, addTrackingArea: tracking_area.autorelease()];
 
-                    native_window.setLevel_(NSPopUpWindowLevel);
-                    let _: () = msg_send![
-                        native_window,
-                        setAnimationBehavior: NSWindowAnimationBehaviorUtilityWindow
-                    ];
-                    native_window.setCollectionBehavior_(
-                        NSWindowCollectionBehavior::CanJoinAllSpaces
-                            | NSWindowCollectionBehavior::FullScreenAuxiliary,
-                    );
-                }
-                WindowKind::Overlay => {
-                    let tracking_area: id = msg_send![lookup_class(c"NSTrackingArea"), alloc];
-                    let _: () = msg_send![
-                        tracking_area,
-                        initWithRect: NSRect::new(NSPoint::new(0., 0.), NSSize::new(0., 0.)),
-                        options: NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved | NSTrackingActiveAlways | NSTrackingInVisibleRect,
-                        owner: native_view,
-                        userInfo: nil
-                    ];
-                    let _: () =
-                        msg_send![native_view, addTrackingArea: tracking_area.autorelease()];
+                let _: () = msg_send![native_window, setLevel: 25_isize];
+                let _: () = msg_send![
+                    native_window,
+                    setAnimationBehavior: NSWindowAnimationBehaviorUtilityWindow
+                ];
+                let behavior = NSWindowCollectionBehavior::CanJoinAllSpaces
+                    | NSWindowCollectionBehavior::Stationary
+                    | NSWindowCollectionBehavior::FullScreenAuxiliary;
+                let _: () = msg_send![native_window, setCollectionBehavior: behavior];
+            } else {
+                // Normal/Floating always land here. Bottom/Wallpaper are
+                // wlr-layer-shell-only kinds with no direct macOS equivalent; each
+                // gets the closest native window level instead. Wallpaper ->
+                // kCGDesktopWindowLevel, behind desktop icons. Bottom stays at the
+                // normal level - macOS has no level strictly between desktop and
+                // normal - and relies on avoiding activation (focus: false) plus an
+                // explicit orderBack below to stay out of the way.
+                let level = if kind.is_wallpaper() {
+                    NSDesktopWindowLevel
+                } else {
+                    NSNormalWindowLevel
+                };
+                native_window.setLevel_(level);
+                native_window.setAcceptsMouseMovedEvents_(YES);
 
-                    let _: () = msg_send![native_window, setLevel: 25_isize];
-                    let _: () = msg_send![
-                        native_window,
-                        setAnimationBehavior: NSWindowAnimationBehaviorUtilityWindow
-                    ];
-                    let behavior = NSWindowCollectionBehavior::CanJoinAllSpaces
-                        | NSWindowCollectionBehavior::Stationary
-                        | NSWindowCollectionBehavior::FullScreenAuxiliary;
-                    let _: () = msg_send![native_window, setCollectionBehavior: behavior];
+                if let Some(tabbing_identifier) = tabbing_identifier {
+                    let tabbing_id = ns_string(tabbing_identifier.as_str());
+                    let _: () = msg_send![native_window, setTabbingIdentifier: tabbing_id];
+                } else {
+                    let _: () = msg_send![native_window, setTabbingIdentifier:nil];
                 }
             }
 
@@ -4011,6 +4035,14 @@ impl MacWindow {
                 let _: () = msg_send![native_window, makeKeyAndOrderFront: nil];
             } else if show {
                 let _: () = msg_send![native_window, orderFront: nil];
+            }
+
+            if show && kind.is_bottom() {
+                // No macOS level sits strictly between desktop and normal, so a
+                // Bottom window shares NSNormalWindowLevel with ordinary windows;
+                // ordering it to the back of that level is the closest approximation
+                // to staying beneath them.
+                let _: () = msg_send![native_window, orderBack: nil];
             }
 
             // Set the initial position of the window to the specified origin.

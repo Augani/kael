@@ -11,6 +11,7 @@ use collections::HashMap;
 use futures::channel::oneshot::Receiver;
 
 use raw_window_handle as rwh;
+use util::shell;
 use wayland_backend::client::ObjectId;
 use wayland_client::WEnum;
 use wayland_client::{Proxy, protocol::wl_surface};
@@ -102,6 +103,12 @@ pub struct WaylandWindowState {
     acknowledged_first_configure: bool,
     frame_callback_active: bool,
     frame_callback_requested: bool,
+    /// Forces the next `frame()` call to render past the `frame_callback_active` gate,
+    /// regardless of `invalidator` dirty state. Set for a wlr-layer-shell surface's
+    /// mandatory first paint after `ack_configure` (frame_callback_active can't be
+    /// trusted at that point - see `handle_layer_surface_event`), and reused whenever
+    /// a window created with `show: false` shows its deferred first paint via `show()`.
+    force_next_frame: bool,
     pub surface: wl_surface::WlSurface,
     decoration: Option<zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1>,
     app_id: Option<String>,
@@ -133,6 +140,12 @@ pub struct WaylandWindowState {
     window_controls: WindowControls,
     client_inset: Option<Pixels>,
     visible: bool,
+    /// Whether `start_window_move` requests are honored. Layer-shell surfaces have
+    /// no `toplevel`, so `start_window_move` is already a no-op for them regardless.
+    is_movable: bool,
+    /// Whether `start_window_resize` requests are honored. Layer-shell surfaces have
+    /// no `toplevel`, so `start_window_resize` is already a no-op for them regardless.
+    is_resizable: bool,
     tab_manager: WindowTabManager,
     accessibility_root: crate::platform::linux::accessibility::AtSpiAccessibleRoot,
     pointer_lock: crate::game_input::NativePointerLockState,
@@ -190,6 +203,7 @@ impl WaylandWindowState {
             acknowledged_first_configure: false,
             frame_callback_active: false,
             frame_callback_requested: false,
+            force_next_frame: false,
             surface,
             decoration,
             app_id: None,
@@ -219,7 +233,9 @@ impl WaylandWindowState {
             in_progress_window_controls: None,
             window_controls: WindowControls::default(),
             client_inset: None,
-            visible: true,
+            visible: options.show,
+            is_movable: options.is_movable,
+            is_resizable: options.is_resizable,
             tab_manager: WindowTabManager::new(handle, tab_manager_state),
             accessibility_root: crate::platform::linux::accessibility::AtSpiAccessibleRoot::new(),
             pointer_lock: crate::game_input::NativePointerLockState::new(pointer_lock_supported),
@@ -340,6 +356,18 @@ impl WaylandWindow {
         self.0.state.borrow_mut()
     }
 
+    fn set_exclusive_edge(
+        edge: crate::LayerShellAnchor,
+        anchor: crate::LayerShellAnchor,
+        layer_surface: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+    ) {
+        if edge.bits().count_ones() == 1 && anchor.contains(edge) {
+            layer_surface.set_exclusive_edge(zwlr_layer_surface_v1::Anchor::from_bits_truncate(
+                edge.bits(),
+            ));
+        }
+    }
+
     pub fn new(
         handle: AnyWindowHandle,
         globals: Globals,
@@ -355,7 +383,33 @@ impl WaylandWindow {
         // An overlay window is given a wlr-layer-shell surface on the overlay layer so it
         // renders above all other surfaces, including fullscreen ones. The role is mutually
         // exclusive with xdg-toplevel, so we create one or the other for a given wl_surface.
-        let use_layer_shell = params.kind == WindowKind::Overlay && globals.layer_shell.is_some();
+        let (use_layer_shell, kind_options, layer, namespace) = match params.kind {
+            WindowKind::Overlay(kind_options) => (
+                true && globals.layer_shell.is_some(),
+                Some(kind_options),
+                Some(zwlr_layer_shell_v1::Layer::Overlay),
+                "kael-overlay",
+            ),
+            WindowKind::Top(kind_options) => (
+                true && globals.layer_shell.is_some(),
+                Some(kind_options),
+                Some(zwlr_layer_shell_v1::Layer::Top),
+                "kael-top",
+            ),
+            WindowKind::Bottom(kind_options) => (
+                true && globals.layer_shell.is_some(),
+                Some(kind_options),
+                Some(zwlr_layer_shell_v1::Layer::Bottom),
+                "kael-bottom",
+            ),
+            WindowKind::Wallpaper(kind_options) => (
+                true && globals.layer_shell.is_some(),
+                Some(kind_options),
+                Some(zwlr_layer_shell_v1::Layer::Background),
+                "kael-wallpaper",
+            ),
+            _ => (false, None, None, ""),
+        };
 
         let (xdg_surface, toplevel, layer_surface, decoration) = if use_layer_shell {
             let Some(layer_shell) = globals.layer_shell.as_ref() else {
@@ -364,12 +418,11 @@ impl WaylandWindow {
             let layer_surface = layer_shell.get_layer_surface(
                 &surface,
                 None,
-                zwlr_layer_shell_v1::Layer::Overlay,
-                "kael-overlay".to_owned(),
+                layer.unwrap(),
+                namespace.to_owned(),
                 &globals.qh,
                 surface.id(),
             );
-
             // Defaults preserve the previous overlay behaviour: a free-floating, explicitly
             // sized surface that does not reserve screen space. Anchoring is left empty so the
             // compositor positions the surface, and the exclusive zone is 0 (no reservation).
@@ -379,15 +432,57 @@ impl WaylandWindow {
                 .to_device_pixels(1.0)
                 .map(|value| value.0.max(1) as u32);
             layer_surface.set_size(dp_size.width, dp_size.height);
-            layer_surface.set_anchor(zwlr_layer_surface_v1::Anchor::empty());
-            layer_surface.set_exclusive_zone(0);
-            // `OnDemand` keyboard interactivity was introduced in version 4 of the protocol;
-            // sending it to an older compositor is a protocol error. Older versions fall back
-            // to the protocol default (`None`, i.e. the overlay does not take keyboard focus).
-            if layer_surface.version() >= 4 {
-                layer_surface.set_keyboard_interactivity(
-                    zwlr_layer_surface_v1::KeyboardInteractivity::OnDemand,
-                );
+
+            if let Some(shell_options) = kind_options {
+                layer_surface.set_anchor(zwlr_layer_surface_v1::Anchor::from_bits_truncate(
+                    shell_options.anchor.bits(),
+                ));
+                if layer_surface.version() >= 5 {
+                    if let Some(exc_edge) = shell_options.exclusive_edge {
+                        Self::set_exclusive_edge(exc_edge, shell_options.anchor, &layer_surface);
+                    }
+                }
+                match shell_options.exclusive_zone {
+                    crate::ExclusiveZone::Ignore => layer_surface.set_exclusive_zone(-1),
+                    crate::ExclusiveZone::None => layer_surface.set_exclusive_zone(0),
+                    crate::ExclusiveZone::Reserve(pix) => {
+                        layer_surface.set_exclusive_zone(u32::from(pix) as i32)
+                    }
+                }
+
+                if let Some((top, rigth, bottom, left)) = shell_options.margin {
+                    layer_surface.set_margin(
+                        f32::from(top) as i32,
+                        f32::from(rigth) as i32,
+                        f32::from(bottom) as i32,
+                        f32::from(left) as i32,
+                    );
+                }
+                if layer_surface.version() >= 4 {
+                    // `focus: false` means the caller doesn't want this surface eligible
+                    // for keyboard focus on map. wlr-layer-shell has no separate "don't
+                    // focus me" hint, so the only lever is refusing keyboard interactivity
+                    // outright, overriding whatever `LayerShellOptions` requested.
+                    let keyboard_interactivity = if params.focus {
+                        shell_options.keyboard_interactivity
+                    } else {
+                        crate::KeyboardInteractivity::None
+                    };
+                    match keyboard_interactivity {
+                        crate::KeyboardInteractivity::OnDemand => layer_surface
+                            .set_keyboard_interactivity(
+                                zwlr_layer_surface_v1::KeyboardInteractivity::OnDemand,
+                            ),
+                        crate::KeyboardInteractivity::None => layer_surface
+                            .set_keyboard_interactivity(
+                                zwlr_layer_surface_v1::KeyboardInteractivity::None,
+                            ),
+                        crate::KeyboardInteractivity::Exclusive => layer_surface
+                            .set_keyboard_interactivity(
+                                zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive,
+                            ),
+                    }
+                }
             }
 
             (None, None, Some(layer_surface), None)
@@ -401,7 +496,7 @@ impl WaylandWindow {
                 toplevel.set_parent(Some(parent));
             }
 
-            if params.kind == WindowKind::Overlay {
+            if let WindowKind::Overlay(_) = params.kind {
                 log::warn!(
                     "Wayland: WindowKind::Overlay requested but the compositor does not \
                      implement wlr-layer-shell; falling back to a regular window. True \
@@ -409,10 +504,32 @@ impl WaylandWindow {
                 );
             }
 
+            if let WindowKind::Top(_) = params.kind {
+                log::warn!(
+                    "Wayland: WindowKind::Top requested but the compositor does not \
+                     implement wlr-layer-shell; falling back to a regular window. True \
+                     always-on-top (above fullscreen) is unavailable on this compositor."
+                );
+            }
+            if let WindowKind::Bottom(_) = params.kind {
+                log::warn!(
+                    "Wayland: WindowKind::Bottom requested but the compositor does not \
+                     implement wlr-layer-shell; falling back to a regular window. True \
+                     behind other windows is unavailable on this compositor."
+                );
+            }
+
+            if let WindowKind::Wallpaper(_) = params.kind {
+                log::warn!(
+                    "Wayland: WindowKind::Wallpaper requested but the compositor does not \
+                     implement wlr-layer-shell; falling back to a regular window. True \
+                     behid all other windows and widgets is unavailable on this compositor."
+                );
+            }
+
             if let Some(size) = params.window_min_size {
                 toplevel.set_min_size(size.width.0 as i32, size.height.0 as i32);
             }
-
             // Attempt to set up window decorations based on the requested configuration
             let decoration = globals
                 .decoration_manager
@@ -601,8 +718,12 @@ impl WaylandWindowStatePtr {
     pub fn frame(&self) {
         let mut state = self.state.borrow_mut();
         state.frame_callback_requested = false;
-        if !state.frame_callback_active {
+        let forced = state.force_next_frame;
+        if !forced && !state.frame_callback_active {
             return;
+        }
+        if forced {
+            state.force_next_frame = false;
         }
         state.surface.frame(&state.globals.qh, state.surface.id());
         state.frame_callback_requested = true;
@@ -611,7 +732,11 @@ impl WaylandWindowStatePtr {
 
         let mut callback = self.callbacks.borrow_mut().request_frame.take();
         if let Some(ref mut fun) = callback {
-            super::super::catch_platform_callback("frame request", (), || fun(Default::default()));
+            let options = RequestFrameOptions {
+                force_render: forced,
+                ..Default::default()
+            };
+            super::super::catch_platform_callback("frame request", (), || fun(options));
         }
         self.callbacks.borrow_mut().request_frame = callback;
     }
@@ -687,10 +812,12 @@ impl WaylandWindowStatePtr {
                 window_geometry.size.height,
             );
 
-            let request_frame_callback = !state.acknowledged_first_configure;
-            if request_frame_callback {
-                state.acknowledged_first_configure = true;
-                drop(state);
+            // A window created with `show: false` defers its first real paint until
+            // `.show()` is called, which forces one through the same gate bypass.
+            let should_paint = !state.acknowledged_first_configure && state.visible;
+            state.acknowledged_first_configure = true;
+            drop(state);
+            if should_paint {
                 self.frame();
             }
         }
@@ -727,14 +854,18 @@ impl WaylandWindowStatePtr {
                     };
                 }
 
-                let request_frame_callback = !state.acknowledged_first_configure;
+                // A window created with `show: false` defers its first real paint until
+                // `.show()` is called, which forces one through the same gate bypass.
+                let should_paint = !state.acknowledged_first_configure && state.visible;
                 state.acknowledged_first_configure = true;
+                if should_paint {
+                    state.force_next_frame = true;
+                }
                 drop(state);
-
                 if let Some(new_size) = new_size {
                     self.resize(new_size);
                 }
-                if request_frame_callback {
+                if should_paint {
                     self.frame();
                 }
                 false
@@ -989,7 +1120,6 @@ impl WaylandWindowStatePtr {
             state.renderer.update_drawable_size(device_bounds.size);
             (state.bounds.size, state.scale)
         };
-
         let mut callback = self.callbacks.borrow_mut().resize.take();
         if let Some(ref mut fun) = callback {
             super::super::catch_platform_callback("window resize", (), || fun(size, scale));
@@ -1050,7 +1180,9 @@ impl WaylandWindowStatePtr {
     }
 
     pub fn set_focused(&self, focus: bool) {
+        println!("window focus {}", focus);
         self.state.borrow_mut().active = focus;
+
         if !focus {
             self.release_native_pointer_lock().ok();
         }
@@ -1512,6 +1644,9 @@ impl PlatformWindow for WaylandWindow {
 
     fn start_window_move(&self) {
         let state = self.borrow();
+        if !state.is_movable {
+            return;
+        }
         let Some(toplevel) = state.toplevel.as_ref() else {
             return;
         };
@@ -1521,6 +1656,9 @@ impl PlatformWindow for WaylandWindow {
 
     fn start_window_resize(&self, edge: crate::ResizeEdge) {
         let state = self.borrow();
+        if !state.is_resizable {
+            return;
+        }
         let Some(toplevel) = state.toplevel.as_ref() else {
             return;
         };
@@ -1573,9 +1711,20 @@ impl PlatformWindow for WaylandWindow {
 
     fn show(&self) {
         let mut state = self.borrow_mut();
+        let was_hidden = !state.visible;
         state.visible = true;
-        state.surface.frame(&state.globals.qh, state.surface.id());
-        state.surface.commit();
+        // A window created with `show: false` skipped its first real paint (see
+        // `handle_xdg_surface_event`/`handle_layer_surface_event`). Force one through
+        // now via the same gate bypass, rather than requesting a plain frame callback:
+        // that would route through the frame_callback_active-gated path and could
+        // silently no-op for the same reason the layer-shell bootstrap used to.
+        if was_hidden && state.acknowledged_first_configure {
+            state.force_next_frame = true;
+        }
+        drop(state);
+        if was_hidden {
+            self.0.frame();
+        }
     }
 
     fn hide(&self) {

@@ -67,6 +67,7 @@ impl WindowsWindowInner {
             }
             WM_CREATE => self.handle_create_msg(handle),
             WM_MOVE => self.handle_move_msg(handle, lparam),
+            WM_WINDOWPOSCHANGING => self.handle_windowpos_changing_msg(lparam),
             WM_SIZE => self.handle_size_msg(wparam, lparam),
             WM_GETMINMAXINFO => self.handle_get_min_max_info_msg(lparam),
             WM_ENTERSIZEMOVE | WM_ENTERMENULOOP => self.handle_size_move_loop(handle),
@@ -149,6 +150,22 @@ impl WindowsWindowInner {
         } else {
             unsafe { DefWindowProcW(handle, msg, wparam, lparam) }
         }
+    }
+
+    /// Keeps a `WindowKind::Bottom` window pinned beneath everything else. Windows
+    /// has no flag to pin a window at the bottom permanently the way HWND_TOPMOST
+    /// pins one at the top, so any Z-order change that would raise it has to be
+    /// caught and rewritten. Rewriting `hwndInsertAfter` in the pending WINDOWPOS
+    /// here - before the change is applied - avoids the visible raise-then-drop a
+    /// separate SetWindowPos call after the fact would cause.
+    fn handle_windowpos_changing_msg(&self, lparam: LPARAM) -> Option<isize> {
+        if self.kind.is_bottom() {
+            let windowpos = unsafe { &mut *(lparam.0 as *mut WINDOWPOS) };
+            if windowpos.flags.0 & SWP_NOZORDER.0 == 0 {
+                windowpos.hwndInsertAfter = HWND_BOTTOM;
+            }
+        }
+        None
     }
 
     fn handle_move_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {

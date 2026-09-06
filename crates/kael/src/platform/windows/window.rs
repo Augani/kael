@@ -126,6 +126,7 @@ pub(crate) struct WindowsWindowInner {
     pub(crate) handle: AnyWindowHandle,
     pub(crate) hide_title_bar: bool,
     pub(crate) is_movable: bool,
+    pub(crate) kind: WindowKind,
     pub(crate) executor: ForegroundExecutor,
     pub(crate) windows_version: WindowsVersion,
     pub(crate) validation_number: usize,
@@ -301,6 +302,7 @@ impl WindowsWindowInner {
             handle: context.handle,
             hide_title_bar: context.hide_title_bar,
             is_movable: context.is_movable,
+            kind: context.kind,
             executor: context.executor.clone(),
             windows_version: context.windows_version,
             validation_number: context.validation_number,
@@ -644,6 +646,7 @@ struct WindowCreateContext {
     hide_title_bar: bool,
     display: WindowsDisplay,
     is_movable: bool,
+    kind: WindowKind,
     min_size: Option<Size<Pixels>>,
     executor: ForegroundExecutor,
     current_cursor: Option<HCURSOR>,
@@ -697,7 +700,7 @@ impl WindowsWindow {
 
         let (mut dwexstyle, dwstyle) = if params.kind == WindowKind::PopUp {
             (WS_EX_TOOLWINDOW, WINDOW_STYLE(0x0))
-        } else if params.kind == WindowKind::Overlay {
+        } else if params.kind.is_overlay() {
             (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WS_POPUP)
         } else {
             let mut dwstyle = WS_SYSMENU;
@@ -743,6 +746,7 @@ impl WindowsWindow {
             hide_title_bar,
             display,
             is_movable: params.is_movable,
+            kind: params.kind,
             min_size: params.window_min_size,
             executor,
             current_cursor,
@@ -803,6 +807,28 @@ impl WindowsWindow {
             });
         }
 
+        // wlr-layer-shell-only kinds with no direct Win32 equivalent: approximated
+        // with the closest native mechanism for each. Best-effort - a failure here
+        // shouldn't fail window creation, just leave the window in its default style.
+        if params.kind.is_wallpaper() {
+            attach_to_desktop_wallpaper(hwnd).log_err();
+        } else if params.kind.is_bottom() {
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    Some(HWND_BOTTOM),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                )
+            }
+            .log_err();
+        } else if let WindowKind::Top(kind_options) = params.kind {
+            register_appbar(hwnd, kind_options).log_err();
+        }
+
         Ok(Self(this))
     }
 }
@@ -827,6 +853,9 @@ impl Drop for WindowsWindow {
     fn drop(&mut self) {
         if let Err(error) = self.0.release_native_pointer_lock() {
             log::error!("failed to release Windows pointer lock while dropping window: {error}");
+        }
+        if matches!(self.0.kind, WindowKind::Top(_)) {
+            unregister_appbar(self.0.hwnd);
         }
         self.0.frame_polling_windows.set(self.0.hwnd, false);
         // Clean up tab manager tracking for this window.
@@ -1914,6 +1943,208 @@ enum WindowOpenState {
 }
 
 const WINDOW_CLASS_NAME: PCWSTR = w!("Kael::Window");
+
+/// Reparents `hwnd` beneath the desktop's own "WorkerW" host window, Windows' closest
+/// equivalent to `WindowKind::Wallpaper` - there is no official API for this; it's the
+/// same undocumented technique third-party wallpaper apps use. Sends Progman the
+/// undocumented 0x052C message to force it to spawn a WorkerW behind the desktop
+/// icons if one doesn't already exist, then reparents onto it.
+fn attach_to_desktop_wallpaper(hwnd: HWND) -> Result<()> {
+    const SPAWN_WORKERW: u32 = 0x052C;
+
+    let progman = unsafe { FindWindowW(Some(w!("Progman")), None) }
+        .context("Progman window not found while attaching a wallpaper window")?;
+    let mut result: usize = 0;
+    unsafe {
+        SendMessageTimeoutW(
+            progman,
+            SPAWN_WORKERW,
+            WPARAM(0),
+            LPARAM(0),
+            SMTO_NORMAL,
+            1000,
+            Some(&mut result),
+        )
+    };
+
+    let mut workerw = HWND::default();
+    unsafe {
+        let _ = EnumWindows(
+            Some(enum_find_workerw),
+            LPARAM(&mut workerw as *mut HWND as isize),
+        );
+    }
+    if workerw.is_invalid() {
+        anyhow::bail!("no WorkerW window found to host a wallpaper window");
+    }
+
+    unsafe { SetParent(hwnd, Some(workerw)) }
+        .context("SetParent failed while attaching a wallpaper window")?;
+    Ok(())
+}
+
+/// Callback for `EnumWindows` used by `attach_to_desktop_wallpaper`. Looks for the
+/// top-level window hosting the desktop icons (identified by a `SHELLDLL_DefView`
+/// child), then returns its sibling `WorkerW` window - the one with no icons drawn on
+/// it, which is where wallpaper-style windows should be parented.
+/// `lparam` carries a `*mut HWND` the result is written into.
+unsafe extern "system" fn enum_find_workerw(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    if lparam.0 == 0 {
+        return BOOL(1);
+    }
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let out = &mut *(lparam.0 as *mut HWND);
+        let shelldll_view =
+            FindWindowExW(Some(hwnd), None, Some(w!("SHELLDLL_DefView")), None)
+                .unwrap_or_default();
+        if shelldll_view.is_invalid() {
+            return BOOL(1);
+        }
+        let workerw = FindWindowExW(None, Some(hwnd), Some(w!("WorkerW")), None)
+            .unwrap_or_default();
+        if !workerw.is_invalid() {
+            *out = workerw;
+            return BOOL(0);
+        }
+        BOOL(1)
+    })) {
+        Ok(result) => result,
+        Err(_) => {
+            log::error!("WorkerW enumeration panicked at the Windows ABI boundary");
+            BOOL(0)
+        }
+    }
+}
+
+/// Registers `hwnd` as a Windows AppBar (desktop toolbar) reserving screen space
+/// along the edge and thickness given by `kind_options.exclusive_reservation()` -
+/// AppBars are Windows' nearest equivalent to wlr-layer-shell's exclusive zone,
+/// used by `WindowKind::Top`. Falls back to a plain always-on-top window (no
+/// space reservation) when the options don't request one.
+fn register_appbar(hwnd: HWND, kind_options: LayerShellOptions) -> Result<()> {
+    let Some((zone, edge)) = kind_options.exclusive_reservation() else {
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        }
+        .log_err();
+        return Ok(());
+    };
+    let reserve = f32::from(zone).max(0.0) as i32;
+
+    // ABE_LEFT/TOP/RIGHT/BOTTOM - stable winuser.h values, used directly since
+    // SHAppBarMessage's uEdge field is a plain u32, not a typed enum.
+    const ABE_LEFT: u32 = 0;
+    const ABE_TOP: u32 = 1;
+    const ABE_RIGHT: u32 = 2;
+    const ABE_BOTTOM: u32 = 3;
+
+    let edge = match edge {
+        LayerShellEdge::Left => ABE_LEFT,
+        LayerShellEdge::Top => ABE_TOP,
+        LayerShellEdge::Right => ABE_RIGHT,
+        LayerShellEdge::Bottom => ABE_BOTTOM,
+    };
+
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    let mut monitor_info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if !unsafe { GetMonitorInfoW(monitor, &mut monitor_info) }.as_bool() {
+        anyhow::bail!("GetMonitorInfoW failed while registering an AppBar");
+    }
+    let screen = monitor_info.rcMonitor;
+
+    let mut abd = APPBARDATA {
+        cbSize: std::mem::size_of::<APPBARDATA>() as u32,
+        hWnd: hwnd,
+        uCallbackMessage: appbar_callback_message(),
+        uEdge: edge,
+        ..Default::default()
+    };
+    unsafe { SHAppBarMessage(ABM_NEW, &mut abd) };
+
+    abd.rc = match edge {
+        ABE_TOP => RECT {
+            left: screen.left,
+            top: screen.top,
+            right: screen.right,
+            bottom: screen.top + reserve,
+        },
+        ABE_BOTTOM => RECT {
+            left: screen.left,
+            top: screen.bottom - reserve,
+            right: screen.right,
+            bottom: screen.bottom,
+        },
+        ABE_LEFT => RECT {
+            left: screen.left,
+            top: screen.top,
+            right: screen.left + reserve,
+            bottom: screen.bottom,
+        },
+        _ => RECT {
+            left: screen.right - reserve,
+            top: screen.top,
+            right: screen.right,
+            bottom: screen.bottom,
+        },
+    };
+    unsafe { SHAppBarMessage(ABM_QUERYPOS, &mut abd) };
+    // The system may adjust the far edge to avoid other appbars; re-pin the near
+    // edge so the reserved thickness along the anchored side stays exact.
+    match edge {
+        ABE_TOP => abd.rc.bottom = abd.rc.top + reserve,
+        ABE_BOTTOM => abd.rc.top = abd.rc.bottom - reserve,
+        ABE_LEFT => abd.rc.right = abd.rc.left + reserve,
+        _ => abd.rc.left = abd.rc.right - reserve,
+    }
+    unsafe { SHAppBarMessage(ABM_SETPOS, &mut abd) };
+
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            abd.rc.left,
+            abd.rc.top,
+            abd.rc.right - abd.rc.left,
+            abd.rc.bottom - abd.rc.top,
+            SWP_NOACTIVATE,
+        )
+    }
+    .log_err();
+
+    Ok(())
+}
+
+/// Unregisters an AppBar registered by `register_appbar`. Safe and cheap to call
+/// even if `hwnd` was never registered - ABM_REMOVE on an unregistered window is a
+/// documented no-op.
+fn unregister_appbar(hwnd: HWND) {
+    let mut abd = APPBARDATA {
+        cbSize: std::mem::size_of::<APPBARDATA>() as u32,
+        hWnd: hwnd,
+        ..Default::default()
+    };
+    unsafe { SHAppBarMessage(ABM_REMOVE, &mut abd) };
+}
+
+/// The system-wide registered window message AppBars use to report ABN_* change
+/// notifications (taskbar autohide toggled, display changed, etc). Registered once
+/// and reused for every `register_appbar` call - notification handling itself is
+/// intentionally not implemented; the initial reservation covers the common case.
+fn appbar_callback_message() -> u32 {
+    static MESSAGE: OnceLock<u32> = OnceLock::new();
+    *MESSAGE.get_or_init(|| unsafe { RegisterWindowMessageW(w!("Kael::AppBarCallback")) })
+}
 
 fn register_window_class(icon_handle: HICON) -> Result<()> {
     static REGISTRATION: OnceLock<std::result::Result<(), String>> = OnceLock::new();
