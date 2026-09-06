@@ -37,39 +37,69 @@ fn lock_platform_test_surface() -> std::sync::MutexGuard<'static, ()> {
     PLATFORM_TEST_LOCK.lock().unwrap()
 }
 
-// WindowKind::{Overlay,Bottom,Wallpaper,Top} and their WindowIntentKind counterparts are
-// unconditionally payload-carrying on every platform - only LayerShellOptions's own
-// contents differ by feature (a real struct under wayland, a zero-sized marker off it),
-// never the enum shape - so these plain constructors need no cfg split.
+// WindowKind::{Overlay,Bottom,Wallpaper} and their WindowIntentKind counterparts carry
+// LayerShellOptions only under wayland (unit variants otherwise, since no other backend
+// reads their payload). Top always carries LayerShellOptions on every platform - X11's
+// struts and Windows' AppBar read its exclusive-zone fields too - so it needs no split.
+#[cfg(feature = "wayland")]
 fn overlay_window_kind() -> crate::WindowKind {
     crate::WindowKind::Overlay(crate::LayerShellOptions::default())
 }
+#[cfg(not(feature = "wayland"))]
+fn overlay_window_kind() -> crate::WindowKind {
+    crate::WindowKind::Overlay
+}
+#[cfg(feature = "wayland")]
 fn bottom_window_kind() -> crate::WindowKind {
     crate::WindowKind::Bottom(crate::LayerShellOptions::default())
 }
+#[cfg(not(feature = "wayland"))]
+fn bottom_window_kind() -> crate::WindowKind {
+    crate::WindowKind::Bottom
+}
+#[cfg(feature = "wayland")]
 fn wallpaper_window_kind() -> crate::WindowKind {
     crate::WindowKind::Wallpaper(crate::LayerShellOptions::default())
+}
+#[cfg(not(feature = "wayland"))]
+fn wallpaper_window_kind() -> crate::WindowKind {
+    crate::WindowKind::Wallpaper
 }
 fn top_window_kind() -> crate::WindowKind {
     crate::WindowKind::Top(crate::LayerShellOptions::default())
 }
 
+#[cfg(feature = "wayland")]
 fn overlay_intent_kind() -> crate::WindowIntentKind {
     crate::WindowIntentKind::Overlay(crate::LayerShellOptions::default())
 }
+#[cfg(not(feature = "wayland"))]
+fn overlay_intent_kind() -> crate::WindowIntentKind {
+    crate::WindowIntentKind::Overlay
+}
+#[cfg(feature = "wayland")]
 fn bottom_intent_kind() -> crate::WindowIntentKind {
     crate::WindowIntentKind::Bottom(crate::LayerShellOptions::default())
 }
+#[cfg(not(feature = "wayland"))]
+fn bottom_intent_kind() -> crate::WindowIntentKind {
+    crate::WindowIntentKind::Bottom
+}
+#[cfg(feature = "wayland")]
 fn wallpaper_intent_kind() -> crate::WindowIntentKind {
     crate::WindowIntentKind::Wallpaper(crate::LayerShellOptions::default())
+}
+#[cfg(not(feature = "wayland"))]
+fn wallpaper_intent_kind() -> crate::WindowIntentKind {
+    crate::WindowIntentKind::Wallpaper
 }
 fn top_intent_kind() -> crate::WindowIntentKind {
     crate::WindowIntentKind::Top(crate::LayerShellOptions::default())
 }
 
-// The *_opts(options)/no-arg split on WindowOptionsBuilder/WindowIntentBuilder genuinely
-// differs by feature (wayland's overlay()/bottom()/wallpaper()/top() take a mandatory
-// LayerShellOptions argument, the non-wayland build's take none), so these do need cfg.
+// The *(options)/no-arg split on WindowOptionsBuilder/WindowIntentBuilder mirrors the
+// kind constructors above: genuinely differs by feature for overlay/bottom/wallpaper,
+// but top() always takes LayerShellOptions on every platform.
 #[cfg(feature = "wayland")]
 fn with_overlay(builder: crate::WindowOptionsBuilder) -> crate::WindowOptionsBuilder {
     builder.overlay(crate::LayerShellOptions::default())
@@ -97,13 +127,8 @@ fn with_wallpaper(builder: crate::WindowOptionsBuilder) -> crate::WindowOptionsB
     builder.wallpaper()
 }
 
-#[cfg(feature = "wayland")]
 fn with_top(builder: crate::WindowOptionsBuilder) -> crate::WindowOptionsBuilder {
     builder.top(crate::LayerShellOptions::default())
-}
-#[cfg(not(feature = "wayland"))]
-fn with_top(builder: crate::WindowOptionsBuilder) -> crate::WindowOptionsBuilder {
-    builder.top()
 }
 
 #[cfg(feature = "wayland")]
@@ -133,13 +158,8 @@ fn wallpaper_intent_builder() -> crate::WindowIntentBuilder {
     crate::WindowIntentBuilder::wallpaper()
 }
 
-#[cfg(feature = "wayland")]
 fn top_intent_builder() -> crate::WindowIntentBuilder {
     crate::WindowIntentBuilder::top(crate::LayerShellOptions::default())
-}
-#[cfg(not(feature = "wayland"))]
-fn top_intent_builder() -> crate::WindowIntentBuilder {
-    crate::WindowIntentBuilder::top()
 }
 
 #[test]
@@ -1865,8 +1885,10 @@ fn window_intent_builder_builds_checked_presets() {
 
     // Bottom/Wallpaper/Top are wlr-layer-shell-only kinds: their builders and
     // validate() rules must still hold even on platforms without a native
-    // layer-shell backend, since WindowKind/WindowIntentKind never change shape
-    // by platform - only LayerShellOptions's contents do.
+    // layer-shell backend. Bottom/Wallpaper are unit variants there (their
+    // *_window_kind()/*_intent_builder() helpers above are cfg-split to match);
+    // only Top's shape never changes by platform, since X11/Windows read its
+    // LayerShellOptions for real.
     let bottom = bottom_intent_builder().build_checked().unwrap();
     assert_eq!(bottom.kind, bottom_window_kind());
     assert!(!bottom.is_minimizable);

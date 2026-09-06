@@ -10,14 +10,13 @@ use crate::platform::tab_manager::{TabManagerState, WindowTabManager};
 #[cfg(any())]
 use crate::webview::{PlatformWebView, PlatformWebViewCommand};
 use crate::{
-    AnyWindowHandle, Bounds, Decorations, DevicePixels, DispatchEventResult, ExclusiveZone,
-    ForegroundExecutor, GameInputAvailability, GameInputCapabilities, GameInputError,
-    GameInputErrorKind, GpuSpecs, LayerShellAnchor, LayerShellOptions, Modifiers, Pixels,
-    PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
-    PointerLockStatus, PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, ScaledPixels,
-    Scene, Size, Tiling, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowControlArea, WindowDecorations, WindowKind, WindowParams, X11ClientStatePtr, point, px,
-    size,
+    AnyWindowHandle, Bounds, Decorations, DevicePixels, DispatchEventResult, ForegroundExecutor,
+    GameInputAvailability, GameInputCapabilities, GameInputError, GameInputErrorKind, GpuSpecs,
+    LayerShellEdge, LayerShellOptions, Modifiers, Pixels, PlatformAtlas, PlatformDisplay,
+    PlatformInput, PlatformInputHandler, PlatformWindow, Point, PointerLockStatus, PromptButton,
+    PromptLevel, RequestFrameOptions, ResizeEdge, ScaledPixels, Scene, Size, Tiling,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
+    WindowDecorations, WindowKind, WindowParams, X11ClientStatePtr, point, px, size,
 };
 
 use blade_graphics as gpu;
@@ -114,48 +113,41 @@ x11rb::atom_manager! {
 /// bottom, then a start/end pixel range along the perpendicular axis for each of
 /// those four) for a `WindowKind::Top` window - X11's nearest equivalent to
 /// wlr-layer-shell's exclusive zone. Returns `None` when the layer-shell options
-/// don't request a reservation (`ExclusiveZone::None`/`Ignore`), matching that no
-/// space should be reserved from the desktop's work area either.
+/// don't request a reservation, matching that no space should be reserved from
+/// the desktop's work area either.
 fn net_wm_strut_partial(
     kind_options: LayerShellOptions,
     bounds: Bounds<DevicePixels>,
 ) -> Option<[u32; 12]> {
-    let ExclusiveZone::Reserve(zone) = kind_options.exclusive_zone else {
-        return None;
-    };
+    let (zone, edge) = kind_options.exclusive_reservation()?;
     let reserve = f32::from(zone).max(0.0) as u32;
-    if reserve == 0 {
-        return None;
-    }
-
-    // Disambiguates which anchored edge the strut applies to, same as
-    // wlr-layer-shell's own exclusive_edge; falls back to a TOP > BOTTOM > LEFT >
-    // RIGHT priority over the raw anchor bits when it isn't set.
-    let edge = kind_options.exclusive_edge.unwrap_or(kind_options.anchor);
     let x0 = bounds.origin.x.0.max(0) as u32;
     let x1 = (bounds.origin.x.0 + bounds.size.width.0).max(0) as u32;
     let y0 = bounds.origin.y.0.max(0) as u32;
     let y1 = (bounds.origin.y.0 + bounds.size.height.0).max(0) as u32;
 
     let mut strut = [0u32; 12];
-    if edge.contains(LayerShellAnchor::TOP) {
-        strut[2] = reserve;
-        strut[8] = x0;
-        strut[9] = x1;
-    } else if edge.contains(LayerShellAnchor::BOTTOM) {
-        strut[3] = reserve;
-        strut[10] = x0;
-        strut[11] = x1;
-    } else if edge.contains(LayerShellAnchor::LEFT) {
-        strut[0] = reserve;
-        strut[4] = y0;
-        strut[5] = y1;
-    } else if edge.contains(LayerShellAnchor::RIGHT) {
-        strut[1] = reserve;
-        strut[6] = y0;
-        strut[7] = y1;
-    } else {
-        return None;
+    match edge {
+        LayerShellEdge::Top => {
+            strut[2] = reserve;
+            strut[8] = x0;
+            strut[9] = x1;
+        }
+        LayerShellEdge::Bottom => {
+            strut[3] = reserve;
+            strut[10] = x0;
+            strut[11] = x1;
+        }
+        LayerShellEdge::Left => {
+            strut[0] = reserve;
+            strut[4] = y0;
+            strut[5] = y1;
+        }
+        LayerShellEdge::Right => {
+            strut[1] = reserve;
+            strut[6] = y0;
+            strut[7] = y1;
+        }
     }
     Some(strut)
 }
@@ -684,7 +676,7 @@ impl X11WindowState {
                 )?;
             }
 
-            if let WindowKind::Overlay(_) = params.kind {
+            if params.kind.is_overlay() {
                 check_reply(
                     || "X11 ChangeProperty32 setting window type for overlay failed.",
                     xcb.change_property32(
@@ -709,7 +701,7 @@ impl X11WindowState {
 
             // Layer-shell kinds with no wlr protocol on X11: approximated via EWMH
             // window-type/state hints, the closest X11 equivalents.
-            if let WindowKind::Wallpaper(_) = params.kind {
+            if params.kind.is_wallpaper() {
                 // _NET_WM_WINDOW_TYPE_DESKTOP tells the window manager this window is
                 // the desktop itself, i.e. the wallpaper layer.
                 check_reply(
@@ -724,7 +716,7 @@ impl X11WindowState {
                 )?;
             }
 
-            if let WindowKind::Bottom(_) = params.kind {
+            if params.kind.is_bottom() {
                 // _NET_WM_STATE_BELOW asks the window manager to keep this window
                 // beneath normal windows, X11's nearest equivalent to the bottom layer.
                 check_reply(

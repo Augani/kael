@@ -700,7 +700,7 @@ impl WindowsWindow {
 
         let (mut dwexstyle, dwstyle) = if params.kind == WindowKind::PopUp {
             (WS_EX_TOOLWINDOW, WINDOW_STYLE(0x0))
-        } else if matches!(params.kind, WindowKind::Overlay(_)) {
+        } else if params.kind.is_overlay() {
             (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WS_POPUP)
         } else {
             let mut dwstyle = WS_SYSMENU;
@@ -810,28 +810,23 @@ impl WindowsWindow {
         // wlr-layer-shell-only kinds with no direct Win32 equivalent: approximated
         // with the closest native mechanism for each. Best-effort - a failure here
         // shouldn't fail window creation, just leave the window in its default style.
-        match params.kind {
-            WindowKind::Wallpaper(_) => {
-                attach_to_desktop_wallpaper(hwnd).log_err();
+        if params.kind.is_wallpaper() {
+            attach_to_desktop_wallpaper(hwnd).log_err();
+        } else if params.kind.is_bottom() {
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    Some(HWND_BOTTOM),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                )
             }
-            WindowKind::Bottom(_) => {
-                unsafe {
-                    SetWindowPos(
-                        hwnd,
-                        Some(HWND_BOTTOM),
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                    )
-                }
-                .log_err();
-            }
-            WindowKind::Top(kind_options) => {
-                register_appbar(hwnd, kind_options).log_err();
-            }
-            _ => {}
+            .log_err();
+        } else if let WindowKind::Top(kind_options) = params.kind {
+            register_appbar(hwnd, kind_options).log_err();
         }
 
         Ok(Self(this))
@@ -2022,13 +2017,12 @@ unsafe extern "system" fn enum_find_workerw(hwnd: HWND, lparam: LPARAM) -> BOOL 
 }
 
 /// Registers `hwnd` as a Windows AppBar (desktop toolbar) reserving screen space
-/// along the edge implied by `kind_options.anchor`/`exclusive_edge`, sized by
-/// `kind_options.exclusive_zone` - AppBars are Windows' nearest equivalent to
-/// wlr-layer-shell's exclusive zone, used by `WindowKind::Top`. Falls back to a
-/// plain always-on-top window (no space reservation) when the options don't request
-/// one, matching `ExclusiveZone::None`/`Ignore`.
+/// along the edge and thickness given by `kind_options.exclusive_reservation()` -
+/// AppBars are Windows' nearest equivalent to wlr-layer-shell's exclusive zone,
+/// used by `WindowKind::Top`. Falls back to a plain always-on-top window (no
+/// space reservation) when the options don't request one.
 fn register_appbar(hwnd: HWND, kind_options: LayerShellOptions) -> Result<()> {
-    let ExclusiveZone::Reserve(zone) = kind_options.exclusive_zone else {
+    let Some((zone, edge)) = kind_options.exclusive_reservation() else {
         unsafe {
             SetWindowPos(
                 hwnd,
@@ -2044,9 +2038,6 @@ fn register_appbar(hwnd: HWND, kind_options: LayerShellOptions) -> Result<()> {
         return Ok(());
     };
     let reserve = f32::from(zone).max(0.0) as i32;
-    if reserve == 0 {
-        return Ok(());
-    }
 
     // ABE_LEFT/TOP/RIGHT/BOTTOM - stable winuser.h values, used directly since
     // SHAppBarMessage's uEdge field is a plain u32, not a typed enum.
@@ -2055,17 +2046,11 @@ fn register_appbar(hwnd: HWND, kind_options: LayerShellOptions) -> Result<()> {
     const ABE_RIGHT: u32 = 2;
     const ABE_BOTTOM: u32 = 3;
 
-    let edge_anchor = kind_options.exclusive_edge.unwrap_or(kind_options.anchor);
-    let edge = if edge_anchor.contains(LayerShellAnchor::TOP) {
-        ABE_TOP
-    } else if edge_anchor.contains(LayerShellAnchor::BOTTOM) {
-        ABE_BOTTOM
-    } else if edge_anchor.contains(LayerShellAnchor::LEFT) {
-        ABE_LEFT
-    } else if edge_anchor.contains(LayerShellAnchor::RIGHT) {
-        ABE_RIGHT
-    } else {
-        return Ok(());
+    let edge = match edge {
+        LayerShellEdge::Left => ABE_LEFT,
+        LayerShellEdge::Top => ABE_TOP,
+        LayerShellEdge::Right => ABE_RIGHT,
+        LayerShellEdge::Bottom => ABE_BOTTOM,
     };
 
     let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };

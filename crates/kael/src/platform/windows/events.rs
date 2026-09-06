@@ -159,7 +159,7 @@ impl WindowsWindowInner {
     /// here - before the change is applied - avoids the visible raise-then-drop a
     /// separate SetWindowPos call after the fact would cause.
     fn handle_windowpos_changing_msg(&self, lparam: LPARAM) -> Option<isize> {
-        if matches!(self.kind, WindowKind::Bottom(_)) {
+        if self.kind.is_bottom() {
             let windowpos = unsafe { &mut *(lparam.0 as *mut WINDOWPOS) };
             if windowpos.flags.0 & SWP_NOZORDER.0 == 0 {
                 windowpos.hwndInsertAfter = HWND_BOTTOM;
