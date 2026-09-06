@@ -3256,9 +3256,10 @@ impl TitlebarOptions {
 
 #[cfg(feature = "wayland")]
 bitflags::bitflags! {
-    /// The options that can be configured for a window's decorations
+    /// The edge(s) of the output a wlr-layer-shell surface is anchored to. Maps
+    /// directly to `zwlr_layer_surface_v1::set_anchor`'s bitfield.
     #[derive(Copy,Clone,Debug,PartialEq,Eq,Default,Hash)]
-    pub struct Anchor: u32 {
+    pub struct LayerShellAnchor: u32 {
         ///top
         const TOP = 1;
          ///bottom
@@ -3302,17 +3303,17 @@ pub enum ExclusiveZone {
     Reserve(Pixels),
 }
 
-/// 1. Дефинираме LayerOption според платформата
+/// A wlr-layer-shell surface's configuration, defined per-platform below.
 #[cfg(feature = "wayland")]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LayerShellOptions {
     ///anchor
-    pub anchor: Anchor,
+    pub anchor: LayerShellAnchor,
     /// How this surface's exclusive zone interacts with other layer-shell
     /// surfaces sharing its anchored edge. See [`ExclusiveZone`].
     pub exclusive_zone: ExclusiveZone,
     ///exclusive edge
-    pub exclusive_edge: Option<Anchor>,
+    pub exclusive_edge: Option<LayerShellAnchor>,
     ///margin
     pub margin: Option<(Pixels, Pixels, Pixels, Pixels)>,
     ///keyboard interactivity
@@ -3327,7 +3328,7 @@ pub struct LayerShellOptions;
 impl Default for LayerShellOptions {
     fn default() -> Self {
         LayerShellOptions {
-            anchor: Anchor::empty(),
+            anchor: LayerShellAnchor::empty(),
             exclusive_zone: ExclusiveZone::default(),
             exclusive_edge: None,
             margin: None,

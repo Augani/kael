@@ -357,8 +357,8 @@ impl WaylandWindow {
     }
 
     fn set_exclusive_edge(
-        edge: crate::Anchor,
-        anchor: crate::Anchor,
+        edge: crate::LayerShellAnchor,
+        anchor: crate::LayerShellAnchor,
         layer_surface: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
     ) {
         if edge.bits().count_ones() == 1 && anchor.contains(edge) {
