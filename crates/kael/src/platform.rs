@@ -3236,17 +3236,16 @@ pub enum KeyboardInteractivity {
 /// A wlr-layer-shell surface's exclusive-zone request. Maps directly to
 /// `zwlr_layer_surface_v1::set_exclusive_zone`, whose protocol values are
 /// exactly the three states below - there is no meaningful value outside them.
-#[repr(i32)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ExclusiveZone {
     /// Ignore every other surface's exclusive zone and don't impose one of its
     /// own either; the surface is free to overlap bars/panels sharing its
     /// anchored edge (protocol value -1).
-    Ignore = -1,
+    Ignore,
     /// No reservation of its own, but still repositioned to avoid other
     /// surfaces' exclusive zones (protocol value 0, the default).
     #[default]
-    None = 0,
+    None,
     /// Reserve this many pixels along the anchored edge, pushing other
     /// surfaces sharing that edge out of the way (protocol value > 0).
     Reserve(Pixels),
@@ -3270,7 +3269,7 @@ pub struct WindowKindOptions {
 }
 
 #[cfg(not(feature = "wayland"))]
-/// За останалите платформи е празна структура (заема 0 байта)
+/// 0 bytes WindowsKindOptions for other platforms
 pub struct WindowKindOptions;
 
 #[cfg(feature = "wayland")]
