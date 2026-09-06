@@ -140,6 +140,12 @@ pub struct WaylandWindowState {
     window_controls: WindowControls,
     client_inset: Option<Pixels>,
     visible: bool,
+    /// Whether `start_window_move` requests are honored. Layer-shell surfaces have
+    /// no `toplevel`, so `start_window_move` is already a no-op for them regardless.
+    is_movable: bool,
+    /// Whether `start_window_resize` requests are honored. Layer-shell surfaces have
+    /// no `toplevel`, so `start_window_resize` is already a no-op for them regardless.
+    is_resizable: bool,
     tab_manager: WindowTabManager,
     accessibility_root: crate::platform::linux::accessibility::AtSpiAccessibleRoot,
     pointer_lock: crate::game_input::NativePointerLockState,
@@ -228,6 +234,8 @@ impl WaylandWindowState {
             window_controls: WindowControls::default(),
             client_inset: None,
             visible: options.show,
+            is_movable: options.is_movable,
+            is_resizable: options.is_resizable,
             tab_manager: WindowTabManager::new(handle, tab_manager_state),
             accessibility_root: crate::platform::linux::accessibility::AtSpiAccessibleRoot::new(),
             pointer_lock: crate::game_input::NativePointerLockState::new(pointer_lock_supported),
@@ -1636,6 +1644,9 @@ impl PlatformWindow for WaylandWindow {
 
     fn start_window_move(&self) {
         let state = self.borrow();
+        if !state.is_movable {
+            return;
+        }
         let Some(toplevel) = state.toplevel.as_ref() else {
             return;
         };
@@ -1645,6 +1656,9 @@ impl PlatformWindow for WaylandWindow {
 
     fn start_window_resize(&self, edge: crate::ResizeEdge) {
         let state = self.borrow();
+        if !state.is_resizable {
+            return;
+        }
         let Some(toplevel) = state.toplevel.as_ref() else {
             return;
         };
