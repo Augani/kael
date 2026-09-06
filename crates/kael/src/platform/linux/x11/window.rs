@@ -10,13 +10,14 @@ use crate::platform::tab_manager::{TabManagerState, WindowTabManager};
 #[cfg(any())]
 use crate::webview::{PlatformWebView, PlatformWebViewCommand};
 use crate::{
-    AnyWindowHandle, Bounds, Decorations, DevicePixels, DispatchEventResult, ForegroundExecutor,
-    GameInputAvailability, GameInputCapabilities, GameInputError, GameInputErrorKind, GpuSpecs,
-    Modifiers, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler,
-    PlatformWindow, Point, PointerLockStatus, PromptButton, PromptLevel, RequestFrameOptions,
-    ResizeEdge, ScaledPixels, Scene, Size, Tiling, WindowAppearance, WindowBackgroundAppearance,
-    WindowBounds, WindowControlArea, WindowDecorations, WindowKind, WindowParams,
-    X11ClientStatePtr, point, px, size,
+    AnyWindowHandle, Bounds, Decorations, DevicePixels, DispatchEventResult, ExclusiveZone,
+    ForegroundExecutor, GameInputAvailability, GameInputCapabilities, GameInputError,
+    GameInputErrorKind, GpuSpecs, LayerShellAnchor, LayerShellOptions, Modifiers, Pixels,
+    PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
+    PointerLockStatus, PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, ScaledPixels,
+    Scene, Size, Tiling, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    WindowControlArea, WindowDecorations, WindowKind, WindowParams, X11ClientStatePtr, point, px,
+    size,
 };
 
 use blade_graphics as gpu;
@@ -84,6 +85,7 @@ x11rb::atom_manager! {
         _NET_WM_STATE_HIDDEN,
         _NET_WM_STATE_FOCUSED,
         _NET_WM_STATE_ABOVE,
+        _NET_WM_STATE_BELOW,
         _NET_WM_WINDOW_OPACITY,
         _NET_ACTIVE_WINDOW,
         _NET_WM_SYNC_REQUEST,
@@ -94,6 +96,9 @@ x11rb::atom_manager! {
         _NET_WM_WINDOW_TYPE_NOTIFICATION,
         _NET_WM_WINDOW_TYPE_DIALOG,
         _NET_WM_WINDOW_TYPE_DOCK,
+        _NET_WM_WINDOW_TYPE_DESKTOP,
+        _NET_WM_STRUT,
+        _NET_WM_STRUT_PARTIAL,
         _NET_WM_SYNC,
         _NET_WM_STATE_DEMANDS_ATTENTION,
         _NET_SUPPORTED,
@@ -103,6 +108,56 @@ x11rb::atom_manager! {
         _GTK_EDGE_CONSTRAINTS,
         _NET_CLIENT_LIST_STACKING,
     }
+}
+
+/// Computes an EWMH `_NET_WM_STRUT_PARTIAL` value (12 CARDINALs: left, right, top,
+/// bottom, then a start/end pixel range along the perpendicular axis for each of
+/// those four) for a `WindowKind::Top` window - X11's nearest equivalent to
+/// wlr-layer-shell's exclusive zone. Returns `None` when the layer-shell options
+/// don't request a reservation (`ExclusiveZone::None`/`Ignore`), matching that no
+/// space should be reserved from the desktop's work area either.
+fn net_wm_strut_partial(
+    kind_options: LayerShellOptions,
+    bounds: Bounds<DevicePixels>,
+) -> Option<[u32; 12]> {
+    let ExclusiveZone::Reserve(zone) = kind_options.exclusive_zone else {
+        return None;
+    };
+    let reserve = f32::from(zone).max(0.0) as u32;
+    if reserve == 0 {
+        return None;
+    }
+
+    // Disambiguates which anchored edge the strut applies to, same as
+    // wlr-layer-shell's own exclusive_edge; falls back to a TOP > BOTTOM > LEFT >
+    // RIGHT priority over the raw anchor bits when it isn't set.
+    let edge = kind_options.exclusive_edge.unwrap_or(kind_options.anchor);
+    let x0 = bounds.origin.x.0.max(0) as u32;
+    let x1 = (bounds.origin.x.0 + bounds.size.width.0).max(0) as u32;
+    let y0 = bounds.origin.y.0.max(0) as u32;
+    let y1 = (bounds.origin.y.0 + bounds.size.height.0).max(0) as u32;
+
+    let mut strut = [0u32; 12];
+    if edge.contains(LayerShellAnchor::TOP) {
+        strut[2] = reserve;
+        strut[8] = x0;
+        strut[9] = x1;
+    } else if edge.contains(LayerShellAnchor::BOTTOM) {
+        strut[3] = reserve;
+        strut[10] = x0;
+        strut[11] = x1;
+    } else if edge.contains(LayerShellAnchor::LEFT) {
+        strut[0] = reserve;
+        strut[4] = y0;
+        strut[5] = y1;
+    } else if edge.contains(LayerShellAnchor::RIGHT) {
+        strut[1] = reserve;
+        strut[6] = y0;
+        strut[7] = y1;
+    } else {
+        return None;
+    }
+    Some(strut)
 }
 
 fn query_render_extent(
@@ -650,6 +705,77 @@ impl X11WindowState {
                         &[atoms._NET_WM_STATE_ABOVE],
                     ),
                 )?;
+            }
+
+            // Layer-shell kinds with no wlr protocol on X11: approximated via EWMH
+            // window-type/state hints, the closest X11 equivalents.
+            if let WindowKind::Wallpaper(_) = params.kind {
+                // _NET_WM_WINDOW_TYPE_DESKTOP tells the window manager this window is
+                // the desktop itself, i.e. the wallpaper layer.
+                check_reply(
+                    || "X11 ChangeProperty32 setting window type for wallpaper failed.",
+                    xcb.change_property32(
+                        xproto::PropMode::REPLACE,
+                        x_window,
+                        atoms._NET_WM_WINDOW_TYPE,
+                        xproto::AtomEnum::ATOM,
+                        &[atoms._NET_WM_WINDOW_TYPE_DESKTOP],
+                    ),
+                )?;
+            }
+
+            if let WindowKind::Bottom(_) = params.kind {
+                // _NET_WM_STATE_BELOW asks the window manager to keep this window
+                // beneath normal windows, X11's nearest equivalent to the bottom layer.
+                check_reply(
+                    || "X11 ChangeProperty32 setting _NET_WM_STATE_BELOW for bottom failed.",
+                    xcb.change_property32(
+                        xproto::PropMode::REPLACE,
+                        x_window,
+                        atoms._NET_WM_STATE,
+                        xproto::AtomEnum::ATOM,
+                        &[atoms._NET_WM_STATE_BELOW],
+                    ),
+                )?;
+            }
+
+            if let WindowKind::Top(kind_options) = params.kind {
+                // _NET_WM_WINDOW_TYPE_DOCK marks this as a taskbar/panel-style window;
+                // _NET_WM_STRUT[_PARTIAL] is the actual space reservation, X11's
+                // equivalent to wlr-layer-shell's exclusive zone.
+                check_reply(
+                    || "X11 ChangeProperty32 setting window type for top failed.",
+                    xcb.change_property32(
+                        xproto::PropMode::REPLACE,
+                        x_window,
+                        atoms._NET_WM_WINDOW_TYPE,
+                        xproto::AtomEnum::ATOM,
+                        &[atoms._NET_WM_WINDOW_TYPE_DOCK],
+                    ),
+                )?;
+                if let Some(strut) = net_wm_strut_partial(kind_options, bounds) {
+                    check_reply(
+                        || "X11 ChangeProperty32 setting _NET_WM_STRUT_PARTIAL for top failed.",
+                        xcb.change_property32(
+                            xproto::PropMode::REPLACE,
+                            x_window,
+                            atoms._NET_WM_STRUT_PARTIAL,
+                            xproto::AtomEnum::CARDINAL,
+                            &strut,
+                        ),
+                    )?;
+                    // Older window managers only read the legacy 4-value _NET_WM_STRUT.
+                    check_reply(
+                        || "X11 ChangeProperty32 setting _NET_WM_STRUT for top failed.",
+                        xcb.change_property32(
+                            xproto::PropMode::REPLACE,
+                            x_window,
+                            atoms._NET_WM_STRUT,
+                            xproto::AtomEnum::CARDINAL,
+                            &strut[0..4],
+                        ),
+                    )?;
+                }
             }
 
             if params.mouse_passthrough {
