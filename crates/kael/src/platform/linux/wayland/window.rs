@@ -103,6 +103,12 @@ pub struct WaylandWindowState {
     acknowledged_first_configure: bool,
     frame_callback_active: bool,
     frame_callback_requested: bool,
+    /// Forces the next `frame()` call to render past the `frame_callback_active` gate,
+    /// regardless of `invalidator` dirty state. Set for a wlr-layer-shell surface's
+    /// mandatory first paint after `ack_configure`: frame_callback_active can't be
+    /// trusted to be true at that point, and the surface has no toplevel-activation/
+    /// keyboard-focus signal to re-arm it the way an xdg-toplevel window might.
+    force_next_frame: bool,
     pub surface: wl_surface::WlSurface,
     decoration: Option<zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1>,
     app_id: Option<String>,
@@ -191,6 +197,7 @@ impl WaylandWindowState {
             acknowledged_first_configure: false,
             frame_callback_active: false,
             frame_callback_requested: false,
+            force_next_frame: false,
             surface,
             decoration,
             app_id: None,
@@ -678,8 +685,12 @@ impl WaylandWindowStatePtr {
     pub fn frame(&self) {
         let mut state = self.state.borrow_mut();
         state.frame_callback_requested = false;
-        if !state.frame_callback_active {
+        let forced = state.force_next_frame;
+        if !forced && !state.frame_callback_active {
             return;
+        }
+        if forced {
+            state.force_next_frame = false;
         }
         state.surface.frame(&state.globals.qh, state.surface.id());
         state.frame_callback_requested = true;
@@ -688,7 +699,11 @@ impl WaylandWindowStatePtr {
 
         let mut callback = self.callbacks.borrow_mut().request_frame.take();
         if let Some(ref mut fun) = callback {
-            super::super::catch_platform_callback("frame request", (), || fun(Default::default()));
+            let options = RequestFrameOptions {
+                force_render: forced,
+                ..Default::default()
+            };
+            super::super::catch_platform_callback("frame request", (), || fun(options));
         }
         self.callbacks.borrow_mut().request_frame = callback;
     }
@@ -806,6 +821,9 @@ impl WaylandWindowStatePtr {
 
                 let request_frame_callback = !state.acknowledged_first_configure;
                 state.acknowledged_first_configure = true;
+                if request_frame_callback {
+                    state.force_next_frame = true;
+                }
                 drop(state);
                 if let Some(new_size) = new_size {
                     self.resize(new_size);
