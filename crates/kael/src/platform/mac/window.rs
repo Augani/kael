@@ -3740,8 +3740,14 @@ impl MacWindow {
             }
 
             let native_window: id = match kind {
-                WindowKind::Normal | WindowKind::Floating => msg_send![WINDOW_CLASS, alloc],
-                WindowKind::PopUp | WindowKind::Overlay => {
+                // Bottom/Wallpaper/Top are wlr-layer-shell-only kinds with no macOS
+                // equivalent; fall back to a regular window, matching what the wayland
+                // backend does when the compositor itself lacks layer-shell support.
+                WindowKind::Normal | WindowKind::Floating | WindowKind::Bottom(_)
+                | WindowKind::Wallpaper(_) | WindowKind::Top(_) => {
+                    msg_send![WINDOW_CLASS, alloc]
+                }
+                WindowKind::PopUp | WindowKind::Overlay(_) => {
                     style_mask |= NSWindowStyleMaskNonactivatingPanel;
                     msg_send![PANEL_CLASS, alloc]
                 }
@@ -3911,7 +3917,11 @@ impl MacWindow {
             native_window.makeFirstResponder_(native_view);
 
             match kind {
-                WindowKind::Normal | WindowKind::Floating => {
+                // Bottom/Wallpaper/Top are wlr-layer-shell-only kinds with no macOS
+                // equivalent; fall back to a regular window, matching what the wayland
+                // backend does when the compositor itself lacks layer-shell support.
+                WindowKind::Normal | WindowKind::Floating | WindowKind::Bottom(_)
+                | WindowKind::Wallpaper(_) | WindowKind::Top(_) => {
                     native_window.setLevel_(NSNormalWindowLevel);
                     native_window.setAcceptsMouseMovedEvents_(YES);
 
@@ -3947,7 +3957,7 @@ impl MacWindow {
                             | NSWindowCollectionBehavior::FullScreenAuxiliary,
                     );
                 }
-                WindowKind::Overlay => {
+                WindowKind::Overlay(_) => {
                     let tracking_area: id = msg_send![lookup_class(c"NSTrackingArea"), alloc];
                     let _: () = msg_send![
                         tracking_area,
