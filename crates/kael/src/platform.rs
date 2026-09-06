@@ -2475,30 +2475,30 @@ impl WindowOptionsBuilder {
     pub fn overlay_opts(self, options: LayerShellOptions) -> Self {
         self.kind(WindowKind::Overlay(options))
     }
-    ///Create background window with default options
-    pub fn z_bg(self) -> Self {
+    ///Create a wallpaper (background-layer) window with default options
+    pub fn wallpaper(self) -> Self {
         self.kind(WindowKind::Background(LayerShellOptions::default()))
     }
-    /// Create background window with options
-    pub fn z_bg_opts(self, options: LayerShellOptions) -> Self {
+    /// Create a wallpaper (background-layer) window with options
+    pub fn wallpaper_opts(self, options: LayerShellOptions) -> Self {
         self.kind(WindowKind::Background(options))
     }
 
     ///Create bottom window with default options
-    pub fn z_bottom(self) -> Self {
+    pub fn bottom(self) -> Self {
         self.kind(WindowKind::Bottom(LayerShellOptions::default()))
     }
     /// Create bottom window with options
-    pub fn z_bottom_opts(self, options: LayerShellOptions) -> Self {
+    pub fn bottom_opts(self, options: LayerShellOptions) -> Self {
         self.kind(WindowKind::Bottom(options))
     }
 
     ///Create top window with default options
-    pub fn z_top(self) -> Self {
+    pub fn top(self) -> Self {
         self.kind(WindowKind::Top(LayerShellOptions::default()))
     }
     ///Create top window with options
-    pub fn z_top_opts(self, options: LayerShellOptions) -> Self {
+    pub fn top_opts(self, options: LayerShellOptions) -> Self {
         self.kind(WindowKind::Top(options))
     }
 
@@ -2782,32 +2782,32 @@ impl WindowIntentBuilder {
     }
 
     /// Bottom widget intent
-    pub fn z_bottom() -> Self {
+    pub fn bottom() -> Self {
         Self::new(WindowIntentKind::Bottom(LayerShellOptions::default()))
     }
 
     /// Bottom widget intent with options
-    pub fn z_bottom_opts(options: LayerShellOptions) -> Self {
+    pub fn bottom_opts(options: LayerShellOptions) -> Self {
         Self::new(WindowIntentKind::Bottom(options))
     }
 
     /// Wallpaper widget intent
-    pub fn z_bg() -> Self {
+    pub fn wallpaper() -> Self {
         Self::new(WindowIntentKind::Background(LayerShellOptions::default()))
     }
 
     /// Wallpaper widget intent with options
-    pub fn z_bg_opts(options: LayerShellOptions) -> Self {
+    pub fn wallpaper_opts(options: LayerShellOptions) -> Self {
         Self::new(WindowIntentKind::Background(options))
     }
 
     /// Top widget intent
-    pub fn z_top() -> Self {
+    pub fn top() -> Self {
         Self::new(WindowIntentKind::Top(LayerShellOptions::default()))
     }
 
     /// Top widget intent with options
-    pub fn z_top_opts(options: LayerShellOptions) -> Self {
+    pub fn top_opts(options: LayerShellOptions) -> Self {
         Self::new(WindowIntentKind::Top(options))
     }
 
@@ -3072,7 +3072,7 @@ fn window_intent_defaults(kind: WindowIntentKind) -> WindowOptionsBuilder {
             .transparent_background()
             .no_titlebar(),
         WindowIntentKind::Bottom(kind_options) => WindowOptionsBuilder::new()
-            .z_bottom_opts(kind_options)
+            .bottom_opts(kind_options)
             .transparent_titlebar(true)
             .client_decorations()
             .resizable(false)
@@ -3082,7 +3082,7 @@ fn window_intent_defaults(kind: WindowIntentKind) -> WindowOptionsBuilder {
             .transparent_background()
             .no_titlebar(),
         WindowIntentKind::Background(kind_options) => WindowOptionsBuilder::new()
-            .z_bg_opts(kind_options)
+            .wallpaper_opts(kind_options)
             .transparent_titlebar(true)
             .client_decorations()
             .resizable(false)
@@ -3092,7 +3092,7 @@ fn window_intent_defaults(kind: WindowIntentKind) -> WindowOptionsBuilder {
             .transparent_background()
             .no_titlebar(),
         WindowIntentKind::Top(kind_options) => WindowOptionsBuilder::new()
-            .z_top_opts(kind_options)
+            .top_opts(kind_options)
             .transparent_titlebar(true)
             .client_decorations()
             .resizable(false)
@@ -3186,21 +3186,6 @@ impl TitlebarOptions {
             bool_text(self.has_traffic_light_position())
         )
     }
-}
-
-#[cfg(feature = "wayland")]
-///wayland layer definition
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub enum Layer {
-    /// background
-    Background,
-    ///bottom
-    Bottom,
-    ///top
-    Top,
-    ///overlay
-    #[default]
-    Overlay,
 }
 
 #[cfg(feature = "wayland")]
