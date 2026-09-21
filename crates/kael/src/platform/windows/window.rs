@@ -1952,7 +1952,7 @@ const WINDOW_CLASS_NAME: PCWSTR = w!("Kael::Window");
 fn attach_to_desktop_wallpaper(hwnd: HWND) -> Result<()> {
     const SPAWN_WORKERW: u32 = 0x052C;
 
-    let progman = unsafe { FindWindowW(Some(w!("Progman")), None) }
+    let progman = unsafe { FindWindowW(w!("Progman"), PCWSTR::null()) }
         .context("Progman window not found while attaching a wallpaper window")?;
     let mut result: usize = 0;
     unsafe {
@@ -1995,12 +1995,12 @@ unsafe extern "system" fn enum_find_workerw(hwnd: HWND, lparam: LPARAM) -> BOOL 
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         let out = &mut *(lparam.0 as *mut HWND);
         let shelldll_view =
-            FindWindowExW(Some(hwnd), None, Some(w!("SHELLDLL_DefView")), None)
+            FindWindowExW(Some(hwnd), None, w!("SHELLDLL_DefView"), PCWSTR::null())
                 .unwrap_or_default();
         if shelldll_view.is_invalid() {
             return BOOL(1);
         }
-        let workerw = FindWindowExW(None, Some(hwnd), Some(w!("WorkerW")), None)
+        let workerw = FindWindowExW(None, Some(hwnd), w!("WorkerW"), PCWSTR::null())
             .unwrap_or_default();
         if !workerw.is_invalid() {
             *out = workerw;
