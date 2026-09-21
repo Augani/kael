@@ -37,6 +37,131 @@ fn lock_platform_test_surface() -> std::sync::MutexGuard<'static, ()> {
     PLATFORM_TEST_LOCK.lock().unwrap()
 }
 
+// WindowKind::{Overlay,Bottom,Wallpaper} and their WindowIntentKind counterparts carry
+// LayerShellOptions only under wayland (unit variants otherwise, since no other backend
+// reads their payload). Top always carries LayerShellOptions on every platform - X11's
+// struts and Windows' AppBar read its exclusive-zone fields too - so it needs no split.
+#[cfg(feature = "wayland")]
+fn overlay_window_kind() -> crate::WindowKind {
+    crate::WindowKind::Overlay(crate::LayerShellOptions::default())
+}
+#[cfg(not(feature = "wayland"))]
+fn overlay_window_kind() -> crate::WindowKind {
+    crate::WindowKind::Overlay
+}
+#[cfg(feature = "wayland")]
+fn bottom_window_kind() -> crate::WindowKind {
+    crate::WindowKind::Bottom(crate::LayerShellOptions::default())
+}
+#[cfg(not(feature = "wayland"))]
+fn bottom_window_kind() -> crate::WindowKind {
+    crate::WindowKind::Bottom
+}
+#[cfg(feature = "wayland")]
+fn wallpaper_window_kind() -> crate::WindowKind {
+    crate::WindowKind::Wallpaper(crate::LayerShellOptions::default())
+}
+#[cfg(not(feature = "wayland"))]
+fn wallpaper_window_kind() -> crate::WindowKind {
+    crate::WindowKind::Wallpaper
+}
+fn top_window_kind() -> crate::WindowKind {
+    crate::WindowKind::Top(crate::LayerShellOptions::default())
+}
+
+#[cfg(feature = "wayland")]
+fn overlay_intent_kind() -> crate::WindowIntentKind {
+    crate::WindowIntentKind::Overlay(crate::LayerShellOptions::default())
+}
+#[cfg(not(feature = "wayland"))]
+fn overlay_intent_kind() -> crate::WindowIntentKind {
+    crate::WindowIntentKind::Overlay
+}
+#[cfg(feature = "wayland")]
+fn bottom_intent_kind() -> crate::WindowIntentKind {
+    crate::WindowIntentKind::Bottom(crate::LayerShellOptions::default())
+}
+#[cfg(not(feature = "wayland"))]
+fn bottom_intent_kind() -> crate::WindowIntentKind {
+    crate::WindowIntentKind::Bottom
+}
+#[cfg(feature = "wayland")]
+fn wallpaper_intent_kind() -> crate::WindowIntentKind {
+    crate::WindowIntentKind::Wallpaper(crate::LayerShellOptions::default())
+}
+#[cfg(not(feature = "wayland"))]
+fn wallpaper_intent_kind() -> crate::WindowIntentKind {
+    crate::WindowIntentKind::Wallpaper
+}
+fn top_intent_kind() -> crate::WindowIntentKind {
+    crate::WindowIntentKind::Top(crate::LayerShellOptions::default())
+}
+
+// The *(options)/no-arg split on WindowOptionsBuilder/WindowIntentBuilder mirrors the
+// kind constructors above: genuinely differs by feature for overlay/bottom/wallpaper,
+// but top() always takes LayerShellOptions on every platform.
+#[cfg(feature = "wayland")]
+fn with_overlay(builder: crate::WindowOptionsBuilder) -> crate::WindowOptionsBuilder {
+    builder.overlay(crate::LayerShellOptions::default())
+}
+#[cfg(not(feature = "wayland"))]
+fn with_overlay(builder: crate::WindowOptionsBuilder) -> crate::WindowOptionsBuilder {
+    builder.overlay()
+}
+
+#[cfg(feature = "wayland")]
+fn with_bottom(builder: crate::WindowOptionsBuilder) -> crate::WindowOptionsBuilder {
+    builder.bottom(crate::LayerShellOptions::default())
+}
+#[cfg(not(feature = "wayland"))]
+fn with_bottom(builder: crate::WindowOptionsBuilder) -> crate::WindowOptionsBuilder {
+    builder.bottom()
+}
+
+#[cfg(feature = "wayland")]
+fn with_wallpaper(builder: crate::WindowOptionsBuilder) -> crate::WindowOptionsBuilder {
+    builder.wallpaper(crate::LayerShellOptions::default())
+}
+#[cfg(not(feature = "wayland"))]
+fn with_wallpaper(builder: crate::WindowOptionsBuilder) -> crate::WindowOptionsBuilder {
+    builder.wallpaper()
+}
+
+fn with_top(builder: crate::WindowOptionsBuilder) -> crate::WindowOptionsBuilder {
+    builder.top(crate::LayerShellOptions::default())
+}
+
+#[cfg(feature = "wayland")]
+fn overlay_intent_builder() -> crate::WindowIntentBuilder {
+    crate::WindowIntentBuilder::overlay(crate::LayerShellOptions::default())
+}
+#[cfg(not(feature = "wayland"))]
+fn overlay_intent_builder() -> crate::WindowIntentBuilder {
+    crate::WindowIntentBuilder::overlay()
+}
+
+#[cfg(feature = "wayland")]
+fn bottom_intent_builder() -> crate::WindowIntentBuilder {
+    crate::WindowIntentBuilder::bottom(crate::LayerShellOptions::default())
+}
+#[cfg(not(feature = "wayland"))]
+fn bottom_intent_builder() -> crate::WindowIntentBuilder {
+    crate::WindowIntentBuilder::bottom()
+}
+
+#[cfg(feature = "wayland")]
+fn wallpaper_intent_builder() -> crate::WindowIntentBuilder {
+    crate::WindowIntentBuilder::wallpaper(crate::LayerShellOptions::default())
+}
+#[cfg(not(feature = "wayland"))]
+fn wallpaper_intent_builder() -> crate::WindowIntentBuilder {
+    crate::WindowIntentBuilder::wallpaper()
+}
+
+fn top_intent_builder() -> crate::WindowIntentBuilder {
+    crate::WindowIntentBuilder::top(crate::LayerShellOptions::default())
+}
+
 #[test]
 fn fallible_headless_startup_reports_initialization_result() {
     let _guard = lock_platform_test_surface();
@@ -1584,8 +1709,8 @@ fn window_options_builder_preserves_options() {
         .transparent_titlebar(true)
         .traffic_light_position(traffic_lights)
         .unfocused()
-        .hidden()
-        .overlay()
+        .hidden();
+    let builder = with_overlay(builder)
         .movable(false)
         .resizable(false)
         .minimizable(false)
@@ -1634,7 +1759,7 @@ fn window_options_builder_preserves_options() {
     );
     assert_eq!(options.focus, false);
     assert_eq!(options.show, false);
-    assert_eq!(options.kind, crate::WindowKind::Overlay);
+    assert_eq!(options.kind, overlay_window_kind());
     assert_eq!(options.is_movable, false);
     assert_eq!(options.is_resizable, false);
     assert_eq!(options.is_minimizable, false);
@@ -1673,6 +1798,18 @@ fn window_options_builder_preserves_options() {
         "titlebar options: title yes, transparent yes, traffic-light-position yes"
     );
     assert!(!titlebar.to_text().contains("Inspector"));
+
+    // Bottom/Wallpaper/Top go through WindowOptionsBuilder directly here (rather than
+    // WindowIntentBuilder, covered above) - same platform-independence requirement:
+    // WindowKind never changes shape, so these must build on every platform.
+    let bottom_options = with_bottom(crate::WindowOptionsBuilder::new()).build();
+    assert_eq!(bottom_options.kind, bottom_window_kind());
+
+    let wallpaper_options = with_wallpaper(crate::WindowOptionsBuilder::new()).build();
+    assert_eq!(wallpaper_options.kind, wallpaper_window_kind());
+
+    let top_options = with_top(crate::WindowOptionsBuilder::new()).build();
+    assert_eq!(top_options.kind, top_window_kind());
 }
 
 #[test]
@@ -1738,17 +1875,60 @@ fn window_intent_builder_builds_checked_presets() {
     assert!(!popup.is_resizable);
     assert!(!popup.is_movable);
 
-    let overlay = crate::WindowIntentBuilder::overlay()
-        .build_checked()
-        .unwrap();
-    assert_eq!(overlay.kind, crate::WindowKind::Overlay);
+    let overlay = overlay_intent_builder().build_checked().unwrap();
+    assert_eq!(overlay.kind, overlay_window_kind());
     assert_eq!(
         overlay.window_background,
         crate::WindowBackgroundAppearance::Transparent
     );
     assert!(overlay.titlebar.is_none());
 
-    assert_eq!(crate::WindowIntentKind::Overlay.to_text(), "overlay");
+    // Bottom/Wallpaper/Top are wlr-layer-shell-only kinds: their builders and
+    // validate() rules must still hold even on platforms without a native
+    // layer-shell backend. Bottom/Wallpaper are unit variants there (their
+    // *_window_kind()/*_intent_builder() helpers above are cfg-split to match);
+    // only Top's shape never changes by platform, since X11/Windows read its
+    // LayerShellOptions for real.
+    let bottom = bottom_intent_builder().build_checked().unwrap();
+    assert_eq!(bottom.kind, bottom_window_kind());
+    assert!(!bottom.is_minimizable);
+    assert!(!bottom.is_movable);
+    assert!(!bottom.focus);
+    assert_eq!(
+        bottom.window_background,
+        crate::WindowBackgroundAppearance::Transparent
+    );
+    assert!(bottom.titlebar.is_none());
+
+    let wallpaper = wallpaper_intent_builder().build_checked().unwrap();
+    assert_eq!(wallpaper.kind, wallpaper_window_kind());
+    assert!(!wallpaper.is_minimizable);
+    assert!(!wallpaper.is_resizable);
+    assert!(!wallpaper.is_movable);
+    assert!(!wallpaper.focus);
+    assert_eq!(
+        wallpaper.window_background,
+        crate::WindowBackgroundAppearance::Transparent
+    );
+    assert!(wallpaper.titlebar.is_none());
+
+    let top = top_intent_builder().build_checked().unwrap();
+    assert_eq!(top.kind, top_window_kind());
+    assert!(!top.is_minimizable);
+    assert!(!top.is_movable);
+    assert_eq!(
+        top.window_background,
+        crate::WindowBackgroundAppearance::Transparent
+    );
+    assert!(top.titlebar.is_none());
+
+    assert_eq!(overlay_intent_kind().to_text(), "overlay");
+    assert_eq!(bottom_intent_kind().to_text(), "bottom");
+    assert_eq!(wallpaper_intent_kind().to_text(), "wallpaper");
+    assert_eq!(top_intent_kind().to_text(), "top");
+    assert_eq!(bottom_window_kind().to_text(), "bottom");
+    assert_eq!(wallpaper_window_kind().to_text(), "wallpaper");
+    assert_eq!(top_window_kind().to_text(), "top");
     assert_eq!(crate::WindowKind::Floating.to_text(), "floating");
     assert_eq!(
         crate::WindowBackgroundAppearance::Transparent.to_text(),
@@ -1825,7 +2005,7 @@ fn window_intent_builder_rejects_incoherent_generated_options() {
             .is_err()
     );
     assert!(
-        crate::WindowIntentBuilder::overlay()
+        overlay_intent_builder()
             .configure(crate::WindowOptionsBuilder::floating)
             .build_checked()
             .is_err()

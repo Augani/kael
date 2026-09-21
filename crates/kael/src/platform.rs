@@ -2466,9 +2466,50 @@ impl WindowOptionsBuilder {
         self.kind(WindowKind::Floating)
     }
 
-    /// Create an overlay window.
+    /// Create an overlay window. No other backend reads overlay options, so
+    /// they're only accepted under `wayland`.
+    #[cfg(not(feature = "wayland"))]
     pub fn overlay(self) -> Self {
         self.kind(WindowKind::Overlay)
+    }
+
+    /// Create an overlay window with the given wlr-layer-shell options.
+    #[cfg(feature = "wayland")]
+    pub fn overlay(self, options: LayerShellOptions) -> Self {
+        self.kind(WindowKind::Overlay(options))
+    }
+
+    /// Create a wallpaper (background-layer) window. No other backend reads
+    /// wallpaper options, so they're only accepted under `wayland`.
+    #[cfg(not(feature = "wayland"))]
+    pub fn wallpaper(self) -> Self {
+        self.kind(WindowKind::Wallpaper)
+    }
+
+    /// Create a wallpaper (background-layer) window with the given wlr-layer-shell options.
+    #[cfg(feature = "wayland")]
+    pub fn wallpaper(self, options: LayerShellOptions) -> Self {
+        self.kind(WindowKind::Wallpaper(options))
+    }
+
+    /// Create a bottom window. No other backend reads bottom options, so
+    /// they're only accepted under `wayland`.
+    #[cfg(not(feature = "wayland"))]
+    pub fn bottom(self) -> Self {
+        self.kind(WindowKind::Bottom)
+    }
+
+    /// Create a bottom window with the given wlr-layer-shell options.
+    #[cfg(feature = "wayland")]
+    pub fn bottom(self, options: LayerShellOptions) -> Self {
+        self.kind(WindowKind::Bottom(options))
+    }
+
+    /// Create a top window with the given options. Always takes `options` -
+    /// unlike overlay/bottom/wallpaper, X11's struts and Windows' AppBar read
+    /// its exclusive-zone fields too, not just wayland.
+    pub fn top(self, options: LayerShellOptions) -> Self {
+        self.kind(WindowKind::Top(options))
     }
 
     /// Set whether the window is movable by the user.
@@ -2672,8 +2713,30 @@ pub enum WindowIntentKind {
     Modal,
     /// Context popup or short-lived popover window.
     Popup,
-    /// Overlay/HUD window.
+    /// Overlay/HUD window. Carries [`LayerShellOptions`] only under `wayland`,
+    /// mirroring [`WindowKind::Overlay`].
+    #[cfg(feature = "wayland")]
+    Overlay(LayerShellOptions),
+    /// See the `wayland` variant above.
+    #[cfg(not(feature = "wayland"))]
     Overlay,
+    /// Bottom widget. Carries [`LayerShellOptions`] only under `wayland`,
+    /// mirroring [`WindowKind::Bottom`].
+    #[cfg(feature = "wayland")]
+    Bottom(LayerShellOptions),
+    /// See the `wayland` variant above.
+    #[cfg(not(feature = "wayland"))]
+    Bottom,
+    /// Wallpaper widget. Carries [`LayerShellOptions`] only under `wayland`,
+    /// mirroring [`WindowKind::Wallpaper`].
+    #[cfg(feature = "wayland")]
+    Wallpaper(LayerShellOptions),
+    /// See the `wayland` variant above.
+    #[cfg(not(feature = "wayland"))]
+    Wallpaper,
+    /// Top widget. Always carries [`LayerShellOptions`], mirroring
+    /// [`WindowKind::Top`].
+    Top(LayerShellOptions),
 }
 
 impl WindowIntentKind {
@@ -2685,7 +2748,19 @@ impl WindowIntentKind {
             Self::Utility => "utility",
             Self::Modal => "modal",
             Self::Popup => "popup",
+            #[cfg(feature = "wayland")]
+            Self::Overlay(_) => "overlay",
+            #[cfg(not(feature = "wayland"))]
             Self::Overlay => "overlay",
+            #[cfg(feature = "wayland")]
+            Self::Bottom(_) => "bottom",
+            #[cfg(not(feature = "wayland"))]
+            Self::Bottom => "bottom",
+            #[cfg(feature = "wayland")]
+            Self::Wallpaper(_) => "wallpaper",
+            #[cfg(not(feature = "wayland"))]
+            Self::Wallpaper => "wallpaper",
+            Self::Top(_) => "top",
         }
     }
 }
@@ -2731,9 +2806,50 @@ impl WindowIntentBuilder {
         Self::new(WindowIntentKind::Popup)
     }
 
-    /// Overlay/HUD intent.
+    /// Overlay/HUD intent. No other backend reads overlay options, so
+    /// they're only accepted under `wayland`.
+    #[cfg(not(feature = "wayland"))]
     pub fn overlay() -> Self {
         Self::new(WindowIntentKind::Overlay)
+    }
+
+    /// Overlay/HUD intent with wlr-layer-shell options.
+    #[cfg(feature = "wayland")]
+    pub fn overlay(options: LayerShellOptions) -> Self {
+        Self::new(WindowIntentKind::Overlay(options))
+    }
+
+    /// Bottom widget intent. No other backend reads bottom options, so
+    /// they're only accepted under `wayland`.
+    #[cfg(not(feature = "wayland"))]
+    pub fn bottom() -> Self {
+        Self::new(WindowIntentKind::Bottom)
+    }
+
+    /// Bottom widget intent with wlr-layer-shell options.
+    #[cfg(feature = "wayland")]
+    pub fn bottom(options: LayerShellOptions) -> Self {
+        Self::new(WindowIntentKind::Bottom(options))
+    }
+
+    /// Wallpaper widget intent. No other backend reads wallpaper options, so
+    /// they're only accepted under `wayland`.
+    #[cfg(not(feature = "wayland"))]
+    pub fn wallpaper() -> Self {
+        Self::new(WindowIntentKind::Wallpaper)
+    }
+
+    /// Wallpaper widget intent with wlr-layer-shell options.
+    #[cfg(feature = "wayland")]
+    pub fn wallpaper(options: LayerShellOptions) -> Self {
+        Self::new(WindowIntentKind::Wallpaper(options))
+    }
+
+    /// Top widget intent with the given options. Always takes `options` -
+    /// unlike overlay/bottom/wallpaper, X11's struts and Windows' AppBar read
+    /// its exclusive-zone fields too, not just wayland.
+    pub fn top(options: LayerShellOptions) -> Self {
+        Self::new(WindowIntentKind::Top(options))
     }
 
     /// Return this intent kind.
@@ -2902,6 +3018,18 @@ impl WindowIntentBuilder {
                     "popup window intent should not be resizable"
                 );
             }
+            #[cfg(feature = "wayland")]
+            WindowIntentKind::Overlay(kind_options) => {
+                anyhow::ensure!(
+                    options.kind == WindowKind::Overlay(kind_options),
+                    "overlay window intent must use overlay kind"
+                );
+                anyhow::ensure!(
+                    !options.is_minimizable,
+                    "overlay window intent should not be minimizable"
+                );
+            }
+            #[cfg(not(feature = "wayland"))]
             WindowIntentKind::Overlay => {
                 anyhow::ensure!(
                     options.kind == WindowKind::Overlay,
@@ -2910,6 +3038,78 @@ impl WindowIntentBuilder {
                 anyhow::ensure!(
                     !options.is_minimizable,
                     "overlay window intent should not be minimizable"
+                );
+            }
+            #[cfg(feature = "wayland")]
+            WindowIntentKind::Bottom(kind_options) => {
+                anyhow::ensure!(
+                    options.kind == WindowKind::Bottom(kind_options),
+                    "bottom window intent must use bottom kind"
+                );
+                anyhow::ensure!(
+                    !options.is_minimizable,
+                    "bottom window intent should not be minimizable"
+                );
+            }
+            #[cfg(not(feature = "wayland"))]
+            WindowIntentKind::Bottom => {
+                anyhow::ensure!(
+                    options.kind == WindowKind::Bottom,
+                    "bottom window intent must use bottom kind"
+                );
+                anyhow::ensure!(
+                    !options.is_minimizable,
+                    "bottom window intent should not be minimizable"
+                );
+            }
+            #[cfg(feature = "wayland")]
+            WindowIntentKind::Wallpaper(kind_options) => {
+                anyhow::ensure!(
+                    options.kind == WindowKind::Wallpaper(kind_options),
+                    "wallpaper window intent must use wallpaper kind"
+                );
+                anyhow::ensure!(
+                    !options.is_minimizable,
+                    "wallpaper window intent should not be minimizable"
+                );
+                anyhow::ensure!(
+                    !options.is_resizable,
+                    "wallpaper window intent should not be resizable"
+                );
+
+                anyhow::ensure!(
+                    !options.focus,
+                    "wallpaper window intent should not be focusable"
+                );
+            }
+            #[cfg(not(feature = "wayland"))]
+            WindowIntentKind::Wallpaper => {
+                anyhow::ensure!(
+                    options.kind == WindowKind::Wallpaper,
+                    "wallpaper window intent must use wallpaper kind"
+                );
+                anyhow::ensure!(
+                    !options.is_minimizable,
+                    "wallpaper window intent should not be minimizable"
+                );
+                anyhow::ensure!(
+                    !options.is_resizable,
+                    "wallpaper window intent should not be resizable"
+                );
+
+                anyhow::ensure!(
+                    !options.focus,
+                    "wallpaper window intent should not be focusable"
+                );
+            }
+            WindowIntentKind::Top(kind_options) => {
+                anyhow::ensure!(
+                    options.kind == WindowKind::Top(kind_options),
+                    "top window intent must use overlay kind"
+                );
+                anyhow::ensure!(
+                    !options.is_minimizable,
+                    "top window intent should not be minimizable"
                 );
             }
         }
@@ -2948,8 +3148,74 @@ fn window_intent_defaults(kind: WindowIntentKind) -> WindowOptionsBuilder {
             .minimizable(false)
             .movable(false)
             .client_decorations(),
+        #[cfg(feature = "wayland")]
+        WindowIntentKind::Overlay(kind_options) => WindowOptionsBuilder::new()
+            .overlay(kind_options)
+            .transparent_titlebar(true)
+            .client_decorations()
+            .resizable(false)
+            .minimizable(false)
+            .movable(false)
+            .transparent_background()
+            .no_titlebar(),
+        #[cfg(not(feature = "wayland"))]
         WindowIntentKind::Overlay => WindowOptionsBuilder::new()
             .overlay()
+            .transparent_titlebar(true)
+            .client_decorations()
+            .resizable(false)
+            .minimizable(false)
+            .movable(false)
+            .transparent_background()
+            .no_titlebar(),
+        #[cfg(feature = "wayland")]
+        WindowIntentKind::Bottom(kind_options) => WindowOptionsBuilder::new()
+            .bottom(kind_options)
+            .transparent_titlebar(true)
+            .client_decorations()
+            .resizable(false)
+            .minimizable(false)
+            .movable(false)
+            .focused(false)
+            .transparent_background()
+            .no_titlebar(),
+        #[cfg(not(feature = "wayland"))]
+        WindowIntentKind::Bottom => WindowOptionsBuilder::new()
+            .bottom()
+            .transparent_titlebar(true)
+            .client_decorations()
+            .resizable(false)
+            .minimizable(false)
+            .movable(false)
+            .focused(false)
+            .transparent_background()
+            .no_titlebar(),
+        #[cfg(feature = "wayland")]
+        WindowIntentKind::Wallpaper(kind_options) => WindowOptionsBuilder::new()
+            .wallpaper(kind_options)
+            .transparent_titlebar(true)
+            .client_decorations()
+            .resizable(false)
+            .minimizable(false)
+            .movable(false)
+            .focused(false)
+            .transparent_background()
+            .no_titlebar(),
+        #[cfg(not(feature = "wayland"))]
+        WindowIntentKind::Wallpaper => WindowOptionsBuilder::new()
+            .wallpaper()
+            .transparent_titlebar(true)
+            .client_decorations()
+            .resizable(false)
+            .minimizable(false)
+            .movable(false)
+            .focused(false)
+            .transparent_background()
+            .no_titlebar(),
+        WindowIntentKind::Top(kind_options) => WindowOptionsBuilder::new()
+            .top(kind_options)
+            .transparent_titlebar(true)
+            .client_decorations()
             .resizable(false)
             .minimizable(false)
             .movable(false)
@@ -3043,7 +3309,143 @@ impl TitlebarOptions {
     }
 }
 
-/// The kind of window to create
+bitflags::bitflags! {
+    /// The edge(s) of the output a wlr-layer-shell surface is anchored to. Maps
+    /// directly to `zwlr_layer_surface_v1::set_anchor`'s bitfield. Defined
+    /// unconditionally (not gated on `wayland`) since X11's struts and Windows'
+    /// AppBars both resolve to one of these edges too, via
+    /// [`LayerShellOptions::exclusive_reservation`].
+    #[derive(Copy,Clone,Debug,PartialEq,Eq,Default,Hash)]
+    pub struct LayerShellAnchor: u32 {
+        ///top
+        const TOP = 1;
+         ///bottom
+        const BOTTOM = 2;
+        ///left
+        const LEFT = 4;
+        ///right
+        const RIGHT = 8;
+    }
+}
+
+#[cfg(feature = "wayland")]
+///Keyboard interactivity
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum KeyboardInteractivity {
+    ///none
+    None,
+    ///exclusive
+    Exclusive,
+    /// normal window
+    #[default]
+    OnDemand,
+}
+
+/// A wlr-layer-shell surface's exclusive-zone request. Maps directly to
+/// `zwlr_layer_surface_v1::set_exclusive_zone`, whose protocol values are
+/// exactly the three states below - there is no meaningful value outside them.
+/// Defined unconditionally (not gated on `wayland`) since X11's struts and
+/// Windows' AppBars both resolve reservation intent from this too, via
+/// [`LayerShellOptions::exclusive_reservation`].
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ExclusiveZone {
+    /// Ignore every other surface's exclusive zone and don't impose one of its
+    /// own either; the surface is free to overlap bars/panels sharing its
+    /// anchored edge (protocol value -1).
+    Ignore,
+    /// No reservation of its own, but still repositioned to avoid other
+    /// surfaces' exclusive zones (protocol value 0, the default).
+    #[default]
+    None,
+    /// Reserve this many pixels along the anchored edge, pushing other
+    /// surfaces sharing that edge out of the way (protocol value > 0).
+    Reserve(Pixels),
+}
+
+/// A wlr-layer-shell surface's configuration. `anchor`/`exclusive_zone`/
+/// `exclusive_edge` are always present since X11's struts and Windows' AppBars
+/// resolve real placement from them too (see
+/// [`LayerShellOptions::exclusive_reservation`]); `margin`/`keyboard_interactivity`
+/// are wayland-protocol-only concepts with no cross-platform equivalent, so they
+/// only exist under `wayland`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LayerShellOptions {
+    ///anchor
+    pub anchor: LayerShellAnchor,
+    /// How this surface's exclusive zone interacts with other layer-shell
+    /// surfaces sharing its anchored edge. See [`ExclusiveZone`].
+    pub exclusive_zone: ExclusiveZone,
+    ///exclusive edge
+    pub exclusive_edge: Option<LayerShellAnchor>,
+    ///margin
+    #[cfg(feature = "wayland")]
+    pub margin: Option<(Pixels, Pixels, Pixels, Pixels)>,
+    ///keyboard interactivity
+    #[cfg(feature = "wayland")]
+    pub keyboard_interactivity: KeyboardInteractivity,
+}
+
+impl Default for LayerShellOptions {
+    fn default() -> Self {
+        LayerShellOptions {
+            anchor: LayerShellAnchor::empty(),
+            exclusive_zone: ExclusiveZone::default(),
+            exclusive_edge: None,
+            #[cfg(feature = "wayland")]
+            margin: None,
+            #[cfg(feature = "wayland")]
+            keyboard_interactivity: KeyboardInteractivity::OnDemand,
+        }
+    }
+}
+
+/// Which output edge a reserved exclusive zone applies to - a named
+/// alternative to matching raw [`LayerShellAnchor`] bits once
+/// [`LayerShellOptions::exclusive_reservation`] has already resolved which
+/// single edge applies.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum LayerShellEdge {
+    ///left
+    Left,
+    ///top
+    Top,
+    ///right
+    Right,
+    ///bottom
+    Bottom,
+}
+
+impl LayerShellOptions {
+    /// The reserved thickness and edge for this surface's exclusive zone, or
+    /// `None` when there's nothing to reserve. Shared by every backend - X11's
+    /// `_NET_WM_STRUT_PARTIAL` and Windows' AppBar read this the same way
+    /// wayland's own exclusive-zone handling does. A zone that rounds down to
+    /// 0 device pixels reserves nothing, matching both platforms' original
+    /// truncation behavior before this was centralized here.
+    pub fn exclusive_reservation(&self) -> Option<(Pixels, LayerShellEdge)> {
+        let ExclusiveZone::Reserve(zone) = self.exclusive_zone else {
+            return None;
+        };
+        if f32::from(zone).max(0.0) as u32 == 0 {
+            return None;
+        }
+        let anchor = self.exclusive_edge.unwrap_or(self.anchor);
+        let edge = if anchor.contains(LayerShellAnchor::TOP) {
+            LayerShellEdge::Top
+        } else if anchor.contains(LayerShellAnchor::BOTTOM) {
+            LayerShellEdge::Bottom
+        } else if anchor.contains(LayerShellAnchor::LEFT) {
+            LayerShellEdge::Left
+        } else if anchor.contains(LayerShellAnchor::RIGHT) {
+            LayerShellEdge::Right
+        } else {
+            return None;
+        };
+        Some((zone, edge))
+    }
+}
+
+///Windows Kind
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum WindowKind {
     /// A normal application window
@@ -3056,8 +3458,35 @@ pub enum WindowKind {
     /// A floating window that appears on top of its parent window
     Floating,
 
-    /// An overlay window that appears above all other windows, including fullscreen apps
+    /// An overlay window that appears above all other windows, including fullscreen apps.
+    /// Carries [`LayerShellOptions`] only under `wayland`, since no other backend
+    /// reads its payload - it's an empty-options equivalent everywhere else.
+    #[cfg(feature = "wayland")]
+    Overlay(LayerShellOptions),
+    /// See the `wayland` variant above.
+    #[cfg(not(feature = "wayland"))]
     Overlay,
+    /// An back window  that appears above the wallpaper, but ordinary applications (such as a browser or terminal) open on them.
+    /// Carries [`LayerShellOptions`] only under `wayland`, since no other backend
+    /// reads its payload.
+    #[cfg(feature = "wayland")]
+    Bottom(LayerShellOptions),
+    /// See the `wayland` variant above.
+    #[cfg(not(feature = "wayland"))]
+    Bottom,
+    ///A wallpaper layer that appears at the bottom, behind everything else.
+    /// Carries [`LayerShellOptions`] only under `wayland`, since no other backend
+    /// reads its payload.
+    #[cfg(feature = "wayland")]
+    Wallpaper(LayerShellOptions),
+    /// See the `wayland` variant above.
+    #[cfg(not(feature = "wayland"))]
+    Wallpaper,
+    ///An window that appears above normal windows, but more importantly – should take up space on the screen
+    ///so that the other windows do not cover it when they are maximized. Always
+    ///carries [`LayerShellOptions`] - unlike the other layer-shell kinds, X11's
+    ///struts and Windows' AppBar both read its exclusive-zone options for real.
+    Top(LayerShellOptions),
 }
 
 impl WindowKind {
@@ -3067,8 +3496,62 @@ impl WindowKind {
             Self::Normal => "normal",
             Self::PopUp => "popup",
             Self::Floating => "floating",
+            #[cfg(feature = "wayland")]
+            Self::Overlay(_) => "overlay",
+            #[cfg(not(feature = "wayland"))]
             Self::Overlay => "overlay",
+            #[cfg(feature = "wayland")]
+            Self::Bottom(_) => "bottom",
+            #[cfg(not(feature = "wayland"))]
+            Self::Bottom => "bottom",
+            #[cfg(feature = "wayland")]
+            Self::Wallpaper(_) => "wallpaper",
+            #[cfg(not(feature = "wayland"))]
+            Self::Wallpaper => "wallpaper",
+            Self::Top(_) => "top",
         }
+    }
+
+    /// Whether this is an overlay-layer window, regardless of whether
+    /// wlr-layer-shell options are attached (only present under `wayland`).
+    /// Lets every backend classify `WindowKind` without depending on that
+    /// feature or the enum's per-platform shape.
+    #[cfg(feature = "wayland")]
+    pub fn is_overlay(self) -> bool {
+        matches!(self, Self::Overlay(_))
+    }
+    /// See the `wayland` version above.
+    #[cfg(not(feature = "wayland"))]
+    pub fn is_overlay(self) -> bool {
+        matches!(self, Self::Overlay)
+    }
+
+    /// Whether this is a bottom-layer window. See [`Self::is_overlay`].
+    #[cfg(feature = "wayland")]
+    pub fn is_bottom(self) -> bool {
+        matches!(self, Self::Bottom(_))
+    }
+    /// See the `wayland` version above.
+    #[cfg(not(feature = "wayland"))]
+    pub fn is_bottom(self) -> bool {
+        matches!(self, Self::Bottom)
+    }
+
+    /// Whether this is a wallpaper-layer window. See [`Self::is_overlay`].
+    #[cfg(feature = "wayland")]
+    pub fn is_wallpaper(self) -> bool {
+        matches!(self, Self::Wallpaper(_))
+    }
+    /// See the `wayland` version above.
+    #[cfg(not(feature = "wayland"))]
+    pub fn is_wallpaper(self) -> bool {
+        matches!(self, Self::Wallpaper)
+    }
+
+    /// Whether this is a top-layer window. `Top` always carries
+    /// [`LayerShellOptions`], so this needs no per-feature split.
+    pub fn is_top(self) -> bool {
+        matches!(self, Self::Top(_))
     }
 }
 

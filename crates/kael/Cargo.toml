@@ -772,7 +772,7 @@ features = ["client"]
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wayland-protocols-wlr]
-version = "0.2.0"
+version = "0.3.12"
 features = ["client"]
 optional = true
 
