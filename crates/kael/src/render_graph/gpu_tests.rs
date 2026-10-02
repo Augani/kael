@@ -17,6 +17,7 @@ pub(crate) trait NativeGraphTestRenderer: GpuGraphRenderer {
     fn allocated_bytes(&self) -> u64;
 }
 
+#[cfg(feature = "custom-shaders")]
 macro_rules! native_graph_tests {
     ($renderer:ty) => {
         #[test]
@@ -33,6 +34,7 @@ macro_rules! native_graph_tests {
         fn image_compute_graph_caches_exact_uniforms_and_rejects_invalid_groups_before_allocation() { $crate::render_graph::gpu_tests::image_compute_graph_caches_exact_uniforms_and_rejects_invalid_groups_before_allocation::<$renderer>(); }
     };
 }
+#[cfg(feature = "custom-shaders")]
 pub(crate) use native_graph_tests;
 
 fn shader(source: &str) -> ShaderHandle {

@@ -14,7 +14,6 @@ const UNIFORMS: &[&str] = &[
     "u_render_origin",
     "u_target_bounds",
     "u_capture_bounds",
-    "u_texture_size",
     "u_axis",
     "u_sigma",
     "u_composite",
@@ -217,13 +216,6 @@ impl WebBlurRenderer {
                 gl.use_program(Some(&pipeline.program));
                 gl.bind_vertex_array(Some(vao));
                 uniform1i(&gl, uniforms, "u_texture", 0);
-                uniform2f(
-                    &gl,
-                    uniforms,
-                    "u_texture_size",
-                    scratch.width as f32,
-                    scratch.height as f32,
-                );
                 uniform4f_array(&gl, uniforms, "u_capture_bounds", bounds(capture));
                 uniform1f(&gl, uniforms, "u_sigma", rect.blur_radius.0);
 
@@ -340,19 +332,18 @@ layout(location = 0) in vec2 a_unit;
 uniform vec2 u_render_size;
 uniform vec2 u_render_origin;
 uniform vec4 u_target_bounds;
-out vec2 v_world;
 void main() {
-    v_world = u_target_bounds.xy + a_unit * u_target_bounds.zw;
-    vec2 clip = (v_world - u_render_origin) / u_render_size * vec2(2.0, -2.0) + vec2(-1.0, 1.0);
+    vec2 world = u_target_bounds.xy + a_unit * u_target_bounds.zw;
+    vec2 clip = (world - u_render_origin) / u_render_size * vec2(2.0, -2.0) + vec2(-1.0, 1.0);
     gl_Position = vec4(clip, 0.0, 1.0);
 }
 "#;
 const FRAGMENT: &str = r#"#version 300 es
 precision highp float;
-in vec2 v_world;
+uniform vec2 u_render_size;
+uniform vec2 u_render_origin;
 uniform sampler2D u_texture;
 uniform vec4 u_capture_bounds;
-uniform vec2 u_texture_size;
 uniform vec2 u_axis;
 uniform float u_sigma;
 uniform int u_composite;
@@ -377,6 +368,10 @@ float rect_mask(vec2 p, vec4 bounds) {
     return step(bounds.x, p.x) * step(bounds.y, p.y) * step(p.x, bounds.x + bounds.z) * step(p.y, bounds.y + bounds.w);
 }
 void main() {
+    // Rasterizer interpolation and normalized linear-filter coordinates can
+    // drift from half texels on SwiftShader. This full-resolution integer
+    // kernel reads exact pixel centers in both compact and window targets.
+    vec2 v_world = u_render_origin + vec2(gl_FragCoord.x, u_render_size.y - gl_FragCoord.y);
     float sigma = max(u_sigma, 0.001);
     int radius = int(min(ceil(u_sigma * 3.0), 16.0));
     vec2 sample_min = u_capture_bounds.xy + vec2(0.5);
@@ -388,8 +383,8 @@ void main() {
         float weight = exp(-0.5 * pow(float(offset) / sigma, 2.0));
         vec2 sample_position = clamp(v_world + u_axis * float(offset), sample_min, sample_max);
         vec2 local = sample_position - u_capture_bounds.xy;
-        vec2 uv = vec2(local.x, u_capture_bounds.w - local.y) / u_texture_size;
-        accum += texture(u_texture, uv) * weight;
+        ivec2 texel = ivec2(floor(vec2(local.x, u_capture_bounds.w - local.y)));
+        accum += texelFetch(u_texture, texel, 0) * weight;
         weights += weight;
     }
     vec4 blurred = accum / weights;

@@ -60,6 +60,13 @@ impl WindowsWindowInner {
     ) -> LRESULT {
         let handled = match msg {
             WM_ACTIVATE => self.handle_activate_msg(wparam),
+            WM_SETFOCUS => {
+                // UIA can restore keyboard focus without changing activation.
+                // Mirror WM_KILLFOCUS so native focused-element queries do not
+                // retain a stale unfocused host after an accessibility action.
+                self.accessibility_provider.update_focus(true);
+                None
+            }
             WM_KILLFOCUS => {
                 self.accessibility_provider.update_focus(false);
                 self.release_native_pointer_lock().log_err();
