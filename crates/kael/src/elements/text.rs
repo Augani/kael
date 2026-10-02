@@ -302,6 +302,8 @@ impl Element for StyledText {
         cx: &mut App,
     ) {
         self.layout.paint(&self.text, window, cx);
+        #[cfg(any(test, feature = "test-support"))]
+        window.record_styled_text_paint(&self.text, bounds);
         if !self.accessibility_hidden {
             let mut node = crate::AccessibilityNode::new(crate::AccessibilityRole::StaticText)
                 .with_label(self.text.to_string());

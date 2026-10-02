@@ -16,6 +16,15 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+mod snapshot;
+pub use snapshot::*;
+mod text;
+pub use text::*;
+#[cfg(not(target_family = "wasm"))]
+mod action_queue;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) use action_queue::PendingActionQueue;
+
 // ---------------------------------------------------------------------------
 // Identity
 // ---------------------------------------------------------------------------
@@ -29,14 +38,56 @@ pub struct AccessibilityId(pub u64);
 impl AccessibilityId {
     /// Generate a new unique accessibility identifier.
     pub fn new() -> Self {
-        Self(
-            NEXT_ACCESSIBILITY_ID
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                    current.checked_add(1)
-                })
-                .expect("accessibility identifier space exhausted"),
-        )
+        Self::reserve_range(1)
+            .expect("accessibility identifier space exhausted")
+            .get(0)
+            .unwrap()
     }
+
+    /// Reserve unique identities for a logical coordinate space in constant
+    /// time and memory. This reserves identifiers, not accessibility nodes.
+    /// Zero-sized reservations and exhausted identity space return `None`.
+    pub fn reserve_range(count: u64) -> Option<AccessibilityIdRange> {
+        reserve_accessibility_ids(&NEXT_ACCESSIBILITY_ID, count)
+    }
+}
+
+/// A checked, uniquely allocated logical accessibility identity range.
+///
+/// Virtual controls can map coordinates to offsets without retaining an ID
+/// map for every visited cell. Retiring a range never permits its identities
+/// to alias a later model, even while a platform retains the outgoing snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccessibilityIdRange {
+    start: u64,
+    count: u64,
+}
+impl AccessibilityIdRange {
+    /// Number of reserved identities. No nodes or labels are allocated.
+    pub fn len(self) -> u64 {
+        self.count
+    }
+    /// Valid ranges are always nonempty.
+    pub fn is_empty(self) -> bool {
+        self.count == 0
+    }
+    /// Resolve an offset only if it belongs to this reserved range.
+    pub fn get(self, offset: u64) -> Option<AccessibilityId> {
+        (offset < self.count)
+            .then(|| self.start.checked_add(offset).map(AccessibilityId))
+            .flatten()
+    }
+}
+fn reserve_accessibility_ids(counter: &AtomicU64, count: u64) -> Option<AccessibilityIdRange> {
+    if count == 0 {
+        return None;
+    }
+    let start = counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(count)
+        })
+        .ok()?;
+    Some(AccessibilityIdRange { start, count })
 }
 
 impl Default for AccessibilityId {
@@ -204,6 +255,7 @@ impl AccessibilityRole {
                 | AccessibilityRole::MenuItem
                 | AccessibilityRole::TabPanel
                 | AccessibilityRole::Tree
+                | AccessibilityRole::TreeItem
                 | AccessibilityRole::Pane
                 | AccessibilityRole::Dialog
                 | AccessibilityRole::Toolbar
@@ -364,6 +416,8 @@ pub enum AccessibilityAction {
     ScrollUp,
     /// Scroll the element downward.
     ScrollDown,
+    /// Reveal a logical item in its scroll viewport without selecting it.
+    ScrollToVisible,
     /// Expand a collapsible element.
     Expand,
     /// Collapse an expanded element.
@@ -376,6 +430,8 @@ pub enum AccessibilityAction {
     Decrement,
     /// Set a form or ranged value to a specific value.
     SetValue,
+    /// Set directed text selection or caret using the prepared document.
+    SetTextSelection,
     /// Open the element's associated menu.
     ShowMenu,
     /// Dismiss the element (e.g., close a dialog).
@@ -392,12 +448,14 @@ impl AccessibilityAction {
             Self::Focus => "focus",
             Self::ScrollUp => "scroll-up",
             Self::ScrollDown => "scroll-down",
+            Self::ScrollToVisible => "scroll-to-visible",
             Self::Expand => "expand",
             Self::Collapse => "collapse",
             Self::Toggle => "toggle",
             Self::Increment => "increment",
             Self::Decrement => "decrement",
             Self::SetValue => "set-value",
+            Self::SetTextSelection => "set-text-selection",
             Self::ShowMenu => "show-menu",
             Self::Dismiss => "dismiss",
             Self::Custom(_) => "custom",
@@ -412,11 +470,13 @@ impl AccessibilityAction {
             Self::Focus => Action::Focus,
             Self::ScrollUp => Action::ScrollUp,
             Self::ScrollDown => Action::ScrollDown,
+            Self::ScrollToVisible => Action::ScrollIntoView,
             Self::Expand => Action::Expand,
             Self::Collapse => Action::Collapse,
             Self::Increment => Action::Increment,
             Self::Decrement => Action::Decrement,
             Self::SetValue => Action::SetValue,
+            Self::SetTextSelection => Action::SetTextSelection,
             Self::ShowMenu => Action::Click,
             Self::Dismiss => Action::Collapse,
             Self::Custom(_) => Action::CustomAction,
@@ -431,11 +491,13 @@ impl AccessibilityAction {
             Action::Focus => Some(Self::Focus),
             Action::ScrollUp => Some(Self::ScrollUp),
             Action::ScrollDown => Some(Self::ScrollDown),
+            Action::ScrollIntoView => Some(Self::ScrollToVisible),
             Action::Expand => Some(Self::Expand),
             Action::Collapse => Some(Self::Collapse),
             Action::Increment => Some(Self::Increment),
             Action::Decrement => Some(Self::Decrement),
             Action::SetValue => Some(Self::SetValue),
+            Action::SetTextSelection => Some(Self::SetTextSelection),
             _ => None,
         }
     }
@@ -448,6 +510,17 @@ pub enum AccessibilityActionPayload {
     Value(String),
     /// A numeric value, such as a slider position.
     NumericValue(f64),
+    /// Directed, checked UTF-8 byte endpoints in one immutable text document.
+    /// Handlers must check the document identity again before applying a
+    /// deferred request, since editing may replace the document meanwhile.
+    TextSelection {
+        /// Immutable prepared document identity that owns these endpoints.
+        document_id: AccessibilityId,
+        /// Fixed selection endpoint.
+        anchor: usize,
+        /// Active endpoint or caret.
+        focus: usize,
+    },
 }
 
 impl AccessibilityActionPayload {
@@ -456,6 +529,7 @@ impl AccessibilityActionPayload {
         match self {
             Self::Value(_) => "value",
             Self::NumericValue(_) => "numeric-value",
+            Self::TextSelection { .. } => "text-selection",
         }
     }
 
@@ -463,14 +537,14 @@ impl AccessibilityActionPayload {
     pub fn value_len_bytes(&self) -> usize {
         match self {
             Self::Value(value) => value.len(),
-            Self::NumericValue(_) => 0,
+            Self::NumericValue(_) | Self::TextSelection { .. } => 0,
         }
     }
 
     /// Whether the payload carries a finite numeric value.
     pub fn has_finite_numeric_value(&self) -> bool {
         match self {
-            Self::Value(_) => false,
+            Self::Value(_) | Self::TextSelection { .. } => false,
             Self::NumericValue(value) => value.is_finite(),
         }
     }
@@ -531,6 +605,10 @@ impl AccessibilityActionRequest {
         action: accesskit::Action,
         data: Option<accesskit::ActionData>,
     ) -> Option<Self> {
+        // Raw TextPositions cannot be normalized without their owning document.
+        if action == accesskit::Action::SetTextSelection {
+            return None;
+        }
         let action = AccessibilityAction::from_accesskit(action)?;
         Some(match data {
             Some(accesskit::ActionData::Value(value))
@@ -568,13 +646,42 @@ impl AccessibilityActionRequest {
 
     /// Create a request from a raw AccessKit action and optional payload, using
     /// the node's advertised actions to recover Kael-specific semantics when
-    /// several Kael actions map to the same platform action.
+    /// several Kael actions map to the same platform action. Disabled and hidden
+    /// nodes reject every action, even if they still advertise the action.
     pub fn from_accesskit_for_node_with_data(
         node_id: AccessibilityId,
         node: &AccessibilityNode,
         action: accesskit::Action,
         data: Option<accesskit::ActionData>,
     ) -> Option<Self> {
+        if node
+            .states
+            .intersects(AccessibilityState::DISABLED | AccessibilityState::HIDDEN)
+        {
+            return None;
+        }
+        if action == accesskit::Action::SetTextSelection {
+            if !node
+                .actions
+                .contains(&AccessibilityAction::SetTextSelection)
+            {
+                return None;
+            }
+            let accesskit::ActionData::SetTextSelection(selection) = data? else {
+                return None;
+            };
+            let document = node.text_document.as_ref()?;
+            let selection = document.import_selection(selection)?;
+            return Some(Self::with_payload(
+                node_id,
+                AccessibilityAction::SetTextSelection,
+                AccessibilityActionPayload::TextSelection {
+                    document_id: document.id(),
+                    anchor: selection.anchor,
+                    focus: selection.focus,
+                },
+            ));
+        }
         let mut request = Self::from_accesskit_with_data(node_id, action, data)?;
 
         if request.action == AccessibilityAction::Click {
@@ -639,6 +746,13 @@ impl AccessibilityActionRequest {
 #[derive(Default)]
 pub struct AccessibilityActionRouter {
     handlers: HashMap<(AccessibilityId, AccessibilityAction), AccessibilityActionHandler>,
+    subtree_handlers: HashMap<
+        AccessibilityId,
+        (
+            std::sync::Arc<AccessibilitySnapshot>,
+            AccessibilityActionHandler,
+        ),
+    >,
 }
 
 type AccessibilityActionHandler = Box<dyn FnMut(AccessibilityActionRequest) + 'static>;
@@ -671,6 +785,32 @@ impl AccessibilityActionRouter {
     /// Return whether a handler is registered for one node/action pair.
     pub fn has_handler(&self, node_id: AccessibilityId, action: AccessibilityAction) -> bool {
         self.handlers.contains_key(&(node_id, action))
+            || self.subtree_handlers.values().any(|(snapshot, _)| {
+                snapshot
+                    .get(node_id)
+                    .is_some_and(|node| node.actions.contains(&action))
+            })
+    }
+
+    /// Route all supported actions in a logical subtree through one handler.
+    pub fn on_subtree(
+        &mut self,
+        snapshot: std::sync::Arc<AccessibilitySnapshot>,
+        handler: impl FnMut(AccessibilityActionRequest) + 'static,
+    ) {
+        self.subtree_handlers
+            .insert(snapshot.root, (snapshot, Box::new(handler)));
+    }
+
+    /// Retain handlers using effective lookup without collecting all logical IDs.
+    pub fn retain_tree(&mut self, tree: &AccessibilityTree) {
+        self.handlers.retain(|(id, _), _| tree.get(*id).is_some());
+        self.subtree_handlers.retain(|root, (snapshot, _)| {
+            tree.nodes
+                .snapshots
+                .get(root)
+                .is_some_and(|current| std::sync::Arc::ptr_eq(current, snapshot))
+        });
     }
 
     /// Remove handlers for nodes that are no longer present in the active tree.
@@ -682,11 +822,22 @@ impl AccessibilityActionRouter {
 
     /// Dispatch a normalized action request. Returns true when a handler ran.
     pub fn dispatch(&mut self, request: AccessibilityActionRequest) -> bool {
-        let Some(handler) = self.handlers.get_mut(&(request.node_id, request.action)) else {
-            return false;
-        };
-        handler(request);
-        true
+        // Logical subtree actions take priority over a mounted element's
+        // synthetic pointer handler, which may capture an outgoing row index.
+        for (snapshot, handler) in self.subtree_handlers.values_mut() {
+            if snapshot
+                .get(request.node_id)
+                .is_some_and(|node| node.actions.contains(&request.action))
+            {
+                handler(request);
+                return true;
+            }
+        }
+        if let Some(handler) = self.handlers.get_mut(&(request.node_id, request.action)) {
+            handler(request);
+            return true;
+        }
+        false
     }
 
     /// Dispatch a raw AccessKit action against a node. Returns true when the
@@ -924,9 +1075,16 @@ pub struct AccessibilityNode {
     /// Actions that can be invoked on this element.
     pub actions: Vec<AccessibilityAction>,
     /// Child node identifiers.
-    pub children: Vec<AccessibilityId>,
+    pub children: AccessibilityChildren,
     /// Parent node identifier, if any.
     pub parent: Option<AccessibilityId>,
+    /// Active logical descendant when keyboard focus stays on this container.
+    /// The referenced node must be present in the accessible tree.
+    pub active_descendant: Option<AccessibilityId>,
+    /// Shared complete text runs, prepared once per document revision.
+    pub text_document: Option<std::sync::Arc<AccessibilityTextDocument>>,
+    /// Directed UTF-8 selection within `text_document`.
+    pub text_selection: Option<AccessibilityTextSelection>,
 }
 
 impl AccessibilityNode {
@@ -950,8 +1108,11 @@ impl AccessibilityNode {
             sort_direction: None,
             bounds: None,
             actions: Vec::new(),
-            children: Vec::new(),
+            children: AccessibilityChildren::default(),
             parent: None,
+            active_descendant: None,
+            text_document: None,
+            text_selection: None,
         }
     }
 
@@ -961,6 +1122,10 @@ impl AccessibilityNode {
     /// when [`AccessibilityNode::bounds`] is populated; the remaining P3-A work is
     /// the layout-side wiring that fills those bounds for every laid-out element.
     pub fn to_accesskit_node(&self) -> accesskit::Node {
+        self.to_accesskit_node_with_children(true)
+    }
+
+    fn to_accesskit_node_with_children(&self, include_children: bool) -> accesskit::Node {
         let mut node = accesskit::Node::new(self.role.to_accesskit());
         if let Some(label) = &self.label {
             node.set_label(label.as_str());
@@ -977,19 +1142,48 @@ impl AccessibilityNode {
         if let Some(bounds) = &self.bounds {
             node.set_bounds(bounds.to_accesskit());
         }
-        apply_value(&mut node, self);
+        if self.text_document.is_none() {
+            apply_value(&mut node, self);
+        }
+        if let Some(document) = &self.text_document {
+            // Native range providers read text from retained runs. Avoid copying
+            // the full document into every root record on caret-only updates.
+            node.clear_value();
+            if self.role == AccessibilityRole::TextInput && document.is_multiline() {
+                node.set_role(accesskit::Role::MultilineTextInput);
+            }
+            if let Some(selection) = self
+                .text_selection
+                .and_then(|selection| document.export_selection(selection))
+            {
+                node.set_text_selection(selection);
+            }
+        }
         apply_states(&mut node, self.states);
         apply_collection_metadata(&mut node, self);
+        if let Some(id) = self.active_descendant {
+            node.set_active_descendant(accesskit::NodeId(id.0));
+        }
         for action in &self.actions {
             node.add_action(action.to_accesskit());
         }
 
-        let children: Vec<accesskit::NodeId> = self
-            .children
-            .iter()
-            .map(|child| accesskit::NodeId(child.0))
-            .collect();
-        node.set_children(children);
+        if include_children {
+            let children: Vec<accesskit::NodeId> = self
+                .children
+                .iter()
+                .map(|child| accesskit::NodeId(child.0))
+                .collect();
+            let children = children
+                .into_iter()
+                .chain(
+                    self.text_document
+                        .iter()
+                        .flat_map(|document| document.run_ids()),
+                )
+                .collect::<Vec<_>>();
+            node.set_children(children);
+        }
         node
     }
 
@@ -1188,14 +1382,14 @@ pub struct AccessibilityTree {
     /// The identifier of the root node.
     pub root: AccessibilityId,
     /// All nodes in the tree, keyed by identifier.
-    pub nodes: std::collections::HashMap<AccessibilityId, AccessibilityNode>,
+    pub nodes: AccessibilityNodeMap,
 }
 
 impl AccessibilityTree {
     /// Create a new tree with the given root node.
     pub fn new(root: AccessibilityNode) -> Self {
         let root_id = root.id;
-        let mut nodes = std::collections::HashMap::new();
+        let mut nodes = AccessibilityNodeMap::default();
         nodes.insert(root_id, root);
         Self {
             root: root_id,
@@ -1237,13 +1431,31 @@ impl AccessibilityTree {
 
     /// Return the identifier of the currently focused node, if any.
     pub fn focused_node(&self) -> Option<AccessibilityId> {
-        self.nodes.iter().find_map(|(id, node)| {
-            if node.states.contains(AccessibilityState::FOCUSED) {
-                Some(*id)
-            } else {
-                None
-            }
-        })
+        self.nodes
+            .frame
+            .iter()
+            .find_map(|(id, node)| {
+                if node.states.contains(AccessibilityState::FOCUSED) {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                self.nodes
+                    .snapshots
+                    .values()
+                    .filter_map(|snapshot| snapshot.focused)
+                    .find(|id| {
+                        self.get(*id)
+                            .is_some_and(|node| node.states.contains(AccessibilityState::FOCUSED))
+                    })
+            })
+    }
+
+    /// Semantic records changed since a previous frame, skipping shared snapshots.
+    pub fn delta<'a>(&'a self, previous: Option<&Self>) -> AccessibilityTreeDelta<'a> {
+        self.nodes.delta(previous.map(|tree| &tree.nodes))
     }
 
     /// Returns true when the root id is present in the node map.
@@ -1397,27 +1609,12 @@ impl AccessibilityTree {
                 continue;
             }
 
-            let mut ak_node = accesskit::Node::new(node.role.to_accesskit());
-            if let Some(label) = &node.label {
-                ak_node.set_label(label.as_str());
-            }
-            if let Some(description) = &node.description {
-                ak_node.set_description(description.as_str());
-            }
-            if let Some(placeholder) = &node.placeholder {
-                ak_node.set_placeholder(placeholder.as_str());
-            }
-            if let Some(level) = node.level {
-                ak_node.set_level(level);
-            }
-            if let Some(bounds) = &node.bounds {
-                ak_node.set_bounds(bounds.to_accesskit());
-            }
-            apply_value(&mut ak_node, node);
-            apply_states(&mut ak_node, node.states);
-            apply_collection_metadata(&mut ak_node, node);
-            for action in &node.actions {
-                ak_node.add_action(action.to_accesskit());
+            let mut ak_node = node.to_accesskit_node_with_children(false);
+            if node
+                .active_descendant
+                .is_some_and(|id| !self.is_exported(id))
+            {
+                ak_node.clear_active_descendant();
             }
 
             let mut child_ids = Vec::new();
@@ -1430,14 +1627,22 @@ impl AccessibilityTree {
                     queue.push_back(*child);
                 }
             }
+            child_ids.extend(
+                node.text_document
+                    .iter()
+                    .flat_map(|document| document.run_ids()),
+            );
             ak_node.set_children(child_ids);
 
             nodes.push((accesskit::NodeId(id.0), ak_node));
+            if let Some(document) = &node.text_document {
+                nodes.extend(document.export_runs());
+            }
         }
 
         let focus = self
             .focused_node()
-            .filter(|id| visited.contains(id))
+            .filter(|id| self.is_exported(*id))
             .map(|id| accesskit::NodeId(id.0))
             .unwrap_or(root_id);
 
@@ -1453,7 +1658,43 @@ impl AccessibilityTree {
         }
     }
 
-    /// Build a full AccessKit update ordered safely relative to the previous tree.
+    fn is_exported(&self, id: AccessibilityId) -> bool {
+        let mut cursor = id;
+        // A malformed parent cycle is rejected without allocating a visited set.
+        for _ in 0..=self.node_count() {
+            let Some(node) = self.get(cursor) else {
+                return false;
+            };
+            if cursor == self.root {
+                return true;
+            }
+            if node.states.contains(AccessibilityState::HIDDEN) {
+                return false;
+            }
+            let Some(parent) = node.parent else {
+                return false;
+            };
+            let shared_edge = self
+                .nodes
+                .base(&cursor)
+                .is_some_and(|node| node.parent == Some(parent))
+                && self.nodes.base(&parent).is_some_and(|base| {
+                    self.get(parent)
+                        .is_some_and(|node| node.children.shares_storage(&base.children))
+                });
+            if !shared_edge
+                && !self
+                    .get(parent)
+                    .is_some_and(|node| node.children.contains(&cursor))
+            {
+                return false;
+            }
+            cursor = parent;
+        }
+        false
+    }
+
+    /// Build an incremental AccessKit update ordered safely relative to the previous tree.
     ///
     /// AccessKit applies node records sequentially. When a retained node moves
     /// between parents, the old parent must release it before the new parent
@@ -1467,9 +1708,106 @@ impl AccessibilityTree {
         toolkit_name: Option<&str>,
         toolkit_version: Option<&str>,
     ) -> accesskit::TreeUpdate {
-        let mut update = self.to_accesskit_tree_update(toolkit_name, toolkit_version);
         let Some(previous) = previous else {
-            return update;
+            return self.to_accesskit_tree_update(toolkit_name, toolkit_version);
+        };
+        let delta = self.delta(Some(previous));
+        let mut changed: HashSet<_> = delta.nodes.iter().map(|node| node.id).collect();
+        for id in &delta.removed {
+            let mut parent = previous.get(*id).and_then(|node| node.parent);
+            while let Some(id) = parent {
+                if self.is_exported(id) {
+                    changed.insert(id);
+                    break;
+                }
+                parent = previous.get(id).and_then(|node| node.parent);
+            }
+        }
+        for node in &delta.nodes {
+            let old_visible = previous.is_exported(node.id);
+            let visible = self.is_exported(node.id);
+            if old_visible != visible {
+                if let Some(parent) = node.parent {
+                    changed.insert(parent);
+                }
+                if let Some(parent) = previous.get(node.id).and_then(|node| node.parent) {
+                    changed.insert(parent);
+                }
+                if visible {
+                    // Previously pruned descendants need records when an
+                    // ancestor becomes visible, even if their data is unchanged.
+                    let mut pending = node.children.to_vec();
+                    let mut seen = HashSet::new();
+                    while let Some(id) = pending.pop() {
+                        if seen.insert(id) && self.is_exported(id) {
+                            changed.insert(id);
+                            if let Some(node) = self.get(id) {
+                                pending.extend(node.children.iter().copied());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let mut nodes = Vec::with_capacity(changed.len());
+        let mut changed: Vec<_> = changed.into_iter().collect();
+        changed.sort_unstable_by_key(|id| id.0);
+        for id in changed {
+            let Some(node) = self.get(id) else {
+                continue;
+            };
+            if !self.is_exported(node.id) {
+                continue;
+            }
+            let mut exported = node.to_accesskit_node_with_children(false);
+            if node
+                .active_descendant
+                .is_some_and(|id| !self.is_exported(id))
+            {
+                exported.clear_active_descendant();
+            }
+            // Only changed parent records copy child identities; retained logical
+            // rows do not copy labels or child lists on ordinary redraws.
+            exported.set_children(
+                node.children
+                    .iter()
+                    .filter(|id| {
+                        self.get(**id)
+                            .is_some_and(|child| !child.states.contains(AccessibilityState::HIDDEN))
+                    })
+                    .map(|id| accesskit::NodeId(id.0))
+                    .chain(
+                        node.text_document
+                            .iter()
+                            .flat_map(|document| document.run_ids()),
+                    )
+                    .collect::<Vec<_>>(),
+            );
+            nodes.push((accesskit::NodeId(node.id.0), exported));
+            if let Some(document) = &node.text_document {
+                let retained = previous
+                    .get(node.id)
+                    .filter(|_| previous.is_exported(node.id))
+                    .and_then(|node| node.text_document.as_ref())
+                    .is_some_and(|old| std::sync::Arc::ptr_eq(old, document));
+                if !retained {
+                    nodes.extend(document.export_runs());
+                }
+            }
+        }
+        let mut tree = accesskit::Tree::new(accesskit::NodeId(self.root.0));
+        tree.toolkit_name = toolkit_name.map(str::to_owned);
+        tree.toolkit_version = toolkit_version.map(str::to_owned);
+        let mut update = accesskit::TreeUpdate {
+            nodes,
+            tree: Some(tree),
+            tree_id: accesskit::TreeId::ROOT,
+            focus: accesskit::NodeId(
+                self.focused_node()
+                    .filter(|id| self.is_exported(*id))
+                    .unwrap_or(self.root)
+                    .0,
+            ),
         };
 
         let base_index: HashMap<_, _> = update
@@ -1482,7 +1820,10 @@ impl AccessibilityTree {
         let mut indegree: HashMap<AccessibilityId, usize> =
             base_index.keys().copied().map(|id| (id, 0)).collect();
 
-        for (id, node) in &self.nodes {
+        for id in base_index.keys() {
+            let Some(node) = self.nodes.get(id) else {
+                continue;
+            };
             let Some(previous_node) = previous.nodes.get(id) else {
                 continue;
             };
@@ -1492,7 +1833,7 @@ impl AccessibilityTree {
 
             let mut release_parent = previous_node.parent;
             while let Some(parent) = release_parent {
-                if self.nodes.contains_key(&parent) {
+                if self.is_exported(parent) {
                     break;
                 }
                 release_parent = previous.nodes.get(&parent).and_then(|node| node.parent);
@@ -2320,6 +2661,9 @@ fn apply_collection_metadata(node: &mut accesskit::Node, source: &AccessibilityN
 /// accessibility semantics.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AccessibilityAttributes {
+    /// Stable semantic identity, independent of a virtual row's visual position.
+    /// IDs must be unique within a window's accessibility tree.
+    pub id: Option<AccessibilityId>,
     /// The semantic role of the element.
     pub role: Option<AccessibilityRole>,
     /// The primary accessible label.
@@ -2352,9 +2696,38 @@ pub struct AccessibilityAttributes {
     pub actions: Vec<AccessibilityAction>,
     /// Whether the element is hidden from assistive technology.
     pub hidden: bool,
+    /// Active logical descendant of a focused container.
+    pub active_descendant: Option<AccessibilityId>,
+    /// Complete immutable native text runs prepared once per content revision.
+    pub text_document: Option<std::sync::Arc<AccessibilityTextDocument>>,
+    /// Directed UTF-8 selection in `text_document`.
+    pub text_selection: Option<AccessibilityTextSelection>,
 }
 
 impl AccessibilityAttributes {
+    /// Use a stable model-owned identity for this semantic node.
+    pub fn id(mut self, id: AccessibilityId) -> Self {
+        self.id = Some(id);
+        self
+    }
+
+    /// Identify the active descendant while focus remains on the container.
+    pub fn active_descendant(mut self, id: AccessibilityId) -> Self {
+        self.active_descendant = Some(id);
+        self
+    }
+    /// Attach complete prepared native text and its directed UTF-8 selection.
+    /// Selection endpoints must be selectable boundaries in the document.
+    /// Keep the document Arc across caret redraws; replace it on content edits.
+    pub fn text_document(
+        mut self,
+        document: std::sync::Arc<AccessibilityTextDocument>,
+        selection: AccessibilityTextSelection,
+    ) -> Self {
+        self.text_document = Some(document);
+        self.text_selection = Some(selection);
+        self
+    }
     /// Create attributes for the given role.
     pub fn new(role: AccessibilityRole) -> Self {
         Self {
@@ -2686,6 +3059,14 @@ impl AccessibilityAttributes {
             self.column_span.is_none_or(|span| span > 0),
             "accessibility column span must be positive"
         );
+        if let Some(selection) = self.text_selection {
+            anyhow::ensure!(
+                self.text_document
+                    .as_ref()
+                    .is_some_and(|document| document.contains_selection(selection)),
+                "accessibility text selection must belong to the prepared document"
+            );
+        }
 
         if let Some(AccessibilityValue::Range {
             current,
@@ -2736,7 +3117,7 @@ impl AccessibilityAttributes {
     /// Convert these attributes into a full [`AccessibilityNode`] with the given id.
     pub fn to_node(&self, id: AccessibilityId) -> AccessibilityNode {
         AccessibilityNode {
-            id,
+            id: self.id.unwrap_or(id),
             role: self.role.unwrap_or(AccessibilityRole::Unknown),
             states: if self.hidden {
                 self.states | AccessibilityState::HIDDEN
@@ -2757,8 +3138,11 @@ impl AccessibilityAttributes {
             sort_direction: self.sort_direction,
             bounds: None,
             actions: self.actions.clone(),
-            children: Vec::new(),
+            children: AccessibilityChildren::default(),
             parent: None,
+            active_descendant: self.active_descendant,
+            text_document: self.text_document.clone(),
+            text_selection: self.text_selection,
         }
     }
 
@@ -2860,6 +3244,36 @@ mod tests {
         let id1 = AccessibilityId::new();
         let id2 = AccessibilityId::new();
         assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn accessibility_ranges_check_offsets_without_allocating_nodes() {
+        let counter = AtomicU64::new(7);
+        assert!(reserve_accessibility_ids(&counter, 0).is_none());
+        assert_eq!(counter.load(Ordering::Relaxed), 7);
+        let range = reserve_accessibility_ids(&counter, 16_384_000_000).unwrap();
+        assert_eq!(range.get(0), Some(AccessibilityId(7)));
+        assert_eq!(
+            range.get(range.len() - 1),
+            Some(AccessibilityId(16_384_000_006))
+        );
+        assert!(range.get(range.len()).is_none());
+        assert!(range.get(u64::MAX).is_none());
+        assert!(!range.is_empty());
+        let next = reserve_accessibility_ids(&counter, 1).unwrap();
+        assert_eq!(next.get(0), Some(AccessibilityId(16_384_000_007)));
+    }
+
+    #[test]
+    fn failed_accessibility_range_reservations_leave_counter_unchanged() {
+        let counter = AtomicU64::new(u64::MAX - 2);
+        assert!(reserve_accessibility_ids(&counter, 3).is_none());
+        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX - 2);
+        let last = reserve_accessibility_ids(&counter, 2).unwrap();
+        assert_eq!(last.get(1), Some(AccessibilityId(u64::MAX - 1)));
+        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+        assert!(reserve_accessibility_ids(&counter, 1).is_none());
+        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
     }
 
     #[test]
@@ -3377,6 +3791,50 @@ mod tests {
     }
 
     #[test]
+    fn explicit_semantic_ids_and_active_descendants_survive_export() {
+        let root = AccessibilityNode::new(AccessibilityRole::Window);
+        let mut tree = AccessibilityTree::new(root);
+        let container_id = AccessibilityId::new();
+        let logical_id = AccessibilityId::new();
+        let attrs = AccessibilityAttributes::new(AccessibilityRole::Tree)
+            .id(container_id)
+            .active_descendant(logical_id)
+            .state(AccessibilityState::FOCUSED, true);
+        let container = attrs.to_node(AccessibilityId::new());
+        assert_eq!(container.id, container_id);
+        assert_eq!(
+            container.to_accesskit_node().active_descendant(),
+            Some(accesskit::NodeId(logical_id.0))
+        );
+        tree.insert(container);
+        tree.set_parent(container_id, tree.root);
+        let mut logical =
+            AccessibilityNode::new(AccessibilityRole::TreeItem).with_label("Offscreen document");
+        logical.id = logical_id;
+        tree.insert(logical);
+        tree.set_parent(logical_id, container_id);
+        let update = tree.to_accesskit_tree_update(None, None);
+        let container = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == accesskit::NodeId(container_id.0))
+            .unwrap();
+        assert_eq!(
+            container.1.active_descendant(),
+            Some(accesskit::NodeId(logical_id.0))
+        );
+        assert_eq!(update.focus, accesskit::NodeId(container_id.0));
+        tree.remove(logical_id);
+        let update = tree.to_accesskit_tree_update(None, None);
+        let container = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == accesskit::NodeId(container_id.0))
+            .unwrap();
+        assert_eq!(container.1.active_descendant(), None);
+    }
+
+    #[test]
     fn test_tree_parent_child_relationships() {
         let root = AccessibilityNode::new(AccessibilityRole::Window);
         let mut tree = AccessibilityTree::new(root);
@@ -3459,7 +3917,7 @@ mod accesskit_spike_tests {
     #[test]
     fn node_converts_role_label_and_children() {
         let mut node = AccessibilityNode::new(AccessibilityRole::Button).with_label("OK");
-        node.children = vec![AccessibilityId(7)];
+        node.children = vec![AccessibilityId(7)].into();
         let ak = node.to_accesskit_node();
         assert_eq!(ak.role(), accesskit::Role::Button);
         assert_eq!(ak.label(), Some("OK"));
@@ -3694,6 +4152,52 @@ mod accesskit_spike_tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn native_actions_reject_disabled_and_hidden_nodes_even_when_advertised() {
+        for action in [
+            AccessibilityAction::Click,
+            AccessibilityAction::Focus,
+            AccessibilityAction::ScrollUp,
+            AccessibilityAction::ScrollDown,
+            AccessibilityAction::ScrollToVisible,
+            AccessibilityAction::Expand,
+            AccessibilityAction::Collapse,
+            AccessibilityAction::Toggle,
+            AccessibilityAction::Increment,
+            AccessibilityAction::Decrement,
+            AccessibilityAction::SetValue,
+            AccessibilityAction::ShowMenu,
+            AccessibilityAction::Dismiss,
+        ] {
+            let mut node =
+                AccessibilityNode::new(AccessibilityRole::Button).with_actions(vec![action]);
+            for state in [AccessibilityState::DISABLED, AccessibilityState::HIDDEN] {
+                node.states = state;
+                assert!(
+                    AccessibilityActionRequest::from_accesskit_for_node(
+                        node.id,
+                        &node,
+                        action.to_accesskit(),
+                    )
+                    .is_none(),
+                    "{action:?} must reject {state:?} even while its action remains advertised"
+                );
+            }
+            node.states = AccessibilityState::NONE;
+            assert_eq!(
+                AccessibilityActionRequest::from_accesskit_for_node(
+                    node.id,
+                    &node,
+                    action.to_accesskit(),
+                )
+                .unwrap()
+                .action,
+                action,
+                "re-enabled actions retain their native semantics"
+            );
+        }
     }
 
     #[test]

@@ -50,6 +50,7 @@ crates=(
   kael_util
   kael_http_client
   kael_diagnostics
+  kael_accesskit_macos
   kael
   kael_ui
 )

@@ -183,3 +183,9 @@ pub mod confetti;
 pub mod draggable_spring;
 pub mod particle_emitter;
 pub mod waveform;
+
+pub mod workspace;
+
+pub mod property_inspector;
+
+pub(crate) mod model_observer;

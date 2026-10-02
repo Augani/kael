@@ -3361,6 +3361,8 @@ pub struct Window {
     pub(crate) tooltip_bounds: Option<TooltipBounds>,
     next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>>,
     pending_animation_frame_entities: Rc<RefCell<FxHashSet<EntityId>>>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) painted_styled_text: Option<Vec<(SharedString, Bounds<Pixels>, Bounds<Pixels>)>>,
     pub(crate) dirty_views: FxHashSet<EntityId>,
     focus_listeners: SubscriberSet<(), AnyWindowFocusListener>,
     pub(crate) focus_lost_listeners: SubscriberSet<(), AnyObserver>,
@@ -3399,6 +3401,10 @@ pub struct Window {
     accessibility_child_ordinals: FxHashMap<crate::AccessibilityId, u32>,
     pub(crate) accessibility_announcements: Vec<String>,
     accessibility_action_router: crate::AccessibilityActionRouter,
+    accessibility_snapshots: std::collections::HashMap<
+        crate::AccessibilityId,
+        std::sync::Arc<crate::AccessibilitySnapshot>,
+    >,
     pending_accessibility_actions: Vec<crate::AccessibilityActionRequest>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     inspector: Option<Entity<Inspector>>,
@@ -3406,12 +3412,29 @@ pub struct Window {
     frame_timeline: crate::FrameTimeline,
     #[cfg(any(feature = "inspector", debug_assertions))]
     frame_counter: u64,
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    frame_submissions: std::collections::VecDeque<WindowFrameSubmission>,
     frame_view_render_us: u64,
     frame_taffy_compute_us: u64,
     frame_layout_nodes: u64,
     frame_layout_measure_count: u64,
     frame_layout_measure_us: u64,
     reuse_layout_on_next_frame: bool,
+}
+
+/// CPU-side submission of a newly drawn frame to the native/browser platform.
+/// Available with `inspector` or in debug builds. A submission is distinct from
+/// GPU completion and compositor presentation; those timings require native
+/// GPU/compositor instrumentation.
+#[cfg(any(feature = "inspector", debug_assertions))]
+#[derive(Clone, Copy, Debug)]
+pub struct WindowFrameSubmission {
+    /// The corresponding draw record's frame number.
+    pub frame_number: u64,
+    /// Monotonic time when the platform draw/submission returned.
+    pub submitted_at: Instant,
+    /// CPU time spent in platform draw/submission, in microseconds.
+    pub duration_us: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -3839,6 +3862,8 @@ impl Window {
             next_hitbox_id: HitboxId(0),
             next_tooltip_id: TooltipId::default(),
             tooltip_bounds: None,
+            #[cfg(any(test, feature = "test-support"))]
+            painted_styled_text: None,
             dirty_views: FxHashSet::default(),
             focus_listeners: SubscriberSet::new(),
             focus_lost_listeners: SubscriberSet::new(),
@@ -3879,6 +3904,7 @@ impl Window {
             accessibility_child_ordinals: FxHashMap::default(),
             accessibility_announcements: Vec::new(),
             accessibility_action_router: crate::AccessibilityActionRouter::new(),
+            accessibility_snapshots: std::collections::HashMap::new(),
             pending_accessibility_actions: Vec::new(),
             image_cache_stack: SmallVec::new(),
             #[cfg(any(feature = "inspector", debug_assertions))]
@@ -3887,6 +3913,8 @@ impl Window {
             frame_timeline: crate::FrameTimeline::new(),
             #[cfg(any(feature = "inspector", debug_assertions))]
             frame_counter: 0,
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            frame_submissions: std::collections::VecDeque::new(),
             frame_view_render_us: 0,
             frame_taffy_compute_us: 0,
             frame_layout_nodes: 0,
@@ -4104,7 +4132,14 @@ impl Window {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    #[allow(dead_code)]
+    pub(crate) fn record_styled_text_paint(&mut self, text: &SharedString, bounds: Bounds<Pixels>) {
+        let clip = self.content_mask().bounds;
+        if let Some(trace) = &mut self.painted_styled_text {
+            trace.push((text.clone(), bounds, clip));
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn rendered_scene(&self) -> &Scene {
         &self.rendered_frame.scene
     }
@@ -4253,6 +4288,55 @@ impl Window {
         self.next_frame.accessibility_nodes.push(node);
     }
 
+    /// Attach a retained logical subtree to its explicitly identified painted root.
+    /// Reusing the same Arc avoids copying offscreen nodes on redraws. A subtree
+    /// is released when its root is no longer painted, including cached replay.
+    pub fn register_accessibility_snapshot(
+        &mut self,
+        snapshot: std::sync::Arc<crate::AccessibilitySnapshot>,
+    ) {
+        self.accessibility_snapshots.insert(snapshot.root, snapshot);
+    }
+
+    /// Handle all supported logical subtree actions through one retained callback.
+    pub fn on_accessibility_subtree_action(
+        &mut self,
+        snapshot: std::sync::Arc<crate::AccessibilitySnapshot>,
+        handler: impl FnMut(crate::AccessibilityActionRequest, &mut Window, &mut App) + 'static,
+        cx: &mut App,
+    ) {
+        let handler = Rc::new(RefCell::new(handler));
+        let subtree_root = snapshot.root;
+        let window = Window::window_handle(self);
+        let async_cx = cx.to_async();
+        let executor = cx.foreground_executor().clone();
+        self.accessibility_action_router
+            .on_subtree(snapshot, move |request| {
+                let handler = handler.clone();
+                let mut async_cx = async_cx.clone();
+                executor
+                    .spawn(async move {
+                        let _ = window.update(&mut async_cx, |_, window, cx| {
+                            if !window
+                                .accessibility_tree
+                                .nodes
+                                .snapshots
+                                .contains_key(&subtree_root)
+                                || !window
+                                    .accessibility_tree
+                                    .get(request.node_id)
+                                    .is_some_and(|node| node.actions.contains(&request.action))
+                            {
+                                return;
+                            }
+                            (handler.borrow_mut())(request, window, cx);
+                            window.refresh();
+                        });
+                    })
+                    .detach();
+            });
+    }
+
     pub(crate) fn accessibility_node_index(&self) -> usize {
         self.next_frame.accessibility_nodes.len()
     }
@@ -4293,10 +4377,35 @@ impl Window {
             .accessibility_nodes
             .drain(..)
             .collect::<Vec<_>>();
+        let painted: std::collections::HashSet<_> = nodes.iter().map(|node| node.id).collect();
+        self.accessibility_snapshots
+            .retain(|root, _| painted.contains(root));
+        for snapshot in self.accessibility_snapshots.values() {
+            tree.nodes.attach(snapshot.clone());
+        }
         for node in &nodes {
-            tree.insert(node.clone());
+            let mut node = node.clone();
+            if let Some(base) = tree.nodes.base(&node.id) {
+                if node.children.is_empty() {
+                    node.children = base.children.clone();
+                }
+                if base.parent.is_some() {
+                    node.parent = base.parent;
+                }
+                if node.label.is_none() {
+                    node.label = base.label.clone();
+                }
+            }
+            tree.insert(node);
         }
         for node in nodes {
+            if tree
+                .nodes
+                .base(&node.id)
+                .is_some_and(|base| base.parent.is_some())
+            {
+                continue;
+            }
             tree.set_parent(node.id, node.parent.unwrap_or(root_id));
         }
         self.accessibility_tree = tree;
@@ -4315,8 +4424,26 @@ impl Window {
         if let Some(node) = self.accessibility_tree.get_mut(id) {
             node.states |= crate::AccessibilityState::FOCUSED;
         }
-        for (_, node) in self.accessibility_tree.nodes.iter_mut() {
-            if node.id != id {
+        let mut previous = self
+            .accessibility_tree
+            .nodes
+            .frame
+            .values()
+            .filter(|node| {
+                node.id != id && node.states.contains(crate::AccessibilityState::FOCUSED)
+            })
+            .map(|node| node.id)
+            .collect::<Vec<_>>();
+        previous.extend(
+            self.accessibility_tree
+                .nodes
+                .snapshots
+                .values()
+                .filter_map(|snapshot| snapshot.focused)
+                .filter(|old| *old != id),
+        );
+        for old in previous {
+            if let Some(node) = self.accessibility_tree.get_mut(old) {
                 node.states &= !crate::AccessibilityState::FOCUSED;
             }
         }
@@ -5373,6 +5500,10 @@ impl Window {
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
         #[cfg(any(feature = "inspector", debug_assertions))]
         let frame_started_at = Instant::now();
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(trace) = self.painted_styled_text.as_mut() {
+            trace.clear();
+        }
         self.frame_view_render_us = 0;
         self.frame_taffy_compute_us = 0;
         self.frame_layout_nodes = 0;
@@ -5417,7 +5548,7 @@ impl Window {
         self.next_frame.clear();
         self.update_accessibility_tree();
         self.accessibility_action_router
-            .retain_nodes(self.accessibility_tree.nodes.keys().copied());
+            .retain_tree(&self.accessibility_tree);
         let accessibility_actions = self
             .platform_window
             .update_accessibility_tree(&self.accessibility_tree);
@@ -5458,6 +5589,16 @@ impl Window {
         self.refreshing = false;
         self.invalidator.set_phase(DrawPhase::None);
         self.needs_present.set(true);
+        if self.sprite_atlas.needs_retirement_frames() {
+            // Retirement needs successful platform frames even when the new
+            // scene has the same checksum. This bounded drain runs outside a
+            // rendered view, so schedule a window refresh directly.
+            self.frame_skip.invalidate();
+            self.on_next_frame(|window, _| {
+                window.frame_skip.invalidate();
+                window.refresh();
+            });
+        }
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         self.record_frame_timing(frame_started_at, draw_roots_timing);
@@ -5514,6 +5655,39 @@ impl Window {
         &self.frame_timeline
     }
 
+    /// The latest 300 platform submission records, in chronological order.
+    /// This measures CPU submission; it does not assert GPU completion or
+    /// compositor display. Unchanged frames skipped by damage checks have no
+    /// submission record. Borrowing this iterator does not allocate.
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub fn frame_submissions(&self) -> impl Iterator<Item = &WindowFrameSubmission> {
+        self.frame_submissions.iter()
+    }
+
+    /// Actual native device allocation counter, including other windows that
+    /// share that device. `None` means the backend lacks a counter.
+    pub fn gpu_allocated_bytes(&self) -> Option<u64> {
+        self.platform_window.gpu_allocated_bytes()
+    }
+
+    /// Enable opt-in native GPU completion and drawable presentation timing.
+    /// Returns `false` when this backend does not implement these measurements.
+    /// Enabled backends retain bounded records without polling or CPU readbacks.
+    pub fn set_gpu_frame_timing_enabled(&self, enabled: bool) -> bool {
+        self.platform_window.set_gpu_frame_timing_enabled(enabled)
+    }
+
+    /// Drain ready GPU frame timing records from this window's renderer.
+    /// Onscreen records wait for both completion and the drawable callback.
+    /// An absent presentation timestamp means no display time was reported,
+    /// including offscreen or dropped frames. GPU completion alone does not
+    /// establish display time. Backends retain at most 64 records; disabling
+    /// collection discards the session, and pressure from newer records can
+    /// discard the oldest records before collection.
+    pub fn take_gpu_frame_timings(&self) -> Vec<crate::GpuFrameTiming> {
+        self.platform_window.take_gpu_frame_timings()
+    }
+
     fn record_entities_accessed(&mut self, cx: &mut App) {
         let mut entities_ref = cx.entities.accessed_entities.borrow_mut();
         let mut entities = mem::take(entities_ref.deref_mut());
@@ -5558,7 +5732,24 @@ impl Window {
             return;
         }
 
+        #[cfg(any(feature = "inspector", debug_assertions))]
+        let submission_started = Instant::now();
         self.platform_window.draw(&self.rendered_frame.scene);
+        #[cfg(any(feature = "inspector", debug_assertions))]
+        {
+            let submitted_at = Instant::now();
+            if self.frame_submissions.len() == 300 {
+                self.frame_submissions.pop_front();
+            }
+            self.frame_submissions.push_back(WindowFrameSubmission {
+                frame_number: self.frame_counter.wrapping_sub(1),
+                submitted_at,
+                duration_us: submitted_at
+                    .duration_since(submission_started)
+                    .as_micros()
+                    .min(u128::from(u64::MAX)) as u64,
+            });
+        }
         self.needs_present.set(false);
         self.last_frame_presented_at = Instant::now();
         profiling::finish_frame!();
@@ -6370,25 +6561,21 @@ impl Window {
     /// Note that the multiple calls to this method will only result in one `Asset::load` call at a
     /// time.
     pub fn use_asset<A: Asset>(&mut self, source: &A::Source, cx: &mut App) -> Option<A::Output> {
-        let (task, is_first) = cx.fetch_asset::<A>(source);
-        task.clone().now_or_never().or_else(|| {
-            if is_first {
-                let entity_id = self.current_view();
-                self.spawn(cx, {
-                    let task = task.clone();
-                    async move |cx| {
-                        task.await;
-
-                        cx.on_next_frame(move |_, cx| {
-                            cx.notify(entity_id);
-                        });
-                    }
-                })
-                .detach();
+        let (task, _) = match cx.fetch_asset_checked::<A>(source) {
+            Ok(request) => request,
+            Err(error) => {
+                log::warn!("asset request deferred: {error}");
+                cx.defer_asset_retry(self.current_view());
+                return None;
             }
-
-            None
-        })
+        };
+        let output = task.now_or_never();
+        if output.is_none() {
+            // The App cache owns one completion observer. Register every view
+            // without creating detached Shared owners that outlive the view.
+            cx.defer_asset_retry(self.current_view());
+        }
+        output
     }
 
     /// Asynchronously load an asset, if the asset hasn't finished loading or doesn't exist this will return None.
@@ -6397,7 +6584,13 @@ impl Window {
     /// Note that the multiple calls to this method will only result in one `Asset::load` call at a
     /// time.
     pub fn get_asset<A: Asset>(&mut self, source: &A::Source, cx: &mut App) -> Option<A::Output> {
-        let (task, _) = cx.fetch_asset::<A>(source);
+        let (task, _) = match cx.fetch_asset_checked::<A>(source) {
+            Ok(request) => request,
+            Err(error) => {
+                log::warn!("asset request deferred: {error}");
+                return None;
+            }
+        };
         task.now_or_never()
     }
     /// Obtain the current element offset. This method should only be called during the
@@ -6983,12 +7176,14 @@ impl Window {
 
         let raster_bounds = self.text_system().raster_bounds(&params)?;
         if !raster_bounds.is_zero() {
-            let Some(tile) =
-                self.sprite_atlas
-                    .get_or_insert_with(&params.clone().into(), &mut || {
-                        let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
-                        Ok(Some((size, Cow::Owned(bytes))))
-                    })?
+            let Some(tile) = self.sprite_atlas.get_or_insert_with_size(
+                &params.clone().into(),
+                raster_bounds.size,
+                &mut || {
+                    let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
+                    Ok(Some((size, Cow::Owned(bytes))))
+                },
+            )?
             else {
                 return Ok(());
             };
@@ -7076,12 +7271,14 @@ impl Window {
 
         let raster_bounds = self.text_system().raster_bounds(&params)?;
         if !raster_bounds.is_zero() {
-            let Some(tile) =
-                self.sprite_atlas
-                    .get_or_insert_with(&params.clone().into(), &mut || {
-                        let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
-                        Ok(Some((size, Cow::Owned(bytes))))
-                    })?
+            let Some(tile) = self.sprite_atlas.get_or_insert_with_size(
+                &params.clone().into(),
+                raster_bounds.size,
+                &mut || {
+                    let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
+                    Ok(Some((size, Cow::Owned(bytes))))
+                },
+            )?
             else {
                 return Ok(());
             };
@@ -7144,14 +7341,16 @@ impl Window {
             }),
         };
 
-        let Some(tile) =
-            self.sprite_atlas
-                .get_or_insert_with(&params.clone().into(), &mut || {
-                    let Some((size, bytes)) = cx.svg_renderer.render(&params)? else {
-                        return Ok(None);
-                    };
-                    Ok(Some((size, Cow::Owned(bytes))))
-                })?
+        let Some(tile) = self.sprite_atlas.get_or_insert_with_size(
+            &params.clone().into(),
+            params.size,
+            &mut || {
+                let Some((size, bytes)) = cx.svg_renderer.render(&params)? else {
+                    return Ok(None);
+                };
+                Ok(Some((size, Cow::Owned(bytes))))
+            },
+        )?
         else {
             return Ok(());
         };
@@ -7211,8 +7410,9 @@ impl Window {
             );
         };
 
-        let Some(atlas_tile) = self.sprite_atlas.get_or_insert_with(
+        let Some(atlas_tile) = self.sprite_atlas.get_or_insert_with_size(
             &crate::AtlasKey::IconAtlas(icon.atlas_params.clone()),
+            icon.atlas_size,
             &mut || Ok(Some((icon.atlas_size, Cow::Borrowed(icon.bytes)))),
         )?
         else {
@@ -7259,14 +7459,16 @@ impl Window {
             frame_index,
         };
 
-        let Some(tile) = self
-            .sprite_atlas
-            .get_or_insert_with(&params.into(), &mut || {
+        let Some(tile) = self.sprite_atlas.get_or_insert_with_size(
+            &params.into(),
+            data.size(frame_index),
+            &mut || {
                 let bytes = data
                     .as_bytes(frame_index)
                     .with_context(|| format!("invalid image frame index {frame_index}"))?;
                 Ok(Some((data.size(frame_index), Cow::Borrowed(bytes))))
-            })?
+            },
+        )?
         else {
             return Ok(());
         };
@@ -7314,8 +7516,177 @@ impl Window {
             order: 0,
             bounds,
             content_mask,
-            image_buffer,
+            source: crate::PaintSurfaceSource::CoreVideo(image_buffer),
         });
+    }
+
+    /// Allocate a zero-initialized GPU storage buffer. Buffers and targets share this window's 256 MiB default budget and 64 live-allocation limit.
+    #[cfg(feature = "custom-shaders")]
+    pub fn create_gpu_buffer(
+        &mut self,
+        descriptor: crate::GpuBufferDescriptor,
+    ) -> std::result::Result<crate::GpuBuffer, crate::RenderTargetError> {
+        self.platform_window.create_gpu_buffer(descriptor)
+    }
+
+    /// Check this buffer belongs to this window and remains valid.
+    #[cfg(feature = "custom-shaders")]
+    pub fn validate_gpu_buffer(
+        &self,
+        buffer: &crate::GpuBuffer,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.platform_window.validate_gpu_buffer(buffer)
+    }
+
+    /// Upload an aligned, in-bounds byte range. Both offset and length must be multiples of four.
+    #[cfg(feature = "custom-shaders")]
+    pub fn write_gpu_buffer(
+        &mut self,
+        buffer: &crate::GpuBuffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.platform_window
+            .write_gpu_buffer(buffer, offset, bytes)?;
+        self.refresh();
+        Ok(())
+    }
+
+    /// Read this entire GPU buffer after earlier queue work completes, with a bounded CPU wait.
+    #[cfg(feature = "custom-shaders")]
+    pub fn read_gpu_buffer(
+        &self,
+        buffer: &crate::GpuBuffer,
+    ) -> std::result::Result<Vec<u8>, crate::RenderTargetError> {
+        self.platform_window.read_gpu_buffer(buffer)
+    }
+
+    /// Dispatch native WGSL compute workgroups. Storage image colors must already be premultiplied linear RGBA. WebGL2 does not support compute.
+    #[cfg(feature = "custom-shaders")]
+    pub fn dispatch_compute(
+        &mut self,
+        shader: &crate::ComputeHandle,
+        bindings: &crate::ComputeBindings,
+        groups: [u32; 3],
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.platform_window
+            .dispatch_compute(shader, bindings, groups)?;
+        self.refresh();
+        Ok(())
+    }
+
+    /// Upload exactly packed pixels in the same encoding as read_render_target: canonical RGBA bytes, little-endian binary16, or R8. RGB must already be premultiplied. No color conversion is performed.
+    #[cfg(feature = "custom-shaders")]
+    pub fn write_render_target(
+        &mut self,
+        target: &crate::RenderTarget,
+        pixels: &[u8],
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.platform_window.write_render_target(target, pixels)?;
+        self.refresh();
+        Ok(())
+    }
+
+    /// Allocate a bounded GPU texture on this window's device.
+    ///
+    /// The per-window budget is 256 MiB by default, with at most 64 live
+    /// targets and storage buffers combined. Targets retain their storage until all handles and painted
+    /// scenes release them. Cross-window handles are rejected.
+    #[cfg(feature = "custom-shaders")]
+    pub fn create_render_target(
+        &mut self,
+        descriptor: crate::RenderTargetDescriptor,
+    ) -> std::result::Result<crate::RenderTarget, crate::RenderTargetError> {
+        self.platform_window.create_render_target(descriptor)
+    }
+
+    /// Check that a target is live and belongs to this window's current GPU
+    /// device, without allocating, submitting work, or reading pixels.
+    #[cfg(feature = "custom-shaders")]
+    pub fn validate_render_target(
+        &self,
+        target: &crate::RenderTarget,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.platform_window.validate_render_target(target)
+    }
+
+    /// Run a validated fragment shader over the entire target, clearing it
+    /// first. The shader returns straight linear RGBA; the target stores
+    /// premultiplied color. GPU submission is ordered before UI composition.
+    #[cfg(feature = "custom-shaders")]
+    pub fn render_shader(
+        &mut self,
+        target: &crate::RenderTarget,
+        shader: &crate::ShaderHandle,
+        bindings: &crate::ShaderBindings,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.platform_window
+            .render_shader(target, shader, bindings)?;
+        self.refresh();
+        Ok(())
+    }
+
+    /// Read tightly packed target pixels to the CPU, waiting for submitted GPU
+    /// work. Use the `render_target` element for display without readback.
+    #[cfg(feature = "custom-shaders")]
+    pub fn read_render_target(
+        &self,
+        target: &crate::RenderTarget,
+    ) -> std::result::Result<crate::RenderTargetReadback, crate::RenderTargetError> {
+        self.platform_window.read_render_target(target)
+    }
+
+    /// Change this window's target payload-byte budget. Live targets remain
+    /// valid; allocations fail while retained bytes exceed the new budget.
+    #[cfg(feature = "custom-shaders")]
+    pub fn set_render_target_byte_budget(&mut self, bytes: u64) {
+        self.platform_window.set_render_target_byte_budget(bytes);
+    }
+
+    /// Paint a custom target at the current z-index, without CPU pixel copies.
+    /// Call during the element paint phase, on the target's owning window.
+    #[cfg(feature = "custom-shaders")]
+    pub fn paint_render_target(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        target: crate::RenderTarget,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.paint_render_target_with_corners(bounds, Corners::default(), target)
+    }
+
+    /// Paint a custom target with rounded corners, preserving the surrounding
+    /// element's opacity, transform, color filter, and rounded clipping.
+    #[cfg(feature = "custom-shaders")]
+    pub fn paint_render_target_with_corners(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        target: crate::RenderTarget,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.invalidator.debug_assert_paint();
+        self.platform_window.validate_render_target(&target)?;
+        let scale_factor = self.scale_factor();
+        let bounds = bounds.scale(scale_factor);
+        let content_mask = self.content_mask().scale(scale_factor);
+        let revision = target.revision();
+        self.next_frame.scene.insert_primitive(crate::PaintSurface {
+            order: 0,
+            bounds,
+            content_mask,
+            source: crate::PaintSurfaceSource::RenderTarget {
+                target,
+                revision,
+                paint: crate::render_target::RenderTargetPaint {
+                    opacity: self.element_opacity(),
+                    corner_radii: corner_radii.map(|radius| radius.scale(scale_factor)),
+                    rounded_clip_bounds: self.rounded_clip.0,
+                    rounded_clip_radii: self.rounded_clip.1,
+                    transform: self.element_transform,
+                    color_filter: self.element_color_filter,
+                },
+            },
+        });
+        Ok(())
     }
 
     /// Register a native WebView for the next frame at the given bounds.
@@ -8775,9 +9146,15 @@ impl Window {
     /// Set a soft byte budget for this window's glyph/sprite atlas. When set, the renderer
     /// evicts least-recently-used atlas tiles down to the budget at the end of each frame,
     /// bounding glyph-atlas growth on long-running, text-churning UIs. `None` (the default)
-    /// disables eviction. Currently honored on the Metal backend.
+    /// disables soft eviction. Hard admission limits remain active. The native GPU,
+    /// browser, and GTK renderers honor this policy while protecting active resources.
     pub fn set_atlas_byte_budget(&self, budget: Option<u64>) {
         self.platform_window.set_atlas_byte_budget(budget);
+    }
+
+    pub(crate) fn shed_memory(&self, level: crate::MemoryPressureLevel) {
+        self.text_system.clear_shaped_text_cache();
+        self.platform_window.shed_memory(level);
     }
 
     /// Validate and set a soft byte budget for this window's glyph/sprite atlas.
@@ -8788,6 +9165,16 @@ impl Window {
         let budget = budget.build_checked()?;
         self.set_atlas_byte_budget(budget.max_bytes());
         Ok(budget)
+    }
+
+    /// Apply hard atlas admission limits before rasterization and texture allocation.
+    /// Existing live and in-flight resources survive a lower limit; new work is
+    /// rejected until enough storage retires. These limits are independent of
+    /// the soft LRU byte budget configured by `set_atlas_byte_budget`.
+    pub fn set_atlas_admission_limits(&self, limits: crate::AtlasAdmissionLimits) -> Result<()> {
+        self.sprite_atlas
+            .set_hard_admission_limits(limits.validate()?);
+        Ok(())
     }
 
     /// Toggle full screen status on the current window at the platform level.

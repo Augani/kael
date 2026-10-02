@@ -12,6 +12,9 @@ pub enum SurfaceSource {
     /// A macOS image buffer from CoreVideo
     #[cfg(target_os = "macos")]
     Surface(CVPixelBuffer),
+    /// A custom GPU target from the window that paints this element.
+    #[cfg(feature = "custom-shaders")]
+    RenderTarget(crate::RenderTarget),
 }
 
 #[cfg(target_os = "macos")]
@@ -24,16 +27,13 @@ impl From<CVPixelBuffer> for SurfaceSource {
 impl SurfaceSource {
     /// Stable text key for the source kind.
     pub fn kind(&self) -> &'static str {
-        #[cfg(target_os = "macos")]
-        {
-            match self {
-                Self::Surface(_) => "core_video_pixel_buffer",
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = self;
-            unreachable!("SurfaceSource has no variants on this platform")
+        match self {
+            #[cfg(target_os = "macos")]
+            Self::Surface(_) => "core_video_pixel_buffer",
+            #[cfg(feature = "custom-shaders")]
+            Self::RenderTarget(_) => "gpu_render_target",
+            #[cfg(not(any(target_os = "macos", feature = "custom-shaders")))]
+            _ => unreachable!("SurfaceSource has no variants on this platform"),
         }
     }
 
@@ -113,7 +113,7 @@ impl Element for Surface {
         _global_id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         window: &mut Window,
-        cx: &mut App,
+        #[cfg_attr(not(feature = "custom-shaders"), allow(unused_variables))] cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
         style.refine(&self.style);
@@ -140,7 +140,7 @@ impl Element for Surface {
         _: &mut Self::RequestLayoutState,
         _: &mut Self::PrepaintState,
         #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] window: &mut Window,
-        _: &mut App,
+        #[cfg_attr(not(feature = "custom-shaders"), allow(unused_variables))] cx: &mut App,
     ) {
         match &self.source {
             #[cfg(target_os = "macos")]
@@ -149,6 +149,28 @@ impl Element for Surface {
                 let new_bounds = self.object_fit.get_bounds(bounds, size);
                 // TODO: Add support for corner_radii
                 window.paint_surface(new_bounds, surface.clone());
+            }
+            #[cfg(feature = "custom-shaders")]
+            SurfaceSource::RenderTarget(target) => {
+                let new_bounds = self.object_fit.get_bounds(bounds, target.size());
+                let mut style = Style::default();
+                style.refine(&self.style);
+                let corners = window
+                    .ui_corners_in_pixels(style.corner_radii)
+                    .clamp_radii_for_quad_size(new_bounds.size);
+                window.with_element_opacity(style.opacity, |window| {
+                    style.paint(bounds, window, cx, |window, _| {
+                        window.with_content_mask(Some(crate::ContentMask { bounds }), |window| {
+                            if let Err(error) = window.paint_render_target_with_corners(
+                                new_bounds,
+                                corners,
+                                target.clone(),
+                            ) {
+                                log::warn!("GPU target display rejected: {error}");
+                            }
+                        });
+                    });
+                });
             }
             #[allow(unreachable_patterns)]
             _ => {}

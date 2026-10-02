@@ -818,7 +818,7 @@ fn write_pdf(
     )?;
     for offset in offsets.iter().skip(1) {
         ensure!(
-            *offset <= 9_999_999_999usize,
+            (*offset as u64) <= 9_999_999_999u64,
             "PDF xref offset is too large"
         );
         write!(&mut ByteWriter(&mut pdf), "{offset:010} 00000 n \n")?;

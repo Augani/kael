@@ -2851,30 +2851,34 @@ impl Element for Div {
             .interactivity
             .accessibility_attributes
             .as_ref()
-            .filter(|_| global_id.is_none())
+            .filter(|attributes| global_id.is_none() && attributes.id.is_none())
             .map(|_| window.next_anonymous_accessibility_id());
-        let accessibility_id = self
-            .interactivity
-            .accessibility_attributes
-            .as_ref()
-            .map(|_| {
-                window.with_optional_element_state::<InteractiveElementState, _>(
-                    global_id,
-                    |element_state, _window| {
-                        let mut element_state =
-                            element_state.map(|state| state.unwrap_or_default());
-                        let id = element_state
-                            .as_mut()
-                            .and_then(|state| state.accessibility_id)
-                            .or(anonymous_accessibility_id)
-                            .unwrap_or_else(crate::AccessibilityId::new);
-                        if let Some(state) = element_state.as_mut() {
-                            state.accessibility_id = Some(id);
-                        }
-                        (id, element_state)
-                    },
-                )
-            });
+        let accessibility_id =
+            self.interactivity
+                .accessibility_attributes
+                .as_ref()
+                .map(|attributes| {
+                    window.with_optional_element_state::<InteractiveElementState, _>(
+                        global_id,
+                        |element_state, _window| {
+                            let mut element_state =
+                                element_state.map(|state| state.unwrap_or_default());
+                            let id = attributes
+                                .id
+                                .or_else(|| {
+                                    element_state
+                                        .as_mut()
+                                        .and_then(|state| state.accessibility_id)
+                                        .or(anonymous_accessibility_id)
+                                })
+                                .unwrap_or_else(crate::AccessibilityId::new);
+                            if let Some(state) = element_state.as_mut() {
+                                state.accessibility_id = Some(id);
+                            }
+                            (id, element_state)
+                        },
+                    )
+                });
 
         window.with_image_cache(image_cache, |window| {
             let accessibility_node =
@@ -6579,8 +6583,9 @@ mod test {
     use std::{
         cell::{Cell, RefCell},
         rc::Rc,
-        time::{Duration, Instant},
+        time::Duration,
     };
+    use web_time::Instant;
 
     crate::actions!(context_menu_test, [PrimaryMenuAction, ShareViaLinkAction]);
 
@@ -6673,7 +6678,8 @@ mod test {
 
     #[test]
     fn scroll_elasticity_animates_back_to_zero() {
-        use std::time::{Duration, Instant};
+        use std::time::Duration;
+        use web_time::Instant;
 
         let mut overscroll = px(40.0);
         let mut last_advance = None;

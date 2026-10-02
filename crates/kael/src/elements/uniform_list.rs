@@ -51,6 +51,7 @@ where
         scroll_handle: None,
         sizing_behavior: ListSizingBehavior::default(),
         horizontal_sizing_behavior: ListHorizontalSizingBehavior::default(),
+        accessibility_wrappers: true,
     }
 }
 
@@ -66,6 +67,7 @@ pub struct UniformList {
     scroll_handle: Option<UniformListScrollHandle>,
     sizing_behavior: ListSizingBehavior,
     horizontal_sizing_behavior: ListHorizontalSizingBehavior,
+    accessibility_wrappers: bool,
 }
 
 /// Frame state used by the [UniformList].
@@ -704,6 +706,15 @@ impl Element for UniformList {
             window,
             cx,
             |_, window, cx| {
+                if !self.accessibility_wrappers {
+                    for item in &mut request_layout.items {
+                        item.paint(window, cx);
+                    }
+                    for decoration in &mut request_layout.decorations {
+                        decoration.paint(window, cx);
+                    }
+                    return;
+                }
                 let mut list_node = crate::AccessibilityNode::new(crate::AccessibilityRole::List);
                 list_node.id = window.next_anonymous_accessibility_id();
                 let list_id = list_node.id;
@@ -786,6 +797,14 @@ impl<T: UniformListDecoration + 'static> UniformListDecoration for Entity<T> {
 }
 
 impl UniformList {
+    /// Let items provide their own accessibility hierarchy without automatic
+    /// list and item wrappers. Use this when a retained logical tree or grid
+    /// already represents every item, including those outside the viewport.
+    pub fn without_accessibility_wrappers(mut self) -> Self {
+        self.accessibility_wrappers = false;
+        self
+    }
+
     /// Number of items in the list.
     pub fn item_count(&self) -> usize {
         self.item_count

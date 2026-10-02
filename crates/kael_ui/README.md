@@ -101,6 +101,25 @@ Astryx and its assets are repository-only and are not part of the crate package.
 Crate consumers receive the library and its required font assets, not the
 example application or its media.
 
+## Large tree explorers
+
+`VirtualTreeList` mounts only the visible rows of large expanded hierarchies.
+Build a reusable `VirtualTreeModel` when data, expansion, or filtering changes,
+and retain `VirtualTreeState` for one keyboard focus handle, stable active node
+IDs, and scroll-to-item navigation. Selection and expansion stay controlled by
+the application. Displayed IDs must be unique. Mounted rows expose hierarchy
+levels and working accessibility actions; offscreen accessibility nodes are not
+synthesized.
+
+```bash
+cargo run -p kael_ui --example virtual_tree
+```
+
+The example displays 100,000 files across 25 expandable projects. Use arrows to
+navigate, Left/Right to collapse or expand, Home/End to jump, and Enter to select.
+For smaller trees, `TreeList::shared_nodes(Arc<[TreeNode<T>]>)` reuses immutable
+source models across redraws without cloning descendants.
+
 ## Suite-scale release workload
 
 For a spreadsheet surface, use `VirtualSheetGrid` instead of constructing one
@@ -151,5 +170,32 @@ It verifies a real million-row × 16,384-column virtual sheet grid and compresse
 virtual document pages and slide thumbnails, and 100,000 retained whiteboard
 shapes with spatial culling, tiled damage, bounded tile payloads, rich pointer
 input, and a fixed frame clock.
+
+Desktop workflows also include a reusable asynchronous `FileTreeState` /
+`VirtualFileTree`, persistent `DockWorkspace` tab/split/floating layouts, and a
+typed `PropertyInspector` with atomic edits and bounded undo/redo. Filesystem
+catalog preparation and reclamation run on workers; viewport mounting and
+prepared Arc swaps keep large loads out of the foreground render path.
+
+```bash
+cargo run -p kael_ui --example filesystem_explorer
+cargo run -p kael_ui --release --example filesystem_explorer -- --stress
+cargo run -p kael_ui --example desktop_workspace
+```
+
+The explorer performs real moves inside its demo directory; passing an existing
+directory makes it read only. The workspace demonstrates nested docking,
+pointer/keyboard floating panes, background JSON save/restore, live typed editing
+and pane state retained across tab changes.
+
+The document/data workbench combines the existing Markdown source editor and
+worker-parsed rich preview with a real loopback HTTP record source. Its 100,000
+logical records support frozen panes, query cancellation, editing, clipboard,
+undo/redo and bounded accessibility metadata; writes keep the query identity that
+was active when each edit occurred.
+
+```bash
+cargo run -p kael_ui --features markdown --example document_data_workbench
+```
 
 Licensed under Apache-2.0.

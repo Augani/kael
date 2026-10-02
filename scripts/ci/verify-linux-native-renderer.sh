@@ -121,6 +121,9 @@ grep -Fq "NATIVE_RENDERER_SMOKE_OK:" "${evidence_dir}/native-renderer.log"
 grep -Fq "text_probe_pixels=" "${evidence_dir}/native-renderer.log"
 test -s "${evidence_dir}/native-renderer.png"
 
+python3 "${workspace_dir}/scripts/ci/verify-programmable-renderer.py" \
+  --backend blade --evidence "${evidence_dir}/programmable"
+
 if [[ "${KAEL_SKIP_GENERATED_NATIVE_RUNTIME:-0}" == "1" ]]; then
   echo "GENERATED_NATIVE_RUNTIME_SKIPPED: explicitly disabled" \
     | tee "${evidence_dir}/generated-native.log"

@@ -1,8 +1,11 @@
 mod app_menu;
+mod atlas_policy;
 /// Pure-logic core for the XDG GlobalShortcuts desktop portal used by Wayland global hotkeys.
 pub(crate) mod global_hotkey_portal;
 mod keyboard;
 mod keystroke;
+pub use atlas_policy::AtlasAdmissionLimits;
+pub(crate) use atlas_policy::AtlasPolicy;
 /// Cross-platform single instance enforcement using Unix domain sockets and Windows named mutexes.
 pub mod single_instance;
 /// Cross-platform window tab manager for Windows and Linux backends.
@@ -79,8 +82,8 @@ use crate::{
     SystemWindowTab, Task, TaskLabel, Window, WindowCaptureError, WindowControlArea,
     WindowPlacement,
     assets::{
-        checked_image_frame_len, collect_animation_frames, decode_static_image,
-        image_decode_limits, validate_image_source_bytes,
+        MAX_DECODED_IMAGE_BYTES, checked_image_frame_len, collect_animation_frames_with_budget,
+        decode_static_image_with_budget, image_decode_limits, validate_image_source_bytes,
     },
     hash, point,
     print::PlatformPrintJob,
@@ -1119,6 +1122,105 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         })
     }
     fn draw(&self, scene: &Scene);
+    #[cfg(feature = "custom-shaders")]
+    fn create_gpu_buffer(
+        &self,
+        _descriptor: crate::GpuBufferDescriptor,
+    ) -> Result<crate::GpuBuffer, crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no native compute/upload renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn validate_gpu_buffer(
+        &self,
+        _buffer: &crate::GpuBuffer,
+    ) -> Result<(), crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no native compute/upload renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn write_gpu_buffer(
+        &self,
+        _buffer: &crate::GpuBuffer,
+        _offset: u64,
+        _bytes: &[u8],
+    ) -> Result<(), crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no native compute/upload renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn read_gpu_buffer(
+        &self,
+        _buffer: &crate::GpuBuffer,
+    ) -> Result<Vec<u8>, crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no native compute/upload renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn dispatch_compute(
+        &self,
+        _shader: &crate::ComputeHandle,
+        _bindings: &crate::ComputeBindings,
+        _groups: [u32; 3],
+    ) -> Result<(), crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no native compute/upload renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn write_render_target(
+        &self,
+        _target: &crate::RenderTarget,
+        _pixels: &[u8],
+    ) -> Result<(), crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no native compute/upload renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn create_render_target(
+        &self,
+        _descriptor: crate::RenderTargetDescriptor,
+    ) -> Result<crate::RenderTarget, crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no custom GPU renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn render_shader(
+        &self,
+        _target: &crate::RenderTarget,
+        _shader: &crate::ShaderHandle,
+        _bindings: &crate::ShaderBindings,
+    ) -> Result<(), crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no custom GPU renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn read_render_target(
+        &self,
+        _target: &crate::RenderTarget,
+    ) -> Result<crate::RenderTargetReadback, crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no custom GPU renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn validate_render_target(
+        &self,
+        _target: &crate::RenderTarget,
+    ) -> Result<(), crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no custom GPU renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn set_render_target_byte_budget(&self, _bytes: u64) {}
     fn completed_frame(&self) {}
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
 
@@ -1225,6 +1327,24 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// -used atlas tiles are evicted to the budget at the end of each frame. `None` (default)
     /// disables eviction. No-op on backends that do not yet implement atlas eviction.
     fn set_atlas_byte_budget(&self, _budget: Option<u64>) {}
+
+    /// Shed unused renderer caches under memory pressure. Implementations must
+    /// preserve live resources and retire submitted GPU work before destruction.
+    fn shed_memory(&self, _level: crate::MemoryPressureLevel) {}
+
+    /// Actual GPU allocation bytes reported by the native device, when the
+    /// renderer provides a counter. A shared device includes all its windows.
+    fn gpu_allocated_bytes(&self) -> Option<u64> {
+        None
+    }
+
+    fn set_gpu_frame_timing_enabled(&self, _enabled: bool) -> bool {
+        false
+    }
+
+    fn take_gpu_frame_timings(&self) -> Vec<crate::GpuFrameTiming> {
+        Vec::new()
+    }
     fn set_progress_bar(&self, _state: ProgressBarState) {}
 
     /// Get the display refresh rate for this window's current display.
@@ -1524,6 +1644,15 @@ pub(crate) fn validate_atlas_payload(
     kind: AtlasTextureKind,
     byte_len: usize,
 ) -> Result<usize> {
+    let expected = atlas_payload_len(size, kind)?;
+    anyhow::ensure!(
+        byte_len == expected,
+        "atlas payload length mismatch: expected {expected} bytes, received {byte_len}"
+    );
+    Ok(expected)
+}
+
+pub(crate) fn atlas_payload_len(size: Size<DevicePixels>, kind: AtlasTextureKind) -> Result<usize> {
     let width = usize::try_from(size.width.0)
         .ok()
         .filter(|width| *width > 0 && *width <= MAX_ATLAS_TEXTURE_DIMENSION as usize)
@@ -1544,10 +1673,6 @@ pub(crate) fn validate_atlas_payload(
         .checked_mul(height)
         .and_then(|pixels| pixels.checked_mul(bytes_per_pixel))
         .ok_or_else(|| anyhow::anyhow!("atlas payload size overflow"))?;
-    anyhow::ensure!(
-        byte_len == expected,
-        "atlas payload length mismatch: expected {expected} bytes, received {byte_len}"
-    );
     Ok(expected)
 }
 
@@ -1667,11 +1792,24 @@ impl From<crate::shadow_cache::ShadowAtlasParams> for AtlasKey {
 }
 
 pub(crate) trait PlatformAtlas: Send + Sync {
+    /// Legacy internal entrypoint used by renderer fixtures with no predeclared dimensions.
+    #[allow(dead_code)]
     fn get_or_insert_with<'a>(
         &self,
         key: &AtlasKey,
         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
     ) -> Result<Option<AtlasTile>>;
+    /// Reserve checked dimensions before invoking expensive raster work.
+    fn get_or_insert_with_size<'a>(
+        &self,
+        key: &AtlasKey,
+        size: Size<DevicePixels>,
+        build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
+    ) -> Result<Option<AtlasTile>>;
+    fn set_hard_admission_limits(&self, limits: AtlasAdmissionLimits);
+    fn needs_retirement_frames(&self) -> bool {
+        false
+    }
     fn remove(&self, key: &AtlasKey);
 
     /// Remove all cached atlas entries, for example after browser fonts change.
@@ -1745,7 +1883,7 @@ pub(crate) enum AtlasTextureKind {
     Polychrome = 1,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(C)]
 pub(crate) struct TileId(pub(crate) u32);
 
@@ -8124,23 +8262,50 @@ impl Image {
 
     /// Convert the clipboard image to an `ImageData` object.
     pub fn to_image_data(&self, svg_renderer: SvgRenderer) -> Result<Arc<RenderImage>> {
+        self.to_image_data_with_budget(svg_renderer, MAX_DECODED_IMAGE_BYTES as u64)
+    }
+
+    pub(crate) fn to_image_data_with_budget(
+        &self,
+        svg_renderer: SvgRenderer,
+        max_bytes: u64,
+    ) -> Result<Arc<RenderImage>> {
         validate_image_source_bytes(&self.bytes)?;
 
         let frames = match self.format {
             ImageFormat::Gif => {
                 let mut decoder = GifDecoder::new(Cursor::new(&self.bytes))?;
-                decoder.set_limits(image_decode_limits())?;
+                let mut limits = image_decode_limits();
+                limits.max_alloc = Some(max_bytes.min(MAX_DECODED_IMAGE_BYTES as u64));
+                decoder.set_limits(limits)?;
                 let (width, height) = decoder.dimensions();
-                checked_image_frame_len(width, height)?;
-                collect_animation_frames(decoder.into_frames())?
+                anyhow::ensure!(
+                    checked_image_frame_len(width, height)? as u64 <= max_bytes,
+                    "declared decoded image dimensions exceed the cache byte budget"
+                );
+                collect_animation_frames_with_budget(decoder.into_frames(), max_bytes)?
             }
-            ImageFormat::Png => decode_static_image(&self.bytes, image::ImageFormat::Png)?,
-            ImageFormat::Jpeg => decode_static_image(&self.bytes, image::ImageFormat::Jpeg)?,
-            ImageFormat::Webp => decode_static_image(&self.bytes, image::ImageFormat::WebP)?,
-            ImageFormat::Bmp => decode_static_image(&self.bytes, image::ImageFormat::Bmp)?,
-            ImageFormat::Tiff => decode_static_image(&self.bytes, image::ImageFormat::Tiff)?,
+            ImageFormat::Png => {
+                decode_static_image_with_budget(&self.bytes, image::ImageFormat::Png, max_bytes)?
+            }
+            ImageFormat::Jpeg => {
+                decode_static_image_with_budget(&self.bytes, image::ImageFormat::Jpeg, max_bytes)?
+            }
+            ImageFormat::Webp => {
+                decode_static_image_with_budget(&self.bytes, image::ImageFormat::WebP, max_bytes)?
+            }
+            ImageFormat::Bmp => {
+                decode_static_image_with_budget(&self.bytes, image::ImageFormat::Bmp, max_bytes)?
+            }
+            ImageFormat::Tiff => {
+                decode_static_image_with_budget(&self.bytes, image::ImageFormat::Tiff, max_bytes)?
+            }
             ImageFormat::Svg => {
-                let pixmap = svg_renderer.render_pixmap(&self.bytes, SvgSize::ScaleFactor(1.0))?;
+                let pixmap = svg_renderer.render_pixmap_with_budget(
+                    &self.bytes,
+                    SvgSize::ScaleFactor(1.0),
+                    max_bytes,
+                )?;
 
                 let buffer =
                     image::ImageBuffer::from_raw(pixmap.width(), pixmap.height(), pixmap.take())

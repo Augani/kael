@@ -25,6 +25,10 @@ rustdoc-args = ["--cfg", "docsrs"]
 name = "kael_render_graph"
 path = "src/lib.rs"
 
+[[bench]]
+name = "transient_allocation"
+harness = false
+
 [dependencies.anyhow]
 workspace = true
 

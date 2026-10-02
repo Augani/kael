@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
+use unicode_segmentation::UnicodeSegmentation;
 
 // Tree-sitter's native C runtime does not target `wasm32-unknown-unknown`.
 // Keep the editor's public surface and all in-memory editing behavior available
@@ -333,6 +335,7 @@ pub fn init(cx: &mut App) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Position {
     pub line: usize,
+    /// UTF-8 byte column in the line.
     pub col: usize,
 }
 
@@ -392,8 +395,19 @@ impl Selection {
 
 #[derive(Debug, Clone)]
 enum EditOp {
-    Insert { byte_offset: usize, text: String },
-    Delete { byte_offset: usize, text: String },
+    Insert {
+        byte_offset: usize,
+        text: String,
+    },
+    Delete {
+        byte_offset: usize,
+        text: String,
+    },
+    Replace {
+        byte_offset: usize,
+        before: String,
+        after: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -423,6 +437,7 @@ const AUTO_CLOSE_PAIRS: &[(char, char)] = &[
     ('`', '`'),
 ];
 const MAX_ACCESSIBILITY_VALUE_CHARS: usize = 65_536;
+const INLINE_ACCESSIBILITY_DOCUMENT_BYTES: usize = 16_384;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Language {
@@ -811,6 +826,118 @@ pub fn highlight_color_for_capture(capture_name: &str) -> Hsla {
     }
 }
 
+#[derive(Clone, Copy)]
+struct CollapsedLineSpan {
+    start: usize,
+    end: usize,
+    display_start: usize,
+    removed_through: usize,
+}
+
+/// A collapsed-fold index stores one interval per effective fold, rather than
+/// one integer per document line. Unfolded documents need no allocated index.
+struct FoldLineIndex {
+    total_lines: usize,
+    visible_lines: usize,
+    spans: Vec<CollapsedLineSpan>,
+}
+impl FoldLineIndex {
+    fn new(total_lines: usize, folds: &[FoldRange]) -> Self {
+        let mut sorted = folds.to_vec();
+        sorted.sort_by_key(|fold| fold.start_line);
+        let mut spans: Vec<CollapsedLineSpan> = Vec::with_capacity(sorted.len());
+        let mut removed = 0;
+        for fold in sorted {
+            if fold.start_line >= total_lines || fold.end_line <= fold.start_line {
+                continue;
+            }
+            // A fold whose header is hidden by an earlier fold is ineffective,
+            // matching the editor's existing nested/overlapping fold semantics.
+            if spans.last().is_some_and(|span| fold.start_line <= span.end) {
+                continue;
+            }
+            let end = fold.end_line.min(total_lines.saturating_sub(1));
+            let display_start = fold.start_line - removed;
+            removed += end - fold.start_line;
+            spans.push(CollapsedLineSpan {
+                start: fold.start_line,
+                end,
+                display_start,
+                removed_through: removed,
+            });
+        }
+        Self {
+            total_lines,
+            visible_lines: total_lines - removed,
+            spans,
+        }
+    }
+    fn row_for_line(&self, line: usize) -> Option<usize> {
+        if line >= self.total_lines {
+            return None;
+        }
+        let preceding = self.spans.partition_point(|span| span.start < line);
+        let Some(span) = preceding.checked_sub(1).map(|index| &self.spans[index]) else {
+            return Some(line);
+        };
+        if line <= span.end {
+            None
+        } else {
+            Some(line - span.removed_through)
+        }
+    }
+    fn line_for_row(&self, row: usize) -> Option<usize> {
+        if row >= self.visible_lines {
+            return None;
+        }
+        let preceding = self.spans.partition_point(|span| span.display_start < row);
+        let removed = preceding
+            .checked_sub(1)
+            .map_or(0, |index| self.spans[index].removed_through);
+        Some(row + removed)
+    }
+    fn is_header(&self, line: usize) -> bool {
+        self.spans
+            .binary_search_by_key(&line, |span| span.start)
+            .is_ok()
+    }
+}
+
+#[derive(Clone)]
+enum DisplayLineIndex {
+    Unfolded(usize),
+    Folded(Arc<FoldLineIndex>),
+}
+impl DisplayLineIndex {
+    fn len(&self) -> usize {
+        match self {
+            Self::Unfolded(lines) => *lines,
+            Self::Folded(index) => index.visible_lines,
+        }
+    }
+    fn line_for_row(&self, row: usize) -> Option<usize> {
+        match self {
+            Self::Unfolded(lines) => (row < *lines).then_some(row),
+            Self::Folded(index) => index.line_for_row(row),
+        }
+    }
+    fn row_for_line(&self, line: usize) -> Option<usize> {
+        match self {
+            Self::Unfolded(lines) => (line < *lines).then_some(line),
+            Self::Folded(index) => index.row_for_line(line),
+        }
+    }
+    fn visible_range(&self, range: Range<usize>) -> Vec<usize> {
+        range.filter_map(|row| self.line_for_row(row)).collect()
+    }
+    fn is_fold_header(&self, line: usize) -> bool {
+        match self {
+            Self::Unfolded(_) => false,
+            Self::Folded(index) => index.is_header(line),
+        }
+    }
+}
+
 pub struct EditorState {
     focus_handle: FocusHandle,
     rope: Rope,
@@ -823,6 +950,8 @@ pub struct EditorState {
     file_path: Option<PathBuf>,
     is_modified: bool,
     content_version: u64,
+    accessibility_document: Option<(u64, Arc<AccessibilityTextDocument>)>,
+    accessibility_preparation_task: Option<Task<()>>,
 
     parser: Parser,
     syntax_tree: Option<Tree>,
@@ -859,6 +988,9 @@ pub struct EditorState {
 
     cursor_visible: bool,
     blink_task: Option<Task<()>>,
+    blink_window: Option<AnyWindowHandle>,
+    blink_subscriptions: Vec<Subscription>,
+    blink_paint_epoch: u64,
     last_cursor_move: web_time::Instant,
     last_blink_cursor: Position,
 
@@ -893,7 +1025,7 @@ pub struct EditorState {
 
     fold_ranges: Vec<FoldRange>,
     folded: Vec<FoldRange>,
-    cached_display_lines: Option<Rc<Vec<usize>>>,
+    fold_line_index: Option<Arc<FoldLineIndex>>,
 
     diagnostics: Vec<EditorDiagnostic>,
 }
@@ -966,6 +1098,8 @@ impl EditorState {
             file_path: None,
             is_modified: false,
             content_version: 0,
+            accessibility_document: None,
+            accessibility_preparation_task: None,
             parser,
             syntax_tree: None,
             highlight_query: None,
@@ -995,6 +1129,9 @@ impl EditorState {
             font_family_override: None,
             cursor_visible: true,
             blink_task: None,
+            blink_window: None,
+            blink_subscriptions: Vec::new(),
+            blink_paint_epoch: 0,
             last_cursor_move: web_time::Instant::now(),
             last_blink_cursor: Position::zero(),
             overlay_active_check: None,
@@ -1024,7 +1161,7 @@ impl EditorState {
             syntax_color_fn: None,
             fold_ranges: Vec::new(),
             folded: Vec::new(),
-            cached_display_lines: None,
+            fold_line_index: None,
             diagnostics: Vec::new(),
         }
     }
@@ -1034,9 +1171,53 @@ impl EditorState {
         self.cursor.line = line.min(max_line);
         let line_len = self.line_len(self.cursor.line);
         self.cursor.col = col.min(line_len);
+        self.clamp_cursor();
         self.selection = None;
         self.reset_cursor_blink(cx);
         self.ensure_cursor_visible(cx);
+    }
+
+    /// Set selection using UTF-8 byte offsets. Reversed selections retain their
+    /// anchor and focus; invalid offsets leave selection and history unchanged.
+    /// This also finishes any marked-text range without editing its contents.
+    pub fn set_selection_bytes(
+        &mut self,
+        anchor: usize,
+        focus: usize,
+        cx: &mut Context<Self>,
+    ) -> Result<(), &'static str> {
+        for offset in [anchor, focus] {
+            if offset > self.rope.len_bytes()
+                || self.rope.char_to_byte(self.rope.byte_to_char(offset)) != offset
+            {
+                return Err("selection offset must be a valid UTF-8 character boundary");
+            }
+        }
+        let anchor = self.byte_offset_to_pos(anchor);
+        let focus = self.byte_offset_to_pos(focus);
+        self.cursor = focus;
+        self.selection = (anchor != focus).then(|| Selection::new(anchor, focus));
+        self.marked_range = None;
+        self.reset_cursor_blink(cx);
+        self.ensure_cursor_visible(cx);
+        cx.notify();
+        Ok(())
+    }
+
+    /// The current selection's UTF-8 byte anchor and focus, or the caret twice.
+    pub fn selection_bytes(&self) -> (usize, usize) {
+        self.selection.as_ref().map_or_else(
+            || {
+                let caret = self.pos_to_byte_offset(self.cursor);
+                (caret, caret)
+            },
+            |selection| {
+                (
+                    self.pos_to_byte_offset(selection.anchor),
+                    self.pos_to_byte_offset(selection.cursor),
+                )
+            },
+        )
     }
 
     pub fn set_font_size(&mut self, size: f32, cx: &mut Context<Self>) {
@@ -1054,19 +1235,78 @@ impl EditorState {
         cx.notify();
     }
 
-    fn reset_cursor_blink(&mut self, cx: &mut Context<Self>) {
+    fn reset_cursor_blink(&mut self, _: &mut Context<Self>) {
         self.cursor_visible = true;
         self.last_cursor_move = web_time::Instant::now();
-        self.blink_task = Some(cx.spawn(async |this, cx| {
+        // A programmatic selection on an unfocused editor must not start a timer.
+        // The next focused paint restarts the caret's complete visible interval.
+        self.blink_task = None;
+    }
+
+    fn bind_cursor_blink(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.blink_window == Some(window.window_handle()) {
+            return;
+        }
+        self.blink_task = None;
+        self.blink_subscriptions.clear();
+        self.blink_window = Some(window.window_handle());
+        let focus = self.focus_handle.clone();
+        self.blink_subscriptions
+            .push(cx.on_blur(&focus, window, |state, _, _| {
+                state.blink_task = None;
+                state.cursor_visible = true;
+            }));
+        self.blink_subscriptions
+            .push(cx.observe_window_activation(window, |state, window, _| {
+                if !window.is_window_active() {
+                    state.blink_task = None;
+                    state.cursor_visible = true;
+                }
+            }));
+    }
+
+    fn paint_cursor_blink(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.blink_paint_epoch = self.blink_paint_epoch.wrapping_add(1);
+        if !self.focus_handle.is_focused(window)
+            || !window.is_window_active()
+            || !window.is_window_visible()
+            || window.reduce_motion()
+        {
+            self.blink_task = None;
+            self.cursor_visible = true;
+            return;
+        }
+        if self.blink_task.is_some() {
+            return;
+        }
+        let this = cx.weak_entity();
+        let mut last_paint = self.blink_paint_epoch.wrapping_sub(1);
+        self.blink_task = Some(window.spawn(cx, async move |cx| {
             loop {
-                Timer::after(std::time::Duration::from_millis(500)).await;
-                let ok = this
-                    .update(cx, |state, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(500))
+                    .await;
+                let keep_blinking = this
+                    .update_in(cx, |state, window, cx| {
+                        // A retained state whose editor stopped painting gets at most
+                        // one pending check, never a permanent idle notification loop.
+                        if !state.focus_handle.is_focused(window)
+                            || !window.is_window_active()
+                            || !window.is_window_visible()
+                            || window.reduce_motion()
+                            || last_paint == state.blink_paint_epoch
+                        {
+                            state.blink_task = None;
+                            state.cursor_visible = true;
+                            return false;
+                        }
+                        last_paint = state.blink_paint_epoch;
                         state.cursor_visible = !state.cursor_visible;
                         cx.notify();
+                        true
                     })
-                    .is_ok();
-                if !ok {
+                    .unwrap_or(false);
+                if !keep_blinking {
                     break;
                 }
             }
@@ -1091,6 +1331,71 @@ impl EditorState {
 
     pub fn content_len_bytes(&self) -> usize {
         self.rope.len_bytes()
+    }
+
+    fn prepare_accessibility_document(&mut self, cx: &mut Context<Self>) {
+        if self
+            .accessibility_document
+            .as_ref()
+            .is_some_and(|(revision, _)| *revision == self.content_version)
+        {
+            return;
+        }
+        let revision = self.content_version;
+        let executor = cx.background_executor().clone();
+        if self.rope.len_bytes() <= INLINE_ACCESSIBILITY_DOCUMENT_BYTES {
+            self.accessibility_document = Some((
+                revision,
+                AccessibilityTextDocument::with_reclaim_executor(self.rope.to_string(), &executor),
+            ));
+            return;
+        }
+        if self.accessibility_preparation_task.is_some() {
+            return; // One worker coalesces later revisions without cloning text on the UI thread.
+        }
+        let rope = self.rope.clone();
+        self.accessibility_preparation_task = Some(cx.spawn(async move |state, cx| {
+            let worker = executor.clone();
+            let document = executor
+                .spawn(async move {
+                    AccessibilityTextDocument::with_reclaim_executor(rope.to_string(), &worker)
+                })
+                .await;
+            let _ = state.update(cx, |state, cx| {
+                state.accessibility_preparation_task = None;
+                if state.content_version == revision {
+                    state.accessibility_document = Some((revision, document));
+                }
+                state.prepare_accessibility_document(cx);
+                cx.notify();
+            });
+        }));
+    }
+
+    fn prepared_accessibility_document(&self) -> Option<Arc<AccessibilityTextDocument>> {
+        self.accessibility_document
+            .as_ref()
+            .filter(|(revision, _)| *revision == self.content_version)
+            .map(|(_, document)| document.clone())
+    }
+
+    fn set_accessibility_selection(
+        &mut self,
+        document_id: AccessibilityId,
+        anchor: usize,
+        focus: usize,
+        cx: &mut Context<Self>,
+    ) -> Result<(), &'static str> {
+        let selection = AccessibilityTextSelection { anchor, focus };
+        if !self
+            .prepared_accessibility_document()
+            .is_some_and(|document| {
+                document.id() == document_id && document.contains_selection(selection)
+            })
+        {
+            return Err("selection requires the originating current prepared document");
+        }
+        self.set_selection_bytes(anchor, focus, cx)
     }
 
     fn accessibility_value(&self) -> String {
@@ -1422,14 +1727,15 @@ impl EditorState {
     }
 
     pub fn compute_fold_ranges(&mut self) {
-        let tree = match &self.syntax_tree {
-            Some(t) => t,
-            None => {
-                self.fold_ranges.clear();
-                return;
-            }
-        };
+        let ranges = self
+            .syntax_tree
+            .as_ref()
+            .map(Self::collect_fold_ranges)
+            .unwrap_or_default();
+        self.install_fold_ranges(ranges);
+    }
 
+    fn collect_fold_ranges(tree: &Tree) -> Vec<FoldRange> {
         let mut ranges = Vec::new();
         let mut tree_cursor = tree.root_node().walk();
         let mut did_enter = true;
@@ -1459,19 +1765,22 @@ impl EditorState {
 
         ranges.sort_by_key(|r| r.start_line);
         ranges.dedup_by_key(|r| r.start_line);
+        ranges
+    }
+
+    fn install_fold_ranges(&mut self, ranges: Vec<FoldRange>) {
         self.fold_ranges = ranges;
-
-        self.folded.retain(|f| {
-            self.fold_ranges
-                .iter()
-                .any(|r| r.start_line == f.start_line)
-        });
-
-        if self.folded.is_empty() {
-            self.cached_display_lines = None;
-        } else {
-            self.cached_display_lines = Some(Rc::new(self.compute_display_lines()));
-        }
+        self.folded = self
+            .folded
+            .iter()
+            .filter_map(|fold| {
+                self.fold_ranges
+                    .binary_search_by_key(&fold.start_line, |range| range.start_line)
+                    .ok()
+                    .map(|index| self.fold_ranges[index])
+            })
+            .collect();
+        self.rebuild_fold_line_index();
     }
 
     fn is_foldable_kind(kind: &str) -> bool {
@@ -1542,30 +1851,30 @@ impl EditorState {
 
     fn invalidate_folds(&mut self) {
         self.invalidate_all_caches();
-        if self.folded.is_empty() {
-            self.cached_display_lines = None;
-        } else {
-            self.cached_display_lines = Some(Rc::new(self.compute_display_lines()));
-        }
+        self.rebuild_fold_line_index();
     }
 
-    fn compute_display_lines(&self) -> Vec<usize> {
-        let total = self.total_lines();
-        let mut lines = Vec::with_capacity(total);
-        let mut skip_until: Option<usize> = None;
-        for line in 0..total {
-            if let Some(end) = skip_until {
-                if line <= end {
-                    continue;
-                }
-                skip_until = None;
-            }
-            lines.push(line);
-            if let Some(fold) = self.folded.iter().find(|f| f.start_line == line) {
-                skip_until = Some(fold.end_line);
-            }
+    fn rebuild_fold_line_index(&mut self) {
+        self.fold_line_index = if self.folded.is_empty() {
+            None
+        } else {
+            Some(Arc::new(FoldLineIndex::new(
+                self.total_lines(),
+                &self.folded,
+            )))
+        };
+    }
+
+    fn display_line_index(&self) -> DisplayLineIndex {
+        if self.folded.is_empty() {
+            DisplayLineIndex::Unfolded(self.total_lines())
+        } else {
+            DisplayLineIndex::Folded(
+                self.fold_line_index
+                    .clone()
+                    .expect("fold mutations prepare their retained interval index"),
+            )
         }
-        lines
     }
 
     fn clamp_scroll_after_fold(&mut self) {
@@ -1589,73 +1898,29 @@ impl EditorState {
     }
 
     pub fn is_line_folded(&self, line: usize) -> bool {
-        self.folded
-            .iter()
-            .any(|f| line > f.start_line && line <= f.end_line)
+        line < self.total_lines() && self.display_line_index().row_for_line(line).is_none()
     }
 
+    /// Enumerate all displayed buffer lines. This explicit compatibility API
+    /// allocates in proportion to the document; rendering/navigation instead
+    /// use the retained interval index and enumerate only their viewport.
     pub fn display_lines(&self) -> Rc<Vec<usize>> {
-        if let Some(ref cached) = self.cached_display_lines {
-            return Rc::clone(cached);
-        }
-        Rc::new(self.compute_display_lines())
+        let index = self.display_line_index();
+        Rc::new(index.visible_range(0..index.len()))
     }
 
     pub fn display_line_count(&self) -> usize {
-        if self.folded.is_empty() {
-            return self.total_lines();
-        }
-        if let Some(ref cached) = self.cached_display_lines {
-            return cached.len();
-        }
-        self.compute_display_lines().len()
+        self.display_line_index().len()
     }
 
     pub fn buffer_line_to_display_row(&self, buffer_line: usize) -> Option<usize> {
-        let mut display_row = 0usize;
-        let mut skip_until: Option<usize> = None;
-        let total = self.total_lines();
-        for line in 0..total {
-            if let Some(end) = skip_until {
-                if line <= end {
-                    if line == buffer_line {
-                        return None;
-                    }
-                    continue;
-                }
-                skip_until = None;
-            }
-            if line == buffer_line {
-                return Some(display_row);
-            }
-            if let Some(fold) = self.folded.iter().find(|f| f.start_line == line) {
-                skip_until = Some(fold.end_line);
-            }
-            display_row += 1;
-        }
-        None
+        self.display_line_index().row_for_line(buffer_line)
     }
 
     pub fn display_row_to_buffer_line(&self, display_row: usize) -> usize {
-        let mut current_display = 0usize;
-        let mut skip_until: Option<usize> = None;
-        let total = self.total_lines();
-        for line in 0..total {
-            if let Some(end) = skip_until {
-                if line <= end {
-                    continue;
-                }
-                skip_until = None;
-            }
-            if current_display == display_row {
-                return line;
-            }
-            if let Some(fold) = self.folded.iter().find(|f| f.start_line == line) {
-                skip_until = Some(fold.end_line);
-            }
-            current_display += 1;
-        }
-        total.saturating_sub(1)
+        self.display_line_index()
+            .line_for_row(display_row)
+            .unwrap_or_else(|| self.total_lines().saturating_sub(1))
     }
 
     pub fn fold_ranges(&self) -> &[FoldRange] {
@@ -1850,6 +2115,23 @@ impl EditorState {
         self.line_text(line).len()
     }
 
+    fn previous_grapheme_column(&self, position: Position) -> usize {
+        self.line_text(position.line)
+            .grapheme_indices(true)
+            .map(|(offset, _)| offset)
+            .take_while(|offset| *offset < position.col)
+            .last()
+            .unwrap_or(0)
+    }
+
+    fn next_grapheme_column(&self, position: Position) -> usize {
+        let text = self.line_text(position.line);
+        text.grapheme_indices(true)
+            .map(|(offset, _)| offset)
+            .find(|offset| *offset > position.col)
+            .unwrap_or(text.len())
+    }
+
     fn rope_insert(&mut self, byte_offset: usize, text: &str) {
         let char_offset = self
             .rope
@@ -1869,6 +2151,8 @@ impl EditorState {
     }
 
     pub fn set_content(&mut self, content: &str, cx: &mut Context<Self>) {
+        self.reparse_task = None;
+        self.content_version = self.content_version.wrapping_add(1);
         self.rope = if content.is_empty() {
             Rope::from_str("\n")
         } else if content.ends_with('\n') {
@@ -1880,6 +2164,10 @@ impl EditorState {
         };
         self.cursor = Position::zero();
         self.selection = None;
+        self.marked_range = None;
+        self.folded.clear();
+        self.fold_ranges.clear();
+        self.fold_line_index = None;
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.is_modified = false;
@@ -1893,6 +2181,7 @@ impl EditorState {
     }
 
     pub fn set_language(&mut self, lang: Language) {
+        self.reparse_task = None;
         self.language = lang;
         let tree_sitter_language = lang.tree_sitter_language();
         if let Some(ts_lang) = tree_sitter_language {
@@ -1940,8 +2229,10 @@ impl EditorState {
                     Ok(rope) => {
                         self.file_path = Some(path);
                         self.rope = rope;
+                        self.content_version = self.content_version.wrapping_add(1);
                         self.cursor = Position::zero();
                         self.selection = None;
+                        self.marked_range = None;
                         self.undo_stack.clear();
                         self.redo_stack.clear();
                         self.is_modified = false;
@@ -2040,32 +2331,41 @@ impl EditorState {
     }
 
     fn parse_async(&mut self, cx: &mut Context<Self>) {
-        let content = self.rope.to_string();
-        let lang = self.language;
         self.syntax_tree = None;
+        self.reparse_task = None;
+        let lang = self.language;
+        let Some(tree_sitter_language) = lang.tree_sitter_language() else {
+            self.install_fold_ranges(Vec::new());
+            return;
+        };
+        let revision = self.content_version;
+        let rope = self.rope.clone();
+        // Rope clones share storage; flattening text, parsing, and walking the
+        // syntax tree for available folds all belong on the worker.
         let parse_task = cx.background_spawn(async move {
             let mut parser = Parser::new();
-            let tree_sitter_language = lang.tree_sitter_language();
-            if let Some(ts_lang) = tree_sitter_language {
-                let _ = parser.set_language(&ts_lang);
-                parser.parse(&content, None)
-            } else {
-                None
-            }
+            let _ = parser.set_language(&tree_sitter_language);
+            let content = rope.to_string();
+            let tree = parser.parse(&content, None);
+            let ranges = tree
+                .as_ref()
+                .map(Self::collect_fold_ranges)
+                .unwrap_or_default();
+            (tree, ranges)
         });
-        cx.spawn(async move |this, cx| {
-            if let Some(tree) = parse_task.await {
-                let _ = cx.update(|cx| {
-                    let _ = this.update(cx, |state, cx| {
-                        state.syntax_tree = Some(tree);
-                        state.compute_fold_ranges();
-                        state.invalidate_all_caches();
-                        cx.notify();
-                    });
-                });
-            }
-        })
-        .detach();
+        self.reparse_task = Some(cx.spawn(async move |this, cx| {
+            let (tree, ranges) = parse_task.await;
+            let _ = this.update(cx, |state, cx| {
+                if state.content_version != revision || state.language != lang {
+                    return;
+                }
+                state.reparse_task = None;
+                state.syntax_tree = tree;
+                state.install_fold_ranges(ranges);
+                state.invalidate_all_caches();
+                cx.notify();
+            });
+        }));
     }
 
     fn schedule_reparse(&mut self, cx: &mut Context<Self>) {
@@ -2108,8 +2408,12 @@ impl EditorState {
             return self.rope.len_bytes();
         }
         let line_start = self.rope.line_to_byte(pos.line);
-        let line_len = self.line_len(pos.line);
-        line_start + min(pos.col, line_len)
+        let text = self.line_text(pos.line);
+        let mut column = min(pos.col, text.len());
+        while !text.is_char_boundary(column) {
+            column -= 1;
+        }
+        line_start + column
     }
 
     fn byte_offset_to_pos(&self, offset: usize) -> Position {
@@ -2123,8 +2427,7 @@ impl EditorState {
     fn clamp_cursor(&mut self) {
         let max_line = self.total_lines().saturating_sub(1);
         self.cursor.line = min(self.cursor.line, max_line);
-        let line_len = self.line_len(self.cursor.line);
-        self.cursor.col = min(self.cursor.col, line_len);
+        self.cursor = self.byte_offset_to_pos(self.pos_to_byte_offset(self.cursor));
     }
 
     fn mark_modified(&mut self) {
@@ -2216,16 +2519,29 @@ impl EditorState {
             return Position::new(pos.line - 1, self.line_len(pos.line - 1));
         }
         let line_text = self.line_text(pos.line);
-        let bytes = line_text.as_bytes();
-        let mut col = pos.col;
-        while col > 0 && bytes[col - 1].is_ascii_whitespace() {
-            col -= 1;
-        }
-        while col > 0
-            && !bytes[col - 1].is_ascii_whitespace()
-            && bytes[col - 1].is_ascii_alphanumeric()
+        let col = self.pos_to_byte_offset(pos) - self.rope.line_to_byte(pos.line);
+        let mut graphemes = line_text[..col]
+            .grapheme_indices(true)
+            .rev()
+            .skip_while(|(_, text)| text.chars().all(char::is_whitespace));
+        let Some((mut col, text)) = graphemes.next() else {
+            return Position::new(pos.line, 0);
+        };
+        if text
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_alphanumeric() || ch == '_')
         {
-            col -= 1;
+            for (offset, text) in graphemes {
+                if !text
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| ch.is_alphanumeric() || ch == '_')
+                {
+                    break;
+                }
+                col = offset;
+            }
         }
         Position::new(pos.line, col)
     }
@@ -2239,16 +2555,35 @@ impl EditorState {
             return Position::new(pos.line + 1, 0);
         }
         let line_text = self.line_text(pos.line);
-        let bytes = line_text.as_bytes();
-        let mut col = pos.col;
-        while col < line_len && bytes[col].is_ascii_alphanumeric() {
-            col += 1;
+        let start = self.pos_to_byte_offset(pos) - self.rope.line_to_byte(pos.line);
+        let mut graphemes = line_text[start..].graphemes(true).peekable();
+        let mut col = start;
+        if let Some(text) = graphemes.next() {
+            col += text.len();
+            if text
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_alphanumeric() || ch == '_')
+            {
+                while let Some(text) = graphemes.peek() {
+                    if !text
+                        .chars()
+                        .next()
+                        .is_some_and(|ch| ch.is_alphanumeric() || ch == '_')
+                    {
+                        break;
+                    }
+                    col += text.len();
+                    graphemes.next();
+                }
+            }
         }
-        while col < line_len && bytes[col].is_ascii_whitespace() {
-            col += 1;
-        }
-        if col == pos.col {
-            col += 1;
+        while let Some(text) = graphemes.peek() {
+            if !text.chars().all(char::is_whitespace) {
+                break;
+            }
+            col += text.len();
+            graphemes.next();
         }
         Position::new(pos.line, min(col, line_len))
     }
@@ -2287,7 +2622,82 @@ impl EditorState {
         self.offset_from_utf16(range.start)..self.offset_from_utf16(range.end)
     }
 
+    fn input_replacement_range(&self) -> Range<usize> {
+        self.marked_range.clone().unwrap_or_else(|| {
+            if let Some(selection) = &self.selection {
+                let (start, end) = selection.range();
+                self.pos_to_byte_offset(start)..self.pos_to_byte_offset(end)
+            } else {
+                let offset = self.pos_to_byte_offset(self.cursor);
+                offset..offset
+            }
+        })
+    }
+
+    fn replace_input_range(
+        &mut self,
+        range: Range<usize>,
+        text: &str,
+        coalesce_marked: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let before: String = self.rope.byte_slice(range.clone()).into();
+        self.selection = None;
+        if before == text {
+            self.cursor = self.byte_offset_to_pos(range.start + text.len());
+            return;
+        }
+        let old_end_position = self.byte_to_ts_point(range.end);
+        let coalesced = coalesce_marked
+            && self.marked_range.as_ref() == Some(&range)
+            && if let Some(EditOp::Replace {
+                byte_offset, after, ..
+            }) = self.undo_stack.last_mut()
+            {
+                if *byte_offset == range.start && *after == before {
+                    *after = text.to_string();
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+        if !coalesced {
+            self.undo_stack.push(EditOp::Replace {
+                byte_offset: range.start,
+                before,
+                after: text.to_string(),
+            });
+        }
+        self.redo_stack.clear();
+        self.rope_remove(range.start, range.end);
+        self.rope_insert(range.start, text);
+        let new_end = range.start + text.len();
+        self.cursor = self.byte_offset_to_pos(new_end);
+        self.mark_modified();
+        self.update_syntax_tree_incremental(range.start, range.end, new_end, old_end_position, cx);
+        self.invalidate_after_edit();
+    }
+
+    /// Replace the current selection as one undoable edit. This is useful for
+    /// document formatting commands and does not reload/reset the document.
+    pub fn replace_selection(&mut self, text: &str, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
+        let range = self.input_replacement_range();
+        self.replace_input_range(range, text, false, cx);
+        self.marked_range = None;
+        self.ensure_cursor_visible(cx);
+        cx.notify();
+    }
+
     pub fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
+        self.marked_range = None;
         if let Some(op) = self.undo_stack.pop() {
             match &op {
                 EditOp::Insert { byte_offset, text } => {
@@ -2301,6 +2711,16 @@ impl EditorState {
                     self.cursor = self.byte_offset_to_pos(*byte_offset + text.len());
                     self.redo_stack.push(op);
                 }
+                EditOp::Replace {
+                    byte_offset,
+                    before,
+                    after,
+                } => {
+                    self.rope_remove(*byte_offset, *byte_offset + after.len());
+                    self.rope_insert(*byte_offset, before);
+                    self.cursor = self.byte_offset_to_pos(*byte_offset + before.len());
+                    self.redo_stack.push(op);
+                }
             }
             self.selection = None;
             self.mark_modified();
@@ -2311,6 +2731,10 @@ impl EditorState {
     }
 
     pub fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
+        self.marked_range = None;
         if let Some(op) = self.redo_stack.pop() {
             match &op {
                 EditOp::Insert { byte_offset, text } => {
@@ -2322,6 +2746,16 @@ impl EditorState {
                     let end = byte_offset + text.len();
                     self.rope_remove(*byte_offset, end);
                     self.cursor = self.byte_offset_to_pos(*byte_offset);
+                    self.undo_stack.push(op);
+                }
+                EditOp::Replace {
+                    byte_offset,
+                    before,
+                    after,
+                } => {
+                    self.rope_remove(*byte_offset, *byte_offset + before.len());
+                    self.rope_insert(*byte_offset, after);
+                    self.cursor = self.byte_offset_to_pos(*byte_offset + after.len());
                     self.undo_stack.push(op);
                 }
             }
@@ -2361,7 +2795,7 @@ impl EditorState {
 
     pub fn move_left(&mut self, _: &MoveLeft, _: &mut Window, cx: &mut Context<Self>) {
         if self.cursor.col > 0 {
-            self.cursor.col -= 1;
+            self.cursor.col = self.previous_grapheme_column(self.cursor);
         } else if self.cursor.line > 0 {
             self.cursor.line -= 1;
             self.cursor.col = self.line_len(self.cursor.line);
@@ -2373,7 +2807,7 @@ impl EditorState {
     pub fn move_right(&mut self, _: &MoveRight, _: &mut Window, cx: &mut Context<Self>) {
         let line_len = self.line_len(self.cursor.line);
         if self.cursor.col < line_len {
-            self.cursor.col += 1;
+            self.cursor.col = self.next_grapheme_column(self.cursor);
         } else if self.cursor.line < self.total_lines() - 1 {
             self.cursor.line += 1;
             self.cursor.col = 0;
@@ -2478,7 +2912,7 @@ impl EditorState {
     pub fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.start_selection_if_needed();
         if self.cursor.col > 0 {
-            self.cursor.col -= 1;
+            self.cursor.col = self.previous_grapheme_column(self.cursor);
         } else if self.cursor.line > 0 {
             self.cursor.line -= 1;
             self.cursor.col = self.line_len(self.cursor.line);
@@ -2493,7 +2927,7 @@ impl EditorState {
         self.start_selection_if_needed();
         let line_len = self.line_len(self.cursor.line);
         if self.cursor.col < line_len {
-            self.cursor.col += 1;
+            self.cursor.col = self.next_grapheme_column(self.cursor);
         } else if self.cursor.line < self.total_lines() - 1 {
             self.cursor.line += 1;
             self.cursor.col = 0;
@@ -2545,7 +2979,11 @@ impl EditorState {
         if self.read_only {
             return;
         }
-        if let Some(selection) = self.selection.take() {
+        if let Some(selection) = self
+            .selection
+            .take()
+            .filter(|selection| !selection.is_empty())
+        {
             self.delete_selection_internal(selection, cx);
             cx.notify();
             return;
@@ -2557,8 +2995,11 @@ impl EditorState {
 
         let delete_pair = self.is_between_auto_close_pair();
         let char_idx = self.rope.byte_to_char(offset);
-        let prev_char_byte = self.rope.char_to_byte(char_idx.saturating_sub(1));
-        let del_start = prev_char_byte;
+        let del_start = if self.cursor.col > 0 {
+            self.rope.line_to_byte(self.cursor.line) + self.previous_grapheme_column(self.cursor)
+        } else {
+            self.rope.char_to_byte(char_idx.saturating_sub(1))
+        };
         let del_end = if delete_pair {
             let next_char_byte = if char_idx < self.rope.len_chars() {
                 self.rope.char_to_byte(char_idx + 1)
@@ -2589,7 +3030,11 @@ impl EditorState {
         if self.read_only {
             return;
         }
-        if let Some(selection) = self.selection.take() {
+        if let Some(selection) = self
+            .selection
+            .take()
+            .filter(|selection| !selection.is_empty())
+        {
             self.delete_selection_internal(selection, cx);
             cx.notify();
             return;
@@ -2599,7 +3044,9 @@ impl EditorState {
             return;
         }
         let char_idx = self.rope.byte_to_char(offset);
-        let next_char_byte = if char_idx < self.rope.len_chars() {
+        let next_char_byte = if self.cursor.col < self.line_len(self.cursor.line) {
+            self.rope.line_to_byte(self.cursor.line) + self.next_grapheme_column(self.cursor)
+        } else if char_idx < self.rope.len_chars() {
             self.rope.char_to_byte(char_idx + 1)
         } else {
             self.rope.len_bytes()
@@ -2956,6 +3403,13 @@ impl EditorState {
     /// Invalidation for text edits. Clears all caches since line indices
     /// shift on insert/delete, making index-keyed caches stale.
     fn invalidate_after_edit(&mut self) {
+        if self
+            .fold_line_index
+            .as_ref()
+            .is_some_and(|index| index.total_lines != self.total_lines())
+        {
+            self.rebuild_fold_line_index();
+        }
         self.line_layouts.clear();
         self.line_content_hashes.clear();
         self.highlight_cache_version = u64::MAX;
@@ -3030,6 +3484,18 @@ impl EditorState {
     }
 
     fn ensure_cursor_visible(&mut self, cx: &mut Context<Self>) {
+        if self.cursor.line < self.total_lines()
+            && self
+                .display_line_index()
+                .row_for_line(self.cursor.line)
+                .is_none()
+        {
+            self.folded.retain(|fold| {
+                !(self.cursor.line > fold.start_line && self.cursor.line <= fold.end_line)
+            });
+            self.rebuild_fold_line_index();
+            self.invalidate_all_caches();
+        }
         let line_height = self.line_height;
         let padding_top = px(12.0);
         let viewport_bounds = self.scroll_handle.bounds();
@@ -3110,14 +3576,14 @@ impl EditorState {
         let padding_top = px(12.0);
         let relative_y = mouse_pos.y - bounds.top() - padding_top;
         let display_row_f = (relative_y / line_height).floor();
-        let display_lines = self.display_lines();
+        let display_lines = self.display_line_index();
         let display_count = display_lines.len();
         let display_row = if display_row_f < 0.0 {
             0
         } else {
             min(display_row_f as usize, display_count.saturating_sub(1))
         };
-        let line = display_lines.get(display_row).copied().unwrap_or(0);
+        let line = display_lines.line_for_row(display_row).unwrap_or(0);
 
         let relative_x = mouse_pos.x - bounds.left() - gutter_width + self.scroll_offset_x;
         let col = if let Some(layout) = self.line_layouts.get(&line) {
@@ -3223,8 +3689,10 @@ impl EditorState {
         let display_row = ((event.position.y - bounds.top() - padding_top) / line_height)
             .floor()
             .max(0.0) as usize;
-        let dl = self.display_lines();
-        let click_line = dl.get(display_row).copied().unwrap_or(0);
+        let click_line = self
+            .display_line_index()
+            .line_for_row(display_row)
+            .unwrap_or(0);
 
         if click_x >= gutter_width - px(16.0)
             && click_x <= gutter_width
@@ -3366,7 +3834,8 @@ impl EntityInputHandler for EditorState {
         if let Some(selection) = &self.selection {
             let start_offset = self.pos_to_byte_offset(selection.anchor);
             let end_offset = self.pos_to_byte_offset(selection.cursor);
-            let range = self.range_to_utf16(&(start_offset..end_offset));
+            let range =
+                self.range_to_utf16(&(start_offset.min(end_offset)..start_offset.max(end_offset)));
             Some(UTF16Selection {
                 range,
                 reversed: selection.anchor > selection.cursor,
@@ -3391,8 +3860,10 @@ impl EntityInputHandler for EditorState {
             .map(|range| self.range_to_utf16(range))
     }
 
-    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.marked_range = None;
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.marked_range.take().is_some() {
+            cx.notify();
+        }
     }
 
     fn replace_text_in_range(
@@ -3405,51 +3876,36 @@ impl EntityInputHandler for EditorState {
         if self.read_only {
             return;
         }
-        let range_utf8 = range_utf16
+        let composing = self.marked_range.is_some();
+        let range = range_utf16
             .as_ref()
-            .map(|r| self.range_from_utf16(r))
-            .or_else(|| self.marked_range.clone())
-            .or_else(|| {
-                if let Some(sel) = &self.selection {
-                    let start = self.pos_to_byte_offset(sel.anchor);
-                    let end = self.pos_to_byte_offset(sel.cursor);
-                    Some(start.min(end)..start.max(end))
-                } else {
-                    let cursor_offset = self.pos_to_byte_offset(self.cursor);
-                    Some(cursor_offset..cursor_offset)
-                }
-            });
-
-        if let Some(range) = range_utf8 {
-            let start_pos = self.byte_offset_to_pos(range.start);
-            let end_pos = self.byte_offset_to_pos(range.end);
-
-            if start_pos != end_pos {
-                self.delete_selection_internal(Selection::new(start_pos, end_pos), cx);
+            .map(|range| self.range_from_utf16(range))
+            .unwrap_or_else(|| self.input_replacement_range());
+        // Automatic bracket pairing applies only to ordinary insertion at the
+        // caret, never a replacement or an IME commit.
+        if !composing
+            && range.is_empty()
+            && range.start == self.pos_to_byte_offset(self.cursor)
+            && self.selection.is_none()
+            && new_text.len() == 1
+        {
+            let ch = new_text.chars().next().unwrap();
+            if let Some(closer) = self.closing_char_for(ch) {
+                self.replace_input_range(range, &format!("{ch}{closer}"), false, cx);
+                self.cursor.col = self.cursor.col.saturating_sub(1);
+                cx.notify();
+                return;
             }
-
-            if new_text.len() == 1 && self.selection.is_none() {
-                let ch = new_text.chars().next().unwrap();
-
-                if let Some(closer) = self.closing_char_for(ch) {
-                    let pair_text = format!("{}{}", ch, closer);
-                    self.insert_text_at_cursor(&pair_text, cx);
-                    self.cursor.col = self.cursor.col.saturating_sub(1);
-                    self.marked_range = None;
-                    return;
-                }
-
-                if self.should_skip_closing_char(ch) {
-                    self.cursor.col += 1;
-                    self.marked_range = None;
-                    cx.notify();
-                    return;
-                }
+            if self.should_skip_closing_char(ch) {
+                self.cursor.col += 1;
+                cx.notify();
+                return;
             }
-
-            self.insert_text_at_cursor(new_text, cx);
         }
+        self.replace_input_range(range, new_text, composing, cx);
         self.marked_range = None;
+        self.ensure_cursor_visible(cx);
+        cx.notify();
     }
 
     fn replace_and_mark_text_in_range(
@@ -3463,36 +3919,34 @@ impl EntityInputHandler for EditorState {
         if self.read_only {
             return;
         }
-
-        let range_utf8 = range_utf16
-            .map(|r| self.range_from_utf16(&r))
-            .unwrap_or_else(|| {
-                let cursor_offset = self.pos_to_byte_offset(self.cursor);
-                cursor_offset..cursor_offset
-            });
-
-        let start_pos = self.byte_offset_to_pos(range_utf8.start);
-        let end_pos = self.byte_offset_to_pos(range_utf8.end);
-
-        if start_pos != end_pos {
-            self.delete_selection_internal(Selection::new(start_pos, end_pos), cx);
+        let range = range_utf16
+            .as_ref()
+            .map(|range| self.range_from_utf16(range))
+            .unwrap_or_else(|| self.input_replacement_range());
+        let start = range.start;
+        self.replace_input_range(range, new_text, true, cx);
+        self.marked_range = (!new_text.is_empty()).then_some(start..start + new_text.len());
+        if let Some(selection) = new_selected_range_utf16 {
+            // Platform selection offsets are relative to the newly marked text.
+            // Convert that text, rather than using offsets into the document.
+            let local_offset = |requested| {
+                let mut utf16 = 0;
+                let mut bytes = 0;
+                for ch in new_text.chars() {
+                    if utf16 >= requested {
+                        break;
+                    }
+                    utf16 += ch.len_utf16();
+                    bytes += ch.len_utf8();
+                }
+                bytes
+            };
+            let anchor = self.byte_offset_to_pos(start + local_offset(selection.start));
+            let cursor = self.byte_offset_to_pos(start + local_offset(selection.end));
+            self.selection = Some(Selection::new(anchor, cursor));
+            self.cursor = cursor;
         }
-
-        let insert_start = self.pos_to_byte_offset(self.cursor);
-        self.insert_text_at_cursor(new_text, cx);
-        let insert_end = self.pos_to_byte_offset(self.cursor);
-
-        if !new_text.is_empty() {
-            self.marked_range = Some(insert_start..insert_end);
-        }
-
-        if let Some(new_sel_utf16) = new_selected_range_utf16 {
-            let new_sel_utf8 = self.range_from_utf16(&new_sel_utf16);
-            let sel_start = self.byte_offset_to_pos(insert_start + new_sel_utf8.start);
-            let sel_end = self.byte_offset_to_pos(insert_start + new_sel_utf8.end);
-            self.selection = Some(Selection::new(sel_start, sel_end));
-            self.cursor = sel_end;
-        }
+        self.ensure_cursor_visible(cx);
         cx.notify();
     }
 
@@ -3641,10 +4095,9 @@ impl Element for EditorElement {
         let scroll_offset = self.state.read(cx).scroll_handle.offset();
         let viewport_height = self.state.read(cx).scroll_handle.bounds().size.height;
 
-        let display_lines_vec = self.state.read(cx).display_lines();
-        let display_count = display_lines_vec.len();
-        let buf_to_disp =
-            |line: usize| -> Option<usize> { display_lines_vec.binary_search(&line).ok() };
+        let display_lines = self.state.read(cx).display_line_index();
+        let display_count = display_lines.len();
+        let buf_to_disp = |line: usize| display_lines.row_for_line(line);
 
         let first_visible_display_row = ((-scroll_offset.y - padding_top) / line_height)
             .floor()
@@ -3652,13 +4105,9 @@ impl Element for EditorElement {
         let visible_rows = ((viewport_height / line_height).ceil() as usize + 2).max(1);
         let last_visible_display_row = min(first_visible_display_row + visible_rows, display_count);
 
-        let visible_buffer_lines = if first_visible_display_row < display_count
-            && last_visible_display_row <= display_count
-        {
-            &display_lines_vec[first_visible_display_row..last_visible_display_row]
-        } else {
-            &[]
-        };
+        let visible_buffer_lines =
+            display_lines.visible_range(first_visible_display_row..last_visible_display_row);
+        let visible_buffer_lines = visible_buffer_lines.as_slice();
 
         let (cursor, selection, show_line_numbers, scroll_offset_x) = {
             let state = self.state.read(cx);
@@ -3681,8 +4130,6 @@ impl Element for EditorElement {
             indent_guide_active_color,
             fold_marker_color,
             tab_size,
-            folded_ranges,
-            fold_ranges,
         ) = {
             let s = self.state.read(cx);
             (
@@ -3704,8 +4151,6 @@ impl Element for EditorElement {
                 s.fold_marker_color_override
                     .unwrap_or(theme.tokens.muted_foreground),
                 s.tab_size,
-                s.folded.clone(),
-                s.fold_ranges.clone(),
             )
         };
 
@@ -3777,7 +4222,9 @@ impl Element for EditorElement {
         };
 
         for display_row in first_visible_display_row..last_visible_display_row {
-            let line_idx = display_lines_vec[display_row];
+            let line_idx = display_lines
+                .line_for_row(display_row)
+                .expect("viewport row");
             let y = bounds.top() + padding_top + line_height * display_row as f32;
 
             let line_text = self.state.read(cx).line_text(line_idx);
@@ -3860,10 +4307,10 @@ impl Element for EditorElement {
         self.state.update(cx, |state, _| {
             state
                 .line_layouts
-                .retain(|&line_idx, _| line_idx >= first_buf && line_idx < last_buf);
+                .retain(|line_idx, _| visible_buffer_lines.binary_search(line_idx).is_ok());
             state
                 .line_content_hashes
-                .retain(|&line_idx, _| line_idx >= first_buf && line_idx < last_buf);
+                .retain(|line_idx, _| visible_buffer_lines.binary_search(line_idx).is_ok());
             for (idx, layout, hash) in shaped_layouts {
                 if let Some(shaped) = layout {
                     state.line_layouts.insert(idx, shaped);
@@ -3896,7 +4343,9 @@ impl Element for EditorElement {
 
             let mut line_num_buf2 = String::with_capacity(8);
             for display_row in first_visible_display_row..last_visible_display_row {
-                let line_idx = display_lines_vec[display_row];
+                let line_idx = display_lines
+                    .line_for_row(display_row)
+                    .expect("viewport row");
                 let y = bounds.top() + padding_top + line_height * display_row as f32;
                 let is_current_line = line_idx == cursor.line;
                 let num_color = if is_current_line && is_focused {
@@ -3930,8 +4379,13 @@ impl Element for EditorElement {
                 );
                 let _ = shaped.paint(point(bounds.left() + px(6.0), y), line_height, window, cx);
 
-                let fold_start = fold_ranges.iter().any(|f| f.start_line == line_idx);
-                let is_folded = folded_ranges.iter().any(|f| f.start_line == line_idx);
+                let fold_start = self
+                    .state
+                    .read(cx)
+                    .fold_ranges
+                    .binary_search_by_key(&line_idx, |fold| fold.start_line)
+                    .is_ok();
+                let is_folded = display_lines.is_fold_header(line_idx);
                 if fold_start {
                     let icon_name = if is_folded {
                         "chevron-right"
@@ -4197,11 +4651,15 @@ impl Element for EditorElement {
                 self.state.update(cx, |state, cx| {
                     state.last_blink_cursor = cursor;
                     state.reset_cursor_blink(cx);
+                    state.paint_cursor_blink(window, cx);
                 });
             } else if self.state.read(cx).blink_task.is_none() {
                 self.state.update(cx, |state, cx| {
-                    state.reset_cursor_blink(cx);
+                    state.paint_cursor_blink(window, cx);
                 });
+            } else {
+                self.state
+                    .update(cx, |state, cx| state.paint_cursor_blink(window, cx));
             }
 
             let cursor_visible = self.state.read(cx).cursor_visible;
@@ -4650,7 +5108,9 @@ impl Styled for Editor {
 impl RenderOnce for Editor {
     fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let syn_fn = self.syntax_color_fn.take();
-        self.state.update(cx, |state, _| {
+        self.state.update(cx, |state, cx| {
+            state.bind_cursor_blink(window, cx);
+            state.prepare_accessibility_document(cx);
             state.cursor_color_override = self.cursor_color;
             state.selection_color_override = self.selection_color;
             state.line_number_color_override = self.line_number_color;
@@ -4676,10 +5136,12 @@ impl RenderOnce for Editor {
         let max_height = self.max_lines.map(|lines| px(lines as f32 * 20.0));
         let scroll_handle = self.state.read(cx).scroll_handle.clone();
 
-        let (accessibility_value, read_only, focus_handle) = {
+        let (accessibility_document, selection, read_only, focus_handle) = {
             let state = self.state.read(cx);
+            let (anchor, focus) = state.selection_bytes();
             (
-                state.accessibility_value(),
+                state.prepared_accessibility_document(),
+                AccessibilityTextSelection { anchor, focus },
                 state.read_only,
                 state.focus_handle(cx),
             )
@@ -4691,20 +5153,59 @@ impl RenderOnce for Editor {
         if focus_handle.is_focused(window) {
             accessibility_state |= AccessibilityState::FOCUSED;
         }
-        let accessibility_actions = if read_only {
-            vec![AccessibilityAction::Focus]
+        let mut accessibility_actions = vec![AccessibilityAction::Focus];
+        if !read_only {
+            accessibility_actions.push(AccessibilityAction::SetValue);
+        }
+        if accessibility_document.is_some() {
+            accessibility_actions.push(AccessibilityAction::SetTextSelection);
         } else {
-            vec![AccessibilityAction::Focus, AccessibilityAction::SetValue]
-        };
-        let accessibility = AccessibilityAttributes::new(AccessibilityRole::TextInput)
+            accessibility_state |= AccessibilityState::BUSY;
+        }
+        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::TextInput)
             .label(self.accessibility_label.to_string())
-            .value(AccessibilityValue::Text(accessibility_value))
             .states(accessibility_state)
             .actions(accessibility_actions);
+        if let Some(document) = accessibility_document {
+            accessibility = accessibility.text_document(document, selection);
+        } else {
+            accessibility.value = Some(AccessibilityValue::Text(
+                self.state.read(cx).accessibility_value(),
+            ));
+        }
+        // The browser DOM adapter retains its current bounded value fallback;
+        // native adapters query complete text ranges from the immutable document.
+        #[cfg(target_arch = "wasm32")]
+        {
+            accessibility.value = Some(AccessibilityValue::Text(
+                self.state.read(cx).accessibility_value(),
+            ));
+        }
 
         let mut base = div()
             .id(("editor", self.state.entity_id()))
             .accessibility(accessibility)
+            .on_accessibility_action(AccessibilityAction::SetTextSelection, {
+                let state = self.state.downgrade();
+                move |request, window, cx| {
+                    let Some(AccessibilityActionPayload::TextSelection {
+                        document_id,
+                        anchor,
+                        focus,
+                    }) = request.payload.as_ref()
+                    else {
+                        return;
+                    };
+                    let _ = state.update(cx, |state, cx| {
+                        if state
+                            .set_accessibility_selection(*document_id, *anchor, *focus, cx)
+                            .is_ok()
+                        {
+                            window.focus(&state.focus_handle(cx));
+                        }
+                    });
+                }
+            })
             .key_context("Editor")
             .track_focus(&focus_handle.tab_index(0).tab_stop(true))
             .w_full()
@@ -5259,6 +5760,656 @@ mod tests {
             let value = state.read(cx).accessibility_value();
             assert_eq!(value.chars().count(), MAX_ACCESSIBILITY_VALUE_CHARS);
             assert!(value.chars().all(|character| character == '界'));
+        });
+    }
+    struct DocumentHost {
+        state: Entity<EditorState>,
+        _observer: Subscription,
+    }
+    impl Render for DocumentHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            Editor::new(&self.state)
+                .accessibility_label("Project document")
+                .w(px(640.0))
+                .h(px(480.0))
+        }
+    }
+    fn document_window<'a>(
+        cx: &'a mut TestAppContext,
+        content: &str,
+    ) -> (Entity<EditorState>, &'a mut VisualTestContext) {
+        cx.update(|cx| {
+            crate::init(cx);
+            crate::theme::install_theme(cx, Theme::dark());
+        });
+        let state = cx.new(EditorState::new);
+        state.update(cx, |state, cx| {
+            state.set_content(content, cx);
+            state.set_language(Language::Markdown);
+        });
+        let (_, window) = cx.add_window_view({
+            let state = state.clone();
+            move |_, cx| DocumentHost {
+                _observer: cx.observe(&state, |_, _, cx| cx.notify()),
+                state,
+            }
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.focus(&state.focus_handle(cx));
+        });
+        (state, window)
+    }
+
+    #[::core::prelude::v1::test]
+    fn retained_fold_intervals_match_nested_overlap_and_clamped_coordinates() {
+        for seed in 0..100 {
+            let folds = (0..20)
+                .map(|index| FoldRange {
+                    start_line: (seed * 17 + index * 11) % 70,
+                    end_line: (seed * 17 + index * 11) % 70 + index % 12,
+                })
+                .collect::<Vec<_>>();
+            let mut reference = Vec::new();
+            let mut skip_through = None;
+            for line in 0..50 {
+                if skip_through.is_some_and(|end| line <= end) {
+                    continue;
+                }
+                skip_through = None;
+                reference.push(line);
+                if let Some(fold) = folds.iter().find(|fold| fold.start_line == line) {
+                    skip_through = Some(fold.end_line);
+                }
+            }
+            let index = FoldLineIndex::new(50, &folds);
+            assert_eq!(index.visible_lines, reference.len());
+            assert!(index.spans.len() <= folds.len());
+            for (row, line) in reference.iter().copied().enumerate() {
+                assert_eq!(index.line_for_row(row), Some(line));
+                assert_eq!(index.row_for_line(line), Some(row));
+            }
+            for line in 0..50 {
+                assert_eq!(
+                    index.row_for_line(line),
+                    reference.iter().position(|value| *value == line)
+                );
+            }
+            assert_eq!(index.line_for_row(reference.len()), None);
+            assert_eq!(index.row_for_line(50), None);
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn hundred_thousand_editor_lines_draw_only_viewport_and_reuse_fold_index() {
+        let mut cx = TestAppContext::single();
+        let content = "let label = \"日本語 café🙂\";\n".repeat(100_000);
+        let (state, window) = document_window(&mut cx, &content);
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let state_ref = state.read(cx);
+            assert!(matches!(
+                state_ref.display_line_index(),
+                DisplayLineIndex::Unfolded(100_000)
+            ));
+            assert!(
+                state_ref.fold_line_index.is_none(),
+                "unfolded view stores no document-sized row vector"
+            );
+            assert_eq!(state_ref.buffer_line_to_display_row(99_999), Some(99_999));
+            assert_eq!(state_ref.display_row_to_buffer_line(99_999), 99_999);
+            assert!(state_ref.line_layouts.len() <= 27);
+            let started = std::time::Instant::now();
+            for _ in 0..20 {
+                window.draw(cx).clear();
+            }
+            eprintln!(
+                "100k unfolded editor:20 CPU TestPlatform draws {:?}",
+                started.elapsed()
+            );
+            state.update(cx, |state, cx| {
+                state.fold_ranges = vec![FoldRange {
+                    start_line: 1,
+                    end_line: 99_990,
+                }];
+                state.toggle_fold_at_line(1, cx);
+                assert_eq!(state.display_line_count(), 11);
+                assert_eq!(state.buffer_line_to_display_row(2), None);
+                assert_eq!(state.display_row_to_buffer_line(2), 99_991);
+            });
+            let index = state.read(cx).fold_line_index.clone().unwrap();
+            assert_eq!(
+                index.spans.len(),
+                1,
+                "fold index stores intervals, not100k rows"
+            );
+            for _ in 0..20 {
+                window.draw(cx).clear();
+                let state_ref = state.read(cx);
+                assert!(Arc::ptr_eq(
+                    &index,
+                    state_ref.fold_line_index.as_ref().unwrap()
+                ));
+                assert!(
+                    state_ref.line_layouts.len() <= 11,
+                    "hidden-gap shaped layouts are pruned"
+                );
+            }
+            state.update(cx, |state, cx| {
+                let byte = state.rope.line_to_byte(50_000);
+                state.set_selection_bytes(byte, byte, cx).unwrap();
+                assert!(
+                    state.folded.is_empty(),
+                    "a requested caret reveals its folded line"
+                );
+                assert!(state.fold_line_index.is_none());
+                assert_eq!(state.buffer_line_to_display_row(50_000), Some(50_000));
+            });
+            window.draw(cx).clear();
+            assert!(state.read(cx).line_layouts.len() <= 27);
+            assert!(
+                state.read(cx).prepared_accessibility_document().is_some(),
+                "full text metadata prepared on worker"
+            );
+        });
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "tree-sitter-rust"))]
+    #[::core::prelude::v1::test]
+    fn worker_syntax_and_fold_preparation_coalesces_document_revisions() {
+        let mut cx = TestAppContext::single();
+        let state = cx.new(EditorState::new);
+        state.update(&mut cx, |state, cx| {
+            state.set_language(Language::Rust);
+            for revision in 0..20 {
+                let content = (0..1000 + revision).map(|function| format!(
+                    "fn revision_{revision}_{function}() {{\n    let label = \"日本語 café🙂\";\n    println!(\"{{label}}\");\n}}\n"
+                )).collect::<String>();
+                state.set_content(&content, cx);
+                assert!(state.reparse_task.is_some());
+            }
+        });
+        cx.run_until_parked();
+        state.update(&mut cx, |state, cx| {
+            assert!(state.reparse_task.is_none());
+            assert_eq!(
+                state.syntax_tree.as_ref().unwrap().root_node().end_byte(),
+                state.content_len_bytes()
+            );
+            assert_eq!(
+                state.fold_ranges.len(),
+                1019,
+                "only newest worker's available folds commit"
+            );
+            state.toggle_fold_at_line(0, cx);
+            let index = state.fold_line_index.clone().unwrap();
+            assert_eq!(index.spans.len(), 1);
+            let caret = state.rope.line_to_byte(1);
+            state.set_selection_bytes(caret, caret, cx).unwrap();
+            assert!(state.folded.is_empty());
+            assert!(state.fold_line_index.is_none());
+        });
+    }
+
+    struct BlinkHost {
+        state: Entity<EditorState>,
+        visible: bool,
+        _observer: Subscription,
+    }
+    impl Render for BlinkHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().when(self.visible, |this| {
+                this.child(Editor::new(&self.state).w(px(640.0)).h(px(480.0)))
+            })
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn cursor_blink_stops_on_blur_deactivation_and_retained_hidden_editor() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::init(cx);
+            crate::theme::install_theme(cx, Theme::dark());
+        });
+        let state = cx.new(EditorState::new);
+        state.update(&mut cx, |state, cx| {
+            state.set_content("caret 日本🙂\n", cx);
+            state.set_selection_bytes(0, 0, cx).unwrap();
+            assert!(
+                state.blink_task.is_none(),
+                "unfocused selection does not start a timer"
+            );
+        });
+        let (host, window) = cx.add_window_view({
+            let state = state.clone();
+            move |_, cx| BlinkHost {
+                _observer: cx.observe(&state, |_, _, cx| cx.notify()),
+                state,
+                visible: true,
+            }
+        });
+        // Test windows are registered active before their activation callback
+        // exists; drive an actual deactivate/reactivate platform transition.
+        window.deactivate_window();
+        window.update(|window, cx| {
+            window.activate_window();
+            window.focus(&state.focus_handle(cx));
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(
+                state.read(cx).blink_task.is_some(),
+                "focused={} active={} visible={} reduced={} paint_epoch={}",
+                state.read(cx).focus_handle.is_focused(window),
+                window.is_window_active(),
+                window.is_window_visible(),
+                window.reduce_motion(),
+                state.read(cx).blink_paint_epoch
+            );
+        });
+        window.run_until_parked();
+        window.executor().advance_clock(Duration::from_millis(500));
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert!(!state.read(cx).cursor_visible, "focused caret still blinks");
+            window.draw(cx).clear();
+            window.focus(&cx.focus_handle());
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            assert!(
+                state.read(cx).blink_task.is_none(),
+                "blur cancels the task immediately"
+            );
+            assert!(state.read(cx).cursor_visible);
+        });
+        window.executor().advance_clock(Duration::from_secs(2));
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert!(state.read(cx).cursor_visible);
+            window.focus(&state.focus_handle(cx));
+            window.draw(cx).clear();
+            assert!(state.read(cx).blink_task.is_some());
+        });
+        window.deactivate_window();
+        window.update(|_, cx| assert!(state.read(cx).blink_task.is_none()));
+        window.update(|window, _| window.activate_window());
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(state.read(cx).blink_task.is_some());
+            host.update(cx, |host, cx| {
+                host.visible = false;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+        });
+        window.run_until_parked();
+        for _ in 0..3 {
+            window.executor().advance_clock(Duration::from_millis(500));
+            window.run_until_parked();
+        }
+        window.update(|_, cx| {
+            assert!(
+                state.read(cx).blink_task.is_none(),
+                "retained hidden state has no recurring timer"
+            );
+            assert!(state.read(cx).cursor_visible);
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn deferred_accessibility_selection_rejects_replaced_document_identity() {
+        let mut cx = TestAppContext::single();
+        let content = "original café 日本🙂\n";
+        let replacement = "modified café 日本🙂\n";
+        let (state, window) = document_window(&mut cx, content);
+        let start = content.find("日本").unwrap();
+        let end = start + "日本🙂".len();
+        let (id, original) = window.update(|window, _| {
+            let node = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some("Project document"))
+                .unwrap();
+            (node.id, node.text_document.clone().unwrap())
+        });
+        // This is the normalized payload: the native queue already converted
+        // run positions to bytes. Div defers its listener onto the foreground
+        // executor, leaving a real edit/reprepare window before invocation.
+        let current = window.update(|window, cx| {
+            window.dispatch_accessibility_action_for_test(
+                AccessibilityActionRequest::with_payload(
+                    id,
+                    AccessibilityAction::SetTextSelection,
+                    AccessibilityActionPayload::TextSelection {
+                        document_id: original.id(),
+                        anchor: end,
+                        focus: start,
+                    },
+                ),
+            );
+            let current = state.update(cx, |state, cx| {
+                state.set_content(replacement, cx);
+                state.prepare_accessibility_document(cx);
+                state.set_selection_bytes(1, 1, cx).unwrap();
+                let current = state.prepared_accessibility_document().unwrap();
+                assert_ne!(current.id(), original.id());
+                assert!(
+                    current.contains_selection(AccessibilityTextSelection {
+                        anchor: end,
+                        focus: start
+                    }),
+                    "same byte endpoints remain valid in the replacement document"
+                );
+                current
+            });
+            window.draw(cx).clear();
+            current
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert_eq!(
+                state.read(cx).selection_bytes(),
+                (1, 1),
+                "deferred old-document action is rejected despite freshly prepared current metadata"
+            );
+            assert_eq!(state.read(cx).content(), replacement);
+            window.dispatch_accessibility_action_for_test(
+                AccessibilityActionRequest::with_payload(
+                    id,
+                    AccessibilityAction::SetTextSelection,
+                    AccessibilityActionPayload::TextSelection {
+                        document_id: current.id(),
+                        anchor: end,
+                        focus: start,
+                    },
+                ),
+            );
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            assert_eq!(state.read(cx).selection_bytes(), (end, start));
+            assert_eq!(state.read(cx).selection_text().as_deref(), Some("日本🙂"));
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn document_accessibility_selection_uses_complete_revision_and_reuses_metadata() {
+        let mut cx = TestAppContext::single();
+        let content = "# café 日本🙂\nsecond\n";
+        let (state, window) = document_window(&mut cx, content);
+        let (id, document) = window.update(|window, cx| {
+            let node = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some("Project document"))
+                .unwrap();
+            assert!(
+                node.actions
+                    .contains(&AccessibilityAction::SetTextSelection)
+            );
+            assert!(!node.states.contains(AccessibilityState::BUSY));
+            assert!(
+                node.value.is_none(),
+                "native full text is supplied through retained text runs"
+            );
+            let document = node.text_document.clone().unwrap();
+            assert_eq!(document.text(), state.read(cx).content());
+            (node.id, document)
+        });
+        let start = content.find("日本").unwrap();
+        let end = start + "日本🙂".len();
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(
+                AccessibilityActionRequest::with_payload(
+                    id,
+                    AccessibilityAction::SetTextSelection,
+                    AccessibilityActionPayload::TextSelection {
+                        document_id: document.id(),
+                        anchor: end,
+                        focus: start,
+                    },
+                ),
+            );
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert_eq!(state.read(cx).selection_bytes(), (end, start));
+            assert_eq!(state.read(cx).selection_text().as_deref(), Some("日本🙂"));
+            for _ in 0..20 {
+                state.update(cx, |state, cx| {
+                    state.set_selection_bytes(start, start, cx).unwrap()
+                });
+                window.draw(cx).clear();
+                assert!(Arc::ptr_eq(
+                    &document,
+                    &state.read(cx).prepared_accessibility_document().unwrap()
+                ));
+            }
+            state.update(cx, |state, cx| {
+                state.set_content(&"changed 日本🙂\n".repeat(10_000), cx);
+                let before = state.selection_bytes();
+                assert!(
+                    state
+                        .set_accessibility_selection(document.id(), end, start, cx)
+                        .is_err()
+                );
+                assert_eq!(
+                    state.selection_bytes(),
+                    before,
+                    "old-revision selection cannot mutate current document"
+                );
+            });
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn large_document_accessibility_preparation_coalesces_revisions_and_reclaims_outgoing_text() {
+        let mut cx = TestAppContext::single();
+        let state = cx.new(EditorState::new);
+        state.update(&mut cx, |state, cx| {
+            state.set_content(&"old café🙂\n".repeat(10_000), cx);
+            state.prepare_accessibility_document(cx);
+            assert!(state.accessibility_preparation_task.is_some());
+            for revision in 0..20 {
+                state.set_content(&format!("revision {revision} 日本🙂\n").repeat(5_000), cx);
+                state.prepare_accessibility_document(cx);
+                assert!(state.accessibility_preparation_task.is_some());
+                assert!(state.prepared_accessibility_document().is_none());
+            }
+        });
+        cx.run_until_parked();
+        let retired = state.update(&mut cx, |state, cx| {
+            let document = state.prepared_accessibility_document().unwrap();
+            assert_eq!(document.text(), state.content());
+            assert!(document.text().starts_with("revision 19 日本🙂"));
+            assert!(state.accessibility_preparation_task.is_none());
+            let retired = Arc::downgrade(&document);
+            state.set_content("small 日本語\n", cx);
+            state.prepare_accessibility_document(cx);
+            assert_eq!(
+                state.prepared_accessibility_document().unwrap().text(),
+                "small 日本語\n"
+            );
+            retired
+        });
+        cx.run_until_parked();
+        assert!(retired.upgrade().is_none());
+        state.update(&mut cx, |state, cx| {
+            let previous = state.prepared_accessibility_document().unwrap();
+            let version = state.content_version();
+            state.marked_range = Some(0..1);
+            state.load_file(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("examples/fixtures/project_launch.md"),
+                cx,
+            );
+            assert!(
+                state.content_version() > version,
+                "loading a new file changes document identity"
+            );
+            assert!(state.marked_range.is_none());
+            assert!(state.prepared_accessibility_document().is_none());
+            state.prepare_accessibility_document(cx);
+            let current = state.prepared_accessibility_document().unwrap();
+            assert!(!Arc::ptr_eq(&previous, &current));
+            assert_eq!(current.text(), state.content());
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn document_selection_bytes_validate_boundaries_and_preserve_history_direction() {
+        let mut cx = TestAppContext::single();
+        let (state, window) = document_window(&mut cx, "café 日本🙂\nsecond\n");
+        window.update(|_, cx| {
+            state.update(cx, |state, cx| {
+                let before = state.content();
+                let start = before.find("日本").unwrap();
+                let end = start + "日本🙂".len();
+                state.set_selection_bytes(end, start, cx).unwrap();
+                assert_eq!(state.selection_bytes(), (end, start));
+                assert_eq!(state.selection_text().as_deref(), Some("日本🙂"));
+                assert!(state.set_selection_bytes(start + 1, end, cx).is_err());
+                assert!(state.set_selection_bytes(0, before.len() + 1, cx).is_err());
+                assert_eq!(state.selection_bytes(), (end, start));
+                assert_eq!(state.content(), before);
+                assert_eq!(state.undo_depth(), 0);
+                state.replace_selection("選択", cx);
+                assert_eq!(state.undo_depth(), 1);
+                let caret = state.selection_bytes().1;
+                state.set_selection_bytes(caret, caret, cx).unwrap();
+                assert!(state.selection_is_empty());
+                assert_eq!(state.undo_depth(), 1);
+            })
+        });
+        window.update(|window, cx| {
+            state.update(cx, |state, cx| {
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.content(), "café 日本🙂\nsecond\n");
+            })
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn document_ime_replaces_marked_selection_and_commits_as_one_undo_step() {
+        let mut cx = TestAppContext::single();
+        let (state, window) = document_window(&mut cx, "# Project café\n\nHello 🙂 team\n");
+        let original = window.update(|_, cx| state.read(cx).content());
+        window.update(|window, cx| {
+            state.update(cx, |state, cx| {
+                // Select "Hello" backwards: platform ranges stay sorted, with a
+                // separate reversed bit, including Unicode before the selection.
+                state.selection = Some(Selection::new(Position::new(2, 5), Position::new(2, 0)));
+                state.cursor = Position::new(2, 0);
+                let selected = state.selected_text_range(false, window, cx).unwrap();
+                assert!(selected.reversed);
+                assert!(selected.range.start < selected.range.end);
+                assert_eq!(
+                    state
+                        .text_for_range(selected.range, &mut None, window, cx)
+                        .as_deref(),
+                    Some("Hello")
+                );
+                state.replace_and_mark_text_in_range(None, "に", Some(1..1), window, cx);
+                state.replace_and_mark_text_in_range(None, "日本🙂", Some(2..4), window, cx);
+                assert!(state.content().contains("日本🙂 🙂 team"));
+                assert!(!state.content().contains("に日本"));
+                assert_eq!(state.selection_text().as_deref(), Some("🙂"));
+                let marked = state.marked_text_range(window, cx).unwrap();
+                assert_eq!(marked.end - marked.start, 4);
+                assert_eq!(state.undo_depth(), 1);
+                state.replace_text_in_range(None, "日本語", window, cx);
+                assert!(state.marked_text_range(window, cx).is_none());
+                assert!(state.content().contains("日本語 🙂 team"));
+                assert_eq!(state.undo_depth(), 1);
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.content(), original);
+                state.redo(&Redo, window, cx);
+                assert!(state.content().contains("日本語 🙂 team"));
+                assert_eq!(state.undo_depth(), 1);
+            })
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn document_input_formatting_unicode_selection_and_clipboard_roundtrip() {
+        let mut cx = TestAppContext::single();
+        let (state, window) = document_window(&mut cx, "# Project plan\n\nLaunch notes\n");
+        #[cfg(target_os = "macos")]
+        window.simulate_keystrokes("cmd-a");
+        #[cfg(not(target_os = "macos"))]
+        window.simulate_keystrokes("ctrl-a");
+        window.simulate_input("A e\u{301}👩\u{200d}💻 B\n");
+        window.update(|window, cx| {
+            state.update(cx, |state, cx| {
+                state.set_cursor_position(0, "A e\u{301}👩\u{200d}💻".len(), cx);
+                state.select_left(&SelectLeft, window, cx);
+                assert_eq!(state.selection_text().as_deref(), Some("👩\u{200d}💻"));
+                state.copy(&Copy, window, cx);
+                assert_eq!(
+                    cx.read_from_clipboard().unwrap().unwrap().text().as_deref(),
+                    Some("👩\u{200d}💻")
+                );
+                state.replace_selection("**developer**", cx);
+                assert!(state.content().contains("A e\u{301}**developer** B"));
+                state.undo(&Undo, window, cx);
+                assert!(state.content().contains("A e\u{301}👩\u{200d}💻 B"));
+                state.redo(&Redo, window, cx);
+                assert!(state.content().contains("**developer**"));
+                state.undo(&Undo, window, cx);
+                state.set_cursor_position(0, "A e\u{301}".len(), cx);
+                state.backspace(&Backspace, window, cx);
+                assert!(state.content().starts_with("A 👩\u{200d}💻"));
+                state.undo(&Undo, window, cx);
+                state.set_cursor_position(0, 2, cx);
+                state.delete(&Delete, window, cx);
+                assert!(state.content().starts_with("A 👩\u{200d}💻"));
+                state.undo(&Undo, window, cx);
+                state.set_cursor_position(0, 2, cx);
+                state.move_right(&MoveRight, window, cx);
+                assert_eq!(state.cursor.col, "A e\u{301}".len());
+                state.move_right(&MoveRight, window, cx);
+                assert_eq!(state.cursor.col, "A e\u{301}👩\u{200d}💻".len());
+            })
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn document_explicit_ime_range_moves_to_requested_caret_and_read_only_rejects_edits() {
+        let mut cx = TestAppContext::single();
+        let (state, window) = document_window(&mut cx, "café 🙂\n");
+        window.update(|window, cx| {
+            state.update(cx, |state, cx| {
+                state.set_cursor_position(0, 0, cx);
+                state.replace_and_mark_text_in_range(
+                    Some(5..7),
+                    "👩\u{200d}💻",
+                    Some(5..5),
+                    window,
+                    cx,
+                );
+                assert_eq!(state.content(), "café 👩\u{200d}💻\n");
+                assert_eq!(state.cursor.col, "café 👩\u{200d}💻".len());
+                state.unmark_text(window, cx);
+                let content = state.content();
+                let depth = state.undo_depth();
+                state.read_only = true;
+                state.replace_and_mark_text_in_range(None, "blocked", None, window, cx);
+                state.replace_text_in_range(None, "blocked", window, cx);
+                state.replace_selection("blocked", cx);
+                state.undo(&Undo, window, cx);
+                state.redo(&Redo, window, cx);
+                assert_eq!(state.content(), content);
+                assert_eq!(state.undo_depth(), depth);
+            })
         });
     }
 }

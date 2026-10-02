@@ -61,6 +61,7 @@ impl WindowsWindowInner {
         let handled = match msg {
             WM_ACTIVATE => self.handle_activate_msg(wparam),
             WM_KILLFOCUS => {
+                self.accessibility_provider.update_focus(false);
                 self.release_native_pointer_lock().log_err();
                 self.cancel_active_precision_pointers();
                 None
@@ -141,7 +142,9 @@ impl WindowsWindowInner {
             WM_GPUI_CURSOR_STYLE_CHANGED => self.handle_cursor_changed(lparam),
             WM_GPUI_FORCE_UPDATE_WINDOW => self.draw_window(handle, true),
             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
-            WM_GETOBJECT => handle_wm_getobject(handle, wparam, lparam, &self.uia_provider),
+            WM_GETOBJECT => self
+                .accessibility_provider
+                .handle_wm_getobject(wparam, lparam),
             _ => None,
         };
         if let Some(n) = handled {
@@ -1032,17 +1035,7 @@ impl WindowsWindowInner {
         }
         let this = self.clone();
 
-        // Fire UIA focus changed event when the window gains focus.
-        if activated {
-            let provider: windows::Win32::UI::Accessibility::IRawElementProviderSimple =
-                self.uia_provider.to_interface();
-            unsafe {
-                let _ = windows::Win32::UI::Accessibility::UiaRaiseAutomationEvent(
-                    &provider,
-                    windows::Win32::UI::Accessibility::UIA_AutomationFocusChangedEventId,
-                );
-            }
-        }
+        self.accessibility_provider.update_focus(activated);
 
         self.executor
             .spawn(async move {

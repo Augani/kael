@@ -70,6 +70,12 @@ try {
         throw "native renderer did not produce a non-empty PNG"
     }
 
+    Invoke-LoggedCommand `
+        -LogPath (Join-Path $evidence "programmable-renderer.log") `
+        -Command "python" `
+        (Join-Path $workspace "scripts\ci\verify-programmable-renderer.py"), `
+        "--backend", "directx11", "--evidence", (Join-Path $evidence "programmable")
+
     if ($SkipGeneratedProject) {
         "GENERATED_NATIVE_RUNTIME_SKIPPED: explicitly disabled" |
             Set-Content -Encoding utf8 (Join-Path $evidence "generated-native.log")

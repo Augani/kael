@@ -1,7 +1,7 @@
 use crate::{DevicePixels, Pixels, Result, SharedString, Size, size};
 use smallvec::SmallVec;
 
-use image::{Delay, Frame, ImageFormat, ImageReader, Limits};
+use image::{Delay, Frame, ImageDecoder, ImageFormat, ImageReader, Limits};
 use std::{
     borrow::Cow,
     fmt,
@@ -57,22 +57,38 @@ pub(crate) fn checked_image_frame_len(width: u32, height: u32) -> Result<usize> 
     Ok(byte_len)
 }
 
-pub(crate) fn decode_static_image(
+pub(crate) fn decode_static_image_with_budget(
     bytes: &[u8],
     format: ImageFormat,
+    max_bytes: u64,
 ) -> Result<SmallVec<[Frame; 1]>> {
     validate_image_source_bytes(bytes)?;
     let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
-    reader.limits(image_decode_limits());
-    let image = reader.decode()?;
-    checked_image_frame_len(image.width(), image.height())?;
+    let mut limits = image_decode_limits();
+    limits.max_alloc = Some(max_bytes.min(MAX_DECODED_IMAGE_BYTES as u64));
+    reader.limits(limits);
+    let decoder = reader.into_decoder()?;
+    let (width, height) = decoder.dimensions();
+    anyhow::ensure!(
+        checked_image_frame_len(width, height)? as u64 <= max_bytes,
+        "declared decoded image dimensions exceed the cache byte budget"
+    );
+    let image = image::DynamicImage::from_decoder(decoder)?;
     let mut data = image.into_rgba8();
     rgba_to_bgra(data.as_mut());
     Ok(SmallVec::from_elem(Frame::new(data), 1))
 }
 
+#[cfg(test)]
 pub(crate) fn collect_animation_frames(
     frames: impl IntoIterator<Item = image::ImageResult<Frame>>,
+) -> Result<SmallVec<[Frame; 1]>> {
+    collect_animation_frames_with_budget(frames, MAX_DECODED_IMAGE_BYTES as u64)
+}
+
+pub(crate) fn collect_animation_frames_with_budget(
+    frames: impl IntoIterator<Item = image::ImageResult<Frame>>,
+    max_bytes: u64,
 ) -> Result<SmallVec<[Frame; 1]>> {
     let mut decoded_bytes = 0usize;
     let mut decoded_frames = SmallVec::new();
@@ -93,7 +109,7 @@ pub(crate) fn collect_animation_frames(
             .checked_add(frame_bytes)
             .ok_or_else(|| anyhow::anyhow!("decoded image data length overflowed"))?;
         anyhow::ensure!(
-            decoded_bytes <= MAX_DECODED_IMAGE_BYTES,
+            decoded_bytes <= MAX_DECODED_IMAGE_BYTES && decoded_bytes as u64 <= max_bytes,
             "decoded image data cannot exceed {MAX_DECODED_IMAGE_BYTES} bytes"
         );
         rgba_to_bgra(buffer.as_mut());
@@ -199,6 +215,13 @@ impl RenderImage {
     pub fn frame_count(&self) -> usize {
         self.data.len()
     }
+
+    /// Bytes occupied by all decoded frames, including animated-image frames.
+    pub fn decoded_bytes(&self) -> u64 {
+        self.data.iter().fold(0u64, |bytes, frame| {
+            bytes.saturating_add(frame.buffer().as_raw().len() as u64)
+        })
+    }
 }
 
 impl fmt::Debug for RenderImage {
@@ -207,5 +230,57 @@ impl fmt::Debug for RenderImage {
             .field("id", &self.id)
             .field("size", &self.size(0))
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn decoded_frame_budget_includes_all_animation_buffers() {
+        let image = RenderImage::new(smallvec::smallvec![
+            Frame::new(image::RgbaImage::new(2, 3)),
+            Frame::new(image::RgbaImage::new(4, 1)),
+        ]);
+        assert_eq!(image.decoded_bytes(), 40);
+        assert!(
+            collect_animation_frames_with_budget(
+                [
+                    Ok(Frame::new(image::RgbaImage::new(2, 3))),
+                    Ok(Frame::new(image::RgbaImage::new(4, 1)))
+                ],
+                39
+            )
+            .is_err()
+        );
+        assert_eq!(
+            collect_animation_frames_with_budget(
+                [
+                    Ok(Frame::new(image::RgbaImage::new(2, 3))),
+                    Ok(Frame::new(image::RgbaImage::new(4, 1)))
+                ],
+                40
+            )
+            .unwrap()
+            .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn declared_static_dimensions_are_checked_against_decode_budget() {
+        let mut encoded = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(4, 4))
+            .write_to(&mut encoded, ImageFormat::Png)
+            .unwrap();
+        assert!(decode_static_image_with_budget(encoded.get_ref(), ImageFormat::Png, 63).is_err());
+        assert_eq!(
+            decode_static_image_with_budget(encoded.get_ref(), ImageFormat::Png, 4096).unwrap()[0]
+                .buffer()
+                .as_raw()
+                .len(),
+            64
+        );
     }
 }

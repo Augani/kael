@@ -1,4 +1,6 @@
+#[cfg(test)]
 pub(crate) mod accessibility;
+mod accesskit_provider;
 mod active_window;
 mod auto_launch;
 mod biometric;
@@ -37,7 +39,7 @@ mod webview;
 mod window;
 mod wrapper;
 
-pub(crate) use accessibility::*;
+pub(crate) use accesskit_provider::WindowsAccessibilityProvider;
 pub(crate) use clipboard::*;
 pub(crate) use destination_list::*;
 pub(crate) use direct_write::*;

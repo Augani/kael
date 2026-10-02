@@ -9,6 +9,84 @@ stabilised — minor version bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Added optional typed GPU render targets, reflected WGSL fragment/compute
+  programs and a render graph with checked bindings, device ownership,
+  resource budgets, transient aliasing and revision-based pass reuse. Public
+  examples display GPU results directly through the UI.
+- Added persistent docking layouts with nested splits, tab rearrangement,
+  floating pane groups and restore validation, plus structured property
+  inspectors with typed edits and bounded undo/redo history.
+- Added reusable lazy asynchronous filesystem models and a document/data
+  workbench with rich Markdown preview and a bounded remote spreadsheet source.
+- Added matched native navigation, Unicode editor and 100,000-row data comparison contracts
+  against a pinned GPUI Kit release, raw process/frame evidence collection and
+  separate builds with framework frame instrumentation disabled.
+- Added opt-in Metal GPU completion and drawable-presentation timestamps with
+  bounded retention and no periodic UI work.
+- Added native accessibility protocol/client checks for AppKit, Windows UI
+  Automation and Linux AT-SPI. The licensed macOS adapter ships as the named
+  `kael_accesskit_macos` package with retained upstream provenance.
+- Added viewport-mounted `VirtualTreeList`, reusable immutable `VirtualTreeModel`,
+  and persistent `VirtualTreeState` for large project/file explorers, with one
+  keyboard focus handle, controlled selection/expansion, mounted accessibility
+  actions, and a 100,000-file example.
+- Added optional payload-byte budgets for `MemoryCache` and the two-tier
+  `CacheManager`, with checked admission and memory usage queries.
+- Added maintained transient-allocation and GPU-budget bookkeeping benchmarks
+  to the cross-platform performance workflow.
+
+### Changed
+
+- Bound the shared shaped-text cache to 4,096 entries and 8 MiB of charged
+  allocations, use second-chance eviction and clear it under memory pressure.
+- Keep editor line mapping proportional to visible lines and collapsed folds;
+  prepare large document syntax and accessibility metadata on cancellable workers.
+- Bound decoded images, pending loads, completed default asset retention and
+  atlas admissions before expensive raster work; defer atlas retirement until
+  native submissions are safe to reuse.
+- Use retained logical accessibility snapshots for virtual controls and wake
+  idle Windows/Linux windows through their native foreground dispatch paths.
+- Made transient allocation planning O(R log R) while preserving deterministic
+  compatible slot reuse, and indexed GPU resource bookkeeping to avoid quadratic
+  registration and pressure eviction.
+- Bounded media frame-cache metadata by entry count as well as bytes, added
+  immediate budget updates, and replaced full-map LRU scans with indexed slots.
+- Reduced tree flattening/filtering copies, made parent lookup linear, and added
+  shared tree model input for redraws.
+
+### Fixed
+
+- Include line-clamp limits in wrapped-text cache keys, preserving the correct
+  wrapping result when the same text is drawn with different limits.
+- Stop caret timers in blurred, deactivated and retained hidden editors, and
+  keep a steady caret when reduced motion is requested.
+- Preserve Unicode grapheme selections and atomic IME/selection history;
+  expose complete prepared document text and checked native selection actions.
+- Reject native actions on disabled or hidden controls and reject deferred
+  text selections whose prepared document identity has changed.
+- Require loaded remote-cell baselines for undoable edits, preserve captured
+  query identities for asynchronous writes, and keep grid wheel axes independent.
+- Replace the browser backdrop tint fallback with bounded separable GPU blur,
+  including premultiplied tint, rounded masks and context-loss recovery.
+- Allocate Metal path/MSAA and subtree scratch targets on first use, and reject
+  oversized offscreen captures before allocating GPU resources.
+- Corrected source-over destination alpha in Metal and DirectX ordinary and
+  path-sprite rendering pipelines.
+- Corrected backdrop blur parameter bindings on Metal, premultiplied color and
+  tint composition, framebuffer sampling coordinates, and capture-edge filtering
+  in the Metal, DirectX, and Blade shaders.
+- Validate Blade WGSL semantics during builds and on other native hosts in the
+  primitive-layout regression, beyond syntax parsing.
+- Wake idle macOS windows for accessibility action batches so buttons activate
+  without waiting for unrelated pointer input.
+- Reject checked GPU reservations larger than the whole budget before eviction.
+- Enforce decoded-image LRU capacity when asynchronous loads complete, preserve
+  currently requested images during pruning, and contain recency rollover.
+- Corrected tree search highlight ranges when Unicode lowercasing expands
+  characters, and removed repeated prefix counting during substring matching.
+
 ## [0.4.1] - 2026-08-25
 
 ### Added

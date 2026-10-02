@@ -6,7 +6,7 @@ use crate::components::icon_button::IconButton;
 use crate::components::icon_source::IconSource;
 use crate::theme::Theme;
 use kael::{prelude::*, *};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::hash::Hash;
 use std::panic::Location;
 use std::rc::Rc;
@@ -62,51 +62,90 @@ impl<T: Clone> TreeNode<T> {
     }
 }
 
-#[derive(Clone)]
-struct FlatTreeNode<T: Clone> {
-    node: TreeNode<T>,
-    level: usize,
-    node_id: T,
+// Retain only the row payload. Cloning a TreeNode here would recursively clone
+// every descendant once per ancestor, even when the branch is collapsed.
+pub(super) struct FlatTreeNode<T: Clone> {
+    pub(super) node_id: T,
+    pub(super) label: SharedString,
+    pub(super) icon: Option<IconSource>,
+    pub(super) icon_color: Option<Hsla>,
+    pub(super) disabled: bool,
+    pub(super) has_children: bool,
+    pub(super) level: usize,
+    pub(super) match_ranges: Vec<(usize, usize)>,
 }
 
-#[derive(Clone)]
-struct FilteredNode<T: Clone> {
-    node: TreeNode<T>,
-    match_ranges: Vec<(usize, usize)>,
-    children: Vec<FilteredNode<T>>,
-}
-
-fn filter_tree<T: Clone>(nodes: &[TreeNode<T>], filter: &str) -> Vec<FilteredNode<T>> {
-    if filter.is_empty() {
-        return nodes
-            .iter()
-            .map(|node| FilteredNode {
-                node: node.clone(),
-                match_ranges: Vec::new(),
-                children: filter_tree(&node.children, filter),
-            })
-            .collect();
-    }
-
-    let filter_lower = filter.to_lowercase();
-    let mut filtered = Vec::new();
-
-    for node in nodes {
-        let label_lower = node.label.to_lowercase();
-
-        let (matches, match_ranges) = find_matches(&label_lower, &filter_lower);
-
-        let filtered_children = filter_tree(&node.children, filter);
-        if matches || !filtered_children.is_empty() {
-            filtered.push(FilteredNode {
-                node: node.clone(),
-                match_ranges,
-                children: filtered_children,
-            });
+impl<T: Clone> FlatTreeNode<T> {
+    fn new(node: &TreeNode<T>, level: usize, match_ranges: Vec<(usize, usize)>) -> Self {
+        Self {
+            node_id: node.id.clone(),
+            label: node.label.clone(),
+            icon: node.icon.clone(),
+            icon_color: node.icon_color,
+            disabled: node.disabled,
+            has_children: !node.children.is_empty() || node.has_lazy_children,
+            level,
+            match_ranges,
         }
     }
+}
 
-    filtered
+pub(super) struct FilteredNode<'a, T: Clone> {
+    node: &'a TreeNode<T>,
+    match_ranges: Vec<(usize, usize)>,
+    children: Vec<FilteredNode<'a, T>>,
+}
+
+pub(super) fn filter_tree<'a, T: Clone>(
+    nodes: &'a [TreeNode<T>],
+    filter: &str,
+) -> Vec<FilteredNode<'a, T>> {
+    fn visit<'a, T: Clone>(
+        nodes: &'a [TreeNode<T>],
+        filter_lower: &str,
+    ) -> Vec<FilteredNode<'a, T>> {
+        let mut filtered = Vec::new();
+        for node in nodes {
+            let (matches, match_ranges) = find_label_matches(&node.label, filter_lower);
+            let children = visit(&node.children, filter_lower);
+            if filter_lower.is_empty() || matches || !children.is_empty() {
+                filtered.push(FilteredNode {
+                    node,
+                    match_ranges,
+                    children,
+                });
+            }
+        }
+        filtered
+    }
+
+    visit(nodes, &filter.to_lowercase())
+}
+
+// Lowercasing can expand a character (for example, İ becomes i + ◌̇).
+// Highlight ranges must still index characters in the original label.
+fn find_label_matches(label: &str, filter_lower: &str) -> (bool, Vec<(usize, usize)>) {
+    let label_lower = label.to_lowercase();
+    let (matches, ranges) = find_matches(&label_lower, filter_lower);
+    if !matches || label_lower.chars().count() == label.chars().count() {
+        return (matches, ranges);
+    }
+
+    let original_indices: Vec<usize> = label
+        .chars()
+        .enumerate()
+        .flat_map(|(index, character)| character.to_lowercase().map(move |_| index))
+        .collect();
+    let mut mapped: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        let range = (original_indices[start], original_indices[end - 1] + 1);
+        if let Some(previous) = mapped.last_mut().filter(|previous| range.0 <= previous.1) {
+            previous.1 = previous.1.max(range.1);
+        } else {
+            mapped.push(range);
+        }
+    }
+    (true, mapped)
 }
 
 fn find_matches(text: &str, filter: &str) -> (bool, Vec<(usize, usize)>) {
@@ -116,11 +155,12 @@ fn find_matches(text: &str, filter: &str) -> (bool, Vec<(usize, usize)>) {
 
     let mut match_ranges = Vec::new();
     let mut start_byte = 0;
+    let mut start_char_offset = 0;
     let filter_char_count = filter.chars().count();
 
     while let Some(pos) = text[start_byte..].find(filter) {
         let absolute_byte = start_byte + pos;
-        let start_char = text[..absolute_byte].chars().count();
+        let start_char = start_char_offset + text[start_byte..absolute_byte].chars().count();
         let end_char = start_char + filter_char_count;
         let overlaps_previous = match_ranges
             .last()
@@ -138,6 +178,7 @@ fn find_matches(text: &str, filter: &str) -> (bool, Vec<(usize, usize)>) {
             .map(char::len_utf8)
             .unwrap_or(1);
         start_byte = absolute_byte + advance;
+        start_char_offset = start_char + 1;
     }
 
     if !match_ranges.is_empty() {
@@ -145,12 +186,11 @@ fn find_matches(text: &str, filter: &str) -> (bool, Vec<(usize, usize)>) {
     }
 
     let filter_chars: Vec<char> = filter.chars().collect();
-    let text_chars: Vec<char> = text.chars().collect();
     let mut filter_idx = 0;
     let mut current_match_start = None;
     let mut fuzzy_ranges = Vec::new();
 
-    for (text_idx, &text_char) in text_chars.iter().enumerate() {
+    for (text_idx, text_char) in text.chars().enumerate() {
         if filter_idx < filter_chars.len() && text_char == filter_chars[filter_idx] {
             if current_match_start.is_none() {
                 current_match_start = Some(text_idx);
@@ -169,62 +209,71 @@ fn find_matches(text: &str, filter: &str) -> (bool, Vec<(usize, usize)>) {
     (false, Vec::new())
 }
 
-fn flatten_filtered_tree<T: Clone + PartialEq + Eq + Hash>(
-    filtered_nodes: &[FilteredNode<T>],
+pub(super) fn flatten_filtered_tree<T: Clone + Eq + Hash>(
+    filtered_nodes: &[FilteredNode<'_, T>],
     expanded_ids: &HashSet<T>,
     level: usize,
     auto_expand_matches: bool,
-) -> Vec<(FlatTreeNode<T>, Vec<(usize, usize)>)> {
+) -> Vec<FlatTreeNode<T>> {
     let mut flat = Vec::new();
-
-    for filtered_node in filtered_nodes {
-        flat.push((
-            FlatTreeNode {
-                node: filtered_node.node.clone(),
-                level,
-                node_id: filtered_node.node.id.clone(),
-            },
+    let mut stack = vec![(filtered_nodes.iter(), level)];
+    while let Some((siblings, level)) = stack.last_mut() {
+        let Some(filtered_node) = siblings.next() else {
+            stack.pop();
+            continue;
+        };
+        let next_level = *level + 1;
+        flat.push(FlatTreeNode::new(
+            filtered_node.node,
+            *level,
             filtered_node.match_ranges.clone(),
         ));
-
-        let should_expand = expanded_ids.contains(&filtered_node.node.id)
-            || (auto_expand_matches && !filtered_node.children.is_empty());
-
-        if should_expand {
-            let children = flatten_filtered_tree(
-                &filtered_node.children,
-                expanded_ids,
-                level + 1,
-                auto_expand_matches,
-            );
-            flat.extend(children);
+        if expanded_ids.contains(&filtered_node.node.id)
+            || (auto_expand_matches && !filtered_node.children.is_empty())
+        {
+            stack.push((filtered_node.children.iter(), next_level));
         }
     }
-
     flat
 }
 
-fn flatten_tree<T: Clone + PartialEq + Eq + Hash>(
+pub(super) fn flatten_tree<T: Clone + Eq + Hash>(
     nodes: &[TreeNode<T>],
     expanded_ids: &HashSet<T>,
     level: usize,
 ) -> Vec<FlatTreeNode<T>> {
     let mut flat = Vec::new();
-
-    for node in nodes {
-        flat.push(FlatTreeNode {
-            node: node.clone(),
-            level,
-            node_id: node.id.clone(),
-        });
-
+    // Keep one iterator per expanded ancestor, avoiding both recursive vectors
+    // and traversal of collapsed descendants.
+    let mut stack = vec![(nodes.iter(), level)];
+    while let Some((siblings, level)) = stack.last_mut() {
+        let Some(node) = siblings.next() else {
+            stack.pop();
+            continue;
+        };
+        let next_level = *level + 1;
+        flat.push(FlatTreeNode::new(node, *level, Vec::new()));
         if !node.children.is_empty() && expanded_ids.contains(&node.id) {
-            let children = flatten_tree(&node.children, expanded_ids, level + 1);
-            flat.extend(children);
+            stack.push((node.children.iter(), next_level));
         }
     }
-
     flat
+}
+
+pub(super) fn parent_indices<T: Clone>(nodes: &[FlatTreeNode<T>]) -> Vec<Option<usize>> {
+    let mut parents = Vec::with_capacity(nodes.len());
+    let mut ancestors: Vec<usize> = Vec::new();
+    for (index, node) in nodes.iter().enumerate() {
+        while ancestors
+            .last()
+            .is_some_and(|ancestor| nodes[*ancestor].level >= node.level)
+        {
+            ancestors.pop();
+        }
+        parents.push(ancestors.last().copied());
+        ancestors.push(index);
+    }
+    parents
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -236,7 +285,7 @@ pub enum TreeListDensity {
 }
 
 impl TreeListDensity {
-    fn row_height(self) -> Pixels {
+    pub(super) fn row_height(self) -> Pixels {
         match self {
             Self::Compact => px(28.0),
             Self::Balanced => px(36.0),
@@ -244,11 +293,11 @@ impl TreeListDensity {
         }
     }
 
-    fn text_size(self) -> Pixels {
+    pub(super) fn text_size(self) -> Pixels {
         px(14.0)
     }
 
-    fn indent(self) -> f32 {
+    pub(super) fn indent(self) -> f32 {
         match self {
             Self::Compact => 14.0,
             Self::Balanced => 16.0,
@@ -260,7 +309,7 @@ impl TreeListDensity {
 #[derive(IntoElement)]
 pub struct TreeList<T: Clone + PartialEq + Eq + Hash + 'static> {
     id: ElementId,
-    nodes: Vec<TreeNode<T>>,
+    nodes: Arc<[TreeNode<T>]>,
     header: Option<AnyElement>,
     density: TreeListDensity,
     selected_id: Option<T>,
@@ -295,7 +344,7 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> TreeList<T> {
                 )
                 .into(),
             ),
-            nodes: Vec::new(),
+            nodes: Arc::from([]),
             header: None,
             density: TreeListDensity::Balanced,
             selected_id: None,
@@ -316,7 +365,17 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> TreeList<T> {
         self
     }
 
+    /// Set the tree model. Use [`Self::shared_nodes`] to reuse a model across renders.
     pub fn nodes(mut self, nodes: Vec<TreeNode<T>>) -> Self {
+        self.nodes = nodes.into();
+        self
+    }
+
+    /// Reuse an immutable tree model without cloning its descendants each render.
+    ///
+    /// Replace the shared model when its nodes change. Expanded and selected IDs
+    /// remain independently controlled by the application.
+    pub fn shared_nodes(mut self, nodes: Arc<[TreeNode<T>]>) -> Self {
         self.nodes = nodes;
         self
     }
@@ -385,15 +444,17 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> TreeList<T> {
         self
     }
 
-    fn render_highlighted_text(
+    pub(super) fn render_highlighted_text(
         text: &str,
         match_ranges: &[(usize, usize)],
-        theme: &crate::theme::Theme,
-        is_selected: bool,
+        highlight_color: Hsla,
         highlight_matches: bool,
+        accessibility_hidden: bool,
     ) -> impl IntoElement + use<T> {
         if match_ranges.is_empty() || !highlight_matches {
-            return div().child(text.to_string()).into_any_element();
+            return div()
+                .child(StyledText::new(text.to_string()).accessibility_hidden(accessibility_hidden))
+                .into_any_element();
         }
 
         let mut parts = Vec::new();
@@ -426,17 +487,15 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> TreeList<T> {
             .children(parts.into_iter().map(|(text, is_match)| {
                 if is_match {
                     div()
-                        .bg(if is_selected {
-                            theme.tokens.accent_foreground.opacity(0.3)
-                        } else {
-                            theme.tokens.accent.opacity(0.3)
-                        })
+                        .bg(highlight_color)
                         .rounded_sm()
                         .px(px(1.0))
-                        .child(text)
+                        .child(StyledText::new(text).accessibility_hidden(accessibility_hidden))
                         .into_any_element()
                 } else {
-                    div().child(text).into_any_element()
+                    div()
+                        .child(StyledText::new(text).accessibility_hidden(accessibility_hidden))
+                        .into_any_element()
                 }
             }))
             .into_any_element()
@@ -451,29 +510,13 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> Styled for TreeList<T> {
 
 impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = Theme::of(cx).clone();
+        let expanded_set: HashSet<T> = self.expanded_ids.into_iter().collect();
 
-        let expanded_set: HashSet<T> = self.expanded_ids.iter().cloned().collect();
-
-        let (flat_nodes, match_ranges_map): (
-            Vec<FlatTreeNode<T>>,
-            HashMap<T, Vec<(usize, usize)>>,
-        ) = if let Some(ref filter) = self.filter {
+        let flat_nodes = if let Some(ref filter) = self.filter {
             let filtered = filter_tree(&self.nodes, filter);
-            let flat_with_ranges =
-                flatten_filtered_tree(&filtered, &expanded_set, 0, self.auto_expand_matches);
-
-            let mut nodes = Vec::new();
-            let mut ranges_map = HashMap::new();
-
-            for (node, ranges) in flat_with_ranges {
-                ranges_map.insert(node.node_id.clone(), ranges);
-                nodes.push(node);
-            }
-
-            (nodes, ranges_map)
+            flatten_filtered_tree(&filtered, &expanded_set, 0, self.auto_expand_matches)
         } else {
-            (flatten_tree(&self.nodes, &expanded_set, 0), HashMap::new())
+            flatten_tree(&self.nodes, &expanded_set, 0)
         };
 
         let total_items = flat_nodes.len();
@@ -481,19 +524,8 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
         let row_height = density.row_height();
         let text_size = density.text_size();
         let indent_step = density.indent();
-        let overlay_hover = crate::astryx::overlay_hover(theme.tokens.background.l < 0.5);
-
-        let _item_sizes: Rc<Vec<Size<Pixels>>> = Rc::new(
-            (0..total_items)
-                .map(|_| Size {
-                    width: px(0.), // Width will be determined by container
-                    height: row_height,
-                })
-                .collect(),
-        );
-
         let flat_nodes_rc = Rc::new(flat_nodes);
-        let tree_id = self.id.clone();
+        let tree_id = self.id;
         let row_focus_handles: Rc<Vec<FocusHandle>> = Rc::new(
             (0..total_items)
                 .map(|index| {
@@ -508,26 +540,17 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                 })
                 .collect(),
         );
-        let parent_indices: Rc<Vec<Option<usize>>> = Rc::new(
-            flat_nodes_rc
-                .iter()
-                .enumerate()
-                .map(|(index, node)| {
-                    (0..index)
-                        .rev()
-                        .find(|candidate| flat_nodes_rc[*candidate].level < node.level)
-                })
-                .collect(),
-        );
-        let match_ranges_rc = Rc::new(match_ranges_map);
-        let selected_id = self.selected_id.clone();
+        let parent_indices = Rc::new(parent_indices(&flat_nodes_rc));
+        let selected_id = self.selected_id;
         let expanded_ids_rc = Rc::new(expanded_set);
-        let on_select = self.on_select.clone();
-        let on_toggle = self.on_toggle.clone();
-        let on_right_click = self.on_right_click.clone();
+        let on_select = self.on_select;
+        let on_toggle = self.on_toggle;
+        let on_right_click = self.on_right_click;
         let highlight_matches = self.highlight_matches;
-        let user_style = self.style.clone();
+        let user_style = self.style;
         let header = self.header;
+        let theme = Theme::of(cx);
+        let overlay_hover = crate::astryx::overlay_hover(theme.tokens.background.l < 0.5);
 
         div()
             .id(tree_id.clone())
@@ -555,8 +578,7 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                             .map(|(row_index, flat_node)| {
                                 let is_selected = selected_id.as_ref() == Some(&flat_node.node_id);
                                 let is_expanded = expanded_ids_rc.contains(&flat_node.node_id);
-                                let has_children = !flat_node.node.children.is_empty()
-                                    || flat_node.node.has_lazy_children;
+                                let has_children = flat_node.has_children;
                                 let indent = px((flat_node.level as f32) * indent_step);
                                 let focus_handle = row_focus_handles[row_index].clone();
                                 let focus_on_mouse = focus_handle.clone();
@@ -568,7 +590,7 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                                 if is_focused {
                                     accessibility_state |= AccessibilityState::FOCUSED;
                                 }
-                                if flat_node.node.disabled {
+                                if flat_node.disabled {
                                     accessibility_state |= AccessibilityState::DISABLED;
                                 }
                                 if has_children {
@@ -580,9 +602,9 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                                 }
                                 let mut accessibility =
                                     AccessibilityAttributes::new(AccessibilityRole::TreeItem)
-                                        .label(flat_node.node.label.to_string())
+                                        .label(flat_node.label.to_string())
                                         .states(accessibility_state);
-                                if !flat_node.node.disabled {
+                                if !flat_node.disabled {
                                     let mut actions = vec![
                                         AccessibilityAction::Focus,
                                         AccessibilityAction::Click,
@@ -603,7 +625,7 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                                         format!("item-{row_index}").into(),
                                     ))
                                     .accessibility(accessibility)
-                                    .when(!flat_node.node.disabled, |this| {
+                                    .when(!flat_node.disabled, |this| {
                                         this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
                                     })
                                     .w_full()
@@ -614,7 +636,7 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                                     .pl(indent + px(8.0))
                                     .rounded(theme.tokens.radius_sm)
                                     .transition(theme.tokens.transition_fast)
-                                    .cursor(if flat_node.node.disabled {
+                                    .cursor(if flat_node.disabled {
                                         CursorStyle::Arrow
                                     } else {
                                         CursorStyle::PointingHand
@@ -626,18 +648,18 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                                     })
                                     .text_color(if is_selected {
                                         theme.tokens.foreground
-                                    } else if flat_node.node.disabled {
+                                    } else if flat_node.disabled {
                                         theme.tokens.muted_foreground
                                     } else {
                                         theme.tokens.foreground
                                     })
-                                    .when(!flat_node.node.disabled && !is_selected, |div| {
+                                    .when(!flat_node.disabled && !is_selected, |div| {
                                         div.hover(move |mut style| {
                                             style.background = Some(overlay_hover.into());
                                             style
                                         })
                                     })
-                                    .when(!flat_node.node.disabled, {
+                                    .when(!flat_node.disabled, {
                                         let on_select = on_select.clone();
                                         let node_id = flat_node.node_id.clone();
 
@@ -653,7 +675,7 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                                             )
                                         }
                                     })
-                                    .when(!flat_node.node.disabled, {
+                                    .when(!flat_node.disabled, {
                                         let node_id = flat_node.node_id.clone();
                                         let on_select = on_select.clone();
                                         let on_toggle = on_toggle.clone();
@@ -722,7 +744,7 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                                             })
                                         }
                                     })
-                                    .when(!flat_node.node.disabled, {
+                                    .when(!flat_node.disabled, {
                                         let on_right_click = on_right_click.clone();
                                         let node_id = flat_node.node_id.clone();
 
@@ -757,15 +779,15 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                                                     format!("toggle-{row_index}").into(),
                                                 ))
                                                 .label(if is_expanded {
-                                                    format!("Collapse {}", flat_node.node.label)
+                                                    format!("Collapse {}", flat_node.label)
                                                 } else {
-                                                    format!("Expand {}", flat_node.node.label)
+                                                    format!("Expand {}", flat_node.label)
                                                 })
                                                 .variant(ButtonVariant::Ghost)
                                                 .size(px(24.0))
                                                 .icon_size(px(12.0))
                                                 .tab_stop(false)
-                                                .disabled(flat_node.node.disabled)
+                                                .disabled(flat_node.disabled)
                                                 .on_click(move |_, window, cx| {
                                                     if let Some(handler) = on_toggle.as_ref() {
                                                         handler(&node_id, !is_expanded, window, cx);
@@ -775,12 +797,12 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                                             } else {
                                                 div().w(px(24.0)).h(px(24.0)).into_any_element()
                                             })
-                                            .children(flat_node.node.icon.as_ref().map(|icon| {
+                                            .children(flat_node.icon.as_ref().map(|icon| {
                                                 Icon::new(icon.clone()).size(px(16.0)).color(
-                                                    if flat_node.node.disabled {
+                                                    if flat_node.disabled {
                                                         theme.tokens.muted_foreground
                                                     } else {
-                                                        flat_node.node.icon_color.unwrap_or(
+                                                        flat_node.icon_color.unwrap_or(
                                                             theme.tokens.muted_foreground,
                                                         )
                                                     },
@@ -802,23 +824,27 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                                                         FontWeight::NORMAL
                                                     })
                                                     .child({
-                                                        let ranges = match_ranges_rc
-                                                            .get(&flat_node.node_id)
-                                                            .map(|r| r.as_slice())
-                                                            .unwrap_or(&[]);
+                                                        let ranges = &flat_node.match_ranges;
 
                                                         if !ranges.is_empty() && highlight_matches {
                                                             Self::render_highlighted_text(
-                                                                &flat_node.node.label,
+                                                                &flat_node.label,
                                                                 ranges,
-                                                                &theme,
-                                                                is_selected,
+                                                                if is_selected {
+                                                                    theme
+                                                                        .tokens
+                                                                        .accent_foreground
+                                                                        .opacity(0.3)
+                                                                } else {
+                                                                    theme.tokens.accent.opacity(0.3)
+                                                                },
                                                                 highlight_matches,
+                                                                false,
                                                             )
                                                             .into_any_element()
                                                         } else {
                                                             div()
-                                                                .child(flat_node.node.label.clone())
+                                                                .child(flat_node.label.clone())
                                                                 .into_any_element()
                                                         }
                                                     }),
@@ -1039,22 +1065,194 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for List<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::find_matches;
+    use super::*;
+    use std::cell::Cell;
+    use std::hash::{Hash, Hasher};
 
-    #[test]
+    #[derive(Debug)]
+    struct CountedId {
+        value: usize,
+        clones: Rc<Cell<usize>>,
+    }
+
+    impl Clone for CountedId {
+        fn clone(&self) -> Self {
+            self.clones.set(self.clones.get() + 1);
+            Self {
+                value: self.value,
+                clones: self.clones.clone(),
+            }
+        }
+    }
+
+    impl PartialEq for CountedId {
+        fn eq(&self, other: &Self) -> bool {
+            self.value == other.value
+        }
+    }
+
+    impl Eq for CountedId {}
+
+    impl Hash for CountedId {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.value.hash(state);
+        }
+    }
+
+    fn counted_chain(length: usize, clones: &Rc<Cell<usize>>) -> Vec<TreeNode<CountedId>> {
+        let mut nodes = Vec::new();
+        for value in (0..length).rev() {
+            nodes = vec![
+                TreeNode::new(
+                    CountedId {
+                        value,
+                        clones: clones.clone(),
+                    },
+                    "matching node",
+                )
+                .with_children(nodes),
+            ];
+        }
+        nodes
+    }
+
+    #[::core::prelude::v1::test]
     fn substring_match_ranges_use_character_offsets() {
         assert_eq!(find_matches("éclair", "cl"), (true, vec![(1, 3)]));
         assert_eq!(find_matches("東京駅", "京"), (true, vec![(1, 2)]));
     }
 
-    #[test]
+    #[::core::prelude::v1::test]
     fn overlapping_substring_matches_are_merged() {
         assert_eq!(find_matches("aaaa", "aa"), (true, vec![(0, 4)]));
     }
 
-    #[test]
+    #[::core::prelude::v1::test]
     fn fuzzy_matches_keep_character_offsets() {
         assert_eq!(find_matches("résumé", "ré"), (true, vec![(0, 2)]));
         assert_eq!(find_matches("résumé", "rs"), (true, vec![(0, 3)]));
+    }
+
+    #[::core::prelude::v1::test]
+    fn long_repeated_labels_merge_ranges_without_recounting_prefixes() {
+        let text = "é".repeat(100_000);
+        assert_eq!(find_matches(&text, "éé"), (true, vec![(0, 100_000)]));
+    }
+
+    #[::core::prelude::v1::test]
+    fn lowercase_expansion_maps_highlights_to_original_characters() {
+        assert_eq!(find_label_matches("İstanbul", "s"), (true, vec![(1, 2)]));
+        assert_eq!(find_label_matches("İstanbul", "i"), (true, vec![(0, 1)]));
+        assert_eq!(find_label_matches("İstanbul", "l"), (true, vec![(7, 8)]));
+        assert_eq!(find_label_matches("İİ", "i"), (true, vec![(0, 2)]));
+        assert_eq!(find_label_matches("İstanbul", "il"), (true, vec![(0, 8)]));
+    }
+
+    #[::core::prelude::v1::test]
+    fn collapsed_branches_clone_only_the_visible_row_id() {
+        let clones = Rc::new(Cell::new(0));
+        let nodes = counted_chain(128, &clones);
+        let flat = flatten_tree(&nodes, &HashSet::new(), 0);
+
+        assert_eq!(flat.len(), 1);
+        assert_eq!(clones.get(), 1);
+        assert!(flat[0].has_children);
+        assert_eq!(flat[0].node_id.value, 0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn expanded_chain_clones_each_row_once() {
+        let clones = Rc::new(Cell::new(0));
+        let nodes = counted_chain(128, &clones);
+        #[allow(
+            clippy::mutable_key_type,
+            reason = "CountedId Hash and Eq use only immutable value; the Cell measures clones"
+        )]
+        let expanded = (0..128)
+            .map(|value| CountedId {
+                value,
+                clones: clones.clone(),
+            })
+            .collect();
+        let flat = flatten_tree(&nodes, &expanded, 0);
+
+        assert_eq!(flat.len(), 128);
+        assert_eq!(clones.get(), 128);
+        assert_eq!(flat.last().unwrap().level, 127);
+        assert!(!flat.last().unwrap().has_children);
+    }
+
+    #[::core::prelude::v1::test]
+    fn filtering_borrows_models_and_clones_only_displayed_row_ids() {
+        let clones = Rc::new(Cell::new(0));
+        let nodes = counted_chain(128, &clones);
+        let filtered = filter_tree(&nodes, "MATCH");
+
+        assert!(std::ptr::eq(filtered[0].node, &nodes[0]));
+        assert_eq!(clones.get(), 0);
+        let flat = flatten_filtered_tree(&filtered, &HashSet::new(), 0, true);
+        assert_eq!(flat.len(), 128);
+        assert_eq!(clones.get(), 128);
+        assert!(flat.iter().all(|node| node.match_ranges == vec![(0, 5)]));
+    }
+
+    #[::core::prelude::v1::test]
+    fn filtered_tree_retains_ancestors_and_original_expandability() {
+        let nodes = vec![TreeNode::new(0, "root").with_children(vec![
+            TreeNode::new(1, "branch").with_children(vec![TreeNode::new(2, "needle")]),
+            TreeNode::new(3, "hidden"),
+        ])];
+        let filtered = filter_tree(&nodes, "needle");
+        let collapsed = flatten_filtered_tree(&filtered, &HashSet::new(), 0, false);
+        assert_eq!(collapsed.len(), 1);
+        assert!(collapsed[0].has_children);
+
+        let expanded = flatten_filtered_tree(&filtered, &HashSet::new(), 0, true);
+        assert_eq!(
+            expanded.iter().map(|node| node.node_id).collect::<Vec<_>>(),
+            vec![0, 1, 2],
+        );
+        assert_eq!(parent_indices(&expanded), vec![None, Some(0), Some(1)]);
+
+        // A matched branch still expands even when all its children were filtered out.
+        let root_match = filter_tree(&nodes, "root");
+        let root_row = flatten_filtered_tree(&root_match, &HashSet::new(), 0, true);
+        assert_eq!(root_row.len(), 1);
+        assert!(root_row[0].has_children);
+    }
+
+    #[::core::prelude::v1::test]
+    fn parent_indexing_handles_wide_siblings_and_nested_roots() {
+        let nodes = vec![
+            TreeNode::new(0, "root").with_children(vec![
+                TreeNode::new(1, "first").with_children(vec![TreeNode::new(2, "nested")]),
+                TreeNode::new(3, "second"),
+                TreeNode::new(4, "third"),
+            ]),
+            TreeNode::new(5, "other root").with_children(vec![TreeNode::new(6, "other child")]),
+        ];
+        let flat = flatten_tree(&nodes, &HashSet::from([0, 1, 5]), 0);
+        assert_eq!(
+            parent_indices(&flat),
+            vec![None, Some(0), Some(1), Some(0), Some(0), None, Some(5)],
+        );
+
+        let wide = vec![
+            TreeNode::new(0, "root")
+                .with_children((1..10_001).map(|id| TreeNode::new(id, "child")).collect()),
+        ];
+        let flat = flatten_tree(&wide, &HashSet::from([0]), 0);
+        let parents = parent_indices(&flat);
+        assert_eq!(parents.len(), 10_001);
+        assert_eq!(parents[0], None);
+        assert!(parents[1..].iter().all(|parent| *parent == Some(0)));
+    }
+
+    #[::core::prelude::v1::test]
+    fn shared_nodes_reuse_the_original_allocation() {
+        let nodes: Arc<[TreeNode<usize>]> = vec![TreeNode::new(0, "root")].into();
+        let tree = TreeList::new().shared_nodes(nodes.clone());
+        assert!(Arc::ptr_eq(&tree.nodes, &nodes));
+        assert_eq!(Arc::strong_count(&nodes), 2);
     }
 }

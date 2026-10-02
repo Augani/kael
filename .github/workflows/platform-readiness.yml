@@ -180,6 +180,12 @@ jobs:
         timeout-minutes: 30
         run: bash scripts/ci/verify-macos-native-renderer.sh
 
+      - name: Execute native macOS outline accessibility protocol
+        if: runner.os == 'macOS'
+        shell: bash
+        timeout-minutes: 10
+        run: bash scripts/ci/verify-macos-native-accessibility.sh
+
       - name: Install pinned Python for macOS browser performance
         if: runner.os == 'macOS'
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -225,6 +231,7 @@ jobs:
           name: macos-runtime-evidence
           path: |
             target/native-renderer-smoke/macos
+            target/native-accessibility-smoke/macos
             target/browser-hardware-macos
           if-no-files-found: warn
 
@@ -242,7 +249,7 @@ jobs:
         run: |
           bash scripts/ci/install-linux-deps.sh
           sudo apt-get install --yes --no-install-recommends \
-            at-spi2-core mesa-vulkan-drivers vulkan-tools \
+            at-spi2-core dbus-x11 python3-gi gir1.2-atspi-2.0 mesa-vulkan-drivers vulkan-tools \
             weston xwayland xvfb xdotool x11-apps x11-utils
 
       - name: Install toolchain
@@ -263,6 +270,13 @@ jobs:
         shell: bash
         run: cargo clippy --locked -p kael --lib --no-default-features --features webview -- -D warnings
 
+      - name: Execute idle native Linux accessibility actions
+        shell: bash
+        timeout-minutes: 20
+        env:
+          KAEL_NATIVE_RENDERER_USE_SOFTWARE: 1
+        run: bash scripts/ci/verify-linux-native-accessibility.sh
+
       - name: Execute embedded WebView under Wayland and XWayland
         shell: bash
         timeout-minutes: 20
@@ -271,6 +285,16 @@ jobs:
         env:
           WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1'
         run: |
+          set -o pipefail
+          mkdir -p target/native-renderer-smoke/linux/gtk4-atlas
+          cargo test --locked -p kael --no-default-features \
+            --features webview-wayland-gtk4 --lib gtk4_scene::tests -- --nocapture \
+            2>&1 | tee target/native-renderer-smoke/linux/gtk4-atlas/native-tests.log
+          grep -Fq 'gtk4_checked_admission_bounds_mirrors_variants_and_deferred_entries ... ok' \
+            target/native-renderer-smoke/linux/gtk4-atlas/native-tests.log
+          grep -Fq 'gtk4_retired_entry_does_not_unlink_same_key_replacement ... ok' \
+            target/native-renderer-smoke/linux/gtk4-atlas/native-tests.log
+          bash scripts/ci/verify-linux-native-accessibility.sh --gtk4
           bash scripts/ci/run-linux-webview-wayland-gtk4.sh
           bash scripts/ci/run-linux-webview-xwayland.sh
 
@@ -281,6 +305,8 @@ jobs:
           name: linux-runtime-evidence
           path: |
             target/native-renderer-smoke/linux
+            target/native-accessibility-smoke/linux
+            target/native-accessibility-smoke/linux-gtk4
             ${{ runner.temp }}/kael-webview-wayland-gtk4/*.log
             ${{ runner.temp }}/kael-webview-xwayland/*.log
           if-no-files-found: warn
@@ -326,6 +352,20 @@ jobs:
 
       - name: Install matching ChromeDriver
         uses: nanasess/setup-chromedriver@e913548694400f275b4070efcd90f47dbbc8914c # v3.0.0
+
+      - name: Execute mandatory WebGL2 shader and context-loss pixels
+        timeout-minutes: 25
+        run: |
+          python scripts/ci/verify-programmable-renderer.py \
+            --backend webgl2 --evidence target/native-renderer-smoke/webgl2
+
+      - name: Preserve WebGL2 programmable rendering evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: webgl2-programmable-runtime-evidence
+          path: target/native-renderer-smoke/webgl2
+          if-no-files-found: error
 
       - name: Install three-engine browser runner
         run: |
@@ -507,6 +547,11 @@ jobs:
         timeout-minutes: 15
         run: pwsh -NoProfile -File scripts/ci/verify-windows-webview.ps1
 
+      - name: Execute idle native Windows UIA hierarchy and actions
+        shell: pwsh
+        timeout-minutes: 20
+        run: pwsh -NoProfile -File scripts/ci/verify-windows-native-accessibility.ps1
+
       - name: Install pinned WiX v4 CLI
         shell: pwsh
         run: |
@@ -537,6 +582,7 @@ jobs:
           path: |
             target/release-artifacts/Kael.msi
             target/native-renderer-smoke/windows
+            target/native-accessibility-smoke/windows
             target/windows-msi-verification
             target/windows-webview-smoke
           if-no-files-found: error

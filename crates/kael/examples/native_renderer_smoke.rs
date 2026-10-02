@@ -395,9 +395,23 @@ mod native {
         let render_count = Arc::new(AtomicUsize::new(0));
         let outcome = Arc::new(AtomicU8::new(0));
         let app_outcome = outcome.clone();
+        let require_gpu_timing = std::env::var_os("KAEL_GPU_FRAME_TIMING_SMOKE").is_some();
         let application = Application::try_new().context("initialize native Kael platform")?;
 
         application.run(move |cx: &mut App| {
+            let quit_outcome = app_outcome.clone();
+            cx.on_app_quit(move |_| {
+                let outcome = quit_outcome.clone();
+                async move {
+                    // AppKit's terminate: exits directly rather than returning
+                    // from Application::run. Reject incomplete proofs there too,
+                    // after the normal window cleanup has run.
+                    if outcome.load(Ordering::Acquire) != 1 {
+                        std::process::exit(1);
+                    }
+                }
+            })
+            .detach();
             let window = match cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -432,8 +446,15 @@ mod native {
                 window.set_always_on_top(true);
                 window.show_window();
                 window.activate_window();
+                if require_gpu_timing {
+                    ensure!(
+                        window.set_gpu_frame_timing_enabled(true),
+                        "this backend does not support native GPU frame timing"
+                    );
+                }
                 window.refresh();
-            }) {
+                Ok::<(), anyhow::Error>(())
+            }).and_then(|result| result) {
                 eprintln!("NATIVE_RENDERER_SMOKE_FAIL: show real window: {error:#}");
                 app_outcome.store(2, Ordering::Release);
                 cx.quit();
@@ -507,6 +528,49 @@ mod native {
                 cx.background_executor()
                     .timer(Duration::from_millis(50))
                     .await;
+                if require_gpu_timing {
+                    let deadline = Instant::now() + Duration::from_secs(2);
+                    let mut presented = 0;
+                    loop {
+                        let records = match window.update(cx, |_, window, _| window.take_gpu_frame_timings()) {
+                            Ok(records) => records,
+                            Err(error) => {
+                                eprintln!("NATIVE_RENDERER_SMOKE_FAIL: collect native timing: {error:#}");
+                                outcome.store(2, Ordering::Release);
+                                let _ = cx.update(|cx| cx.quit());
+                                return;
+                            }
+                        };
+                        for record in records {
+                            if let Some(displayed) = record.presented_time_seconds {
+                                if !displayed.is_finite()
+                                    || record.submitted_time_seconds <= 0.0
+                                    || record.gpu_start_time_seconds + 0.0001 < record.submitted_time_seconds
+                                    || record.gpu_end_time_seconds < record.gpu_start_time_seconds
+                                    || displayed + 0.0001 < record.gpu_end_time_seconds
+                                {
+                                    eprintln!("NATIVE_RENDERER_SMOKE_FAIL: inconsistent native timing: {record:?}");
+                                    outcome.store(2, Ordering::Release);
+                                    let _ = cx.update(|cx| cx.quit());
+                                    return;
+                                }
+                                presented += 1;
+                                println!("NATIVE_GPU_PRESENTATION_FRAME: {record:?}");
+                            }
+                        }
+                        if presented > 0 {
+                            println!("NATIVE_GPU_PRESENTATION_OK: completed_and_displayed_frames={presented} clock=monotonic_host_seconds");
+                            break;
+                        }
+                        if Instant::now() >= deadline {
+                            eprintln!("NATIVE_RENDERER_SMOKE_FAIL: no drawable presentation callback within two seconds");
+                            outcome.store(2, Ordering::Release);
+                            let _ = cx.update(|cx| cx.quit());
+                            return;
+                        }
+                        cx.background_executor().timer(Duration::from_millis(8)).await;
+                    }
+                }
                 let verification = window
                     .update(cx, |_, window, _| verify_frame(window, &output))
                     .context("access native renderer smoke window")

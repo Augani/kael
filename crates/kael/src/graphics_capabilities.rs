@@ -57,6 +57,10 @@ pub struct GraphicsCapabilityReport {
     pub public_render_targets: GraphicsCapabilityStatus,
     /// Public custom shader injection for native Kael drawing.
     pub public_custom_shaders: GraphicsCapabilityStatus,
+    /// Native compute/storage execution; WebGL2 has no compute stage.
+    pub public_compute: GraphicsCapabilityStatus,
+    /// Typed GPU graph execution with resource aliasing and pass caches.
+    pub public_render_graph: GraphicsCapabilityStatus,
 }
 
 impl GraphicsCapabilityReport {
@@ -68,7 +72,7 @@ impl GraphicsCapabilityReport {
     }
 
     /// Return the report statuses as a compact list for dashboards/tests.
-    pub fn statuses(&self) -> [GraphicsCapabilityStatus; 13] {
+    pub fn statuses(&self) -> [GraphicsCapabilityStatus; 15] {
         [
             self.styled_elements,
             self.immediate_canvas,
@@ -83,6 +87,8 @@ impl GraphicsCapabilityReport {
             self.browser_graphics_fallback,
             self.public_render_targets,
             self.public_custom_shaders,
+            self.public_compute,
+            self.public_render_graph,
         ]
     }
 
@@ -141,8 +147,26 @@ pub fn graphics_capability_report() -> GraphicsCapabilityReport {
         effect_layers: GraphicsCapabilityStatus::Partial,
         headless_rendering: GraphicsCapabilityStatus::Partial,
         browser_graphics_fallback: GraphicsCapabilityStatus::WebView,
-        public_render_targets: GraphicsCapabilityStatus::Roadmap,
-        public_custom_shaders: GraphicsCapabilityStatus::Roadmap,
+        public_render_targets: if cfg!(feature = "custom-shaders") {
+            GraphicsCapabilityStatus::Partial
+        } else {
+            GraphicsCapabilityStatus::Roadmap
+        },
+        public_custom_shaders: if cfg!(feature = "custom-shaders") {
+            GraphicsCapabilityStatus::Partial
+        } else {
+            GraphicsCapabilityStatus::Roadmap
+        },
+        public_compute: if cfg!(feature = "custom-shaders") {
+            GraphicsCapabilityStatus::Partial
+        } else {
+            GraphicsCapabilityStatus::Roadmap
+        },
+        public_render_graph: if cfg!(feature = "custom-shaders") {
+            GraphicsCapabilityStatus::Partial
+        } else {
+            GraphicsCapabilityStatus::Roadmap
+        },
     }
 }
 
@@ -155,7 +179,7 @@ mod tests {
         let report = graphics_capability_report();
 
         assert!(!report.is_full_native());
-        assert!(report.has_roadmap_gaps());
+        assert_eq!(report.has_roadmap_gaps(), !cfg!(feature = "custom-shaders"));
         assert!(report.has_webview_fallbacks());
         assert_eq!(GraphicsCapabilityStatus::Disabled.to_text(), "disabled");
         assert_eq!(GraphicsCapabilityStatus::Full.to_text(), "full");
@@ -171,9 +195,25 @@ mod tests {
             report.count_status(GraphicsCapabilityStatus::Disabled),
             if lottie_enabled { 0 } else { 1 }
         );
-        assert_eq!(report.count_status(GraphicsCapabilityStatus::Partial), 3);
+        assert_eq!(
+            report.count_status(GraphicsCapabilityStatus::Partial),
+            if cfg!(feature = "custom-shaders") {
+                7
+            } else {
+                3
+            }
+        );
         assert_eq!(report.count_status(GraphicsCapabilityStatus::WebView), 1);
-        assert_eq!(report.count_status(GraphicsCapabilityStatus::Roadmap), 2);
+        assert_eq!(
+            report.count_status(GraphicsCapabilityStatus::Roadmap),
+            if cfg!(feature = "custom-shaders") {
+                0
+            } else {
+                4
+            }
+        );
+        assert_eq!(report.public_compute, report.public_custom_shaders);
+        assert_eq!(report.public_render_graph, report.public_render_targets);
         assert_eq!(report.styled_elements, GraphicsCapabilityStatus::Full);
         assert_eq!(report.immediate_canvas, GraphicsCapabilityStatus::Full);
         assert_eq!(
@@ -200,17 +240,35 @@ mod tests {
         );
         assert_eq!(
             report.public_render_targets,
-            GraphicsCapabilityStatus::Roadmap
+            if cfg!(feature = "custom-shaders") {
+                GraphicsCapabilityStatus::Partial
+            } else {
+                GraphicsCapabilityStatus::Roadmap
+            }
         );
         assert_eq!(
             report.public_custom_shaders,
-            GraphicsCapabilityStatus::Roadmap
+            if cfg!(feature = "custom-shaders") {
+                GraphicsCapabilityStatus::Partial
+            } else {
+                GraphicsCapabilityStatus::Roadmap
+            }
         );
         assert_eq!(
             report.to_text(),
             format!(
-                "graphics capabilities: full {}, partial 3, webview 1, roadmap 2, disabled {}, all native full false",
+                "graphics capabilities: full {}, partial {}, webview 1, roadmap {}, disabled {}, all native full false",
                 if lottie_enabled { 7 } else { 6 },
+                if cfg!(feature = "custom-shaders") {
+                    7
+                } else {
+                    3
+                },
+                if cfg!(feature = "custom-shaders") {
+                    0
+                } else {
+                    4
+                },
                 if lottie_enabled { 0 } else { 1 }
             )
         );

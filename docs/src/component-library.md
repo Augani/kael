@@ -126,7 +126,7 @@ one application.
 | ------------ | --------------------------------------------------------------------------- |
 | `components` | Button, IconButton, Input, Textarea, SearchInput, NumberInput, OtpInput, TagInput, MentionInput, HotkeyInput, Checkbox, Radio, Toggle, Switch, Slider, RangeSlider, Select, Combobox, Dropdown, DatePicker, TimePicker, Calendar, ColorPicker, Rating, FileUpload, Avatar, AvatarGroup, Progress, Spinner, Skeleton, Stepper, Pagination, Carousel, Timeline, QrCode, CopyButton, InlineEdit, code Editor with tree-sitter syntax highlighting, audio/video players, and many more |
 | `display`    | Table, DataTable, DataGrid, Card, Badge, Accordion, RichText, Markdown and HTML rendering (feature-gated) |
-| `navigation` | Sidebar, Menu, AppMenu, Tabs, Breadcrumbs, Toolbar, StatusBar, Tree, FileTree, VirtualList |
+| `navigation` | Sidebar, Menu, AppMenu, Tabs, Breadcrumbs, Toolbar, StatusBar, Tree, VirtualTreeList, FileTree, VirtualFileTree, VirtualList |
 | `overlays`   | Dialog, AlertDialog, ConfirmDialog, Sheet, BottomSheet, Popover, PopoverMenu, HoverCard, ContextMenu, Toast, Tooltip, CommandPalette |
 | `charts`     | LineChart, AreaChart, BarChart, PieChart, DonutChart, RadarChart, Gauge, Heatmap, Treemap, Sparkline |
 | `layout`     | VStack, HStack, Grid, ScrollContainer, responsive breakpoint helpers        |
@@ -175,6 +175,216 @@ state, shortcut coverage, query presence/length, selection state, and handler
 coverage without logging ids, labels, titles, descriptions, categories,
 shortcut strings, user queries, coordinates, dimensions, child contents, or
 callback internals.
+
+## Tree models and rendering cost
+
+For file explorers, navigation trees, and project outlines, `TreeList` builds
+shallow row payloads and visits only expanded branches when no filter is active.
+It computes keyboard parent navigation in one pass. Filtering borrows the model,
+retains matching ancestors, and maps highlights back to the original label even
+when Unicode lowercasing expands a character.
+
+Keep large immutable models in an `Arc` and pass them with `shared_nodes` to
+avoid cloning the entire hierarchy on unrelated redraws:
+
+```rust,ignore
+use std::sync::Arc;
+use kael_ui::prelude::*;
+
+// Store this model in your view state and replace it when the hierarchy changes.
+let nodes: Arc<[TreeNode<u64>]> = vec![
+    TreeNode::new(1, "Project").with_children(vec![
+        TreeNode::new(2, "src").with_lazy_children(true),
+        TreeNode::new(3, "Cargo.toml"),
+    ]),
+].into();
+
+TreeList::new()
+    .id("project-tree")
+    .shared_nodes(nodes.clone())
+    .expanded_ids(vec![1]);
+```
+
+`nodes(Vec<TreeNode<T>>)` remains available for owned models. Selection and
+expansion remain controlled by the application; lazy child markers allow it to
+load a branch on demand. `TreeList` mounts all expanded rows, so keep large
+hierarchies collapsed or lazily populated, or use `VirtualTreeList` for large
+expanded hierarchies. For large flat datasets, use `uniform_virtual_list` or
+`variable_virtual_list` to mount only viewport rows.
+
+`VirtualTreeList` pairs an immutable `VirtualTreeModel` with explicit
+`VirtualTreeState`. Build the snapshot when data, expansion, or filtering changes;
+clone it cheaply on redraws. The state owns one keyboard focus handle and keeps
+an active logical ID as rows move. Up/Down skip disabled rows, Home/End jump,
+Left/Right request expansion changes, and navigation scrolls the active row into
+view. Selection and expansion callbacks remain controlled by your application.
+
+```rust,ignore
+// During view construction or when the hierarchy changes:
+let expanded = std::collections::HashSet::from([1]);
+let model = VirtualTreeModel::new(&nodes, &expanded)?;
+let state = cx.new(|cx| VirtualTreeState::new(cx));
+
+// During render; give the tree a bounded viewport height:
+VirtualTreeList::new("project-tree", model.clone(), state.clone())
+    .label("Project files")
+    .h(px(480.0))
+    .on_toggle(move |id, expanded, _window, cx| {
+        // Update expanded IDs, rebuild the snapshot, and notify your view.
+    });
+```
+
+Displayed IDs must be unique; model construction returns an error for duplicates.
+`VirtualTreeModel::filtered` supports highlighted case-insensitive matching and
+automatic ancestor expansion. A retained logical accessibility snapshot covers
+offscreen items while only viewport rows receive mounted geometry. Focus remains
+on the tree with an active descendant; Focus, Click, Expand, Collapse and reveal
+actions resolve stable current model IDs. For large Send/Sync models, capture
+`state.accessibility_preparation_context(label, has_toggle)` and call
+`model.prepare_accessibility(context, &background_executor)` on a worker before
+sharing the model. This prepares semantic labels/IDs and reclamation outside the
+frame budget; the generic fallback prepares them synchronously. Model metadata
+remains linear in expanded rows and element construction remains bounded by the
+viewport. Native assistive-technology behavior still requires platform QA.
+
+A runnable explorer with 100,000 files is included:
+
+```bash
+cargo run -p kael_ui --example virtual_tree
+```
+
+For reusable filesystem explorers, keep a `FileTreeState` entity and mount
+`VirtualFileTree`. The native source loads only expanded directories and does
+not follow symlinks; custom blocking and asynchronous loaders use the same
+generation, cancellation and entry-budget checks.
+
+```rust,ignore
+let files = cx.new(|cx| FileTreeState::filesystem(project_root, cx).unwrap());
+files.update(cx, |files, cx| files.set_expanded(project_root, true, cx));
+
+VirtualFileTree::new("files", files.clone())
+    .h(px(480.0))
+    .show_file_size(true)
+    .context_actions(vec![FileTreeContextAction::new("reveal", "Reveal")]);
+```
+
+Listings retain normalized sort keys and shallow entries in an immutable catalog.
+Workers prepare catalog changes, row snapshots, logical accessibility and large-value reclamation.
+Foreground commits swap prepared Arcs and bounded request metadata; redraws mount
+only viewport rows. Expansion and cache eviction are asynchronous, so the previous
+coherent snapshot remains visible until its replacement is ready. Expanded membership
+uses shared immutable sets and bounded coalesced deltas; `try_set_expanded` rejects
+a new distinct delta beyond `FILE_TREE_MAX_PENDING_EXPANSIONS` (4,096) without
+changing requested intent, so callers may retry after preparation. Configure
+`set_cached_entry_budget` and `set_load_limits` for application-specific storage.
+`FileTreeEvent` reports selection, opening, context actions, failures and validated
+drop requests. Applications perform file operations, then reload affected parents.
+Pointer drag/drop and keyboard Pick up / Move here use the same cycle/root/target
+validation. `filesystem_explorer` demonstrates actual moves inside a demo directory;
+an explicit directory argument is read only, and `--stress` loads 100,000 synthetic
+files on workers with preparation/commit diagnostics.
+
+## Desktop workspaces and property editing
+
+`DockWorkspaceState` combines an application-owned pane registry with a versioned
+`DockLayout`. Stable pane IDs retain interactive entities when inactive tabs are
+unmounted. The workspace renders nested resizable splits, movable tabs and groups,
+edge docking, zoom, close/reopen, and floating groups with pointer/keyboard movement
+and resizing. Floating groups occupy the workspace window. Runtime mutations and
+restore validate node IDs, pane coverage, geometry and maximum split depth.
+
+```rust,ignore
+let workspace = cx.new(|cx| DockWorkspaceState::new(
+    vec![
+        DockPane::new("files", "Files", move |_, _| VirtualFileTree::new("pane-files", files.clone()).into_any_element()),
+        DockPane::new("editor", "Editor", move |_, _| Editor::new(&editor).into_any_element()),
+    ],
+    DockLayout::group(["files", "editor"]),
+    cx,
+).unwrap());
+workspace.update(cx, |state, cx| {
+    state.move_pane("files", 1, DockPlacement::Left, cx);
+});
+DockWorkspace::new("workspace", workspace.clone());
+```
+
+Persist `layout_json()` on `DockWorkspaceEvent::LayoutChanged` and restore with
+`restore_json()`. Render callbacks and runtime entities remain in the application;
+invalid snapshots and impossible splits leave the current layout intact.
+
+`PropertyInspectorState` declares groups of typed text, number, boolean and choice
+fields. `PropertyInspector` renders the existing themed controls, descriptions,
+read-only states, inline errors and bounded transactional Undo/Redo. `set_values`
+validates an entire batch before changing any value; editor contents synchronize
+after programmatic changes while ordinary typing preserves the cursor. Subscribe
+to `PropertyInspectorEvent::Changed` to update application models or previews.
+The runnable `desktop_workspace` example combines a lazy project explorer, live
+typed properties, preview and retained notes with background layout save/restore.
+
+## Document and remote-data workflows
+
+The editor accepts native text/IME input, preserves Unicode grapheme boundaries
+when moving/deleting, and treats selection replacement or an entire composition
+as one undoable operation. `EditorState::set_selection_bytes` accepts checked UTF-8
+anchor/focus offsets without editing history. Complete native accessibility text
+metadata prepares once per content revision (on workers for large documents),
+reuses its Arc during caret movement, and exposes native text selection after
+preparation. Unfolded line coordinates map directly; collapsed folds retain compact
+interval metadata, and paint/hit testing enumerate only viewport lines. Large
+document syntax/fold extraction prepares on workers with revision checks. The
+compatibility `display_lines()` method explicitly enumerates the complete document.
+Caret blinking cancels on blur/deactivation and stops when a retained
+editor no longer paints; reduced motion keeps a steady caret.
+`EditorState::replace_selection` supports application
+formatting commands. A Markdown editor plus worker-parsed rich preview, formatting
+and Undo/Redo appears in `document_data_workbench`.
+
+`RemoteSheetState<Q>` adds bounded asynchronous data sources to the existing
+`VirtualSheetGrid`. A source receives a captured query, exact tile request and
+cooperative cancellation token; stale replies never commit after a query change.
+Invalid tile responses pause automatic fetching until explicit `refresh`.
+Remote edits and paste require loaded previous values so Undo cannot overwrite
+an unknown original value with an invented empty string; mixed loaded/unloaded
+batches reject atomically.
+
+```rust,ignore
+let remote = cx.new(|cx| RemoteSheetState::new(
+    row_count, column_count, query,
+    move |request| Box::pin(async move {
+        // Fetch exactly request.tile.rows × request.tile.columns in row-major
+        // order. Check request.is_cancelled() during long operations.
+        storage.fetch_tile(request.query.clone(), request.tile.clone()).await
+    }),
+    cx,
+).unwrap());
+RemoteSheet::new("records", remote.clone()).h(px(480.0));
+```
+
+Use `RemoteSheetOptions` to configure tile dimensions and cache/pending limits.
+`state.grid()` exposes the existing selection, frozen panes, cell editing,
+clipboard, undo/redo and named-column APIs. Handle `RemoteSheetEvent::Edited` to
+write application records: its captured query/generation belongs to the edit,
+even if a newer query is active when your write completes. `set_query` retires
+positional edits/history because rows now represent different records;
+`refresh` preserves local edits for the same records.
+
+Grid accessibility keeps full column headers and logical dimensions, stable
+coordinate IDs, the active descendant and at most 1,024 cached cell semantics.
+Viewport cells add bounded geometry; independent scrolling preserves the logical
+focused cell. Offscreen active/cached actions reveal and fetch current coordinates.
+Unknown remote values stay marked as loading; values over 4 KiB expose a preview
+and the complete value remains available through the cell editor. Accessibility
+metadata and retired snapshots prepare/reclaim on workers. Reserving coordinate
+IDs allocates no cell nodes, even for a million-by-XFD sheet.
+
+```bash
+cargo run -p kael_ui --features markdown --example document_data_workbench
+```
+
+The example uses a real loopback HTTP fixture with 100,000 records, sparse remote
+writes, query reversal and frozen panes. Its source/preview document includes
+tables, tasks and multilingual text. Native IME, clipboard and assistive-technology
+QA should accompany the automated workflow tests for your supported platforms.
 
 ## Icons
 

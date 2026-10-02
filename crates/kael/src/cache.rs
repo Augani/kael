@@ -97,11 +97,19 @@ impl SubtreeCacheState {
             return;
         }
 
-        let byte_len =
-            device_bounds.size.width.0 as usize * device_bounds.size.height.0 as usize * 4;
+        let Ok(byte_len) =
+            crate::atlas_payload_len(device_bounds.size, crate::AtlasTextureKind::Polychrome)
+        else {
+            self.surface = None;
+            return;
+        };
         let mut build = || Ok(Some((device_bounds.size, Cow::Owned(vec![0; byte_len]))));
         let surface = sprite_atlas
-            .get_or_insert_with(&AtlasKey::from(params.clone()), &mut build)
+            .get_or_insert_with_size(
+                &AtlasKey::from(params.clone()),
+                device_bounds.size,
+                &mut build,
+            )
             .ok()
             .flatten()
             .map(|tile| CachedSurface {

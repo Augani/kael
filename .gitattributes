@@ -1,0 +1,2 @@
+# Unified-diff context lines retain their required prefix on blank lines.
+vendor/accesskit_macos/outline-support.patch whitespace=-blank-at-eol

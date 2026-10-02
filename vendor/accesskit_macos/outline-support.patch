@@ -1,0 +1,1059 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -12,8 +12,8 @@
+ [package]
+ edition = "2024"
+ rust-version = "1.85"
+-name = "accesskit_macos"
+-version = "0.26.3"
++name = "kael_accesskit_macos"
++version = "0.4.1"
+ authors = ["The AccessKit contributors"]
+ build = false
+ autolib = false
+@@ -21,7 +21,7 @@
+ autoexamples = false
+ autotests = false
+ autobenches = false
+-description = "AccessKit UI accessibility infrastructure: macOS adapter"
++description = "Kael-maintained AccessKit macOS adapter with native outline support"
+ readme = "README.md"
+ keywords = [
+     "gui",
+@@ -30,7 +30,7 @@
+ ]
+ categories = ["gui"]
+ license = "MIT OR Apache-2.0"
+-repository = "https://github.com/AccessKit/accesskit"
++repository = "https://github.com/Augani/kael"
+ resolver = "2"
+ 
+ [package.metadata.docs.rs]
+@@ -40,21 +40,32 @@
+ name = "accesskit_macos"
+ path = "src/lib.rs"
+ 
+-[dependencies.accesskit]
++# AppKit protocol objects must be exercised on the process's actual main thread.
++[[test]]
++name = "native_outline"
++path = "tests/native_outline.rs"
++harness = false
++
++[[test]]
++name = "native_text_selection"
++path = "tests/native_text_selection.rs"
++harness = false
++
++[target.'cfg(target_os = "macos")'.dependencies.accesskit]
+ version = "0.24.1"
+ 
+-[dependencies.accesskit_consumer]
++[target.'cfg(target_os = "macos")'.dependencies.accesskit_consumer]
+ version = "0.38.0"
+ 
+-[dependencies.hashbrown]
++[target.'cfg(target_os = "macos")'.dependencies.hashbrown]
+ version = "0.16"
+ features = ["default-hasher"]
+ default-features = false
+ 
+-[dependencies.objc2]
++[target.'cfg(target_os = "macos")'.dependencies.objc2]
+ version = "0.5.1"
+ 
+-[dependencies.objc2-app-kit]
++[target.'cfg(target_os = "macos")'.dependencies.objc2-app-kit]
+ version = "0.2.0"
+ features = [
+     "NSAccessibility",
+@@ -68,7 +79,7 @@
+     "NSWindow",
+ ]
+ 
+-[dependencies.objc2-foundation]
++[target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
+ version = "0.2.0"
+ features = [
+     "NSArray",
+--- a/src/filters.rs
++++ b/src/filters.rs
+@@ -3,4 +3,22 @@
+ // the LICENSE-APACHE file) or the MIT license (found in
+ // the LICENSE-MIT file), at your option.
+ 
+-pub(crate) use accesskit_consumer::common_filter as filter;
++use accesskit::Role;
++use accesskit_consumer::{FilterResult, Node, common_filter};
++
++// Collapsed outline rows keep semantic descendants in the consumer model, but
++// those descendants must not remain navigable or actionable native elements.
++pub(crate) fn filter(node: &Node) -> FilterResult {
++    let result = common_filter(node);
++    if result == FilterResult::ExcludeSubtree {
++        return result;
++    }
++    let mut parent = node.parent();
++    while let Some(ancestor) = parent {
++        if ancestor.role() == Role::TreeItem && ancestor.data().is_expanded() == Some(false) {
++            return FilterResult::ExcludeSubtree;
++        }
++        parent = ancestor.parent();
++    }
++    result
++}
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -3,6 +3,7 @@
+ // the LICENSE-APACHE file) or the MIT license (found in
+ // the LICENSE-MIT file), at your option.
+ 
++#![cfg(target_os = "macos")]
+ #![deny(unsafe_op_in_unsafe_fn)]
+ 
+ mod context;
+--- a/src/node.rs
++++ b/src/node.rs
+@@ -32,6 +32,73 @@
+ use crate::{context::Context, filters::filter, util::*};
+ 
+ const SCROLL_TO_VISIBLE_ACTION: &str = "AXScrollToVisible";
++const EXPAND_ACTION: &str = "AXExpand";
++const COLLAPSE_ACTION: &str = "AXCollapse";
++
++// NSAccessibility outlines enumerate every disclosed row in preorder. The
++// generic consumer `items` iterator stops at an item and therefore only exposes
++// the top-level rows of a hierarchical tree.
++struct ContainerRows<'a> {
++    pending: Vec<Node<'a>>,
++    outline: bool,
++}
++
++fn container_rows<'a>(node: &Node<'a>) -> ContainerRows<'a> {
++    ContainerRows {
++        pending: node.filtered_children(filter).rev().collect(),
++        outline: node.role() == Role::Tree,
++    }
++}
++
++impl<'a> Iterator for ContainerRows<'a> {
++    type Item = Node<'a>;
++
++    fn next(&mut self) -> Option<Self::Item> {
++        while let Some(row) = self.pending.pop() {
++            let is_row = if self.outline {
++                row.role() == Role::TreeItem
++            } else {
++                row.is_item_like()
++            };
++            if !is_row || (self.outline && row.data().is_expanded() != Some(false)) {
++                self.pending.extend(row.filtered_children(filter).rev());
++            }
++            if is_row {
++                return Some(row);
++            }
++        }
++        None
++    }
++}
++
++fn disclosure_action(node: &Node, disclosed: bool) -> Option<Action> {
++    if !can_act(node) || node.data().is_expanded() == Some(disclosed) {
++        return None;
++    }
++    let action = if disclosed {
++        Action::Expand
++    } else {
++        Action::Collapse
++    };
++    node.supports_action(action, &filter).then_some(action)
++}
++
++fn disclosure_level(node: &Node) -> NSInteger {
++    node.level().map_or_else(
++        || {
++            let mut level = 0;
++            let mut parent = node.parent();
++            while let Some(row) = parent {
++                if row.role() == Role::TreeItem {
++                    level += 1;
++                }
++                parent = row.parent();
++            }
++            level
++        },
++        |level| level.saturating_sub(1).min(NSInteger::MAX as usize) as NSInteger,
++    )
++}
+ 
+ fn ns_role(node: &Node) -> &'static NSAccessibilityRole {
+     let role = node.role();
+@@ -285,6 +352,10 @@
+     }
+ }
+ 
++fn can_act(node: &Node) -> bool {
++    !node.is_disabled() && filter(node) == FilterResult::Include
++}
++
+ pub(crate) fn can_be_focused(node: &Node) -> bool {
+     filter(node) == FilterResult::Include && node.role() != Role::Window
+ }
+@@ -331,6 +402,11 @@
+         }
+         if let Some(value) = self.0.value() {
+             return Some(Value::String(value));
++        }
++        // Multiline controls retain their content in text runs rather than
++        // copying the full document into every caret-only root update.
++        if self.0.is_text_input() && self.0.supports_text_ranges() {
++            return Some(Value::String(self.0.document_range().text()));
+         }
+         if let Some(value) = self.0.numeric_value() {
+             return Some(Value::Number(value));
+@@ -438,8 +514,7 @@
+                 if !wrapper.is_container_with_selectable_children() {
+                     return None;
+                 }
+-                let platform_nodes = node
+-                    .items(filter)
++                let platform_nodes = container_rows(node)
+                     .filter(|item| item.is_selected() == Some(true))
+                     .map(|child| context.get_or_create_platform_node(child.id()))
+                     .collect::<Vec<Id<PlatformNode>>>();
+@@ -555,7 +630,7 @@
+         #[method(setAccessibilityValue:)]
+         fn set_value(&self, value: &NSObject) {
+             if let Some(string) = downcast_ref::<NSString>(value) {
+-                self.resolve_with_context(|node, tree, context| {
++                self.resolve_action(|node, tree, context| {
+                     if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
+                         context.do_action(ActionRequest {
+                             action: Action::SetValue,
+@@ -566,7 +641,7 @@
+                     }
+                 });
+             } else if let Some(number) = downcast_ref::<NSNumber>(value) {
+-                self.resolve_with_context(|node, tree, context| {
++                self.resolve_action(|node, tree, context| {
+                     if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
+                         context.do_action(ActionRequest {
+                             action: Action::SetValue,
+@@ -637,7 +712,7 @@
+ 
+         #[method(setAccessibilityFocused:)]
+         fn set_focused(&self, focused: bool) {
+-            self.resolve_with_context(|node, tree, context| {
++            self.resolve_action(|node, tree, context| {
+                 if focused {
+                     if node.is_focusable(&filter) {
+                         if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
+@@ -667,7 +742,7 @@
+ 
+         #[method(accessibilityPerformPress)]
+         fn press(&self) -> bool {
+-            self.resolve_with_context(|node, tree, context| {
++            self.resolve_action(|node, tree, context| {
+                 let clickable = node.is_clickable(&filter);
+                 if clickable {
+                     if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
+@@ -686,7 +761,7 @@
+ 
+         #[method(accessibilityPerformIncrement)]
+         fn increment(&self) -> bool {
+-            self.resolve_with_context(|node, tree, context| {
++            self.resolve_action(|node, tree, context| {
+                 let supports_increment = node.supports_increment(&filter);
+                 if supports_increment {
+                     if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
+@@ -705,7 +780,7 @@
+ 
+         #[method(accessibilityPerformDecrement)]
+         fn decrement(&self) -> bool {
+-            self.resolve_with_context(|node, tree, context| {
++            self.resolve_action(|node, tree, context| {
+                 let supports_decrement = node.supports_decrement(&filter);
+                 if supports_decrement {
+                     if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
+@@ -1005,8 +1080,8 @@
+ 
+         #[method(setAccessibilitySelectedTextRange:)]
+         fn set_selected_text_range(&self, range: NSRange) {
+-            self.resolve_with_context(|node, tree, context| {
+-                if node.supports_text_ranges() {
++            self.resolve_action(|node, tree, context| {
++                if node.supports_text_ranges() && node.supports_action(Action::SetTextSelection, &filter) {
+                     if let Some(range) = from_ns_range(node, range) {
+                         if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
+                             context.do_action(ActionRequest {
+@@ -1040,7 +1115,7 @@
+ 
+         #[method(setAccessibilitySelected:)]
+         fn set_selected(&self, selected: bool) {
+-            self.resolve_with_context(|node, tree, context| {
++            self.resolve_action(|node, tree, context| {
+                 let wrapper = NodeWrapper(node);
+                 if !node.is_clickable(&filter)
+                     || !wrapper.is_item_like()
+@@ -1083,8 +1158,7 @@
+                 if !wrapper.is_container_with_selectable_children() {
+                     return None;
+                 }
+-                let platform_nodes = node
+-                    .items(filter)
++                let platform_nodes = container_rows(node)
+                     .map(|child| context.get_or_create_platform_node(child.id()))
+                     .collect::<Vec<Id<PlatformNode>>>();
+                 Some(NSArray::from_vec(platform_nodes))
+@@ -1099,8 +1173,7 @@
+                 if !wrapper.is_container_with_selectable_children() {
+                     return None;
+                 }
+-                let platform_nodes = node
+-                    .items(filter)
++                let platform_nodes = container_rows(node)
+                     .filter(|item| item.is_selected() == Some(true))
+                     .map(|child| context.get_or_create_platform_node(child.id()))
+                     .collect::<Vec<Id<PlatformNode>>>();
+@@ -1109,9 +1182,58 @@
+             .flatten()
+         }
+ 
++        #[method(isAccessibilityDisclosed)]
++        fn is_disclosed(&self) -> bool {
++            self.resolve(|node| node.data().is_expanded().unwrap_or(false)).unwrap_or(false)
++        }
++
++        #[method(setAccessibilityDisclosed:)]
++        fn set_disclosed(&self, disclosed: bool) {
++            self.resolve_action(|node, tree, context| {
++                if let Some(action) = disclosure_action(node, disclosed) {
++                    if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
++                        context.do_action(ActionRequest { action, target_tree, target_node, data: None });
++                    }
++                }
++            });
++        }
++
++        #[method(accessibilityDisclosureLevel)]
++        fn level(&self) -> NSInteger {
++            self.resolve(disclosure_level).unwrap_or(0)
++        }
++
++        #[method_id(accessibilityDisclosedByRow)]
++        fn disclosed_by_row(&self) -> Option<Id<PlatformNode>> {
++            self.resolve_with_context(|node, _, context| {
++                let mut parent = node.filtered_parent(&filter);
++                while let Some(row) = parent {
++                    if row.role() == Role::TreeItem {
++                        return Some(context.get_or_create_platform_node(row.id()));
++                    }
++                    if row.role() == Role::Tree { break; }
++                    parent = row.filtered_parent(&filter);
++                }
++                None
++            }).flatten()
++        }
++
++        #[method_id(accessibilityDisclosedRows)]
++        fn disclosed_rows(&self) -> Option<Id<NSArray<PlatformNode>>> {
++            self.resolve_with_context(|node, _, context| {
++                let rows = if node.data().is_expanded() == Some(true) {
++                    node.items(filter)
++                        .filter(|row| row.role() == Role::TreeItem)
++                        .map(|row| context.get_or_create_platform_node(row.id()))
++                        .collect()
++                } else { Vec::new() };
++                NSArray::from_vec(rows)
++            })
++        }
++
+         #[method(accessibilityPerformPick)]
+         fn pick(&self) -> bool {
+-            self.resolve_with_context(|node, tree, context| {
++            self.resolve_action(|node, tree, context| {
+                 let wrapper = NodeWrapper(node);
+                 let selectable = node.is_clickable(&filter)
+                     && wrapper.is_item_like()
+@@ -1180,21 +1302,34 @@
+         #[method_id(accessibilityActionNames)]
+         fn action_names(&self) -> Id<NSArray<NSString>> {
+             let mut result = vec![];
+-            self.resolve(|node| {
++            self.resolve_action(|node, _, _| {
+                 if node.supports_action(Action::ScrollIntoView, &filter) {
+                     result.push(ns_string!(SCROLL_TO_VISIBLE_ACTION).copy());
+                 }
++                if disclosure_action(node, true).is_some() {
++                    result.push(ns_string!(EXPAND_ACTION).copy());
++                }
++                if disclosure_action(node, false).is_some() {
++                    result.push(ns_string!(COLLAPSE_ACTION).copy());
++                }
+             });
+             NSArray::from_vec(result)
+         }
+ 
+         #[method(accessibilityPerformAction:)]
+         fn perform_action(&self, action: &NSString) {
+-            self.resolve_with_context(|node, tree, context| {
+-                if action == ns_string!(SCROLL_TO_VISIBLE_ACTION) {
++            self.resolve_action(|node, tree, context| {
++                let requested = if action == ns_string!(SCROLL_TO_VISIBLE_ACTION) {
++                    node.supports_action(Action::ScrollIntoView, &filter).then_some(Action::ScrollIntoView)
++                } else if action == ns_string!(EXPAND_ACTION) {
++                    disclosure_action(node, true)
++                } else if action == ns_string!(COLLAPSE_ACTION) {
++                    disclosure_action(node, false)
++                } else { None };
++                if let Some(action) = requested {
+                     if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
+                         context.do_action(ActionRequest {
+-                            action: Action::ScrollIntoView,
++                            action,
+                             target_tree,
+                             target_node,
+                             data: None,
+@@ -1207,9 +1342,32 @@
+         #[method(isAccessibilitySelectorAllowed:)]
+         fn is_selector_allowed(&self, selector: Sel) -> bool {
+             self.resolve(|node| {
++                if !can_act(node) && (
++                    selector == sel!(setAccessibilityFocused:)
++                    || selector == sel!(accessibilityPerformPress)
++                    || selector == sel!(accessibilityPerformIncrement)
++                    || selector == sel!(accessibilityPerformDecrement)
++                    || selector == sel!(setAccessibilityValue:)
++                    || selector == sel!(setAccessibilitySelectedTextRange:)
++                    || selector == sel!(setAccessibilitySelected:)
++                    || selector == sel!(setAccessibilityDisclosed:)
++                    || selector == sel!(accessibilityPerformPick)
++                ) { return false; }
+                 if selector == sel!(setAccessibilityFocused:) {
+                     return node.is_focusable(&filter);
+                 }
++                if selector == sel!(isAccessibilityDisclosed)
++                    || selector == sel!(accessibilityDisclosedRows)
++                    || selector == sel!(accessibilityDisclosedByRow)
++                    || selector == sel!(accessibilityDisclosureLevel)
++                {
++                    return node.role() == Role::TreeItem;
++                }
++                if selector == sel!(setAccessibilityDisclosed:) {
++                    return !node.is_disabled() && node.role() == Role::TreeItem && (
++                        node.supports_action(Action::Expand, &filter) || node.supports_action(Action::Collapse, &filter)
++                    );
++                }
+                 if selector == sel!(accessibilityPerformPress) {
+                     return node.is_clickable(&filter);
+                 }
+@@ -1218,6 +1376,9 @@
+                 }
+                 if selector == sel!(accessibilityPerformDecrement) {
+                     return node.supports_decrement(&filter);
++                }
++                if selector == sel!(setAccessibilitySelectedTextRange:) {
++                    return node.supports_text_ranges() && node.supports_action(Action::SetTextSelection, &filter);
+                 }
+                 if selector == sel!(accessibilityNumberOfCharacters)
+                     || selector == sel!(accessibilitySelectedText)
+@@ -1319,6 +1480,16 @@
+         Some(f(&node, &tree, &context))
+     }
+ 
++    fn resolve_action<F, T>(&self, f: F) -> Option<T>
++    where
++        F: FnOnce(&Node, &Tree, &Rc<Context>) -> T,
++    {
++        self.resolve_with_context(|node, tree, context| {
++            can_act(node).then(|| f(node, tree, context))
++        })
++        .flatten()
++    }
++
+     fn resolve<F, T>(&self, f: F) -> Option<T>
+     where
+         F: FnOnce(&Node) -> T,
+@@ -1336,3 +1507,130 @@
+         })
+     }
+ }
++
++#[cfg(test)]
++mod outline_tests {
++    use super::*;
++    use accesskit::{Node as NodeData, NodeId as LocalId, Tree as TreeData, TreeId, TreeUpdate};
++
++    fn tree(nodes: Vec<(LocalId, NodeData)>) -> Tree {
++        Tree::new(
++            TreeUpdate {
++                nodes,
++                tree: Some(TreeData::new(LocalId(0))),
++                tree_id: TreeId::ROOT,
++                focus: LocalId(0),
++            },
++            true,
++        )
++    }
++
++    fn row(level: usize, expanded: Option<bool>, children: &[u64]) -> NodeData {
++        let mut node = NodeData::new(Role::TreeItem);
++        node.set_level(level);
++        node.set_children(children.iter().map(|id| LocalId(*id)).collect::<Vec<_>>());
++        if let Some(expanded) = expanded {
++            node.set_expanded(expanded);
++        }
++        node
++    }
++
++    #[test]
++    fn outlines_enumerate_descendants_in_preorder_and_prune_closed_and_hidden_rows() {
++        let mut root = NodeData::new(Role::Tree);
++        root.set_children(vec![LocalId(1), LocalId(5)]);
++        let mut group = NodeData::new(Role::GenericContainer);
++        group.set_children(vec![LocalId(3), LocalId(4)]);
++        let mut hidden = row(3, None, &[]);
++        hidden.set_hidden();
++        let tree = tree(vec![
++            (LocalId(0), root),
++            (LocalId(1), row(1, Some(true), &[2])),
++            (LocalId(2), group),
++            (LocalId(3), row(2, None, &[])),
++            (LocalId(4), hidden),
++            (LocalId(5), row(1, Some(false), &[6])),
++            (LocalId(6), row(2, None, &[])),
++        ]);
++        let state = tree.state();
++        let root = state
++            .node_by_tree_local_id(LocalId(0), TreeId::ROOT)
++            .unwrap();
++        let actual = container_rows(&root)
++            .map(|node| node.id())
++            .collect::<Vec<_>>();
++        let expected = [1, 3, 5].map(|id| {
++            state
++                .node_by_tree_local_id(LocalId(id), TreeId::ROOT)
++                .unwrap()
++                .id()
++        });
++        assert_eq!(actual, expected);
++        assert_eq!(
++            root.items(filter).count(),
++            2,
++            "generic items stop at top-level rows"
++        );
++    }
++
++    #[test]
++    fn disclosure_level_and_actions_preserve_state_capabilities_and_disabled_rows() {
++        let mut root = NodeData::new(Role::Tree);
++        root.set_children(vec![LocalId(1), LocalId(3)]);
++        let mut expanded = row(1, Some(true), &[2]);
++        expanded.add_action(Action::Collapse);
++        expanded.add_action(Action::Expand);
++        let mut disabled = row(1, Some(false), &[]);
++        disabled.set_disabled();
++        disabled.add_action(Action::Expand);
++        let mut child = row(2, None, &[]);
++        child.clear_level(); // Fall back to semantic ancestors when level is omitted.
++        let tree = tree(vec![
++            (LocalId(0), root),
++            (LocalId(1), expanded),
++            (LocalId(2), child),
++            (LocalId(3), disabled),
++        ]);
++        let state = tree.state();
++        let parent = state
++            .node_by_tree_local_id(LocalId(1), TreeId::ROOT)
++            .unwrap();
++        let child = state
++            .node_by_tree_local_id(LocalId(2), TreeId::ROOT)
++            .unwrap();
++        let disabled = state
++            .node_by_tree_local_id(LocalId(3), TreeId::ROOT)
++            .unwrap();
++        assert_eq!(disclosure_level(&parent), 0);
++        assert_eq!(disclosure_level(&child), 1);
++        assert_eq!(disclosure_action(&parent, true), None);
++        assert_eq!(disclosure_action(&parent, false), Some(Action::Collapse));
++        assert_eq!(disclosure_action(&child, true), None);
++        assert_eq!(disclosure_action(&disabled, true), None);
++    }
++
++    #[test]
++    fn hundred_thousand_rows_are_all_available_without_visual_bounds() {
++        let mut root = NodeData::new(Role::Tree);
++        root.set_children(vec![LocalId(1)]);
++        let mut parent = row(1, Some(true), &[]);
++        parent.set_children((2..100_002).map(LocalId).collect::<Vec<_>>());
++        let mut nodes = vec![(LocalId(0), root), (LocalId(1), parent)];
++        nodes.extend((2..100_002).map(|id| (LocalId(id), row(2, None, &[]))));
++        let tree = tree(nodes);
++        let state = tree.state();
++        let root = state
++            .node_by_tree_local_id(LocalId(0), TreeId::ROOT)
++            .unwrap();
++        let rows = container_rows(&root).collect::<Vec<_>>();
++        assert_eq!(rows.len(), 100_001);
++        assert!(!rows.last().unwrap().has_bounds());
++        assert_eq!(
++            rows.last().unwrap().id(),
++            state
++                .node_by_tree_local_id(LocalId(100_001), TreeId::ROOT)
++                .unwrap()
++                .id()
++        );
++    }
++}
+--- a/tests/native_outline.rs
++++ b/tests/native_outline.rs
+@@ -0,0 +1,21 @@
++// Licensed under the Apache License, Version 2.0 or MIT, matching the adapter.
++//! Native NSAccessibility protocol integration, with no visible window.
++//! A harness-free test keeps all AppKit objects on the process's main thread.
++
++#[cfg(target_os = "macos")]
++#[path = "native_outline/macos.rs"]
++mod native;
++#[cfg(target_os = "macos")]
++use native::{context, filters, node, util};
++
++#[cfg(target_os = "macos")]
++fn main() {
++    native::run();
++}
++
++#[cfg(not(target_os = "macos"))]
++fn main() {
++    eprintln!(
++        "SKIP native_outline: AppKit protocol verification requires macOS; the macOS CI job must execute it."
++    );
++}
+--- a/tests/native_outline/macos.rs
++++ b/tests/native_outline/macos.rs
+@@ -0,0 +1,403 @@
++// Licensed under the Apache License, Version 2.0 or MIT, matching the adapter.
++#![allow(dead_code)]
++
++#[path = "../../src/context.rs"]
++pub(crate) mod context;
++#[path = "../../src/filters.rs"]
++pub(crate) mod filters;
++#[path = "../../src/node.rs"]
++pub(crate) mod node;
++#[path = "../../src/util.rs"]
++pub(crate) mod util;
++
++use accesskit::{Action, ActionRequest, Node, NodeId, Role, TreeId, TreeUpdate};
++use accesskit_consumer::{Tree, TreeChangeHandler};
++use context::{ActionHandlerNoMut, Context};
++use objc2::{
++    msg_send, msg_send_id,
++    rc::{Id, WeakId},
++};
++use objc2_app_kit::NSView;
++use objc2_foundation::{MainThreadMarker, NSArray, NSInteger, NSRect, NSString};
++use std::{cell::RefCell, rc::Rc, time::Instant};
++
++struct Actions(Rc<RefCell<Vec<ActionRequest>>>);
++impl ActionHandlerNoMut for Actions {
++    fn do_action(&self, request: ActionRequest) {
++        self.0.borrow_mut().push(request);
++    }
++}
++struct Changes;
++impl TreeChangeHandler for Changes {
++    fn node_added(&mut self, _: &accesskit_consumer::Node) {}
++    fn node_updated(&mut self, _: &accesskit_consumer::Node, _: &accesskit_consumer::Node) {}
++    fn focus_moved(
++        &mut self,
++        _: Option<&accesskit_consumer::Node>,
++        _: Option<&accesskit_consumer::Node>,
++    ) {
++    }
++    fn node_removed(&mut self, _: &accesskit_consumer::Node) {}
++}
++
++fn model(collapsed: bool) -> TreeUpdate {
++    let mut root = Node::new(Role::Tree);
++    root.set_children(
++        (0..25)
++            .map(|project| NodeId(1 + project * 4_001))
++            .collect::<Vec<_>>(),
++    );
++    root.set_active_descendant(NodeId(100_025));
++    root.add_action(Action::Focus);
++    let mut nodes = vec![(NodeId(0), root)];
++    for project in 0..25 {
++        let id = 1 + project * 4_001;
++        let mut parent = Node::new(Role::TreeItem);
++        parent.set_label(format!("Project {:02}", project + 1));
++        parent.set_level(1);
++        parent.set_expanded(!collapsed || project != 0);
++        parent.add_action(Action::Expand);
++        parent.add_action(Action::Collapse);
++        parent.add_action(Action::Click);
++        parent.add_action(Action::Focus);
++        parent.set_children(
++            (1..=4_000)
++                .map(|offset| NodeId(id + offset))
++                .collect::<Vec<_>>(),
++        );
++        nodes.push((NodeId(id), parent));
++        for offset in 1..=4_000 {
++            let mut row = Node::new(Role::TreeItem);
++            row.set_label(format!("document_{offset:04}.rs"));
++            row.set_level(2);
++            row.add_action(Action::Click);
++            row.add_action(Action::Focus);
++            row.add_action(Action::ScrollIntoView);
++            nodes.push((NodeId(id + offset), row));
++        }
++    }
++    TreeUpdate {
++        nodes,
++        tree: Some(accesskit::Tree::new(NodeId(0))),
++        tree_id: TreeId::ROOT,
++        focus: NodeId(0),
++    }
++}
++
++pub fn run() {
++    let marker = MainThreadMarker::new().expect("AppKit protocol test runs on process main thread");
++    // A valid main-thread marker satisfies AppKit's allocation requirement.
++    let view = unsafe { NSView::new(marker) };
++    let actions = Rc::new(RefCell::new(Vec::new()));
++    let context = Context::new(
++        WeakId::from_id(&view),
++        Tree::new(model(false), true),
++        Rc::new(Actions(actions.clone())),
++        marker,
++    );
++    let native = |local| {
++        context.get_or_create_platform_node(
++            context
++                .tree
++                .borrow()
++                .state()
++                .node_by_tree_local_id(NodeId(local), TreeId::ROOT)
++                .unwrap()
++                .id(),
++        )
++    };
++    let root = native(0);
++    let project = native(1);
++    let first_document = native(2);
++    let final_project = native(96_025);
++    let last = native(100_025);
++
++    let started = Instant::now();
++    let rows: Id<NSArray<node::PlatformNode>> = unsafe { msg_send_id![&*root, accessibilityRows] };
++    assert_eq!(rows.len(), 100_025);
++    assert_eq!(
++        Id::as_ptr(&unsafe { rows.lastObject() }.unwrap()),
++        Id::as_ptr(&last)
++    );
++    let enumeration = started.elapsed();
++    let title: Id<NSString> = unsafe { msg_send_id![&*last, accessibilityTitle] };
++    assert_eq!(title.to_string(), "document_4000.rs");
++    let level: NSInteger = unsafe { msg_send![&*last, accessibilityDisclosureLevel] };
++    assert_eq!(level, 1);
++    let parent: Id<node::PlatformNode> =
++        unsafe { msg_send_id![&*last, accessibilityDisclosedByRow] };
++    assert_eq!(Id::as_ptr(&parent), Id::as_ptr(&final_project));
++    let disclosed: Id<NSArray<node::PlatformNode>> =
++        unsafe { msg_send_id![&*final_project, accessibilityDisclosedRows] };
++    assert_eq!(disclosed.len(), 4_000);
++    assert_eq!(
++        Id::as_ptr(&unsafe { disclosed.lastObject() }.unwrap()),
++        Id::as_ptr(&last)
++    );
++    let focused: bool = unsafe { msg_send![&*last, isAccessibilityFocused] };
++    assert!(
++        focused,
++        "offscreen active descendant is the native focused element"
++    );
++    let frame: NSRect = unsafe { msg_send![&*last, accessibilityFrame] };
++    assert_eq!(
++        frame,
++        NSRect::ZERO,
++        "offscreen semantics do not fabricate geometry"
++    );
++
++    let pressed: bool = unsafe { msg_send![&*last, accessibilityPerformPress] };
++    assert!(pressed);
++    unsafe {
++        let _: () = msg_send![&*last, setAccessibilityFocused: true];
++    }
++    let scroll = NSString::from_str("AXScrollToVisible");
++    unsafe {
++        let _: () = msg_send![&*last, accessibilityPerformAction: &*scroll];
++    }
++    unsafe {
++        let _: () = msg_send![&*project, setAccessibilityDisclosed: false];
++    }
++    assert_eq!(
++        actions
++            .borrow()
++            .iter()
++            .map(|request| (request.action, request.target_node))
++            .collect::<Vec<_>>(),
++        [
++            (Action::Click, NodeId(100_025)),
++            (Action::Focus, NodeId(100_025)),
++            (Action::ScrollIntoView, NodeId(100_025)),
++            (Action::Collapse, NodeId(1))
++        ]
++    );
++    assert!(
++        actions
++            .borrow()
++            .iter()
++            .all(|request| request.target_tree == TreeId::ROOT)
++    );
++    actions.borrow_mut().clear();
++
++    context
++        .tree
++        .borrow_mut()
++        .update_and_process_changes(model(true), &mut Changes);
++    let closed_rows: Id<NSArray<node::PlatformNode>> =
++        unsafe { msg_send_id![&*root, accessibilityRows] };
++    assert_eq!(closed_rows.len(), 96_025);
++    let closed_children: Id<NSArray<node::PlatformNode>> =
++        unsafe { msg_send_id![&*project, accessibilityDisclosedRows] };
++    assert!(closed_children.is_empty());
++    let hidden_children: Id<NSArray<node::PlatformNode>> =
++        unsafe { msg_send_id![&*project, accessibilityChildren] };
++    assert!(hidden_children.is_empty());
++    let hidden_pressed: bool = unsafe { msg_send![&*first_document, accessibilityPerformPress] };
++    assert!(
++        !hidden_pressed,
++        "retained native children cannot dispatch through a collapsed row"
++    );
++    unsafe {
++        let _: () = msg_send![&*project, setAccessibilityDisclosed: true];
++    }
++    assert_eq!(actions.borrow().last().unwrap().action, Action::Expand);
++    context
++        .tree
++        .borrow_mut()
++        .update_and_process_changes(model(false), &mut Changes);
++    assert_eq!(
++        Id::as_ptr(&native(100_025)),
++        Id::as_ptr(&last),
++        "surviving semantic rows keep native object identity"
++    );
++
++    actions.borrow_mut().clear();
++    drop(context);
++    let stale_pressed: bool = unsafe { msg_send![&*last, accessibilityPerformPress] };
++    assert!(
++        !stale_pressed,
++        "released adapter cannot dispatch stale actions"
++    );
++    assert!(actions.borrow().is_empty());
++    println!(
++        "native NSAccessibility: 100025 rows, 4000 disclosed children, offscreen focus/click/scroll, collapse/expand, stable objects and released lifecycle passed; full row getter {:?}",
++        enumeration
++    );
++}
++
++pub fn run_text_selection() {
++    use accesskit::{ActionData, TextPosition, TextSelection};
++    use objc2::sel;
++    use objc2_foundation::NSRange;
++    let marker =
++        MainThreadMarker::new().expect("AppKit text-range test runs on process main thread");
++    let view = unsafe { NSView::new(marker) };
++    let actions = Rc::new(RefCell::new(Vec::new()));
++    let first = "A🙂e\u{301}\r\n";
++    let second = "第二行";
++    let mut input = Node::new(Role::MultilineTextInput);
++    input.set_children(vec![NodeId(20)]);
++    input.add_action(Action::Focus);
++    input.add_action(Action::SetTextSelection);
++    input.set_text_selection(TextSelection {
++        anchor: TextPosition {
++            node: NodeId(12),
++            character_index: 3,
++        },
++        focus: TextPosition {
++            node: NodeId(11),
++            character_index: 1,
++        },
++    });
++    let mut container = Node::new(Role::GenericContainer);
++    container.set_children(vec![NodeId(11), NodeId(12)]);
++    let mut first_run = Node::new(Role::TextRun);
++    first_run.set_value(first);
++    first_run.set_character_lengths(vec![1, 4, 1, 2, 2]);
++    let mut second_run = Node::new(Role::TextRun);
++    second_run.set_value(second);
++    second_run.set_character_lengths(vec![3, 3, 3]);
++    let tree = Tree::new(
++        TreeUpdate {
++            nodes: vec![
++                (NodeId(10), input),
++                (NodeId(20), container),
++                (NodeId(11), first_run),
++                (NodeId(12), second_run),
++            ],
++            tree: Some(accesskit::Tree::new(NodeId(10))),
++            tree_id: TreeId::ROOT,
++            focus: NodeId(10),
++        },
++        true,
++    );
++    let context = Context::new(
++        WeakId::from_id(&view),
++        tree,
++        Rc::new(Actions(actions.clone())),
++        marker,
++    );
++    let input = context.get_or_create_platform_node(
++        context
++            .tree
++            .borrow()
++            .state()
++            .node_by_tree_local_id(NodeId(10), TreeId::ROOT)
++            .unwrap()
++            .id(),
++    );
++    let settable: bool = unsafe {
++        msg_send![&*input, isAccessibilitySelectorAllowed: sel!(setAccessibilitySelectedTextRange:)]
++    };
++    assert!(settable, "prepared native text selection must be settable");
++    let count: NSInteger = unsafe { msg_send![&*input, accessibilityNumberOfCharacters] };
++    assert_eq!(
++        count, 10,
++        "native character count uses UTF-16, including CRLF"
++    );
++    let range: NSRange = unsafe { msg_send![&*input, accessibilitySelectedTextRange] };
++    assert_eq!((range.location, range.length), (1, 9));
++    let selected: Option<Id<NSString>> =
++        unsafe { msg_send_id![&*input, accessibilitySelectedText] };
++    assert_eq!(
++        selected.unwrap().to_string(),
++        format!("🙂e\u{301}\r\n{second}")
++    );
++    let value: Option<Id<NSString>> = unsafe { msg_send_id![&*input, accessibilityValue] };
++    assert_eq!(
++        value.unwrap().to_string(),
++        format!("{first}{second}"),
++        "native full value comes from retained runs"
++    );
++    let _: () =
++        unsafe { msg_send![&*input, setAccessibilitySelectedTextRange: NSRange::new(1, 2)] };
++    let _: () =
++        unsafe { msg_send![&*input, setAccessibilitySelectedTextRange: NSRange::new(8, 1)] };
++    let requests = actions.borrow_mut().drain(..).collect::<Vec<_>>();
++    assert_eq!(requests.len(), 2);
++    for request in &requests {
++        assert_eq!(request.action, Action::SetTextSelection);
++        assert_eq!(request.target_node, NodeId(10));
++        assert_eq!(request.target_tree, TreeId::ROOT);
++    }
++    assert_eq!(
++        requests[0].data,
++        Some(ActionData::SetTextSelection(TextSelection {
++            anchor: TextPosition {
++                node: NodeId(11),
++                character_index: 1
++            },
++            focus: TextPosition {
++                node: NodeId(11),
++                character_index: 2
++            },
++        }))
++    );
++    assert_eq!(
++        requests[1].data,
++        Some(ActionData::SetTextSelection(TextSelection {
++            anchor: TextPosition {
++                node: NodeId(12),
++                character_index: 1
++            },
++            focus: TextPosition {
++                node: NodeId(12),
++                character_index: 2
++            },
++        }))
++    );
++    let mut disabled = Node::new(Role::MultilineTextInput);
++    disabled.set_children(vec![NodeId(20)]);
++    disabled.set_disabled();
++    disabled.add_action(Action::SetTextSelection);
++    context.tree.borrow_mut().update_and_process_changes(
++        TreeUpdate {
++            nodes: vec![(NodeId(10), disabled)],
++            tree: None,
++            tree_id: TreeId::ROOT,
++            focus: NodeId(10),
++        },
++        &mut Changes,
++    );
++    let settable: bool = unsafe {
++        msg_send![&*input, isAccessibilitySelectorAllowed: sel!(setAccessibilitySelectedTextRange:)]
++    };
++    assert!(!settable);
++    let _: () =
++        unsafe { msg_send![&*input, setAccessibilitySelectedTextRange: NSRange::new(0, 1)] };
++    assert!(
++        actions.borrow().is_empty(),
++        "disabled text cannot dispatch a selection setter"
++    );
++    let mut unsupported = Node::new(Role::MultilineTextInput);
++    unsupported.set_children(vec![NodeId(20)]);
++    context.tree.borrow_mut().update_and_process_changes(
++        TreeUpdate {
++            nodes: vec![(NodeId(10), unsupported)],
++            tree: None,
++            tree_id: TreeId::ROOT,
++            focus: NodeId(10),
++        },
++        &mut Changes,
++    );
++    let settable: bool = unsafe {
++        msg_send![&*input, isAccessibilitySelectorAllowed: sel!(setAccessibilitySelectedTextRange:)]
++    };
++    assert!(!settable);
++    let _: () =
++        unsafe { msg_send![&*input, setAccessibilitySelectedTextRange: NSRange::new(0, 1)] };
++    assert!(
++        actions.borrow().is_empty(),
++        "unadvertised selection setters are inert"
++    );
++    drop(context);
++    let _: () =
++        unsafe { msg_send![&*input, setAccessibilitySelectedTextRange: NSRange::new(0, 1)] };
++    assert!(
++        actions.borrow().is_empty(),
++        "released native text object cannot dispatch"
++    );
++    println!(
++        "native NSAccessibility text selection: full multiline value, UTF-16 range/count, reversed selection, Unicode setter actions and released lifecycle passed"
++    );
++}
+--- a/tests/native_text_selection.rs
++++ b/tests/native_text_selection.rs
+@@ -0,0 +1,19 @@
++// Licensed under the Apache License, Version 2.0 or MIT, matching the adapter.
++//! Actual NSAccessibility UTF-16 getters/setters on the process main thread.
++
++#[cfg(target_os = "macos")]
++#[path = "native_outline/macos.rs"]
++mod native;
++#[cfg(target_os = "macos")]
++use native::{context, filters, node, util};
++
++#[cfg(target_os = "macos")]
++fn main() {
++    native::run_text_selection();
++}
++#[cfg(not(target_os = "macos"))]
++fn main() {
++    eprintln!(
++        "SKIP native_text_selection: AppKit verification requires macOS; macOS CI must execute it."
++    );
++}

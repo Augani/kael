@@ -378,6 +378,21 @@ impl TestAtlas {
 }
 
 impl PlatformAtlas for TestAtlas {
+    fn get_or_insert_with_size<'a>(
+        &self,
+        key: &AtlasKey,
+        size: Size<crate::DevicePixels>,
+        build: &mut dyn FnMut() -> anyhow::Result<
+            Option<(Size<crate::DevicePixels>, std::borrow::Cow<'a, [u8]>)>,
+        >,
+    ) -> anyhow::Result<Option<AtlasTile>> {
+        crate::atlas_payload_len(size, key.texture_kind())?;
+        self.get_or_insert_with(key, build)
+    }
+
+    // This headless test backend owns no raster storage or GPU resources.
+    fn set_hard_admission_limits(&self, _: crate::AtlasAdmissionLimits) {}
+
     fn get_or_insert_with<'a>(
         &self,
         key: &crate::AtlasKey,

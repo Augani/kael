@@ -181,6 +181,15 @@ fn to_tile_position(unit_vertex: vec2<f32>, tile: AtlasTile) -> vec2<f32> {
   return (vec2<f32>(tile.bounds.origin) + unit_vertex * vec2<f32>(tile.bounds.size)) / atlas_size;
 }
 
+// Clamp samples rather than vertex UVs to preserve interior interpolation.
+fn clamp_tile_position(position: vec2<f32>, tile: AtlasTile) -> vec2<f32> {
+    let atlas_size = vec2<f32>(textureDimensions(t_sprite, 0));
+    let origin = vec2<f32>(tile.bounds.origin);
+    let size = vec2<f32>(tile.bounds.size);
+    return clamp(position, (origin + vec2<f32>(0.5)) / atlas_size,
+        (origin + size - vec2<f32>(0.5)) / atlas_size);
+}
+
 fn distance_from_clip_rect_impl(position: vec2<f32>, clip_bounds: Bounds) -> vec4<f32> {
     let tl = position - clip_bounds.origin;
     let br = clip_bounds.origin + clip_bounds.size - position;
@@ -1079,30 +1088,24 @@ struct BlurPass {
     tint: Hsla,
     blur_radius: f32,
     saturation: f32,
+    rounded_clip_bounds: Bounds,
+    rounded_clip_radii: Corners,
 }
 var<storage, read> b_blurs: array<BlurPass>;
 
 struct BlurVarying {
     @builtin(position) position: vec4<f32>,
-    @location(0) sample_position: vec2<f32>,
-    @location(1) @interpolate(flat) blur_id: u32,
-    @location(2) clip_distances: vec4<f32>,
-}
-
-fn blur_position(position: vec2<f32>, blur: BlurPass) -> vec2<f32> {
-    let target_origin = blur.target_bounds.origin;
-    let target_size = max(blur.target_bounds.size, vec2<f32>(1.0, 1.0));
-    let sample_origin = blur.sample_bounds.origin;
-    let sample_size = blur.sample_bounds.size;
-    return sample_origin + ((position - target_origin) / target_size) * sample_size;
+    @location(0) @interpolate(flat) blur_id: u32,
+    @location(1) clip_distances: vec4<f32>,
 }
 
 fn blur_along_axis(position: vec2<f32>, blur: BlurPass, axis: vec2<f32>) -> vec4<f32> {
-    let sample_position = blur_position(position, blur);
     let sigma = max(blur.blur_radius, 0.001);
     let radius = min(i32(ceil(blur.blur_radius * 3.0)), 16);
     let texture_size = vec2<f32>(textureDimensions(t_sprite));
-    let sample_min = blur.sample_bounds.origin;
+    // Captures retain their absolute viewport coordinates. Clamp to texel
+    // centers so linear filtering cannot read outside the copied rectangle.
+    let sample_min = blur.sample_bounds.origin + vec2<f32>(0.5, 0.5);
     let sample_max = sample_min + max(blur.sample_bounds.size - vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 0.0));
 
     var accum = vec4<f32>(0.0);
@@ -1113,7 +1116,7 @@ fn blur_along_axis(position: vec2<f32>, blur: BlurPass, axis: vec2<f32>) -> vec4
         }
 
         let weight = gaussian(f32(offset), sigma);
-        let clamped = clamp(sample_position + axis * f32(offset), sample_min, sample_max);
+        let clamped = clamp(position + axis * f32(offset), sample_min, sample_max);
         accum += textureSampleLevel(t_sprite, s_sprite, clamped / texture_size, 0.0) * weight;
         weight_sum += weight;
     }
@@ -1134,7 +1137,9 @@ fn composite_blur(blurred: vec4<f32>, blur: BlurPass) -> vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    let color = (tint.rgb * tint.a + saturated * blurred.a * (1.0 - tint.a)) / alpha;
+    // The blur target stores premultiplied RGB; saturated includes its alpha.
+    // Return straight color and let blend_color adapt to the surface contract.
+    let color = (tint.rgb * tint.a + saturated * (1.0 - tint.a)) / alpha;
     return vec4<f32>(color, alpha);
 }
 
@@ -1145,7 +1150,6 @@ fn vs_blur(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
 
     var out = BlurVarying();
     out.position = to_device_position(unit_vertex, blur.target_bounds);
-    out.sample_position = blur_position(out.position.xy, blur);
     out.blur_id = instance_id;
     out.clip_distances = distance_from_clip_rect(unit_vertex, blur.target_bounds, blur.clip_bounds);
     return out;
@@ -1173,12 +1177,12 @@ fn fs_blur_composite(input: BlurVarying) -> @location(0) vec4<f32> {
         blur.corner_radii.bottom_left == 0.0 &&
         blur.corner_radii.top_right == 0.0 &&
         blur.corner_radii.bottom_right == 0.0;
-    if (unrounded) {
-        return color;
+    var coverage = rounded_clip_factor(input.position.xy, blur.rounded_clip_bounds, blur.rounded_clip_radii);
+    if (!unrounded) {
+        let distance = quad_sdf(input.position.xy, blur.target_bounds, blur.corner_radii);
+        coverage *= saturate(0.5 - distance);
     }
-
-    let distance = quad_sdf(input.position.xy, blur.target_bounds, blur.corner_radii);
-    return color * vec4<f32>(1.0, 1.0, 1.0, saturate(0.5 - distance));
+    return blend_color(color, coverage);
 }
 
 // --- shadows --- //
@@ -1475,7 +1479,8 @@ fn vs_mono_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
 
 @fragment
 fn fs_mono_sprite(input: MonoSpriteVarying) -> @location(0) vec4<f32> {
-    let sample = textureSample(t_sprite, s_sprite, input.tile_position).r;
+    let sprite = b_mono_sprites[input.sprite_id];
+    let sample = textureSample(t_sprite, s_sprite, clamp_tile_position(input.tile_position, sprite.tile)).r;
     let alpha_corrected = apply_contrast_and_gamma_correction(sample, input.color.rgb, grayscale_enhanced_contrast, gamma_ratios);
 
     // Alpha clip after using the derivatives.
@@ -1483,7 +1488,6 @@ fn fs_mono_sprite(input: MonoSpriteVarying) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    let sprite = b_mono_sprites[input.sprite_id];
     let rounded_clip = rounded_clip_factor(input.position.xy, sprite.rounded_clip_bounds, sprite.rounded_clip_radii);
     let sprite_color = apply_color_filter(input.color, sprite.color_filter);
 
@@ -1569,13 +1573,13 @@ fn vs_poly_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
 
 @fragment
 fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
-    let sample = textureSample(t_sprite, s_sprite, input.tile_position);
+    let sprite = b_poly_sprites[input.sprite_id];
+    let sample = textureSample(t_sprite, s_sprite, clamp_tile_position(input.tile_position, sprite.tile));
     // Alpha clip after using the derivatives.
     if (any(input.clip_distances < vec4<f32>(0.0))) {
         return vec4<f32>(0.0);
     }
 
-    let sprite = b_poly_sprites[input.sprite_id];
     let rounded_clip = rounded_clip_factor(input.position.xy, sprite.rounded_clip_bounds, sprite.rounded_clip_radii);
     let local_position = apply_inverse_transform(input.position.xy, sprite.transformation);
     let distance = quad_sdf(local_position, sprite.bounds, sprite.corner_radii);

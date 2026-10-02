@@ -930,7 +930,8 @@ impl RenderOnce for Input {
                                     Some(AccessibilityActionPayload::NumericValue(value)) => {
                                         Some(value.to_string())
                                     }
-                                    None => None,
+                                    Some(AccessibilityActionPayload::TextSelection { .. })
+                                    | None => None,
                                 };
                                 if let Some(value) = value {
                                     state.update(cx, |state, cx| {

@@ -478,7 +478,9 @@ impl RenderOnce for TextField {
                                 Some(AccessibilityActionPayload::NumericValue(value)) => {
                                     Some(value.to_string())
                                 }
-                                None => None,
+                                Some(AccessibilityActionPayload::TextSelection { .. }) | None => {
+                                    None
+                                }
                             };
                             if let Some(value) = value {
                                 state_for_set_value.update(cx, |state, cx| {

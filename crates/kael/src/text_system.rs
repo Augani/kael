@@ -105,6 +105,15 @@ impl TextSystem {
         self.platform_text_system.add_fonts(fonts)
     }
 
+    /// Release the shared shaped-text cache and its bookkeeping storage.
+    /// Currently displayed or caller-owned layouts remain valid through their
+    /// shared handles. The two cache pools retain at most 4,096 entries and
+    /// 8 MiB of charged text, glyph, run and wrapping allocations in total;
+    /// hash-table metadata is bounded separately by the entry count.
+    pub fn clear_shaped_text_cache(&self) {
+        self.global_line_layout_cache.clear();
+    }
+
     /// Get the FontId for the configure font family and style.
     fn font_id(&self, font: &Font) -> Result<FontId> {
         fn clone_font_id_result(font_id: &Result<FontId>) -> Result<FontId> {

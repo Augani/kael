@@ -283,7 +283,14 @@ impl Styled for SplitPane {
 
 impl RenderOnce for SplitPane {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = Theme::of(cx).clone();
+        let (accent, border, primary) = {
+            let theme = Theme::of(cx);
+            (
+                theme.tokens.accent,
+                theme.tokens.border,
+                theme.tokens.primary,
+            )
+        };
         if let Some(direction) = self.direction {
             self.state.update(cx, |state, _| {
                 state.direction = direction;
@@ -353,10 +360,10 @@ impl RenderOnce for SplitPane {
                 this.h(DIVIDER_HIT_AREA).w_full().cursor_row_resize()
             })
             .when(collapsed_pane.is_none(), |this| {
-                this.hover(|s| s.bg(theme.tokens.accent.opacity(0.35)))
+                this.hover(|s| s.bg(accent.opacity(0.35)))
             })
             .when(is_dragging || divider_focused, |this| {
-                this.bg(theme.tokens.accent.opacity(0.45))
+                this.bg(accent.opacity(0.45))
             })
             .on_accessibility_action(AccessibilityAction::Increment, move |_, window, cx| {
                 state_for_increment.update(cx, |state, cx| {
@@ -429,9 +436,9 @@ impl RenderOnce for SplitPane {
                 div()
                     .rounded_full()
                     .bg(if is_dragging || divider_focused {
-                        theme.tokens.primary
+                        primary
                     } else {
-                        theme.tokens.border
+                        border
                     })
                     .when(is_horizontal, |this| this.h_full().w(DIVIDER_SIZE))
                     .when(!is_horizontal, |this| this.w_full().h(DIVIDER_SIZE)),

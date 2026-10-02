@@ -42,6 +42,8 @@ path = "src/lib.rs"
 kael = { path = "../kael", version = "0.4.0", default-features = false, features = ["icons"] }
 kael_engines = { path = "../kael_engines", version = "0.4.0" }
 smallvec.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 once_cell = "1.19"
 
 # Text processing
@@ -176,3 +178,20 @@ required-features = ["browser", "game-input"]
 [[example]]
 name = "suite_scale_smoke"
 path = "examples/suite_scale_smoke.rs"
+
+[[example]]
+name = "virtual_tree"
+path = "examples/virtual_tree.rs"
+
+[[example]]
+name = "filesystem_explorer"
+path = "examples/filesystem_explorer.rs"
+
+[[example]]
+name = "desktop_workspace"
+path = "examples/desktop_workspace.rs"
+
+[[example]]
+name = "document_data_workbench"
+path = "examples/document_data_workbench.rs"
+required-features = ["native", "editor", "markdown"]

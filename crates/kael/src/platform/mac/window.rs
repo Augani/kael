@@ -3860,6 +3860,32 @@ impl MacWindow {
                 pending_webview_commands: HashMap::default(),
             })));
 
+            // Accessibility requests do not produce ordinary input events.
+            // Schedule a forced draw to drain them even after idle frame
+            // polling has stopped, without retaining this window in its adapter.
+            let action_window = Arc::downgrade(&window.0);
+            let action_executor = window.0.lock().executor.clone();
+            window
+                .0
+                .lock()
+                .accessibility_provider
+                .set_action_wake(move || {
+                    let action_window = action_window.clone();
+                    action_executor
+                        .spawn(async move {
+                            if let Some(window_state) = action_window.upgrade() {
+                                request_frame_immediately(
+                                    &window_state,
+                                    RequestFrameOptions {
+                                        require_presentation: true,
+                                        force_render: true,
+                                    },
+                                );
+                            }
+                        })
+                        .detach();
+                });
+
             store_ivar(
                 native_window,
                 WINDOW_STATE_IVAR,
@@ -4799,6 +4825,97 @@ impl PlatformWindow for MacWindow {
         this.renderer.draw(scene);
     }
 
+    #[cfg(feature = "custom-shaders")]
+    fn create_gpu_buffer(
+        &self,
+        descriptor: crate::GpuBufferDescriptor,
+    ) -> Result<crate::GpuBuffer, crate::RenderTargetError> {
+        self.0.lock().renderer.create_gpu_buffer(descriptor)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn validate_gpu_buffer(
+        &self,
+        buffer: &crate::GpuBuffer,
+    ) -> Result<(), crate::RenderTargetError> {
+        self.0.lock().renderer.validate_gpu_buffer(buffer)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn write_gpu_buffer(
+        &self,
+        buffer: &crate::GpuBuffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), crate::RenderTargetError> {
+        self.0
+            .lock()
+            .renderer
+            .write_gpu_buffer(buffer, offset, bytes)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn read_gpu_buffer(
+        &self,
+        buffer: &crate::GpuBuffer,
+    ) -> Result<Vec<u8>, crate::RenderTargetError> {
+        self.0.lock().renderer.read_gpu_buffer(buffer)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn dispatch_compute(
+        &self,
+        shader: &crate::ComputeHandle,
+        bindings: &crate::ComputeBindings,
+        groups: [u32; 3],
+    ) -> Result<(), crate::RenderTargetError> {
+        self.0
+            .lock()
+            .renderer
+            .dispatch_compute(shader, bindings, groups)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn write_render_target(
+        &self,
+        target: &crate::RenderTarget,
+        pixels: &[u8],
+    ) -> Result<(), crate::RenderTargetError> {
+        self.0.lock().renderer.write_render_target(target, pixels)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn create_render_target(
+        &self,
+        descriptor: crate::RenderTargetDescriptor,
+    ) -> Result<crate::RenderTarget, crate::RenderTargetError> {
+        self.0.lock().renderer.create_render_target(descriptor)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn render_shader(
+        &self,
+        target: &crate::RenderTarget,
+        shader: &crate::ShaderHandle,
+        bindings: &crate::ShaderBindings,
+    ) -> Result<(), crate::RenderTargetError> {
+        self.0
+            .lock()
+            .renderer
+            .render_shader(target, shader, bindings)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn read_render_target(
+        &self,
+        target: &crate::RenderTarget,
+    ) -> Result<crate::RenderTargetReadback, crate::RenderTargetError> {
+        self.0.lock().renderer.read_render_target(target)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn validate_render_target(
+        &self,
+        target: &crate::RenderTarget,
+    ) -> Result<(), crate::RenderTargetError> {
+        self.0.lock().renderer.validate_render_target(target)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn set_render_target_byte_budget(&self, bytes: u64) {
+        self.0.lock().renderer.set_render_target_byte_budget(bytes);
+    }
+
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
         self.0.lock().renderer.sprite_atlas().clone()
     }
@@ -4847,6 +4964,24 @@ impl PlatformWindow for MacWindow {
 
     fn set_atlas_byte_budget(&self, budget: Option<u64>) {
         self.0.lock().renderer.set_atlas_byte_budget(budget);
+    }
+
+    fn gpu_allocated_bytes(&self) -> Option<u64> {
+        Some(self.0.lock().renderer.gpu_allocated_bytes())
+    }
+
+    #[cfg(not(feature = "macos-blade"))]
+    fn set_gpu_frame_timing_enabled(&self, enabled: bool) -> bool {
+        self.0.lock().renderer.set_gpu_frame_timing_enabled(enabled)
+    }
+
+    #[cfg(not(feature = "macos-blade"))]
+    fn take_gpu_frame_timings(&self) -> Vec<crate::GpuFrameTiming> {
+        self.0.lock().renderer.take_gpu_frame_timings()
+    }
+
+    fn shed_memory(&self, level: crate::MemoryPressureLevel) {
+        self.0.lock().renderer.shed_memory(level);
     }
 
     fn titlebar_double_click(&self) {

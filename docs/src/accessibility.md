@@ -122,6 +122,86 @@ div()
 Use `FocusTrapController::persistent()` for surfaces where Escape should not
 dismiss, or `.dismiss_on_escape(false)` / `.autofocus(false)` to tune a trap.
 
+## Virtual controls and retained logical trees
+
+`AccessibilitySnapshot` represents a complete logical subtree independently of
+the elements mounted for drawing. Build and validate the snapshot when the model
+changes, then attach the same `Arc` with
+`Window::register_accessibility_snapshot`. A painted root uses the snapshot's
+explicit `AccessibilityId`; mounted nodes add current geometry and state to a
+small frame overlay. Labels, hierarchy and offscreen actions remain available
+without cloning the full model each frame. Platform adapters publish incremental
+AccessKit updates after activation.
+
+`VirtualTreeList` uses this path. Its container owns keyboard focus and identifies
+the active logical row through `active_descendant`, preserving accessible focus
+when independent scrolling unmounts that row. Stable model IDs keep semantic
+identities across insertions, replacement, disclosure and filtering. The current
+source catalog owns these identities; deleting a catalog item retires its ID
+without retaining an unbounded history. Custom catalog builders can call
+`VirtualTreeModel::set_accessibility_catalog_ids` before preparation to include
+collapsed cached entries. Offscreen focus, selection and
+scroll-to-visible actions resolve against the current model and reveal the row;
+removed or disabled targets are ignored.
+
+For large `Send + Sync` models, prepare both rows and semantic metadata on a
+worker before publishing the replacement:
+
+```rust
+let context = state.read(cx)
+    .accessibility_preparation_context("Project files", true);
+let executor = cx.background_executor().clone();
+let worker = executor.clone();
+let task = executor.spawn(async move {
+    let mut model = VirtualTreeModel::new(&nodes, &expanded)?;
+    model.prepare_accessibility(context, &worker)?;
+    Ok::<_, VirtualTreeModelError>(model)
+});
+```
+
+Adopting prepared metadata on the foreground thread shares its snapshot and ID
+maps. Outgoing prepared model and semantic storage are reclaimed on the worker.
+Keep the returned task and apply its result through the application's normal
+entity update. Small or non-`Send` models can use ordinary construction; their
+first render prepares semantics on the foreground thread, so this route is
+unsuitable for large initial models.
+
+When a logical tree or grid already represents the items, use
+`UniformList::without_accessibility_wrappers()` to avoid an extra physical
+list/item hierarchy. Visual text that duplicates an ancestor's semantic label
+can use `StyledText::accessibility_hidden(true)`.
+
+## Native text selection
+
+Editable components can attach an immutable `AccessibilityTextDocument` and a
+`AccessibilityTextSelection` measured in directed UTF-8 byte endpoints. Prepare
+the document once per content revision; retain its Arc while only the caret or
+selection changes. Large documents can use `with_reclaim_executor` on their
+worker so the final outgoing text storage is reclaimed there too.
+
+```rust
+let document = AccessibilityTextDocument::with_reclaim_executor(text, &executor);
+let attributes = AccessibilityAttributes::new(AccessibilityRole::TextInput)
+    .text_document(document, AccessibilityTextSelection { anchor, focus })
+    .actions(vec![AccessibilityAction::Focus, AccessibilityAction::SetTextSelection]);
+```
+
+Native export supplies complete per-line text runs and the directed selection.
+A retained transparent container keeps caret updates constant in child IDs;
+unchanged text runs are not exported again. UTF-16 native ranges are converted
+through AccessKit, and Kael checks the run identity and selectable UTF-8 byte
+boundaries before producing `AccessibilityActionPayload::TextSelection`.
+Handlers should reject stale content revisions before applying its `anchor` and
+`focus` endpoints. The Editor performs this check, preserves reversed selection,
+and leaves its contents and undo history unchanged by selection requests.
+
+Kael's macOS adapter serves complete multiline values from the retained text
+runs when assistive technology requests them. Its
+[patch record](https://github.com/Augani/kael/blob/main/vendor/accesskit_macos/PATCHES.md)
+links upstream source, licenses and Apple's native API documentation. Native
+protocol regressions execute on macOS; Windows/Linux text-provider runtime
+coverage remains part of Platform Readiness.
+
 ## Assistive-technology actions
 
 Advertised actions tell screen readers and other assistive technologies what a

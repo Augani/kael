@@ -1185,6 +1185,18 @@ impl Gtk4Window {
             pending_active: None,
             accessibility_root: AtSpiAccessibleRoot::new(),
         })));
+        let weak = Rc::downgrade(&this.0);
+        let executor = client.0.borrow().common.foreground_executor.clone();
+        this.0
+            .borrow()
+            .accessibility_root
+            .set_action_wake(&executor, move || {
+                if let Some(state) = weak.upgrade() {
+                    // Idle GTK windows stop frame polling. AT-SPI actions must
+                    // still drain through the normal foreground frame callback.
+                    request_window_frame_force(&state);
+                }
+            });
         GTK4_POINTER_LOCK_WINDOWS.with(|windows| {
             windows
                 .borrow_mut()
@@ -2122,6 +2134,10 @@ impl crate::PlatformWindow for Gtk4Window {
 
     fn set_atlas_byte_budget(&self, budget: Option<u64>) {
         self.0.borrow().renderer.set_atlas_byte_budget(budget);
+    }
+
+    fn shed_memory(&self, level: crate::MemoryPressureLevel) {
+        self.0.borrow_mut().renderer.shed_memory(level);
     }
 
     fn display_refresh_rate(&self) -> Option<f32> {
