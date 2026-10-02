@@ -207,6 +207,24 @@ jobs:
       - name: Run the framework benchmark
         shell: bash
         run: |
+          python - <<'PY'
+          import json, os, platform, subprocess
+          from pathlib import Path
+          def command(*args):
+              return subprocess.check_output(args, text=True).strip()
+          metadata = {
+              "source_commit": command("git", "rev-parse", "HEAD"),
+              "runner_os": os.environ.get("RUNNER_OS"),
+              "runner_arch": os.environ.get("RUNNER_ARCH"),
+              "platform": platform.platform(),
+              "processor": platform.processor(),
+              "cpu_count": os.cpu_count(),
+              "rustc": command("rustc", "-Vv"),
+              "framework_scope": "Headless synthetic scene construction/batching; Metal may use offscreen GPU readback. No native application input, drawable presentation, idle power or desktop workflow measurement.",
+              "resource_scope": "CPU transient allocation planning and GPU budget bookkeeping. Excludes driver allocations and native application behavior.",
+          }
+          Path("benchmark-environment.json").write_text(json.dumps(metadata, indent=2) + "\n")
+          PY
           if [ "${{ steps.download-baseline.outputs.baseline_found }}" == "true" ]; then
             cargo bench -p kael --bench framework -- --compare
           else
@@ -226,6 +244,7 @@ jobs:
           name: benchmark-results-${{ matrix.os }}
           path: |
             benchmark-results.json
+            benchmark-environment.json
             transient-allocation.log
             gpu-budget.log
           if-no-files-found: error
