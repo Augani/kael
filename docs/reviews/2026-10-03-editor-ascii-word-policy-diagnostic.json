@@ -1,0 +1,885 @@
+{
+  "scope": "Six full owned native Editor runs, three before and three after ASCII accessibility word segmentation; all schema-3 workload/geometry/frame gates pass.",
+  "source_before": "01e1cadb6f7f152586bf6af7da36ca1fa22f0f0a",
+  "source_after_word_policy": "84be6313af5e22655952136e43d8c5bad1cc1651",
+  "physical_host": "Apple M2 Pro, macOS 27.2, 12 CPU cores, 16 GiB RAM",
+  "common_controller": "Same external AppKit helper requests owned-child foreground activation at active/churn begin; per-phase native painting remains required. Frozen framework binaries differ only in ASCII word segmentation.",
+  "limitations": [
+    "Three repetitions per variant on a shared desktop with uncontrolled system activity and memory pressure; diagnostic, not a controlled overall framework advantage.",
+    "Time-paced workloads have different operation counts. Startup, operation and draw costs have different scopes; no comparative GPU completion, display latency or physical power claim.",
+    "Earlier sequence with three accepted captures and a fourth with zero churn frames is excluded in full; this report uses a separate complete six-run sequence."
+  ],
+  "medians": {
+    "before": {
+      "active_cpu_percent": 68.88294371897993,
+      "churn_cpu_percent": 71.37013309636613,
+      "peak_rss_bytes": 117850112,
+      "draw_p99_us": 2479
+    },
+    "after": {
+      "active_cpu_percent": 63.680104719280884,
+      "churn_cpu_percent": 67.43390056582275,
+      "peak_rss_bytes": 116080640,
+      "draw_p99_us": 2446
+    }
+  },
+  "runs": [
+    {
+      "variant": "after",
+      "index": 0,
+      "binary_sha256": "7a6ff7bea43f080fcbf02f380b8b08f2cd8d45146aee6f633e7aeac90060aa12",
+      "phase_metrics": {
+        "idle-before": {
+          "rss_median_bytes": 94265344.0,
+          "footprint_max_bytes": 94651448,
+          "cpu_percent": 0.033859066447857813,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 1.8111997629144652,
+          "billed_energy_raw_delta": 72486030,
+          "serviced_energy_raw_delta": 0
+        },
+        "active": {
+          "rss_median_bytes": 113860608.0,
+          "footprint_max_bytes": 118375528,
+          "cpu_percent": 63.680104719280884,
+          "idle_wakeups_per_s": 0.08918294520225138,
+          "interrupt_wakeups_per_s": 134.22033252938832,
+          "billed_energy_raw_delta": 115843957,
+          "serviced_energy_raw_delta": 0
+        },
+        "idle-after": {
+          "rss_median_bytes": 114065408.0,
+          "footprint_max_bytes": 114771048,
+          "cpu_percent": 0.002910657422730647,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 0.6747160163032632,
+          "billed_energy_raw_delta": 0,
+          "serviced_energy_raw_delta": 0
+        },
+        "churn": {
+          "rss_median_bytes": 118374400,
+          "footprint_max_bytes": 120407144,
+          "cpu_percent": 67.43390056582275,
+          "idle_wakeups_per_s": 0.09134747262050402,
+          "interrupt_wakeups_per_s": 132.27114035448983,
+          "billed_energy_raw_delta": 114592210,
+          "serviced_energy_raw_delta": 0
+        }
+      },
+      "phase_frame_counts": [
+        {
+          "phase": "idle-before",
+          "renders": 2,
+          "draws": 2,
+          "submissions": 2
+        },
+        {
+          "phase": "active",
+          "renders": 693,
+          "draws": 693,
+          "submissions": 693
+        },
+        {
+          "phase": "idle-after",
+          "renders": 2,
+          "draws": 2,
+          "submissions": 2
+        },
+        {
+          "phase": "churn",
+          "renders": 681,
+          "draws": 681,
+          "submissions": 681
+        }
+      ],
+      "geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "operations": {
+        "selection": 226,
+        "replace": 225,
+        "undo": 224,
+        "redo": 224,
+        "scroll_to_caret": 224,
+        "home": 224,
+        "replace_document": 23
+      },
+      "draw_p99_us": 2425,
+      "peak_rss_bytes": 119308288
+    },
+    {
+      "variant": "before",
+      "index": 1,
+      "binary_sha256": "c2e98338a17f174d5d1982695ef7937b2837da1a74f53787cc5157741696d55c",
+      "phase_metrics": {
+        "idle-before": {
+          "rss_median_bytes": 93749248.0,
+          "footprint_max_bytes": 95994984,
+          "cpu_percent": 0.024194079006031415,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 1.8117968984878776,
+          "billed_energy_raw_delta": 10321275,
+          "serviced_energy_raw_delta": 0
+        },
+        "active": {
+          "rss_median_bytes": 111624192.0,
+          "footprint_max_bytes": 117802112,
+          "cpu_percent": 69.33437609020824,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 133.89224108037345,
+          "billed_energy_raw_delta": 112421842,
+          "serviced_energy_raw_delta": 0
+        },
+        "idle-after": {
+          "rss_median_bytes": 116736000.0,
+          "footprint_max_bytes": 117802112,
+          "cpu_percent": 0.008373471648013843,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 1.1250885654032707,
+          "billed_energy_raw_delta": 0,
+          "serviced_energy_raw_delta": 0
+        },
+        "churn": {
+          "rss_median_bytes": 69664768,
+          "footprint_max_bytes": 120849536,
+          "cpu_percent": 71.37013309636613,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 135.82959620397136,
+          "billed_energy_raw_delta": 105397608,
+          "serviced_energy_raw_delta": 0
+        }
+      },
+      "phase_frame_counts": [
+        {
+          "phase": "idle-before",
+          "renders": 2,
+          "draws": 2,
+          "submissions": 2
+        },
+        {
+          "phase": "active",
+          "renders": 700,
+          "draws": 700,
+          "submissions": 700
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 701,
+          "draws": 701,
+          "submissions": 701
+        }
+      ],
+      "geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "operations": {
+        "selection": 225,
+        "replace": 224,
+        "undo": 224,
+        "redo": 224,
+        "scroll_to_caret": 224,
+        "home": 223,
+        "replace_document": 23
+      },
+      "draw_p99_us": 2488,
+      "peak_rss_bytes": 117751808
+    },
+    {
+      "variant": "before",
+      "index": 2,
+      "binary_sha256": "c2e98338a17f174d5d1982695ef7937b2837da1a74f53787cc5157741696d55c",
+      "phase_metrics": {
+        "idle-before": {
+          "rss_median_bytes": 103301120,
+          "footprint_max_bytes": 94766184,
+          "cpu_percent": 0.027390780598238275,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 1.9133949772709378,
+          "billed_energy_raw_delta": 11733002,
+          "serviced_energy_raw_delta": 0
+        },
+        "active": {
+          "rss_median_bytes": 118784000,
+          "footprint_max_bytes": 117671088,
+          "cpu_percent": 68.88294371897993,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 133.74211244491826,
+          "billed_energy_raw_delta": 114256328,
+          "serviced_energy_raw_delta": 0
+        },
+        "idle-after": {
+          "rss_median_bytes": 122159104.0,
+          "footprint_max_bytes": 117753008,
+          "cpu_percent": 0.0030492424315296425,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 0.6732457990497831,
+          "billed_energy_raw_delta": 0,
+          "serviced_energy_raw_delta": 0
+        },
+        "churn": {
+          "rss_median_bytes": 118390784.0,
+          "footprint_max_bytes": 120915120,
+          "cpu_percent": 71.39568349586897,
+          "idle_wakeups_per_s": 0.08943764481601361,
+          "interrupt_wakeups_per_s": 135.14028131699658,
+          "billed_energy_raw_delta": 93130316,
+          "serviced_energy_raw_delta": 0
+        }
+      },
+      "phase_frame_counts": [
+        {
+          "phase": "idle-before",
+          "renders": 2,
+          "draws": 2,
+          "submissions": 2
+        },
+        {
+          "phase": "active",
+          "renders": 701,
+          "draws": 701,
+          "submissions": 701
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 706,
+          "draws": 706,
+          "submissions": 706
+        }
+      ],
+      "geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "operations": {
+        "selection": 224,
+        "replace": 224,
+        "undo": 224,
+        "redo": 224,
+        "scroll_to_caret": 224,
+        "home": 224,
+        "replace_document": 23
+      },
+      "draw_p99_us": 2479,
+      "peak_rss_bytes": 122519552
+    },
+    {
+      "variant": "after",
+      "index": 3,
+      "binary_sha256": "7a6ff7bea43f080fcbf02f380b8b08f2cd8d45146aee6f633e7aeac90060aa12",
+      "phase_metrics": {
+        "idle-before": {
+          "rss_median_bytes": 94666752.0,
+          "footprint_max_bytes": 95716408,
+          "cpu_percent": 0.05791062656765182,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 2.0199424052276576,
+          "billed_energy_raw_delta": 9790429,
+          "serviced_energy_raw_delta": 0
+        },
+        "active": {
+          "rss_median_bytes": 80568320.0,
+          "footprint_max_bytes": 115655736,
+          "cpu_percent": 63.423133916397035,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 132.67480329215775,
+          "billed_energy_raw_delta": 107354460,
+          "serviced_energy_raw_delta": 0
+        },
+        "idle-after": {
+          "rss_median_bytes": 81625088.0,
+          "footprint_max_bytes": 115655736,
+          "cpu_percent": 0.004879437432831219,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 0.6782208687460575,
+          "billed_energy_raw_delta": 0,
+          "serviced_energy_raw_delta": 0
+        },
+        "churn": {
+          "rss_median_bytes": 80429056,
+          "footprint_max_bytes": 119391312,
+          "cpu_percent": 67.32032595739359,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 133.41703980090787,
+          "billed_energy_raw_delta": 108351527,
+          "serviced_energy_raw_delta": 0
+        }
+      },
+      "phase_frame_counts": [
+        {
+          "phase": "idle-before",
+          "renders": 2,
+          "draws": 2,
+          "submissions": 2
+        },
+        {
+          "phase": "active",
+          "renders": 687,
+          "draws": 687,
+          "submissions": 687
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 677,
+          "draws": 677,
+          "submissions": 677
+        }
+      ],
+      "geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "operations": {
+        "selection": 224,
+        "replace": 224,
+        "undo": 224,
+        "redo": 224,
+        "scroll_to_caret": 224,
+        "home": 222,
+        "replace_document": 23
+      },
+      "draw_p99_us": 2446,
+      "peak_rss_bytes": 98500608
+    },
+    {
+      "variant": "after",
+      "index": 4,
+      "binary_sha256": "7a6ff7bea43f080fcbf02f380b8b08f2cd8d45146aee6f633e7aeac90060aa12",
+      "phase_metrics": {
+        "idle-before": {
+          "rss_median_bytes": 94093312.0,
+          "footprint_max_bytes": 100090984,
+          "cpu_percent": 0.03854409250047373,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 2.036925901985117,
+          "billed_energy_raw_delta": 9742041,
+          "serviced_energy_raw_delta": 0
+        },
+        "active": {
+          "rss_median_bytes": 113278976.0,
+          "footprint_max_bytes": 117179544,
+          "cpu_percent": 63.9504451483722,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 132.3913942406889,
+          "billed_energy_raw_delta": 95999202,
+          "serviced_energy_raw_delta": 0
+        },
+        "idle-after": {
+          "rss_median_bytes": 113197056.0,
+          "footprint_max_bytes": 117228696,
+          "cpu_percent": 0.0035286955540520465,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 0.6787780467918375,
+          "billed_energy_raw_delta": 0,
+          "serviced_energy_raw_delta": 0
+        },
+        "churn": {
+          "rss_median_bytes": 106741760,
+          "footprint_max_bytes": 122094768,
+          "cpu_percent": 68.50407660454954,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 132.7262754772205,
+          "billed_energy_raw_delta": 29570576,
+          "serviced_energy_raw_delta": 0
+        }
+      },
+      "phase_frame_counts": [
+        {
+          "phase": "idle-before",
+          "renders": 2,
+          "draws": 2,
+          "submissions": 2
+        },
+        {
+          "phase": "active",
+          "renders": 691,
+          "draws": 691,
+          "submissions": 691
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 673,
+          "draws": 673,
+          "submissions": 673
+        }
+      ],
+      "geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "operations": {
+        "selection": 224,
+        "replace": 224,
+        "undo": 224,
+        "redo": 224,
+        "scroll_to_caret": 224,
+        "home": 222,
+        "replace_document": 23
+      },
+      "draw_p99_us": 2502,
+      "peak_rss_bytes": 116080640
+    },
+    {
+      "variant": "before",
+      "index": 5,
+      "binary_sha256": "c2e98338a17f174d5d1982695ef7937b2837da1a74f53787cc5157741696d55c",
+      "phase_metrics": {
+        "idle-before": {
+          "rss_median_bytes": 93896704.0,
+          "footprint_max_bytes": 101434496,
+          "cpu_percent": 0.03470636591399956,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 2.04768462149036,
+          "billed_energy_raw_delta": 9834005,
+          "serviced_energy_raw_delta": 0
+        },
+        "active": {
+          "rss_median_bytes": 116441088,
+          "footprint_max_bytes": 118785176,
+          "cpu_percent": 67.15737038402976,
+          "idle_wakeups_per_s": 0.0876451612027406,
+          "interrupt_wakeups_per_s": 134.36003212380135,
+          "billed_energy_raw_delta": 65241746,
+          "serviced_energy_raw_delta": 0
+        },
+        "idle-after": {
+          "rss_median_bytes": 104808448.0,
+          "footprint_max_bytes": 118785176,
+          "cpu_percent": 0.002814582424878017,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 0.6818656799588195,
+          "billed_energy_raw_delta": 0,
+          "serviced_energy_raw_delta": 0
+        },
+        "churn": {
+          "rss_median_bytes": 109019136,
+          "footprint_max_bytes": 122881200,
+          "cpu_percent": 70.17343187676434,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 135.45298584046367,
+          "billed_energy_raw_delta": 119543996,
+          "serviced_energy_raw_delta": 0
+        }
+      },
+      "phase_frame_counts": [
+        {
+          "phase": "idle-before",
+          "renders": 2,
+          "draws": 2,
+          "submissions": 2
+        },
+        {
+          "phase": "active",
+          "renders": 706,
+          "draws": 706,
+          "submissions": 706
+        },
+        {
+          "phase": "idle-after",
+          "renders": 2,
+          "draws": 2,
+          "submissions": 2
+        },
+        {
+          "phase": "churn",
+          "renders": 709,
+          "draws": 709,
+          "submissions": 709
+        }
+      ],
+      "geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "operations": {
+        "selection": 225,
+        "replace": 224,
+        "undo": 224,
+        "redo": 224,
+        "scroll_to_caret": 223,
+        "home": 223,
+        "replace_document": 23
+      },
+      "draw_p99_us": 2461,
+      "peak_rss_bytes": 117850112
+    }
+  ],
+  "raw_results": [
+    {
+      "relative_path": "00-kael.json",
+      "sha256": "05366288cf007572f823bcccdf2f342a101b842bcc74a64d719efefa1f26eb18"
+    },
+    {
+      "relative_path": "01-kael.json",
+      "sha256": "ee30de9d8146a0e963a9f79573f6157be188a7c61a66d85f90b97f5275fe091f"
+    },
+    {
+      "relative_path": "02-kael.json",
+      "sha256": "42af46075d87414db0c077f5f1099a9806928d6f69474e37c2dd4a98bf8d0bf8"
+    },
+    {
+      "relative_path": "03-kael.json",
+      "sha256": "a8bf1fc25a8c58cc2dd0caab66739555b10f735d395da1856fac2154325c86de"
+    },
+    {
+      "relative_path": "04-kael.json",
+      "sha256": "aa6c9f8cb2a616936ac1efc2879634adcbda257e9efbdfe0ca53ced62c69899b"
+    },
+    {
+      "relative_path": "05-kael.json",
+      "sha256": "437426a20c06fa04eb7d2f77c5f942a1e3d55e2cf9574403448fc817033e1bba"
+    }
+  ],
+  "collector_sha256": "a38a1ebca01d8ccb7eecb8d10f990261c0b752942eb06d8526225958b324425b",
+  "activation_source_sha256": "d18ca1c40356180c9e595c4b0995461283d4a9141d946c11d21d86a6343c7142",
+  "activation_binary_sha256": "066a29b13d6b18a17cb3987cf2733ce8363ca33f03c955db50068f799a399297"
+}

@@ -466,3 +466,52 @@ clears the scene's size request. The backend now preserves the last valid size
 through that transient stage and observes actual Fixed allocation after native
 painting, without adding an idle polling clock. Full GTK protocol verification
 of this correction remains pending.
+
+## Subsequent native diagnostics
+
+The complete [six-run ASCII word-policy diagnostic](2026-10-03-editor-ascii-word-policy-diagnostic.json)
+now passes all workload, viewport and per-phase frame checks: three before and
+three after runs using the same owned-child foreground controller. Median
+active process CPU changes from 68.88% to 63.68%, and churn CPU from 71.37% to
+67.43%. Median peak RSS changes from 117,850,112 to 116,080,640 bytes, and draw
+p99 from 2,479 to 2,446 microseconds. These are local diagnostics with roughly
+unchanged memory and draw cost. The workload is time-paced, operation counts
+differ and the shared desktop is uncontrolled; this does not establish a
+general framework ranking or a controlled power advantage. The earlier
+incomplete sequence remains excluded in full.
+
+A separate [fresh native tree pair](2026-10-03-native-tree-foreground-validation.json)
+passes the original full-model, selection, disclosure and mounted-reveal
+oracles in both engines. Both use the same phase foreground controller and
+stable 1100×760 client viewports at scale 2. Active/churn render, draw and
+submission counts are 317/292 for Kael and 649/642 for GPUI Kit. Those counts
+demonstrate phase activity; one repetition does not establish comparative
+performance. The earlier failed GPUI reveal pair remains preserved and
+excluded. Its diagnostic binary adds failure-only logging without changing
+behavior or weakening the oracle. All five contracts now have accepted native
+geometry/activity pairs; fresh repeated schema-3 hosted execution remains.
+
+Focused [Linux native execution at `2694c4b`](https://github.com/Augani/kael/actions/runs/37155884997)
+passes both full 100,025-node X11/GTK outline clients and the complete X11
+Unicode editor protocol. GTK now has a valid 1280×800 allocation and exposes
+the complete Unicode text. Its read-only/disabled guards, range geometry,
+selection, Copy, Cut and atomic Cut Undo/Redo pass; Paste fails with an
+unchanged native scalar count (63,390 versus the required 63,404), with Busy
+false. This narrows the remaining failure to clipboard consumption rather
+than initial semantic discovery. The earlier `921a4ce` GTK outline focus
+failure remains recorded; the later passing focus trace identifies the
+focused semantic root and active descendant.
+
+The GTK reader synchronously drained the stream returned by an asynchronous
+clipboard open. GDK can supply a pipe whose local producer still needs that
+same main context to serialize content. The reader now asynchronously opens
+and drains bounded chunks, with a three-second cancellation deadline. Exact
+byte-limit and one-byte-over-limit cases cover chunk boundaries. A fresh
+focused job checks these tests, strict native lints and all four unchanged
+native protocol clients before this is counted as a runtime correction.
+
+The fresh macOS Unicode fixture after the ASCII change is not accepted: the
+physical display is asleep, the fixture remains inactive and a later native
+Copy does not complete. An owned-child foreground request is rejected. The
+earlier complete AppKit proof remains a historical checkpoint; no failed
+rerun replaces it or waives fresh physical acceptance.
