@@ -112,6 +112,20 @@ impl Render for TextFixture {
         if self.remaining_window_probes > 0 {
             self.remaining_window_probes -= 1;
             eprintln!("NATIVE_TEXT_WINDOW_RENDER: {:?}", window.runtime_snapshot());
+            for node in window.accessibility_tree().nodes.values() {
+                if node.role == kael::AccessibilityRole::TextInput {
+                    eprintln!(
+                        "NATIVE_TEXT_SEMANTIC_RENDER: label={:?} states={:?} document_bytes={:?} geometry={} bounds={:?}",
+                        node.label,
+                        node.states,
+                        node.text_document
+                            .as_ref()
+                            .map(|document| document.len_bytes()),
+                        node.text_geometry.is_some(),
+                        node.bounds,
+                    );
+                }
+            }
         }
         let theme = cx.global::<Theme>().clone();
         div()

@@ -165,8 +165,11 @@ def main():
                            'NATIVE_ACCESSIBILITY_SELECT: id=100024'):
                 require(marker in text, f'foreground did not execute {marker}')
             last.clear_cache()
-            require(last.get_state_set().contains(Atspi.StateType.FOCUSED),
-                    'native active descendant did not receive focus')
+            states = last.get_state_set()
+            require(states.contains(Atspi.StateType.FOCUSED),
+                    'native active descendant did not receive focus: '
+                    f'focusable={states.contains(Atspi.StateType.FOCUSABLE)} '
+                    f'selected={states.contains(Atspi.StateType.SELECTED)}')
         wait(selected)
         print(f'NATIVE_ACCESSIBILITY_RUNTIME_OK: backend=atspi rows={total} '
               'projects=25 children=4000 last=100024 idle_select=true native_focus=true '

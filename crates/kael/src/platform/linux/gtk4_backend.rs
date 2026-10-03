@@ -2759,9 +2759,18 @@ fn connect_surface_metric_signals(state: &Rc<RefCell<Gtk4WindowState>>) {
     // its actual client size after GTK finishes painting an existing frame;
     // this observes native allocation without keeping idle windows ticking.
     let weak = Rc::downgrade(state);
-    surface
-        .frame_clock()
-        .connect_after_paint(move |_| refresh(&weak));
+    surface.frame_clock().connect_after_paint(move |_| {
+        let Some(state) = weak.upgrade() else { return };
+        let (fixed, previous) = {
+            let state = state.borrow();
+            (state.fixed.clone(), state.bounds.size)
+        };
+        // Scale and monitor notifications have their own signals above. A
+        // stable allocation needs no display lookup on every painted frame.
+        if fixed.width() as f32 != previous.width.0 || fixed.height() as f32 != previous.height.0 {
+            update_window_metrics(&state, &fixed);
+        }
+    });
 }
 
 fn set_window_frame_polling(state: &Rc<RefCell<Gtk4WindowState>>, active: bool) {

@@ -217,11 +217,16 @@ impl AtSpiAccessibleRoot {
     /// Feed the latest accessibility tree to the AT-SPI2 adapter.
     pub fn update_tree(&self, tree: &crate::AccessibilityTree) {
         if self.trace_updates {
+            let focused = tree.focused_node();
             eprintln!(
-                "KAEL_ATSPI_TREE_UPDATE: root={:?} nodes={} host_focused={}",
+                "KAEL_ATSPI_TREE_UPDATE: root={:?} nodes={} host_focused={} focused={:?} active_descendant={:?}",
                 tree.root,
                 tree.nodes.len(),
-                self.window_focused.get()
+                self.window_focused.get(),
+                focused,
+                focused
+                    .and_then(|id| tree.get(id))
+                    .and_then(|node| node.active_descendant),
             );
         }
         let previous = if let Ok(mut guard) = self.latest.lock() {

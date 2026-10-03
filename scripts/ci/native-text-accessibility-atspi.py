@@ -132,7 +132,11 @@ def main():
 
         def contents(expected):
             document.clear_cache()
-            require(Atspi.Text.get_character_count(text) == len(expected), 'native scalar count mismatch')
+            count = Atspi.Text.get_character_count(text)
+            require(count == len(expected),
+                    f'native scalar count mismatch: actual={count} expected={len(expected)} '
+                    f'busy={document.get_state_set().contains(Atspi.StateType.BUSY)} '
+                    f'children={document.get_child_count()}')
             require(Atspi.Text.get_text(text, 0, -1) == expected, 'native complete text mismatch')
             return state(args.app_log)
 
