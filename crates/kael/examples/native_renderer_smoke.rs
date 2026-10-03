@@ -482,9 +482,23 @@ mod native {
                     "NATIVE_RENDERER_SMOKE_STAGE: initial render_calls={}",
                     render_count.load(Ordering::Acquire)
                 );
-                let _ = window.update(cx, |_, window, _| {
+                let geometry = window.update(cx, |_, window, _| {
                     println!("NATIVE_RENDERER_WINDOW_STATE: {:?}", window.runtime_snapshot());
-                });
+                    let viewport = window.viewport_size();
+                    ensure!(
+                        (f32::from(viewport.width) - WIDTH).abs() < 0.01
+                            && (f32::from(viewport.height) - HEIGHT).abs() < 0.01,
+                        "requested native client size {WIDTH}x{HEIGHT} differs from {viewport:?}"
+                    );
+                    println!("NATIVE_WINDOW_CONTENT_SIZE_OK: requested client size matches actual viewport");
+                    Ok::<(), anyhow::Error>(())
+                }).and_then(|result| result);
+                if let Err(error) = geometry {
+                    eprintln!("NATIVE_RENDERER_SMOKE_FAIL: initial client geometry: {error:#}");
+                    outcome.store(2, Ordering::Release);
+                    let _ = cx.update(|cx| cx.quit());
+                    return;
+                }
                 for revision in 1..REQUIRED_RENDER_REVISIONS {
                     // Let the visible window stop its frame clock before a
                     // worker-style model notification. No input, resize, or

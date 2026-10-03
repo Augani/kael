@@ -32,6 +32,11 @@ ordered samples, stable geometry within and across runs, and equal geometry for
 both engines. Requested window dimensions alone do not establish equality;
 equally constrained native windows are permitted and recorded. Schema 3 captures
 enforce this gate; older captures remain historical diagnostics.
+Active and churn phases must also repaint beyond their first phase frame.
+Instrumented builds require native CPU draw and submission activity in each
+phase; disabled builds require application render activity with native timing
+counts absent. Startup records alone cannot satisfy a measured interaction
+workload. These fixed-size counters do not establish GPU completion or display.
 The environment record captures display properties, power/thermal reports and
 a checkout fingerprint that includes untracked source files. Record build-time
 source separately when the checkout changes between compilation and collection.

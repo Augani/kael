@@ -29,10 +29,25 @@ All five benchmark binaries now record actual native client viewport and scale
 at each phase begin/end. Schema 3 requires eight ordered, finite, positive
 samples, rejects resize/scale changes and requires equality between engines and
 across repetitions. Equally constrained windows are accepted; nominal 1100×760
-requests alone cannot satisfy the gate. Nineteen collector regressions pass,
+requests alone cannot satisfy the gate. Twenty-one collector regressions pass,
 including the new fault cases reproduced against the old validator, and strict
-all-target Clippy passes for both engine graphs. Native geometry execution
-remains pending at this checkpoint.
+all-target Clippy passes for both engine graphs with frame timing enabled and
+disabled. Active/churn phases also require repainting beyond their initial
+phase frame, with native CPU draw/submission counts required in instrumented
+builds. Four fixed counter records exclude startup and validation work; paused
+windows cannot pass using startup instrumentation alone.
+
+[Rejected native captures](2026-10-03-native-geometry-rejections.json) identify
+the sleeping physical display, binary/raw-log hashes and incomplete painting.
+The navigation/editor captures also expose Kael client height 761 versus GPUI's
+760 at the same 1100 width and scale 2. The paired geometry gate rejects this
+one-point difference. Reasserting the requested size with AppKit's native
+`setContentSize:` after titlebar/layer configuration corrects the startup drift;
+the native renderer fixture now explicitly verifies its initial client viewport.
+The before trace records 720×461 and the corrected trace records 720×460 with
+`NATIVE_WINDOW_CONTENT_SIZE_OK`. The display remains asleep and later model
+wakeup/presentation still fail, so complete visible-window and paired geometry
+acceptance remain pending. No failed capture enters a performance result.
 
 The UI library's complete 448-test native/editor suite and all 98 core
 accessibility tests pass after the native selection and host-focus corrections.
@@ -114,7 +129,7 @@ The benchmark suite now has navigation, Editor, data table, virtual tree and
 persistent docking contracts. Both engines execute the two new native quick
 fixtures. The independent collector verifies exact Unicode fixture hashes,
 selected/revealed tree indices, complete node counts, actual native pane
-identities, split topology, active content and persistence. Fifteen collector
+identities, split topology, active content and persistence. Twenty-one collector
 regression tests and 3,016 combined core/UI/cache/media/resource-planning library
 tests pass. Strict native all-target and browser library/example Clippy, docs,
 workflow lint and all four adapter patch/hash checks pass. The maintained workflow retains five repetitions per
@@ -349,3 +364,35 @@ two seconds, until that frame mounts the original requested row. The complete
 hierarchy/Unicode/selection/reveal oracles are unchanged, and validation remains
 outside measured phases. An owned complete release pilot then passes all four
 full workload phases with 100,025 logical nodes.
+
+## Complete hosted diagnostic and next native checks
+
+The [hundred-run workflow](https://github.com/Augani/kael/actions/runs/37144285572)
+at `2c5cd60` completes all five contracts in both engines and instrumentation
+modes with five repetitions each. Every saved result revalidates against the
+exact schema-2 checkpoint collector. The [full diagnostic](2026-10-03-hosted-100-run-diagnostic.json)
+retains raw/binary hashes, environment metadata and phase medians. These runs
+predate actual native viewport recording and per-phase frame counts. They
+cannot satisfy schema 3 or support an overall comparison, physical power or
+display-latency claim. Editor and data-table CPU work remain profiling priorities.
+
+At `f81adaf`, Windows 2022 passes the complete 100,025-node UIA outline client,
+including idle host focus, disclosure identities and SelectionItem selection.
+The Linux X11 Unicode editor passes selection, geometry/hit-testing, full text,
+EOF/reveal, clipboard, edits, atomic Undo and read-only/disabled guards. Windows
+then fails its multiline ValuePattern query. The maintained provider now offers
+that pattern and constructs its full Unicode value on demand from retained
+TextPattern runs, avoiding a duplicate document value in every tree update.
+The original mutation guards remain. Microsoft's current
+[Value provider guidance](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementingvalue)
+requires this interface for editable multiline text. Portable query tests and
+exact upstream patch/hash reconstruction pass; actual Windows verification of
+this correction remains pending.
+
+Both Linux outline clients expose a race while rediscovering a restored leaf's
+Action interface after collapse/expand. The client now refreshes the proxy cache
+and waits within its existing bound for actual Click support before dispatching
+its single native action. GTK Editor discovery remains unresolved; bounded
+owned-node diagnostics and opt-in semantic publication counts will distinguish
+an absent native hierarchy from stale client discovery. Fresh runtime CI is
+required for both changes. No proposed client correction counts as a pass.

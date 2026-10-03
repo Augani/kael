@@ -33,6 +33,9 @@ class ComparisonEvidenceTests(unittest.TestCase):
             'frame_timing_enabled': True, 'elapsed_us': 35_100_000,
             'draw_cpu_us': [1, 20, 50], 'submission_cpu_us': [5, 10, 15],
             'first_submission_us': 500_000,
+            'phase_frame_counts': [
+                {'phase': phase, 'renders': 10, 'draws': 10, 'submissions': 10}
+                for phase in ('idle-before', 'active', 'idle-after', 'churn')],
             'native_window_geometry': [
                 {'phase': phase, 'boundary': boundary, 'viewport_width_px': 1100.0,
                  'viewport_height_px': 760.0, 'scale_factor': 2.0}
@@ -50,7 +53,32 @@ class ComparisonEvidenceTests(unittest.TestCase):
         disabled = copy.deepcopy(self.report)
         disabled.update(frame_timing_enabled=False, draw_cpu_us=[],
                         submission_cpu_us=[], first_submission_us=None)
+        for phase in disabled['phase_frame_counts']:
+            phase.update(draws=0, submissions=0)
         self.validate(disabled, enabled=False)
+
+    def test_startup_only_or_paused_native_frames_cannot_satisfy_active_phases(self):
+        for counts in (None, [], self.report['phase_frame_counts'][:-1],
+                       list(reversed(self.report['phase_frame_counts']))):
+            with self.subTest(counts=counts), self.assertRaises(RuntimeError):
+                self.validate(self.report | {'phase_frame_counts': counts})
+        for index in (1, 3):
+            for key in ('renders', 'draws', 'submissions'):
+                for value in (0, 1, True, -1, 1.5):
+                    report = copy.deepcopy(self.report)
+                    report['phase_frame_counts'][index][key] = value
+                    with self.subTest(index=index, key=key, value=value), self.assertRaises(RuntimeError):
+                        self.validate(report)
+
+    def test_disabled_instrumentation_still_requires_measured_application_frames(self):
+        report = copy.deepcopy(self.report)
+        report.update(frame_timing_enabled=False, draw_cpu_us=[],
+                      submission_cpu_us=[], first_submission_us=None)
+        for phase in report['phase_frame_counts']:
+            phase.update(draws=0, submissions=0)
+        report['phase_frame_counts'][1]['renders'] = 0
+        with self.assertRaises(RuntimeError):
+            self.validate(report, enabled=False)
 
     def test_native_geometry_missing_invalid_or_boundary_loss_is_rejected(self):
         geometry = self.report['native_window_geometry']

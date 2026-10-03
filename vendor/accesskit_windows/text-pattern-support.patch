@@ -865,7 +865,36 @@
 +mod text_queries;
 --- a/src/node.rs
 +++ b/src/node.rs
-@@ -1346,9 +1346,13 @@
+@@ -592,7 +592,8 @@
+         if self.node.supports_url() {
+             return true;
+         }
+-        self.node.has_value() && !self.node.label_comes_from_value()
++        (self.node.has_value() || (self.node.is_text_input() && self.node.supports_text_ranges()))
++            && !self.node.label_comes_from_value()
+     }
+ 
+     fn is_range_value_pattern_supported(&self) -> bool {
+@@ -606,7 +607,17 @@
+             return result;
+         }
+         let mut result = WideString::new(self.string_buffer);
+-        self.node.write_value(&mut result).unwrap();
++        if self.node.is_text_input()
++            && self.node.supports_text_ranges()
++            && self.node.data().value().is_none()
++        {
++            // Retained multiline editors omit a duplicate root value. Produce
++            // it only for this native request, using the same text runs as UIA
++            // TextPattern; read-only/disabled mutation guards remain unchanged.
++            self.node.document_range().write_text(&mut result).unwrap();
++        } else {
++            self.node.write_value(&mut result).unwrap();
++        }
+         result
+     }
+ 
+@@ -1346,9 +1357,13 @@
          (UIA_ValueIsReadOnlyPropertyId, IsReadOnly, is_read_only, BOOL)
      ), (
          fn SetValue(&self, value: &PCWSTR) -> Result<()> {
@@ -882,7 +911,7 @@
              })
          }
      )),
-@@ -1432,7 +1436,7 @@
+@@ -1432,7 +1447,7 @@
          fn GetSelection(&self) -> Result<*mut SAFEARRAY> {
              self.resolve_for_text_pattern(|node| {
                  if let Some(range) = node.text_selection() {
@@ -891,7 +920,7 @@
                      let iunknown: IUnknown = platform_range.cast()?;
                      Ok(safe_array_from_com_slice(&[iunknown]))
                  } else {
-@@ -1442,10 +1446,12 @@
+@@ -1442,10 +1457,12 @@
          },
  
          fn GetVisibleRanges(&self) -> Result<*mut SAFEARRAY> {
@@ -908,7 +937,7 @@
          },
  
          fn RangeFromChild(&self, _child: Ref<IRawElementProviderSimple>) -> Result<ITextRangeProvider> {
-@@ -1460,14 +1466,14 @@
+@@ -1460,14 +1477,14 @@
                  let point = node.transform().inverse() * point;
                  let pos = node.text_position_at_point(point);
                  let range = pos.to_degenerate_range();

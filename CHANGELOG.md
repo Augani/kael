@@ -47,7 +47,8 @@ stabilised — minor version bumps may include breaking changes.
 - Reserve accessibility snapshot construction storage from the input node count,
   avoiding repeated movement of large native node records while indexing a tree.
 - Require actual native viewport and display-scale equality at every measured
-  phase boundary in the Kael/GPUI Kit comparison collector.
+  phase boundary in the Kael/GPUI Kit comparison collector, plus draw/submission
+  activity during active and churn phases rather than accepting startup frames.
 - Use Ropey's indexed UTF-16 conversions for editor input ranges instead of
   scanning the document prefix, retaining forward adjustment inside surrogate pairs.
 - Cache filtered AT-SPI child indices per queried parent and invalidate them on
@@ -71,6 +72,8 @@ stabilised — minor version bumps may include breaking changes.
 
 ### Fixed
 
+- Reassert the requested macOS client size after native titlebar/layer setup,
+  correcting a one-point initial viewport-height drift on macOS 27.
 - Export explicit unselected state for native tabs and tree items so Windows UI
   Automation exposes their SelectionItem pattern before the first selection.
 - Forward native host focus changes to the Linux accessibility adapters on X11,

@@ -20,7 +20,7 @@ use ui::{prelude::*, *};
 
 #[path = "native_geometry.rs"]
 mod native_geometry;
-use native_geometry::NativeGeometry;
+use native_geometry::{NativeGeometry, PhaseFrames};
 
 const CONTRACT: &str = "native-editor-document-v1";
 const REPLACEMENT: &str = "新文書";
@@ -216,6 +216,7 @@ struct Workload {
     first_submission_us: Option<u128>,
     gpu_samples: Vec<(String, Option<u64>)>,
     geometry: NativeGeometry,
+    phase_frames: PhaseFrames,
     #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
     last_draw: Option<u64>,
     #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
@@ -268,6 +269,7 @@ impl Workload {
             first_submission_us: None,
             gpu_samples: Vec::with_capacity(5),
             geometry: NativeGeometry::new(),
+            phase_frames: PhaseFrames::default(),
             #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
             last_draw: None,
             #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
@@ -373,6 +375,9 @@ impl Workload {
         {
             for frame in window.frame_timeline().iter() {
                 if self.last_draw.is_none_or(|last| frame.frame_number > last) {
+                    if self.measuring {
+                        self.phase_frames.drew(self.phase);
+                    }
                     if self.measuring && self.draw_us.len() < 4096 {
                         self.draw_us.push(frame.duration_us);
                     }
@@ -384,6 +389,9 @@ impl Workload {
                     .last_submission
                     .is_none_or(|last| frame.frame_number > last)
                 {
+                    if self.measuring {
+                        self.phase_frames.submitted(self.phase);
+                    }
                     if self.measuring && self.submission_us.len() < 4096 {
                         self.submission_us.push(frame.duration_us);
                     }
@@ -405,11 +413,17 @@ impl Workload {
             for event in self.collector.collect_unseen() {
                 match event {
                     gpui_kit::profiler::FrameEvent::Draw(frame) => {
+                        if self.measuring {
+                            self.phase_frames.drew(self.phase);
+                        }
                         if self.measuring && self.draw_us.len() < 4096 {
                             self.draw_us.push(frame.draw_duration().as_micros() as u64);
                         }
                     }
                     gpui_kit::profiler::FrameEvent::Present(frame) => {
+                        if self.measuring {
+                            self.phase_frames.submitted(self.phase);
+                        }
                         if self.measuring && self.submission_us.len() < 4096 {
                             self.submission_us
                                 .push(frame.present_duration().as_micros() as u64);
@@ -455,6 +469,7 @@ impl Workload {
                 "renders": self.renders, "elapsed_us": self.started.elapsed().as_micros(),
                 "first_submission_us": self.first_submission_us,
                 "draw_cpu_us": self.draw_us, "submission_cpu_us": self.submission_us,
+                "phase_frame_counts": self.phase_frames.report(),
                 "native_window_geometry": self.geometry.samples,
                 "gpu_allocated_bytes": self.gpu_samples,
                 "submission_scope": "CPU platform submission, excluding GPU completion/compositor display",
@@ -478,6 +493,7 @@ impl Render for Workload {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         if self.measuring {
             self.renders += 1;
+            self.phase_frames.rendered(self.phase);
             self.first_render_us
                 .get_or_insert_with(|| self.started.elapsed().as_micros());
             let now = Instant::now();

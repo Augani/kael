@@ -52,6 +52,14 @@ returns `UIA_E_INVALIDOPERATION` before dispatch; malformed UTF-16 no longer
 panics in the native boundary. Disabled selection/reveal returns
 `UIA_E_ELEMENTNOTENABLED`. Weak ranges continue to reject retired run identities.
 
+Retained multiline text inputs also expose `ValuePattern`, following Microsoft's
+[current Value implementation guidance](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementingvalue).
+The consumer deliberately omits a flattened multiline value; this fork constructs
+the requested string from the retained text runs on demand, using the same source
+as `TextPattern`. It adds no duplicate value to the root node or caret updates.
+Read-only/disabled `SetValue` continues to reject before dispatch. The real native
+Unicode Editor client exercises full value reads and the read-only mutation guard.
+
 ## Evidence
 
 Portable model tests cover Unicode across runs, overlapping backward matches,

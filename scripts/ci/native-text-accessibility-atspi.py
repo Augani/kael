@@ -45,6 +45,7 @@ def find_owned(pid, label):
     desktop.clear_cache()
     failures = []
     roots = []
+    owned_nodes = []
     for index in range(desktop.get_child_count()):
         try:
             app = desktop.get_child_at_index(index)
@@ -60,9 +61,12 @@ def find_owned(pid, label):
                 seen += 1
                 require(seen <= 512, 'owned editor layout exceeded bound')
                 node.clear_cache()
-                if node.get_name() == label:
-                    return node
+                name = node.get_name()
                 count = node.get_child_count()
+                if len(owned_nodes) < 24:
+                    owned_nodes.append((app_pid, name, count))
+                if name == label:
+                    return node
                 require(0 <= count <= 512, f'unexpected editor hierarchy count={count}')
                 queue.extend(node.get_child_at_index(i) for i in range(count))
         except (GLib.GError, RuntimeError) as error:
@@ -70,7 +74,7 @@ def find_owned(pid, label):
             # same owned PID. A broken/stale GTK widget hierarchy must not
             # hide the independent Kael semantic hierarchy.
             failures.append(str(error))
-    raise RuntimeError(f'owned native node not found: {label}; desktop_roots={roots!r}; errors={failures!r}')
+    raise RuntimeError(f'owned native node not found: {label}; desktop_roots={roots!r}; owned_nodes={owned_nodes!r}; errors={failures!r}')
 
 
 def click(pid, label):

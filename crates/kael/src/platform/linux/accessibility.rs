@@ -150,6 +150,7 @@ impl DeactivationHandler for NoopDeactivationHandler {
 pub struct AtSpiAccessibleRoot {
     adapter: RefCell<Adapter>,
     window_focused: Cell<bool>,
+    trace_updates: bool,
     latest: SharedUpdate,
     pending_actions: PendingActions,
     action_wake: ActionWake,
@@ -178,6 +179,7 @@ impl AtSpiAccessibleRoot {
         Self {
             adapter: RefCell::new(adapter),
             window_focused: Cell::new(false),
+            trace_updates: std::env::var_os("KAEL_ATSPI_TRACE").is_some(),
             latest,
             pending_actions,
             action_wake,
@@ -214,6 +216,14 @@ impl AtSpiAccessibleRoot {
 
     /// Feed the latest accessibility tree to the AT-SPI2 adapter.
     pub fn update_tree(&self, tree: &crate::AccessibilityTree) {
+        if self.trace_updates {
+            eprintln!(
+                "KAEL_ATSPI_TREE_UPDATE: root={:?} nodes={} host_focused={}",
+                tree.root,
+                tree.nodes.len(),
+                self.window_focused.get()
+            );
+        }
         let previous = if let Ok(mut guard) = self.latest.lock() {
             guard.replace(tree.clone())
         } else {

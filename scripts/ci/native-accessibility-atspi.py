@@ -146,10 +146,17 @@ def main():
                     'native D-Bus document identity changed across disclosure')
             return restored
         last = wait(expanded)
-        actions = last.get_action_iface()
-        require(actions is not None, 'offscreen row lacks its native action interface')
-        names = [actions.get_action_name(index) for index in range(actions.get_n_actions())]
-        require('click' in names, f'last row does not advertise Click: {names}')
+        def restored_actions():
+            # Parent children can return before the re-added D-Bus object's
+            # interfaces are registered. The retained proxy may also cache the
+            # absent interfaces it observed while the row was collapsed.
+            last.clear_cache()
+            actions = last.get_action_iface()
+            require(actions is not None, 'offscreen row lacks its native action interface')
+            names = [actions.get_action_name(index) for index in range(actions.get_n_actions())]
+            require('click' in names, f'last row does not advertise Click: {names}')
+            return actions, names
+        actions, names = wait(restored_actions)
         time.sleep(2)
         require(actions.do_action(names.index('click')), 'native click was rejected')
         def selected():

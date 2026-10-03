@@ -592,7 +592,8 @@ impl NodeWrapper<'_> {
         if self.node.supports_url() {
             return true;
         }
-        self.node.has_value() && !self.node.label_comes_from_value()
+        (self.node.has_value() || (self.node.is_text_input() && self.node.supports_text_ranges()))
+            && !self.node.label_comes_from_value()
     }
 
     fn is_range_value_pattern_supported(&self) -> bool {
@@ -606,7 +607,17 @@ impl NodeWrapper<'_> {
             return result;
         }
         let mut result = WideString::new(self.string_buffer);
-        self.node.write_value(&mut result).unwrap();
+        if self.node.is_text_input()
+            && self.node.supports_text_ranges()
+            && self.node.data().value().is_none()
+        {
+            // Retained multiline editors omit a duplicate root value. Produce
+            // it only for this native request, using the same text runs as UIA
+            // TextPattern; read-only/disabled mutation guards remain unchanged.
+            self.node.document_range().write_text(&mut result).unwrap();
+        } else {
+            self.node.write_value(&mut result).unwrap();
+        }
         result
     }
 

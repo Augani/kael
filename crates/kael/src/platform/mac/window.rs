@@ -3938,6 +3938,12 @@ impl MacWindow {
             content_view.addSubview_(native_view.autorelease());
             native_window.makeFirstResponder_(native_view);
 
+            // AppKit can adjust the content height while applying titlebar and
+            // layer configuration after initWithContentRect (one point on
+            // macOS 27). Reassert the requested client size after configuration,
+            // using its native sizing API rather than compensating a border.
+            native_window.setContentSize_(window_rect.size);
+
             match kind {
                 WindowKind::Normal | WindowKind::Floating => {
                     native_window.setLevel_(NSNormalWindowLevel);

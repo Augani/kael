@@ -55,6 +55,25 @@ def validate_paired_geometry(left, right):
         raise RuntimeError('Kael and GPUI Kit actual native viewport or display scale differ')
 
 
+def validate_phase_frames(result, frame_timing):
+    phases = result.get('phase_frame_counts')
+    if not isinstance(phases, list) or len(phases) != 4:
+        raise RuntimeError('missing measured phase frame counts')
+    for phase, name in zip(phases, PHASE_NAMES):
+        if not isinstance(phase, dict) or phase.get('phase') != name:
+            raise RuntimeError('missing, duplicated or reordered measured frame phases')
+        if any(type(phase.get(key)) is not int or not 0 <= phase[key] < 2**64
+               for key in ('renders', 'draws', 'submissions')):
+            raise RuntimeError('invalid measured phase frame counts')
+        if name in ('active', 'churn'):
+            if phase['renders'] < 2:
+                raise RuntimeError('active workload did not repaint after its initial phase frame')
+            if frame_timing and (phase['draws'] < 2 or phase['submissions'] < 2):
+                raise RuntimeError('missing native draw/submission activity during measured phase')
+        if not frame_timing and (phase['draws'] or phase['submissions']):
+            raise RuntimeError('native phase frame instrumentation unexpectedly active in disabled build')
+
+
 def validate_workload(result, phases, engine, frame_timing, contract, rows):
     """Reject incomplete or altered workloads before deriving any comparison."""
     if result.get('contract') != contract or result.get('rows') != rows or result.get('engine') != engine:
@@ -62,6 +81,7 @@ def validate_workload(result, phases, engine, frame_timing, contract, rows):
     if result.get('quick', False):
         raise RuntimeError('quick smoke workloads cannot satisfy measured comparison')
     validate_native_geometry(result)
+    validate_phase_frames(result, frame_timing)
     component_contract = contract in ('native-editor-document-v1', 'native-data-table-v1',
                                       'native-virtual-tree-v1', 'native-dock-workspace-v1')
     names = [phase.get('phase') for phase in phases]
