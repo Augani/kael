@@ -18,6 +18,10 @@ use std::{
 };
 use ui::{prelude::*, *};
 
+#[path = "native_geometry.rs"]
+mod native_geometry;
+use native_geometry::NativeGeometry;
+
 const CONTRACT: &str = "native-editor-document-v1";
 const REPLACEMENT: &str = "新文書";
 const FONT_FAMILY: &str = "Menlo";
@@ -211,6 +215,7 @@ struct Workload {
     submission_us: Vec<u64>,
     first_submission_us: Option<u128>,
     gpu_samples: Vec<(String, Option<u64>)>,
+    geometry: NativeGeometry,
     #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
     last_draw: Option<u64>,
     #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
@@ -262,6 +267,7 @@ impl Workload {
             }),
             first_submission_us: None,
             gpu_samples: Vec::with_capacity(5),
+            geometry: NativeGeometry::new(),
             #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
             last_draw: None,
             #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
@@ -275,6 +281,7 @@ impl Workload {
         self.snapshot_gpu();
         self.measuring = true;
         self.phase = phase;
+        self.geometry.record(phase, "begin", window);
         self.sequence = 0;
         self.last_render = None;
         #[cfg(feature = "kael-engine")]
@@ -293,6 +300,7 @@ impl Workload {
         window.refresh();
     }
     fn begin_validation(&mut self, window: &mut Window) {
+        self.geometry.record(self.phase, "end", window);
         self.collect(window);
         self.measuring = false;
     }
@@ -447,6 +455,7 @@ impl Workload {
                 "renders": self.renders, "elapsed_us": self.started.elapsed().as_micros(),
                 "first_submission_us": self.first_submission_us,
                 "draw_cpu_us": self.draw_us, "submission_cpu_us": self.submission_us,
+                "native_window_geometry": self.geometry.samples,
                 "gpu_allocated_bytes": self.gpu_samples,
                 "submission_scope": "CPU platform submission, excluding GPU completion/compositor display",
                 "timing_scope": "native rendered Editor; public interaction APIs and routed undo/redo; paced separate frames",

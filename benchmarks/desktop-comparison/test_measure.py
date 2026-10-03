@@ -33,6 +33,11 @@ class ComparisonEvidenceTests(unittest.TestCase):
             'frame_timing_enabled': True, 'elapsed_us': 35_100_000,
             'draw_cpu_us': [1, 20, 50], 'submission_cpu_us': [5, 10, 15],
             'first_submission_us': 500_000,
+            'native_window_geometry': [
+                {'phase': phase, 'boundary': boundary, 'viewport_width_px': 1100.0,
+                 'viewport_height_px': 760.0, 'scale_factor': 2.0}
+                for phase in ('idle-before', 'active', 'idle-after', 'churn')
+                for boundary in ('begin', 'end')],
         }
 
     def validate(self, report=None, phases=None, enabled=True):
@@ -46,6 +51,47 @@ class ComparisonEvidenceTests(unittest.TestCase):
         disabled.update(frame_timing_enabled=False, draw_cpu_us=[],
                         submission_cpu_us=[], first_submission_us=None)
         self.validate(disabled, enabled=False)
+
+    def test_native_geometry_missing_invalid_or_boundary_loss_is_rejected(self):
+        geometry = self.report['native_window_geometry']
+        for samples in (None, [], geometry[:-1], geometry + geometry[-1:],
+                        list(reversed(geometry)), [None] * 8):
+            with self.subTest(samples=samples), self.assertRaises(RuntimeError):
+                self.validate(self.report | {'native_window_geometry': samples})
+        for key in ('viewport_width_px', 'viewport_height_px', 'scale_factor'):
+            for value in (None, True, '1100', 0, -1, float('nan'), float('inf')):
+                report = copy.deepcopy(self.report)
+                report['native_window_geometry'][3][key] = value
+                with self.subTest(key=key, value=value), self.assertRaises(RuntimeError):
+                    self.validate(report)
+
+    def test_native_resize_and_display_scale_changes_are_rejected(self):
+        for key, value in (('viewport_width_px', 1099), ('viewport_height_px', 759),
+                           ('scale_factor', 1.0)):
+            report = copy.deepcopy(self.report)
+            report['native_window_geometry'][5][key] = value
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                self.validate(report)
+
+    def test_equal_constrained_geometry_is_accepted(self):
+        report = copy.deepcopy(self.report)
+        for sample in report['native_window_geometry']:
+            sample.update(viewport_width_px=880.0, viewport_height_px=640.0,
+                          scale_factor=1.0)
+        self.validate(report)
+
+    def test_paired_native_geometry_must_match_both_engines(self):
+        from measure import validate_paired_geometry
+        competitor = copy.deepcopy(self.report)
+        competitor['engine'] = 'gpui-kit'
+        validate_paired_geometry(self.report, competitor)
+        for key, value in (('viewport_width_px', 880), ('viewport_height_px', 640),
+                           ('scale_factor', 1.0)):
+            unequal = copy.deepcopy(competitor)
+            for sample in unequal['native_window_geometry']:
+                sample[key] = value
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                validate_paired_geometry(self.report, unequal)
 
     def test_wrong_engine_fixture_typography_and_smoke_are_rejected(self):
         for key, value in (('engine', 'gpui-kit'), ('rows', 100_000),

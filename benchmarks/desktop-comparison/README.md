@@ -26,6 +26,12 @@ thermal conditions. Do not collect results during compilation or other tests.
 The runner alternates engine order and retains every raw application log,
 process sample, frame duration, environment record, and binary digest. A failed
 application, missing phase, or missing measurement rejects a run.
+Each binary records the actual native client viewport and display scale at the
+beginning and end of all four measured phases. The collector requires all eight
+ordered samples, stable geometry within and across runs, and equal geometry for
+both engines. Requested window dimensions alone do not establish equality;
+equally constrained native windows are permitted and recorded. Schema 3 captures
+enforce this gate; older captures remain historical diagnostics.
 The environment record captures display properties, power/thermal reports and
 a checkout fingerprint that includes untracked source files. Record build-time
 source separately when the checkout changes between compilation and collection.

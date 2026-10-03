@@ -102,6 +102,29 @@ client_log="${evidence_dir}/atspi-client.log"
 "${workspace_dir}/target/debug/examples/${example_name}" \
   > "${app_log}" 2> "${evidence_dir}/${example_name}.stderr.log" &
 owned_pid=$!
+# This Xvfb session has no window manager. Establish real X keyboard focus for
+# the owned visible host, as a desktop window manager normally does on launch.
+# Logical control focus must never substitute for an inactive native host.
+owned_window=""
+for ((attempt=0; attempt<300; attempt++)); do
+  owned_window="$(xdotool search --onlyvisible --pid "${owned_pid}" 2>/dev/null | head -n 1 || true)"
+  if [[ -n "${owned_window}" ]]; then break; fi
+  if ! kill -0 "${owned_pid}" 2>/dev/null; then
+    echo 'Owned accessibility application exited before showing its window' >&2
+    exit 1
+  fi
+  sleep 0.05
+done
+if [[ -z "${owned_window}" ]]; then
+  echo 'Owned accessibility application did not show a native window' >&2
+  exit 1
+fi
+if [[ "$(xdotool getwindowpid "${owned_window}")" != "${owned_pid}" ]]; then
+  echo 'Native accessibility host window belongs to a different process' >&2
+  exit 1
+fi
+timeout 10s xdotool windowfocus --sync "${owned_window}"
+echo "NATIVE_ACCESSIBILITY_HOST_FOCUS: pid=${owned_pid} window=${owned_window}" | tee -a "${evidence_dir}/environment.txt"
 client_options=(--pid "${owned_pid}" --app-log "${app_log}")
 if [[ "${text_protocol}" == true ]]; then
   client_options+=(

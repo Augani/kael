@@ -21,12 +21,47 @@ DATA_HASHES = {
 }
 
 
+def same_geometry(left, right):
+    # Allow floating-point representation noise, but reject a one-pixel resize.
+    return all(math.isclose(a, b, rel_tol=0, abs_tol=tolerance)
+               for a, b, tolerance in zip(left, right, (0.01, 0.01, 0.000001)))
+
+
+def validate_native_geometry(result):
+    samples = result.get('native_window_geometry')
+    if not isinstance(samples, list) or len(samples) != 8:
+        raise RuntimeError('missing actual native phase-boundary geometry')
+    expected = [(phase, boundary) for phase in PHASE_NAMES for boundary in ('begin', 'end')]
+    first = None
+    for sample, (phase, boundary) in zip(samples, expected):
+        if not isinstance(sample, dict) or (sample.get('phase'), sample.get('boundary')) != (phase, boundary):
+            raise RuntimeError('missing, duplicated or reordered native geometry boundaries')
+        geometry = tuple(sample.get(key) for key in
+                         ('viewport_width_px', 'viewport_height_px', 'scale_factor'))
+        if any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0
+               for value in geometry):
+            raise RuntimeError('invalid actual native geometry')
+        if first is None:
+            first = geometry
+        elif not same_geometry(first, geometry):
+            raise RuntimeError('native viewport or display scale changed during measurement')
+    return first
+
+
+def validate_paired_geometry(left, right):
+    if {left.get('engine'), right.get('engine')} != {'kael', 'gpui-kit'}:
+        raise RuntimeError('native geometry requires both measured engines')
+    if not same_geometry(validate_native_geometry(left), validate_native_geometry(right)):
+        raise RuntimeError('Kael and GPUI Kit actual native viewport or display scale differ')
+
+
 def validate_workload(result, phases, engine, frame_timing, contract, rows):
     """Reject incomplete or altered workloads before deriving any comparison."""
     if result.get('contract') != contract or result.get('rows') != rows or result.get('engine') != engine:
         raise RuntimeError('workload contract mismatch')
     if result.get('quick', False):
         raise RuntimeError('quick smoke workloads cannot satisfy measured comparison')
+    validate_native_geometry(result)
     component_contract = contract in ('native-editor-document-v1', 'native-data-table-v1',
                                       'native-virtual-tree-v1', 'native-dock-workspace-v1')
     names = [phase.get('phase') for phase in phases]
@@ -298,7 +333,7 @@ def main():
     helper = destination / 'process-metrics'
     subprocess.run(['cc', '-O2', str(Path(__file__).with_name('process_metrics_macos.c')), '-o', str(helper)], check=True)
     adapter_sample = json.loads(command(str(helper), str(os.getpid())))
-    metadata = {'schema_version': 2, 'platform': platform.platform(), 'cpu': command('sysctl', '-n', 'machdep.cpu.brand_string'),
+    metadata = {'schema_version': 3, 'platform': platform.platform(), 'cpu': command('sysctl', '-n', 'machdep.cpu.brand_string'),
                 'memory_bytes': int(command('sysctl', '-n', 'hw.memsize')), 'cpu_count': os.cpu_count(),
                 'rustc': command('rustc', '-Vv'), 'load_average': os.getloadavg(),
                 'power_source': command('pmset', '-g', 'batt'),
@@ -315,20 +350,31 @@ def main():
                 'adapter_source_sha256': digest(Path(__file__).with_name('process_metrics_macos.c')),
                 'adapter_binary_sha256': digest(helper),
                 'framework_frame_timing_enabled': not args.without_frame_timing,
+                'native_geometry_scope': 'actual client viewport and scale at each phase begin/end; stable and equal across all captures required',
                 'timing_scope': 'CPU draw and platform submission when enabled; common application callback timing always enabled; no GPU/compositor completion measurement'}
     (destination / 'environment.json').write_text(json.dumps(metadata, indent=2) + '\n')
     reports = []
+    comparison_geometry = None
     for index in range(args.repetitions):
         order = [('kael', args.kael), ('gpui-kit', args.gpui_kit)]
         if index % 2:
             order.reverse()
+        pair = []
         for engine, executable in order:
-            reports.append(run(engine, executable, helper, destination, index,
-                               frame_timing=not args.without_frame_timing,
-                               contract=args.contract,
-                               rows={'native-editor-document-v1': 16_001,
-                                     'native-virtual-tree-v1': 100_025,
-                                     'native-dock-workspace-v1': 12}.get(args.contract, 100_000)))
+            report = run(engine, executable, helper, destination, index,
+                         frame_timing=not args.without_frame_timing,
+                         contract=args.contract,
+                         rows={'native-editor-document-v1': 16_001,
+                               'native-virtual-tree-v1': 100_025,
+                               'native-dock-workspace-v1': 12}.get(args.contract, 100_000))
+            geometry = validate_native_geometry(report['application'])
+            if comparison_geometry is None:
+                comparison_geometry = geometry
+            elif not same_geometry(comparison_geometry, geometry):
+                raise RuntimeError('native viewport or display scale changed between captures')
+            pair.append(report)
+        validate_paired_geometry(pair[0]['application'], pair[1]['application'])
+        reports.extend(pair)
     (destination / 'runs.json').write_text(json.dumps(reports, indent=2) + '\n')
 
 

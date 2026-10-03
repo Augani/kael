@@ -97,7 +97,10 @@ impl AccessibilitySnapshot {
         root: AccessibilityId,
         nodes: impl IntoIterator<Item = AccessibilityNode>,
     ) -> anyhow::Result<Arc<Self>> {
-        let mut map = HashMap::new();
+        let nodes = nodes.into_iter();
+        // Prepared virtual models know their node count. Reserve from the
+        // guaranteed lower bound to avoid repeatedly moving large node records.
+        let mut map = HashMap::with_capacity(nodes.size_hint().0);
         for node in nodes {
             anyhow::ensure!(
                 map.insert(node.id, node).is_none(),
@@ -108,7 +111,7 @@ impl AccessibilitySnapshot {
             map.contains_key(&root),
             "logical accessibility root missing"
         );
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::with_capacity(map.len());
         let mut pending = vec![root];
         while let Some(id) = pending.pop() {
             anyhow::ensure!(

@@ -172,6 +172,7 @@ struct Workload {
     sequence: usize,
     operations: [u64; 7],
     probe: RowProbe,
+    validation_painted: bool,
     metrics: Metrics,
     #[cfg(feature = "kael-engine")]
     model: VirtualTreeModel<SharedString>,
@@ -207,6 +208,7 @@ impl Workload {
             sequence: 0,
             operations: [0; 7],
             probe: Rc::new(RefCell::new(Vec::with_capacity(64))),
+            validation_painted: false,
             metrics: Metrics::new(started),
             #[cfg(feature = "kael-engine")]
             model,
@@ -490,9 +492,21 @@ impl Workload {
             .iter()
             .position(|record| record.id == self.scroll_target)
             .unwrap();
+        #[cfg(feature = "kael-engine")]
+        if !mounted.contains(&target) {
+            let state = self.control.read(cx);
+            eprintln!(
+                "KAEL_TREE_REVEAL_DIAGNOSTIC: rendered_range={:?} scroll={}",
+                state.last_rendered_range(),
+                state.scroll_handle().to_text(),
+            );
+        }
         assert!(
             mounted.contains(&target),
-            "native reveal target physically rendered"
+            "native reveal target physically rendered: phase={} sequence={} target={} mounted={mounted:?}",
+            self.metrics.phase,
+            self.sequence,
+            target,
         );
         self.metrics
             .checks
@@ -501,6 +515,17 @@ impl Workload {
             "selected_id":selected,"scroll_target_id":self.scroll_target,"collapsed_root":self.collapsed,"visible_nodes":expected.len(),
             "verified_control_nodes":actual.len(),"visible_hash":expected_hash,"fixture_hash":fixture.hash,"native_mounted_rows":mounted.len(),
             "mounted_indices":mounted,"reveal_target_mounted":true}));
+    }
+
+    fn validation_ready(&self, cx: &App) -> bool {
+        #[cfg(feature = "kael-engine")]
+        let target = self.model.index_of(&self.scroll_target);
+        #[cfg(feature = "gpui-kit-engine")]
+        let target = self.control.read(cx).index_of(&self.scroll_target);
+        #[cfg(feature = "kael-engine")]
+        let _ = cx;
+        self.validation_painted
+            && target.is_some_and(|target| self.probe.borrow().contains(&target))
     }
     fn report(&self) {
         self.metrics.report(serde_json::json!({"contract":CONTRACT,"quick":self.options.quick,"rows":self.options.nodes(),"root_count":ROOTS,
@@ -523,6 +548,9 @@ impl Render for Workload {
         #[cfg(feature = "gpui-kit-engine")]
         let _ = cx;
         self.metrics.rendered();
+        if !self.metrics.measuring {
+            self.validation_painted = true;
+        }
         self.probe.borrow_mut().clear();
         let probe = self.probe.clone();
         #[cfg(feature = "kael-engine")]
@@ -636,11 +664,36 @@ fn launch(started: Instant, options: Options, cx: &mut App) {
                             }
                         }
                         marker("validation", started);
-                        weak.update_in(cx, |view, window, _| view.metrics.validation(window))
-                            .unwrap();
+                        weak.update_in(cx, |view, window, cx| {
+                            view.metrics.validation(window);
+                            view.validation_painted = false;
+                            cx.notify();
+                            window.refresh();
+                        })
+                        .unwrap();
                         cx.background_executor()
                             .timer(Duration::from_millis(40))
                             .await;
+                        let deadline = Instant::now() + Duration::from_secs(2);
+                        while !weak
+                            .update_in(cx, |view, _, cx| view.validation_ready(cx))
+                            .unwrap()
+                        {
+                            if Instant::now() >= deadline {
+                                weak.update_in(cx, |view, _, cx| {
+                                    view.check_phase(cx);
+                                    assert!(
+                                        view.validation_painted,
+                                        "native validation frame was not painted"
+                                    );
+                                })
+                                .unwrap();
+                                unreachable!("reveal readiness and the complete oracle must agree");
+                            }
+                            cx.background_executor()
+                                .timer(Duration::from_millis(8))
+                                .await;
+                        }
                         weak.update_in(cx, |view, _, cx| view.check_phase(cx))
                             .unwrap();
                     }

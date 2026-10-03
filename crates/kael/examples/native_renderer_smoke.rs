@@ -542,6 +542,9 @@ mod native {
                             break;
                         }
                         if Instant::now() >= revision_deadline {
+                            let _ = window.update(cx, |_, window, _| {
+                                eprintln!("NATIVE_RENDERER_WINDOW_STATE: {:?}", window.runtime_snapshot());
+                            });
                             eprintln!(
                                 "NATIVE_RENDERER_SMOKE_FAIL: timed out waiting for retained frame revision {revision}"
                             );

@@ -44,6 +44,10 @@ stabilised — minor version bumps may include breaking changes.
 
 ### Changed
 
+- Reserve accessibility snapshot construction storage from the input node count,
+  avoiding repeated movement of large native node records while indexing a tree.
+- Require actual native viewport and display-scale equality at every measured
+  phase boundary in the Kael/GPUI Kit comparison collector.
 - Use Ropey's indexed UTF-16 conversions for editor input ranges instead of
   scanning the document prefix, retaining forward adjustment inside surrogate pairs.
 - Cache filtered AT-SPI child indices per queried parent and invalidate them on
@@ -67,6 +71,12 @@ stabilised — minor version bumps may include breaking changes.
 
 ### Fixed
 
+- Export explicit unselected state for native tabs and tree items so Windows UI
+  Automation exposes their SelectionItem pattern before the first selection.
+- Forward native host focus changes to the Linux accessibility adapters on X11,
+  Wayland and GTK4, keeping logical control focus distinct from host activation.
+- Wait for a fresh tree validation paint and its original reveal target before
+  checking benchmark oracles, with a bounded deadline outside measured phases.
 - Verify release archives in fresh staging so repeated preflights cannot compile
   against a stale local-registry core package with the same unreleased version.
 - Report the actual first line/grapheme fragment in AppKit candidate-rectangle

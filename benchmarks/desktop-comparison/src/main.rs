@@ -13,6 +13,10 @@ use std::{
 };
 use ui::{prelude::*, *};
 
+#[path = "native_geometry.rs"]
+mod native_geometry;
+use native_geometry::NativeGeometry;
+
 const ROWS: usize = 100_000;
 const ACTIVE_SECONDS: u64 = 12;
 const IDLE_SECONDS: u64 = 5;
@@ -34,6 +38,7 @@ struct Workload {
     submission_us: Vec<u64>,
     first_submission_us: Option<u128>,
     gpu_samples: Vec<(String, Option<u64>)>,
+    geometry: NativeGeometry,
     #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
     last_draw: Option<u64>,
     #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
@@ -71,6 +76,7 @@ impl Workload {
             }),
             first_submission_us: None,
             gpu_samples: Vec::with_capacity(5),
+            geometry: NativeGeometry::new(),
             #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
             last_draw: None,
             #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
@@ -194,6 +200,7 @@ impl Workload {
                 "elapsed_us": self.started.elapsed().as_micros(),
                 "first_submission_us": self.first_submission_us,
                 "draw_cpu_us": self.draw_us, "submission_cpu_us": self.submission_us,
+                "native_window_geometry": self.geometry.samples,
                 "gpu_allocated_bytes": self.gpu_samples,
                 "submission_scope": "CPU platform submission, excluding GPU completion/compositor display",
                 "timing_scope": "root render callback; intervals include pacing, not GPU duration"
@@ -305,7 +312,7 @@ fn launch(started: Instant, cx: &mut App) {
             cx.background_executor().timer(Duration::from_secs(1)).await;
             for phase in ["idle-before", "active", "idle-after", "churn"] {
                 let duration = if phase.starts_with("idle") { IDLE_SECONDS } else if phase == "active" { ACTIVE_SECONDS } else { CHURN_SECONDS };
-                weak.update_in(cx, |view, window, cx| { view.collect(window); view.snapshot_gpu(); view.phase = phase; view.last_render = None; cx.notify(); window.refresh(); }).unwrap();
+                weak.update_in(cx, |view, window, cx| { view.collect(window); view.snapshot_gpu(); view.phase = phase; view.geometry.record(phase, "begin", window); view.last_render = None; cx.notify(); window.refresh(); }).unwrap();
                 println!("KAEL_PHASE {}", serde_json::json!({"phase":phase,"elapsed_us":started.elapsed().as_micros()}));
                 if phase.starts_with("idle") { cx.background_executor().timer(Duration::from_secs(duration)).await; }
                 else {
@@ -315,6 +322,7 @@ fn launch(started: Instant, cx: &mut App) {
                         weak.update_in(cx, |view, window, cx| view.tick(window, cx)).unwrap();
                     }
                 }
+                weak.update_in(cx, |view, window, _| view.geometry.record(phase, "end", window)).unwrap();
             }
             weak.update_in(cx, |view, window, _| { view.collect(window); view.snapshot_gpu(); view.report(); }).unwrap();
             cx.update(|_, cx| cx.quit()).unwrap();

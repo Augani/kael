@@ -1357,6 +1357,10 @@ impl X11WindowStatePtr {
 
     pub fn set_active(&self, focus: bool) {
         self.state.borrow_mut().active = focus;
+        self.state
+            .borrow()
+            .accessibility_root
+            .update_window_focus_state(focus);
         if !focus {
             self.release_native_pointer_lock().log_err();
         }
@@ -2257,6 +2261,9 @@ impl PlatformWindow for X11Window {
         tree: &crate::AccessibilityTree,
     ) -> Vec<crate::AccessibilityActionRequest> {
         let state = self.0.state.borrow();
+        state
+            .accessibility_root
+            .update_window_focus_state(state.active);
         state.accessibility_root.update_tree(tree);
         state.accessibility_root.drain_actions(tree)
     }

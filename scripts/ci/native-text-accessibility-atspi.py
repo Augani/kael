@@ -42,12 +42,17 @@ def state(path):
 
 def find_owned(pid, label):
     desktop = Atspi.get_desktop(0)
+    desktop.clear_cache()
     failures = []
+    roots = []
     for index in range(desktop.get_child_count()):
-        app = desktop.get_child_at_index(index)
-        if app.get_process_id() != pid:
-            continue
         try:
+            app = desktop.get_child_at_index(index)
+            app.clear_cache()
+            app_pid = app.get_process_id()
+            roots.append((getattr(getattr(app, 'app', None), 'bus_name', None), app_pid))
+            if app_pid != pid:
+                continue
             queue = [app]
             seen = 0
             while queue:
@@ -65,7 +70,7 @@ def find_owned(pid, label):
             # same owned PID. A broken/stale GTK widget hierarchy must not
             # hide the independent Kael semantic hierarchy.
             failures.append(str(error))
-    raise RuntimeError(f'owned native node not found: {label}; roots={failures!r}')
+    raise RuntimeError(f'owned native node not found: {label}; desktop_roots={roots!r}; errors={failures!r}')
 
 
 def click(pid, label):
@@ -123,16 +128,16 @@ def main():
 
         def contents(expected):
             document.clear_cache()
-            require(text.get_character_count() == len(expected), 'native scalar count mismatch')
+            require(Atspi.Text.get_character_count(text) == len(expected), 'native scalar count mismatch')
             require(Atspi.Text.get_text(text, 0, -1) == expected, 'native complete text mismatch')
             return state(args.app_log)
 
         wait(lambda: contents(original))
         require(Atspi.Text.get_text(ro_text, 0, -1) == original, 'read-only full text mismatch')
-        require(text.set_selection(0, start, end), 'native Unicode selection rejected')
+        require(Atspi.Text.set_selection(text, 0, start, end), 'native Unicode selection rejected')
 
         def selected():
-            selection = text.get_selection(0)
+            selection = Atspi.Text.get_selection(text, 0)
             require((selection.start_offset, selection.end_offset) == (start, end),
                     'native selected scalar range mismatch')
             require(Atspi.Text.get_text(text, start, end) == needle, 'native selected Unicode text mismatch')
@@ -145,20 +150,20 @@ def main():
         selected_state = wait(selected)
         # Visible geometry is shaped, not a root-wide rectangle. The first
         # selected Japanese glyph is not itself a grapheme boundary ambiguity.
-        rect = text.get_character_extents(start, Atspi.CoordType.SCREEN)
+        rect = Atspi.Text.get_character_extents(text, start, Atspi.CoordType.SCREEN)
         require(rect.width > 0 and rect.height > 0, 'mounted text has no native geometry')
-        hit = text.get_offset_at_point(rect.x + rect.width // 2,
-                                      rect.y + rect.height // 2, Atspi.CoordType.SCREEN)
+        hit = Atspi.Text.get_offset_at_point(text, rect.x + rect.width // 2,
+                                             rect.y + rect.height // 2, Atspi.CoordType.SCREEN)
         require(hit == start, f'native glyph hit test mismatch: {hit} != {start}')
         word_offset = original.index('alpha_beta')
-        word = text.get_string_at_offset(word_offset, Atspi.TextGranularity.WORD)
+        word = Atspi.Text.get_string_at_offset(text, word_offset, Atspi.TextGranularity.WORD)
         require(word.start_offset <= word_offset < word.end_offset and word.content,
                 'native word navigation missing')
-        require(text.scroll_substring_to(offscreen, offscreen + 1, Atspi.ScrollType.TOP_EDGE),
+        require(Atspi.Text.scroll_substring_to(text, offscreen, offscreen + 1, Atspi.ScrollType.TOP_EDGE),
                 'native offscreen range reveal rejected')
 
         def revealed():
-            rect = text.get_character_extents(offscreen, Atspi.CoordType.SCREEN)
+            rect = Atspi.Text.get_character_extents(text, offscreen, Atspi.CoordType.SCREEN)
             require(rect.width > 0 and rect.height > 0, 'revealed text has no native geometry')
             current = state(args.app_log)
             require((current['anchor'], current['focus']) ==
@@ -168,17 +173,17 @@ def main():
             require(component.y <= rect.y < component.y + component.height,
                     'offscreen range was not revealed into viewport')
         wait(revealed)
-        require(text.set_caret_offset(len(original)), 'EOF native caret rejected')
+        require(Atspi.Text.set_caret_offset(text, len(original)), 'EOF native caret rejected')
         wait(lambda: require(state(args.app_log)['focus'] == len(original.encode('utf-8')),
                              'EOF caret byte mapping incorrect'))
-        wait(lambda: require(text.get_caret_offset() == len(original),
+        wait(lambda: require(Atspi.Text.get_caret_offset(text) == len(original),
                              'EOF native caret offset incorrect'))
 
-        require(ro_edit.copy_text(start, end), 'read-only copy rejected')
+        require(Atspi.EditableText.copy_text(ro_edit, start, end), 'read-only copy rejected')
         wait(lambda: require(clipboard() == needle, 'native Copy did not reach system clipboard'))
-        require(not ro_edit.cut_text(start, end), 'read-only Cut falsely accepted')
-        require(not ro_edit.paste_text(start), 'read-only Paste falsely accepted')
-        require(not ro_edit.set_text_contents('invalid'), 'read-only SetTextContents accepted')
+        require(not Atspi.EditableText.cut_text(ro_edit, start, end), 'read-only Cut falsely accepted')
+        require(not Atspi.EditableText.paste_text(ro_edit, start), 'read-only Paste falsely accepted')
+        require(not Atspi.EditableText.set_text_contents(ro_edit, 'invalid'), 'read-only SetTextContents accepted')
         require(Atspi.Text.get_text(ro_text, 0, -1) == original, 'read-only content changed')
 
         click(args.pid, 'Toggle disabled document')
@@ -189,10 +194,10 @@ def main():
             require(not document.get_state_set().contains(Atspi.StateType.ENABLED),
                     'disabled editor remains natively enabled')
         wait(disabled)
-        require(not text.set_caret_offset(0), 'disabled selection accepted')
-        require(not edit.insert_text(0, 'X', 1), 'disabled partial edit accepted')
+        require(not Atspi.Text.set_caret_offset(text, 0), 'disabled selection accepted')
+        require(not Atspi.EditableText.insert_text(edit, 0, 'X', 1), 'disabled partial edit accepted')
         try:
-            require(not edit.copy_text(start, end), 'disabled clipboard action accepted')
+            require(not Atspi.EditableText.copy_text(edit, start, end), 'disabled clipboard action accepted')
         except GLib.GError:
             pass  # void CopyText reports NotSupported on the D-Bus interface.
         require(Atspi.Text.get_text(text, 0, -1) == original, 'disabled editor mutated')
@@ -223,18 +228,18 @@ def main():
             click(args.pid, 'Undo document')
             wait(lambda: contents(original))
 
-        atomic_edit(lambda: edit.cut_text(start, end), original[:start] + original[end:])
+        atomic_edit(lambda: Atspi.EditableText.cut_text(edit, start, end), original[:start] + original[end:])
         wait(lambda: require(clipboard() == needle, 'Cut clipboard text mismatch'))
-        atomic_edit(lambda: edit.paste_text(start), original[:start] + needle + original[start:])
+        atomic_edit(lambda: Atspi.EditableText.paste_text(edit, start), original[:start] + needle + original[start:])
         # GNOME specifies InsertText length in UTF-8 bytes. The prefix contains
         # two Japanese scalars (six bytes), with an extra emoji deliberately not inserted.
-        atomic_edit(lambda: edit.insert_text(start, '日本🙂', 6),
+        atomic_edit(lambda: Atspi.EditableText.insert_text(edit, start, '日本🙂', 6),
                     original[:start] + '日本' + original[start:])
-        atomic_edit(lambda: edit.delete_text(start, end), original[:start] + original[end:])
-        require(not edit.insert_text(start, '日本', 2), 'partial UTF-8 insertion accepted')
-        require(not edit.delete_text(end, start), 'reversed native edit range accepted')
-        require(not edit.delete_text(0, len(original) + 1), 'out-of-range edit accepted')
-        require(edit.set_text_contents('whole 日本🙂\r\n'), 'whole SetTextContents rejected')
+        atomic_edit(lambda: Atspi.EditableText.delete_text(edit, start, end), original[:start] + original[end:])
+        require(not Atspi.EditableText.insert_text(edit, start, '日本', 2), 'partial UTF-8 insertion accepted')
+        require(not Atspi.EditableText.delete_text(edit, end, start), 'reversed native edit range accepted')
+        require(not Atspi.EditableText.delete_text(edit, 0, len(original) + 1), 'out-of-range edit accepted')
+        require(Atspi.EditableText.set_text_contents(edit, 'whole 日本🙂\r\n'), 'whole SetTextContents rejected')
         wait(lambda: contents('whole 日本🙂\r\n'))
         click(args.pid, 'Reset document')
         wait(lambda: contents(original))

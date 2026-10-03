@@ -2405,6 +2405,7 @@ struct MacWindowState {
     blurred_view: Option<id>,
     display_link: Option<DisplayLink>,
     frame_polling_active: bool,
+    frame_polling_trace: bool,
     renderer: renderer::Renderer,
     request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
     event_callback: Option<Box<dyn FnMut(PlatformInput) -> crate::DispatchEventResult>>,
@@ -3813,6 +3814,7 @@ impl MacWindow {
                 blurred_view: None,
                 display_link: None,
                 frame_polling_active: false,
+                frame_polling_trace: std::env::var_os("KAEL_GPU_FRAME_TIMING_TRACE").is_some(),
                 renderer: renderer::try_new_renderer(
                     renderer_context,
                     native_window as *mut _,
@@ -4547,6 +4549,13 @@ impl PlatformWindow for MacWindow {
         // unrelated false -> true transition to make the window render again.
         if should_start_display_link(active, was_active, this.display_link.is_some()) {
             this.start_display_link();
+            if this.frame_polling_trace {
+                let occlusion = unsafe { this.native_window.occlusionState() };
+                eprintln!(
+                    "KAEL_NATIVE_FRAME_POLLING: active={active} was_active={was_active} link_started={} occlusion={occlusion:?}",
+                    this.display_link.is_some()
+                );
+            }
         } else if !active && was_active {
             this.stop_display_link();
         }

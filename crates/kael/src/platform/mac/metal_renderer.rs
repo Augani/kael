@@ -189,6 +189,7 @@ pub(crate) struct MetalRenderer {
     counters: RendererCounters,
     last_present_instant: Option<Instant>,
     gpu_frame_timings: Option<Arc<Mutex<GpuFrameTimingCollector>>>,
+    gpu_frame_timing_trace: bool,
     #[cfg(feature = "custom-shaders")]
     custom: custom_shaders::MetalCustomRenderer,
 }
@@ -436,6 +437,7 @@ impl MetalRenderer {
             counters: RendererCounters::default(),
             last_present_instant: None,
             gpu_frame_timings: None,
+            gpu_frame_timing_trace: false,
             #[cfg(feature = "custom-shaders")]
             custom: custom_shaders::MetalCustomRenderer::default(),
         })
@@ -468,6 +470,8 @@ impl MetalRenderer {
     }
 
     pub(crate) fn set_gpu_frame_timing_enabled(&mut self, enabled: bool) -> bool {
+        self.gpu_frame_timing_trace =
+            enabled && std::env::var_os("KAEL_GPU_FRAME_TIMING_TRACE").is_some();
         if enabled {
             self.gpu_frame_timings
                 .get_or_insert_with(|| Arc::new(Mutex::new(GpuFrameTimingCollector::new())));
@@ -494,6 +498,7 @@ impl MetalRenderer {
         if let Some(collector) = self.gpu_frame_timings.as_ref() {
             let frame_id = collector.lock().begin(0.0, drawable.is_some());
             if let Some(frame_id) = frame_id {
+                let trace = self.gpu_frame_timing_trace;
                 let completed_collector = Arc::downgrade(collector);
                 let completed = ConcreteBlock::new(move |buffer: &metal::CommandBufferRef| {
                     if let Some(collector) = completed_collector.upgrade() {
@@ -505,6 +510,12 @@ impl MetalRenderer {
                                 msg_send![buffer, GPUEndTime],
                             )
                         };
+                        if trace {
+                            let status: u64 = unsafe { msg_send![buffer, status] };
+                            eprintln!(
+                                "KAEL_GPU_TIMING_COMPLETE: frame_id={frame_id} status={status} gpu_start={start} gpu_end={end}"
+                            );
+                        }
                         collector.lock().complete(frame_id, start, end);
                     }
                 })
@@ -514,9 +525,15 @@ impl MetalRenderer {
                     let presented_collector = Arc::downgrade(collector);
                     let presented = ConcreteBlock::new(move |drawable: &metal::DrawableRef| {
                         if let Some(collector) = presented_collector.upgrade() {
+                            let presented_time = drawable.presented_time();
+                            if trace {
+                                eprintln!(
+                                    "KAEL_GPU_TIMING_PRESENTED: frame_id={frame_id} presented_time={presented_time}"
+                                );
+                            }
                             collector
                                 .lock()
-                                .presented(frame_id, drawable.presented_time());
+                                .presented(frame_id, presented_time);
                         }
                     })
                     .copy();

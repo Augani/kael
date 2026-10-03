@@ -73,6 +73,7 @@ def main():
     try:
         def owned_tree():
             desktop = Atspi.get_desktop(0)
+            desktop.clear_cache()
             for index in range(desktop.get_child_count()):
                 app = desktop.get_child_at_index(index)
                 if app.get_process_id() == args.pid:

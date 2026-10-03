@@ -14,7 +14,7 @@
 //! invoked from that adapter-owned thread, which is why the shared state they
 //! touch is held behind `Arc<Mutex<_>>`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -149,6 +149,7 @@ impl DeactivationHandler for NoopDeactivationHandler {
 /// the shared [`crate::AccessibilityTree`].
 pub struct AtSpiAccessibleRoot {
     adapter: RefCell<Adapter>,
+    window_focused: Cell<bool>,
     latest: SharedUpdate,
     pending_actions: PendingActions,
     action_wake: ActionWake,
@@ -176,6 +177,7 @@ impl AtSpiAccessibleRoot {
         );
         Self {
             adapter: RefCell::new(adapter),
+            window_focused: Cell::new(false),
             latest,
             pending_actions,
             action_wake,
@@ -224,6 +226,16 @@ impl AtSpiAccessibleRoot {
                 Some(TOOLKIT_VERSION),
             )
         });
+    }
+
+    /// Keep native focus distinct from the tree's logical keyboard target.
+    /// AccessKit suppresses focused descendants while their host is inactive.
+    pub fn update_window_focus_state(&self, is_focused: bool) {
+        if self.window_focused.replace(is_focused) != is_focused {
+            self.adapter
+                .borrow_mut()
+                .update_window_focus_state(is_focused);
+        }
     }
 
     /// Drain action requests received from assistive technology, normalized

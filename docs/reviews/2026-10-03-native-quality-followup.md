@@ -5,6 +5,48 @@ This records the unlocked Mac's fresh acceptance work after the earlier
 [completion ledger](2026-10-02-completion-ledger.md); the evidence below does
 not establish a cross-framework ranking.
 
+## Snapshot construction and comparison geometry
+
+Native profiling identified repeated growth of the accessibility snapshot map.
+Construction now reserves the iterator's guaranteed lower node count and the
+visited set's exact capacity, retaining the existing identities and malformed
+tree handling. Three full before and three full after runs of the 100,025-node
+tree pass every phase oracle using the same validation-paint wait and native
+selection export. Median operation p95 changes from 78.1 to 70.6 ms and p99 from
+83.4 to 74.8 ms. Median active CPU changes from 68.88% to 67.18%; median peak RSS
+changes from 1,139.4 to 1,141.5 MiB. This is a latency diagnostic with roughly
+unchanged peak memory, not a general CPU or cross-framework advantage. The
+phases are time-paced, operation counts differ and the desktop is shared.
+
+[The six-run diagnostic](2026-10-03-tree-snapshot-reservation-diagnostic.json)
+retains individual metrics, operation counts, binary/raw-log hashes, collector
+source hashes and limitations. Three earlier captures failed the original
+40 ms mounted-row validation and are excluded. Both measured variants include
+the same bounded fresh-paint correction, so that harness change is not a
+confounder in this comparison.
+
+All five benchmark binaries now record actual native client viewport and scale
+at each phase begin/end. Schema 3 requires eight ordered, finite, positive
+samples, rejects resize/scale changes and requires equality between engines and
+across repetitions. Equally constrained windows are accepted; nominal 1100×760
+requests alone cannot satisfy the gate. Nineteen collector regressions pass,
+including the new fault cases reproduced against the old validator, and strict
+all-target Clippy passes for both engine graphs. Native geometry execution
+remains pending at this checkpoint.
+
+The UI library's complete 448-test native/editor suite and all 98 core
+accessibility tests pass after the native selection and host-focus corrections.
+Strict native all-target Clippy passes, and fresh isolated package preflight
+verifies all 38 extracted archives after these changes, with no registry upload. A fresh local renderer trace records GPU
+completion but no submitted model-only wakeup on its current native window.
+The added polling trace identifies AppKit occlusion state 8192, without its
+`Visible` bit (2), and no display link; the drawable callback reports presentation
+time zero. Occluded windows deliberately stop their frame clocks. This run fails
+the visible-window acceptance requirement and does not establish an idle-wakeup
+regression or a presentation pass. Opt-in diagnostics distinguish actual drawable
+callbacks (including dropped presentation time zero), command completion and
+native display-link/occlusion state; normal applications do not enable them.
+
 ## Correctness fixes found through native use
 
 CoreText declared glyph bounds without fractional antialias padding and then
@@ -268,3 +310,42 @@ remain at `.artifacts/kael-tree-current-time-profiler.trace` and
 `.artifacts/kael-tree-current-time-profiler-summary.json`. Compilation was active
 elsewhere during capture, and inclusive stack weights overlap; these samples
 identify the next implementation target rather than establish a CPU ranking.
+
+## Second hosted checkpoint and native state corrections
+
+At `2c5cd60`, the complete hosted Linux quality job and Chromium/Firefox/WebKit
+job pass, including the unchanged security audit. The Windows 2022 native
+hierarchy/disclosure/identity/global-focus checks pass before selection fails:
+unselected TreeItems omit the explicit false selection value required to
+advertise UIA SelectionItem. Core export now distinguishes unselected tree/tab
+items and interactive list rows from nonselectable controls. Its regression
+covers false/true/false transitions and preserves absent selection metadata for
+ordinary buttons and static list items. All 98 accessibility-related core tests
+and strict native all-target Clippy pass locally.
+
+The Linux native tree client now explores all 100,025 rows, restores stable
+D-Bus identities across disclosure and dispatches idle selection to the
+foreground model. Its final focus-state check fails because the Kael provider
+never forwarded native host activation to AccessKit. X11, Wayland and GTK4 now
+forward activation and deactivation, suppressing duplicate updates so ordinary
+frames do not clear the filtered child index. The owned Xvfb fixture explicitly
+establishes real keyboard focus on its PID-checked window; no window manager is
+present in that session. An inactive host is not represented as focused.
+
+The X11 Editor reaches complete text discovery and foreground Unicode selection
+before another GI collision: `get_selection` resolves the Accessible interface
+getter rather than the Text range query. The client now calls every Text and
+EditableText method through its explicit GI interface. GTK4 Editor discovery
+still fails at this checkpoint. Discovery now refreshes the desktop cache,
+handles root-level query failures independently and records service/PID details
+on failure. These changes require a fresh native Linux run; a proposed discovery
+fix is not counted as acceptance.
+
+Native tree profiling exposes a separate validation race: the fixed 40 ms
+settle can inspect mounted rows from two navigation updates earlier, even
+without compilation activity. Three failed captures are retained and excluded
+from measurements. Validation now requests a fresh frame and waits, for at most
+two seconds, until that frame mounts the original requested row. The complete
+hierarchy/Unicode/selection/reveal oracles are unchanged, and validation remains
+outside measured phases. An owned complete release pilot then passes all four
+full workload phases with 100,025 logical nodes.

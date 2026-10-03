@@ -14,6 +14,7 @@ find "${evidence_dir}" -mindepth 1 -depth -delete
 unset KAEL_HEADLESS
 export KAEL_NATIVE_RENDERER_SMOKE_PNG="${evidence_dir}/native-renderer.png"
 export KAEL_GPU_FRAME_TIMING_SMOKE=1
+export KAEL_GPU_FRAME_TIMING_TRACE=1
 export CARGO_TARGET_DIR="${workspace_dir}/target"
 
 python3 "${workspace_dir}/scripts/ci/verify-programmable-renderer.py" \

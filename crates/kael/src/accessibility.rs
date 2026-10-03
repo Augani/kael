@@ -1269,6 +1269,17 @@ impl AccessibilityNode {
             }
         }
         apply_states(&mut node, self.states);
+        // Native selection providers distinguish unselected from a node that
+        // does not support selection. Virtual rows must expose their pattern
+        // before selection, including while they are offscreen.
+        if matches!(
+            self.role,
+            AccessibilityRole::Tab | AccessibilityRole::TreeItem
+        ) || (self.role == AccessibilityRole::ListItem
+            && self.actions.contains(&AccessibilityAction::Click))
+        {
+            node.set_selected(self.states.contains(AccessibilityState::SELECTED));
+        }
         apply_collection_metadata(&mut node, self);
         if let Some(id) = self.active_descendant {
             node.set_active_descendant(accesskit::NodeId(id.0));
@@ -4296,6 +4307,25 @@ mod accesskit_spike_tests {
     fn node_omits_geometry_when_bounds_absent() {
         let node = AccessibilityNode::new(AccessibilityRole::Button);
         assert!(node.to_accesskit_node().bounds().is_none());
+    }
+
+    #[test]
+    fn native_selection_metadata_distinguishes_unselected_from_nonselectable() {
+        for role in [AccessibilityRole::TreeItem, AccessibilityRole::Tab] {
+            let mut node = AccessibilityNode::new(role);
+            assert_eq!(node.to_accesskit_node().is_selected(), Some(false));
+            node.states |= AccessibilityState::SELECTED;
+            assert_eq!(node.to_accesskit_node().is_selected(), Some(true));
+            node.states.remove(AccessibilityState::SELECTED);
+            assert_eq!(node.to_accesskit_node().is_selected(), Some(false));
+        }
+        let mut row = AccessibilityNode::new(AccessibilityRole::ListItem);
+        assert_eq!(row.to_accesskit_node().is_selected(), None);
+        row.actions.push(AccessibilityAction::Click);
+        assert_eq!(row.to_accesskit_node().is_selected(), Some(false));
+        let button = AccessibilityNode::new(AccessibilityRole::Button)
+            .with_actions(vec![AccessibilityAction::Click]);
+        assert_eq!(button.to_accesskit_node().is_selected(), None);
     }
 
     #[test]

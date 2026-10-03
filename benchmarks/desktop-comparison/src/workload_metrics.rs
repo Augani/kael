@@ -8,6 +8,10 @@ use kael as ui;
 use std::time::{Duration, Instant};
 use ui::Window;
 
+#[path = "native_geometry.rs"]
+mod native_geometry;
+use native_geometry::NativeGeometry;
+
 pub const WINDOW_WIDTH: f32 = 1100.0;
 pub const WINDOW_HEIGHT: f32 = 760.0;
 pub const CONTENT_HEIGHT: f32 = 704.0;
@@ -70,6 +74,7 @@ pub struct Metrics {
     draw_us: Vec<u64>,
     submission_us: Vec<u64>,
     gpu_samples: Vec<(String, Option<u64>)>,
+    geometry: NativeGeometry,
     #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
     last_draw: Option<u64>,
     #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
@@ -102,6 +107,7 @@ impl Metrics {
                 0
             }),
             gpu_samples: Vec::with_capacity(5),
+            geometry: NativeGeometry::new(),
             #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
             last_draw: None,
             #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
@@ -134,10 +140,12 @@ impl Metrics {
         self.collect(window);
         self.snapshot_gpu();
         self.phase = phase;
+        self.geometry.record(phase, "begin", window);
         self.measuring = true;
         self.last_render = None;
     }
     pub fn validation(&mut self, window: &mut Window) {
+        self.geometry.record(self.phase, "end", window);
         self.collect(window);
         self.measuring = false;
         self.last_render = None;
@@ -219,6 +227,7 @@ impl Metrics {
     pub fn report(&self, mut details: serde_json::Value) {
         let common = serde_json::json!({
             "engine":engine(),"frame_timing_enabled":cfg!(feature="frame-timing"),"validation_phase_markers":true,
+            "native_window_geometry":self.geometry.samples,
             "phase_correctness":self.checks,"phase_oracles":self.oracles,"font_family":FONT_FAMILY,
             "font_size_px":FONT_SIZE,"line_height_px":LINE_HEIGHT,"window_width_px":WINDOW_WIDTH,
             "window_height_px":WINDOW_HEIGHT,"theme_mode":"dark","operation_cpu_us":self.operations_us,

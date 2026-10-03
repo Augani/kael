@@ -1,0 +1,557 @@
+{
+  "contract": "native-virtual-tree-v1",
+  "scope": "Kael before/after reserving accessibility snapshot map and visited-set capacity; otherwise identical native tree harness, fresh validation-paint wait and explicit unselected selection metadata",
+  "host": {
+    "model": "Apple M2 Pro",
+    "memory_bytes": 17179869184,
+    "os": "macOS-27.2-arm64-arm-64bit-Mach-O",
+    "power_source": "AC"
+  },
+  "framework_base": "2c5cd605923fd3fdacb64b1d0794a019b83e5534",
+  "order": [
+    "after",
+    "before",
+    "before",
+    "after",
+    "after",
+    "before"
+  ],
+  "collector_sources_sha256": {
+    "measure.py": "db091ef0d44119849b54429b55dd267e22e5fb09e57ddf9f553681984c7c27bb",
+    "workload_validation.py": "c731abdb551a6a48187bf4bd6d8e79f44abe6a1e483e02b4d2b4ceb8ad5232b6"
+  },
+  "limitations": [
+    "Active shared physical desktop; diagnostic rather than controlled cross-framework ranking.",
+    "Three repetitions per variant. Time-paced phases can execute different operation counts; CPU percentage and latency are distinct observations.",
+    "No physical power or comparative GPU presentation claim. Actual paired viewport geometry was not recorded by this harness revision.",
+    "Three earlier captures without the fresh validation-paint wait failed strict mounted-row oracles and are excluded. Both measured variants include the same validation correction."
+  ],
+  "variants": {
+    "before": {
+      "repetitions": 3,
+      "binary_sha256": "72ff07bac5148d80928482318d7ddc657447b92f11907da0f1940b350603203b",
+      "peak_rss_median_bytes": 1194770432,
+      "operation_p95_median_us": 78108,
+      "operation_p99_median_us": 83368,
+      "draw_p99_median_us": 1963,
+      "first_render_median_us": 563904,
+      "phases": {
+        "idle-before": {
+          "cpu_percent": 1.207242942424382,
+          "rss_median_bytes": 334233600.0,
+          "footprint_max_bytes": 320406848
+        },
+        "active": {
+          "cpu_percent": 68.88038551533619,
+          "rss_median_bytes": 1094189056,
+          "footprint_max_bytes": 1180682472
+        },
+        "idle-after": {
+          "cpu_percent": 0.017021689407783824,
+          "rss_median_bytes": 1137885184.0,
+          "footprint_max_bytes": 1152796904
+        },
+        "churn": {
+          "cpu_percent": 70.93674601463769,
+          "rss_median_bytes": 1154891776.0,
+          "footprint_max_bytes": 1192593688
+        }
+      }
+    },
+    "after": {
+      "repetitions": 3,
+      "binary_sha256": "50e5cc9288edb645dcc1c6333f631113b690891b111c6421b99973c78ed99874",
+      "peak_rss_median_bytes": 1196982272,
+      "operation_p95_median_us": 70634,
+      "operation_p99_median_us": 74845,
+      "draw_p99_median_us": 1970,
+      "first_render_median_us": 515796,
+      "phases": {
+        "idle-before": {
+          "cpu_percent": 1.7956323749449175,
+          "rss_median_bytes": 283656192.0,
+          "footprint_max_bytes": 268240096
+        },
+        "active": {
+          "cpu_percent": 67.17604219412252,
+          "rss_median_bytes": 1098006528,
+          "footprint_max_bytes": 1181452520
+        },
+        "idle-after": {
+          "cpu_percent": 0.010276649863646712,
+          "rss_median_bytes": 1160347648.0,
+          "footprint_max_bytes": 1168083176
+        },
+        "churn": {
+          "cpu_percent": 68.63415286484576,
+          "rss_median_bytes": 1160708096.0,
+          "footprint_max_bytes": 1184483560
+        }
+      }
+    }
+  },
+  "runs": [
+    {
+      "raw_file": "00-kael.json",
+      "raw_sha256": "33806013cdfc0209029543f3d822f8bcdc75a32f2e6f220dbe2db6fba3968e4a",
+      "log_sha256": "9543c56ba598a4cf0354bcd18c4611317b219b11e3a3b5b31e938a4b7155a516",
+      "variant": "after",
+      "binary_sha256": "50e5cc9288edb645dcc1c6333f631113b690891b111c6421b99973c78ed99874",
+      "peak_rss_bytes": 1196982272,
+      "phase_metrics": {
+        "idle-before": {
+          "rss_median_bytes": 283115520.0,
+          "footprint_max_bytes": 267519224,
+          "cpu_percent": 1.7956323749449175,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 35.55287235835642,
+          "billed_energy_raw_delta": 9513399,
+          "serviced_energy_raw_delta": 4694111
+        },
+        "active": {
+          "rss_median_bytes": 1118289920.0,
+          "footprint_max_bytes": 1181452520,
+          "cpu_percent": 67.17604219412252,
+          "idle_wakeups_per_s": 0.5400102298185757,
+          "interrupt_wakeups_per_s": 54.45103150670638,
+          "billed_energy_raw_delta": 7450688,
+          "serviced_energy_raw_delta": 6450654
+        },
+        "idle-after": {
+          "rss_median_bytes": 1183547392.0,
+          "footprint_max_bytes": 1168083176,
+          "cpu_percent": 0.010276649863646712,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 0.9046844446676611,
+          "billed_energy_raw_delta": 0,
+          "serviced_energy_raw_delta": 0
+        },
+        "churn": {
+          "rss_median_bytes": 1160708096.0,
+          "footprint_max_bytes": 1184483560,
+          "cpu_percent": 68.95487169951815,
+          "idle_wakeups_per_s": 1.4410285792224193,
+          "interrupt_wakeups_per_s": 49.89561455557627,
+          "billed_energy_raw_delta": 5608855,
+          "serviced_energy_raw_delta": 0
+        }
+      },
+      "operation_p95_us": 69577,
+      "operation_p99_us": 74565,
+      "draw_p99_us": 2008,
+      "first_render_us": 782815,
+      "operations": {
+        "selection_reveal": 102,
+        "vertical_scroll": 102,
+        "collapse_root": 102,
+        "expand_root": 101,
+        "home": 100,
+        "end_selection": 100,
+        "replace_model": 10
+      },
+      "phase_correctness": [
+        [
+          "idle-before",
+          true
+        ],
+        [
+          "active",
+          true
+        ],
+        [
+          "idle-after",
+          true
+        ],
+        [
+          "churn",
+          true
+        ]
+      ]
+    },
+    {
+      "raw_file": "01-kael.json",
+      "raw_sha256": "bcf6e80161806c060db7336aa9bb2c137d1eb6999f2e6ad53901282f8ca7f40c",
+      "log_sha256": "b2a08729f87d745548df409a39d6a9315ac48571c77f93ee5a7cfb5ccce7c8ac",
+      "variant": "before",
+      "binary_sha256": "72ff07bac5148d80928482318d7ddc657447b92f11907da0f1940b350603203b",
+      "peak_rss_bytes": 1202585600,
+      "phase_metrics": {
+        "idle-before": {
+          "rss_median_bytes": 334233600.0,
+          "footprint_max_bytes": 318981416,
+          "cpu_percent": 0.06035728899426139,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 2.027050196591924,
+          "billed_energy_raw_delta": 20466014,
+          "serviced_energy_raw_delta": 0
+        },
+        "active": {
+          "rss_median_bytes": 1159086080,
+          "footprint_max_bytes": 1180682472,
+          "cpu_percent": 68.58779321866939,
+          "idle_wakeups_per_s": 1.581267607046928,
+          "interrupt_wakeups_per_s": 51.566893629808156,
+          "billed_energy_raw_delta": 39651875,
+          "serviced_energy_raw_delta": 0
+        },
+        "idle-after": {
+          "rss_median_bytes": 1178927104.0,
+          "footprint_max_bytes": 1167050984,
+          "cpu_percent": 0.017021689407783824,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 0.6721307724439449,
+          "billed_energy_raw_delta": 70720,
+          "serviced_energy_raw_delta": 14847
+        },
+        "churn": {
+          "rss_median_bytes": 1181442048.0,
+          "footprint_max_bytes": 1191020800,
+          "cpu_percent": 70.93674601463769,
+          "idle_wakeups_per_s": 0.6306636576337434,
+          "interrupt_wakeups_per_s": 60.093237091672414,
+          "billed_energy_raw_delta": 28189424,
+          "serviced_energy_raw_delta": 6616106
+        }
+      },
+      "operation_p95_us": 73816,
+      "operation_p99_us": 80443,
+      "draw_p99_us": 1963,
+      "first_render_us": 566249,
+      "operations": {
+        "selection_reveal": 96,
+        "vertical_scroll": 96,
+        "collapse_root": 96,
+        "expand_root": 95,
+        "home": 94,
+        "end_selection": 94,
+        "replace_model": 10
+      },
+      "phase_correctness": [
+        [
+          "idle-before",
+          true
+        ],
+        [
+          "active",
+          true
+        ],
+        [
+          "idle-after",
+          true
+        ],
+        [
+          "churn",
+          true
+        ]
+      ]
+    },
+    {
+      "raw_file": "02-kael.json",
+      "raw_sha256": "8e72e391d7fa7b98f5fd1b313001d12c260536baaea1cff0b29481d8fe7746d0",
+      "log_sha256": "9a03a1a541a5aafa7afea162c9dbfe02fbb0cd0e3d0d61a0683896fe6dc888bb",
+      "variant": "before",
+      "binary_sha256": "72ff07bac5148d80928482318d7ddc657447b92f11907da0f1940b350603203b",
+      "peak_rss_bytes": 1194770432,
+      "phase_metrics": {
+        "idle-before": {
+          "rss_median_bytes": 253624320,
+          "footprint_max_bytes": 320406848,
+          "cpu_percent": 1.207242942424382,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 8.52694675471816,
+          "billed_energy_raw_delta": 28873052,
+          "serviced_energy_raw_delta": 5362761
+        },
+        "active": {
+          "rss_median_bytes": 1094189056,
+          "footprint_max_bytes": 1185695976,
+          "cpu_percent": 68.88038551533619,
+          "idle_wakeups_per_s": 1.1452844536836806,
+          "interrupt_wakeups_per_s": 120.51916404917499,
+          "billed_energy_raw_delta": 52024750,
+          "serviced_energy_raw_delta": 36181570
+        },
+        "idle-after": {
+          "rss_median_bytes": 1137885184.0,
+          "footprint_max_bytes": 1152796904,
+          "cpu_percent": 2.8978778067758917,
+          "idle_wakeups_per_s": 0.2238823993646271,
+          "interrupt_wakeups_per_s": 39.62718468753899,
+          "billed_energy_raw_delta": 4219444,
+          "serviced_energy_raw_delta": 2933004
+        },
+        "churn": {
+          "rss_median_bytes": 1125801984.0,
+          "footprint_max_bytes": 1199769904,
+          "cpu_percent": 71.78065371428411,
+          "idle_wakeups_per_s": 0.6309232758119233,
+          "interrupt_wakeups_per_s": 49.212015513330016,
+          "billed_energy_raw_delta": 11859759,
+          "serviced_energy_raw_delta": 2102024
+        }
+      },
+      "operation_p95_us": 78108,
+      "operation_p99_us": 83368,
+      "draw_p99_us": 1948,
+      "first_render_us": 563904,
+      "operations": {
+        "selection_reveal": 94,
+        "vertical_scroll": 94,
+        "collapse_root": 94,
+        "expand_root": 93,
+        "home": 92,
+        "end_selection": 92,
+        "replace_model": 10
+      },
+      "phase_correctness": [
+        [
+          "idle-before",
+          true
+        ],
+        [
+          "active",
+          true
+        ],
+        [
+          "idle-after",
+          true
+        ],
+        [
+          "churn",
+          true
+        ]
+      ]
+    },
+    {
+      "raw_file": "03-kael.json",
+      "raw_sha256": "5b13ad46d6192f6fc78f6f26689bd9f6aff3e293435a25abc941d76472584d9c",
+      "log_sha256": "9c1769d9a8a38340b09be3ae16a6d272119d80c3273b526a7147c39f889dbcaf",
+      "variant": "after",
+      "binary_sha256": "50e5cc9288edb645dcc1c6333f631113b690891b111c6421b99973c78ed99874",
+      "peak_rss_bytes": 1193312256,
+      "phase_metrics": {
+        "idle-before": {
+          "rss_median_bytes": 283656192.0,
+          "footprint_max_bytes": 268240096,
+          "cpu_percent": 0.037014420599464935,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 2.256462282349326,
+          "billed_energy_raw_delta": 18666286,
+          "serviced_energy_raw_delta": 0
+        },
+        "active": {
+          "rss_median_bytes": 1098006528,
+          "footprint_max_bytes": 1180109056,
+          "cpu_percent": 67.84661670684153,
+          "idle_wakeups_per_s": 0.35150172778056477,
+          "interrupt_wakeups_per_s": 53.86763978237155,
+          "billed_energy_raw_delta": 7097304,
+          "serviced_energy_raw_delta": 6142302
+        },
+        "idle-after": {
+          "rss_median_bytes": 1158758400.0,
+          "footprint_max_bytes": 1153403112,
+          "cpu_percent": 0.0052556720060759395,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 0.6739250642520375,
+          "billed_energy_raw_delta": 0,
+          "serviced_energy_raw_delta": 0
+        },
+        "churn": {
+          "rss_median_bytes": 1168408576.0,
+          "footprint_max_bytes": 1184074008,
+          "cpu_percent": 68.63415286484576,
+          "idle_wakeups_per_s": 1.6192913373854512,
+          "interrupt_wakeups_per_s": 50.37795271865848,
+          "billed_energy_raw_delta": 7491531,
+          "serviced_energy_raw_delta": 0
+        }
+      },
+      "operation_p95_us": 71292,
+      "operation_p99_us": 74845,
+      "draw_p99_us": 1894,
+      "first_render_us": 515796,
+      "operations": {
+        "selection_reveal": 102,
+        "vertical_scroll": 101,
+        "collapse_root": 101,
+        "expand_root": 101,
+        "home": 100,
+        "end_selection": 100,
+        "replace_model": 11
+      },
+      "phase_correctness": [
+        [
+          "idle-before",
+          true
+        ],
+        [
+          "active",
+          true
+        ],
+        [
+          "idle-after",
+          true
+        ],
+        [
+          "churn",
+          true
+        ]
+      ]
+    },
+    {
+      "raw_file": "04-kael.json",
+      "raw_sha256": "eaa7e6f7403a522728f9aef51066e5ae0a8d10b50fdfcab7a9e03a39d8b66cbb",
+      "log_sha256": "a949a1a3a0f2e37c1a25c4bfc82d33c021822f12070f2c7ce75768d9b2b9e55f",
+      "variant": "after",
+      "binary_sha256": "50e5cc9288edb645dcc1c6333f631113b690891b111c6421b99973c78ed99874",
+      "peak_rss_bytes": 1237893120,
+      "phase_metrics": {
+        "idle-before": {
+          "rss_median_bytes": 292257792,
+          "footprint_max_bytes": 275432720,
+          "cpu_percent": 6.4785588108782,
+          "idle_wakeups_per_s": 4.297387789764719,
+          "interrupt_wakeups_per_s": 84.03780566651005,
+          "billed_energy_raw_delta": 40176620,
+          "serviced_energy_raw_delta": 5228737
+        },
+        "active": {
+          "rss_median_bytes": 944766976,
+          "footprint_max_bytes": 1215973656,
+          "cpu_percent": 66.65352174764375,
+          "idle_wakeups_per_s": 1.1431421956862935,
+          "interrupt_wakeups_per_s": 54.6949573628365,
+          "billed_energy_raw_delta": 6166076,
+          "serviced_energy_raw_delta": 0
+        },
+        "idle-after": {
+          "rss_median_bytes": 1160347648.0,
+          "footprint_max_bytes": 1202489624,
+          "cpu_percent": 0.015131106334390491,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 0.8950020678413124,
+          "billed_energy_raw_delta": 0,
+          "serviced_energy_raw_delta": 0
+        },
+        "churn": {
+          "rss_median_bytes": 1113899008,
+          "footprint_max_bytes": 1203456280,
+          "cpu_percent": 68.25926918066097,
+          "idle_wakeups_per_s": 1.380673037387681,
+          "interrupt_wakeups_per_s": 51.08490238334419,
+          "billed_energy_raw_delta": 4648391,
+          "serviced_energy_raw_delta": 0
+        }
+      },
+      "operation_p95_us": 70634,
+      "operation_p99_us": 76153,
+      "draw_p99_us": 1970,
+      "first_render_us": 513886,
+      "operations": {
+        "selection_reveal": 104,
+        "vertical_scroll": 103,
+        "collapse_root": 103,
+        "expand_root": 102,
+        "home": 102,
+        "end_selection": 102,
+        "replace_model": 11
+      },
+      "phase_correctness": [
+        [
+          "idle-before",
+          true
+        ],
+        [
+          "active",
+          true
+        ],
+        [
+          "idle-after",
+          true
+        ],
+        [
+          "churn",
+          true
+        ]
+      ]
+    },
+    {
+      "raw_file": "05-kael.json",
+      "raw_sha256": "10493e662db20ab590b9cbdca085b0034e930e6f566a1841a74c8deac33f69ba",
+      "log_sha256": "8f847a9a477d039b5b3e95cfe79e22367f83dc76ccd64dd10f84e1a35f7fd00b",
+      "variant": "before",
+      "binary_sha256": "72ff07bac5148d80928482318d7ddc657447b92f11907da0f1940b350603203b",
+      "peak_rss_bytes": 1170784256,
+      "phase_metrics": {
+        "idle-before": {
+          "rss_median_bytes": 342491136.0,
+          "footprint_max_bytes": 325420376,
+          "cpu_percent": 2.262665206243284,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 21.403356300395977,
+          "billed_energy_raw_delta": 20471108,
+          "serviced_energy_raw_delta": 1447081
+        },
+        "active": {
+          "rss_median_bytes": 980451328,
+          "footprint_max_bytes": 1179109632,
+          "cpu_percent": 70.95526162379737,
+          "idle_wakeups_per_s": 0.6104454963685353,
+          "interrupt_wakeups_per_s": 48.92284620896404,
+          "billed_energy_raw_delta": 12795199,
+          "serviced_energy_raw_delta": 0
+        },
+        "idle-after": {
+          "rss_median_bytes": 1135935488.0,
+          "footprint_max_bytes": 1152469224,
+          "cpu_percent": 0.00688011007846056,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 0.9130384688882554,
+          "billed_energy_raw_delta": 0,
+          "serviced_energy_raw_delta": 0
+        },
+        "churn": {
+          "rss_median_bytes": 1154891776.0,
+          "footprint_max_bytes": 1192593688,
+          "cpu_percent": 69.99184746132207,
+          "idle_wakeups_per_s": 1.4400741818270466,
+          "interrupt_wakeups_per_s": 47.162429454835774,
+          "billed_energy_raw_delta": 5193220,
+          "serviced_energy_raw_delta": 0
+        }
+      },
+      "operation_p95_us": 83610,
+      "operation_p99_us": 88974,
+      "draw_p99_us": 2038,
+      "first_render_us": 514052,
+      "operations": {
+        "selection_reveal": 94,
+        "vertical_scroll": 94,
+        "collapse_root": 94,
+        "expand_root": 94,
+        "home": 92,
+        "end_selection": 92,
+        "replace_model": 10
+      },
+      "phase_correctness": [
+        [
+          "idle-before",
+          true
+        ],
+        [
+          "active",
+          true
+        ],
+        [
+          "idle-after",
+          true
+        ],
+        [
+          "churn",
+          true
+        ]
+      ]
+    }
+  ]
+}

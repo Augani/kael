@@ -2186,6 +2186,9 @@ impl crate::PlatformWindow for Gtk4Window {
         tree: &crate::AccessibilityTree,
     ) -> Vec<crate::AccessibilityActionRequest> {
         let state = self.0.borrow();
+        state
+            .accessibility_root
+            .update_window_focus_state(state.window.is_active());
         state.accessibility_root.update_tree(tree);
         state.accessibility_root.drain_actions(tree)
     }
@@ -3122,6 +3125,7 @@ fn dispatch_deferred_window_metrics(state: &Rc<RefCell<Gtk4WindowState>>) {
 fn defer_window_active(state: &Rc<RefCell<Gtk4WindowState>>, active: bool) {
     let schedule = {
         let mut state = state.borrow_mut();
+        state.accessibility_root.update_window_focus_state(active);
         state.pending_active = Some(active);
         let schedule = !state.active_dispatch_scheduled;
         state.active_dispatch_scheduled = true;

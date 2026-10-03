@@ -25,6 +25,10 @@ use std::{
 };
 use ui::{prelude::*, *};
 
+#[path = "native_geometry.rs"]
+mod native_geometry;
+use native_geometry::NativeGeometry;
+
 const CONTRACT: &str = "native-data-table-v1";
 const FONT_FAMILY: &str = "Menlo";
 const FONT_SIZE: f32 = 13.0;
@@ -371,6 +375,7 @@ struct Workload {
     submission_us: Vec<u64>,
     first_submission_us: Option<u128>,
     gpu_samples: Vec<(String, Option<u64>)>,
+    geometry: NativeGeometry,
     #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
     last_draw: Option<u64>,
     #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
@@ -429,6 +434,7 @@ impl Workload {
             }),
             first_submission_us: None,
             gpu_samples: Vec::with_capacity(5),
+            geometry: NativeGeometry::new(),
             #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
             last_draw: None,
             #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
@@ -442,6 +448,7 @@ impl Workload {
         self.snapshot_gpu();
         self.measuring = true;
         self.phase = phase;
+        self.geometry.record(phase, "begin", window);
         self.sequence = 0;
         self.last_render = None;
         #[cfg(feature = "kael-engine")]
@@ -460,6 +467,7 @@ impl Workload {
         window.refresh();
     }
     fn prepare_check(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.geometry.record(self.phase, "end", window);
         self.collect(window);
         self.measuring = false;
         // No forced draw or cache fill: wait for the widget's existing native
@@ -736,6 +744,7 @@ impl Workload {
                 "operation_cpu_us":self.operation_us, "first_render_us":self.first_render_us,
                 "render_callback_intervals_us":self.active_us, "renders":self.renders, "elapsed_us":self.started.elapsed().as_micros(),
                 "first_submission_us":self.first_submission_us, "draw_cpu_us":self.draw_us, "submission_cpu_us":self.submission_us,
+                "native_window_geometry": self.geometry.samples,
                 "gpu_allocated_bytes":self.gpu_samples,
                 "submission_scope":"CPU platform submission, excluding GPU completion/compositor display",
                 "timing_scope":"shipped native virtual data controls; public selection/navigation/model invalidation APIs; paced separate frames",
