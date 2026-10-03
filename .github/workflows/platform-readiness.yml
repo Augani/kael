@@ -408,6 +408,14 @@ jobs:
           cache-on-failure: true
           shared-key: linux-accessibility
 
+      - name: Check GTK clipboard bounds and strict native lints
+        run: |
+          cargo test --locked -p kael --no-default-features \
+            --features font-kit,webview-wayland-gtk4 --lib gtk4_backend::tests::clipboard_stream
+          cargo clippy --locked -p kael -p kael_ui --no-default-features \
+            --features kael_ui/native,kael_ui/editor,kael/webview-wayland-gtk4 \
+            --lib -- -D warnings
+
       - name: Verify native X11 outline actions
         run: bash scripts/ci/verify-linux-native-accessibility.sh
 

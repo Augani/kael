@@ -3333,25 +3333,25 @@ fn read_clipboard_mimes(
     {
         return None;
     }
-    let result = Rc::new(RefCell::new(None));
-    let result_out = result.clone();
-    let main_loop = glib::MainLoop::new(None, false);
-    let finished_loop = main_loop.clone();
-    clipboard.read_async(
-        mime_types,
-        glib::Priority::DEFAULT,
-        None::<&gio::Cancellable>,
-        move |stream| {
-            *result_out.borrow_mut() = Some(
-                stream
-                    .map_err(anyhow::Error::from)
-                    .and_then(|(stream, _)| read_stream_bounded(&stream, byte_limit)),
-            );
-            finished_loop.quit();
-        },
-    );
-    main_loop.run();
-    match result.borrow_mut().take()? {
+    // GDK can return a pipe whose producer still needs this main context to
+    // serialize a local provider. A synchronous stream read inside read_async's
+    // callback starves that producer and hangs even a Copy/Paste in one app.
+    // Drive both opening and bounded streaming asynchronously. Dropping the
+    // unfinished GioFuture at the deadline cancels the native request.
+    let result = glib::MainContext::ref_thread_default().block_on(async {
+        let read = async {
+            let (stream, _) = clipboard
+                .read_future(mime_types, glib::Priority::DEFAULT)
+                .await?;
+            read_stream_bounded(&stream, byte_limit).await
+        };
+        futures::pin_mut!(read);
+        match futures::future::select(read, glib::timeout_future(Duration::from_secs(3))).await {
+            futures::future::Either::Left((result, _)) => result,
+            futures::future::Either::Right(_) => anyhow::bail!("clipboard read deadline exceeded"),
+        }
+    });
+    match result {
         Ok(bytes) => Some(bytes),
         Err(error) => {
             log::warn!("reading GTK4 clipboard content failed: {error:#}");
@@ -3360,15 +3360,20 @@ fn read_clipboard_mimes(
     }
 }
 
-fn read_stream_bounded(stream: &gio::InputStream, byte_limit: usize) -> anyhow::Result<Vec<u8>> {
+async fn read_stream_bounded(
+    stream: &gio::InputStream,
+    byte_limit: usize,
+) -> anyhow::Result<Vec<u8>> {
     const CHUNK_SIZE: usize = 64 * 1024;
     let mut output = Vec::new();
     loop {
         let remaining = byte_limit.saturating_sub(output.len());
-        let chunk = stream.read_bytes(
-            remaining.saturating_add(1).min(CHUNK_SIZE),
-            None::<&gio::Cancellable>,
-        )?;
+        let chunk = stream
+            .read_bytes_future(
+                remaining.saturating_add(1).min(CHUNK_SIZE),
+                glib::Priority::DEFAULT,
+            )
+            .await?;
         if chunk.is_empty() {
             break;
         }
@@ -3469,6 +3474,33 @@ fn gtk_renderer_is_software(renderer_name: &str, renderer_override: Option<&str>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipboard_stream_preserves_exact_byte_limit_across_chunks() {
+        let context = glib::MainContext::new();
+        for length in [0, 7, 64 * 1024, 64 * 1024 + 1] {
+            let bytes = vec![0x81; length];
+            let stream =
+                gio::MemoryInputStream::from_bytes(&glib::Bytes::from_owned(bytes.clone()));
+            let output = context
+                .block_on(read_stream_bounded(stream.upcast_ref(), length))
+                .unwrap();
+            assert_eq!(output, bytes);
+        }
+    }
+
+    #[test]
+    fn clipboard_stream_rejects_one_byte_over_limit_across_chunks() {
+        let context = glib::MainContext::new();
+        for limit in [0, 7, 64 * 1024, 64 * 1024 + 1] {
+            let stream =
+                gio::MemoryInputStream::from_bytes(&glib::Bytes::from_owned(vec![0x81; limit + 1]));
+            let error = context
+                .block_on(read_stream_bounded(stream.upcast_ref(), limit))
+                .unwrap_err();
+            assert!(error.to_string().contains("exceeds"), "{error}");
+        }
+    }
 
     #[test]
     fn native_window_extent_rejects_hostile_values() {
