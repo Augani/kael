@@ -21,7 +21,7 @@ jobs:
   desktop-comparison:
     name: Matched Kael / GPUI Kit desktop workload
     runs-on: macos-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -54,6 +54,10 @@ jobs:
             .artifacts/competition/binaries/gpui-kit-editor
           cp benchmarks/desktop-comparison/target/release/data_comparison \
             .artifacts/competition/binaries/gpui-kit-data
+          cp benchmarks/desktop-comparison/target/release/tree_comparison \
+            .artifacts/competition/binaries/gpui-kit-tree
+          cp benchmarks/desktop-comparison/target/release/workspace_comparison \
+            .artifacts/competition/binaries/gpui-kit-workspace
           cargo build --manifest-path benchmarks/desktop-comparison/Cargo.toml --locked \
             --release --no-default-features --features kael-engine,frame-timing \
             2>&1 | tee .artifacts/competition/kael-build.log
@@ -63,6 +67,10 @@ jobs:
             .artifacts/competition/binaries/kael-editor
           cp benchmarks/desktop-comparison/target/release/data_comparison \
             .artifacts/competition/binaries/kael-data
+          cp benchmarks/desktop-comparison/target/release/tree_comparison \
+            .artifacts/competition/binaries/kael-tree
+          cp benchmarks/desktop-comparison/target/release/workspace_comparison \
+            .artifacts/competition/binaries/kael-workspace
           cargo build --manifest-path benchmarks/desktop-comparison/Cargo.toml --locked \
             --release --no-default-features --features gpui-kit-engine \
             2>&1 | tee .artifacts/competition/gpui-kit-without-frame-timing-build.log
@@ -72,6 +80,10 @@ jobs:
             .artifacts/competition/binaries/gpui-kit-editor-without-frame-timing
           cp benchmarks/desktop-comparison/target/release/data_comparison \
             .artifacts/competition/binaries/gpui-kit-data-without-frame-timing
+          cp benchmarks/desktop-comparison/target/release/tree_comparison \
+            .artifacts/competition/binaries/gpui-kit-tree-without-frame-timing
+          cp benchmarks/desktop-comparison/target/release/workspace_comparison \
+            .artifacts/competition/binaries/gpui-kit-workspace-without-frame-timing
           cargo build --manifest-path benchmarks/desktop-comparison/Cargo.toml --locked \
             --release --no-default-features --features kael-engine \
             2>&1 | tee .artifacts/competition/kael-without-frame-timing-build.log
@@ -81,6 +93,10 @@ jobs:
             .artifacts/competition/binaries/kael-editor-without-frame-timing
           cp benchmarks/desktop-comparison/target/release/data_comparison \
             .artifacts/competition/binaries/kael-data-without-frame-timing
+          cp benchmarks/desktop-comparison/target/release/tree_comparison \
+            .artifacts/competition/binaries/kael-tree-without-frame-timing
+          cp benchmarks/desktop-comparison/target/release/workspace_comparison \
+            .artifacts/competition/binaries/kael-workspace-without-frame-timing
 
       - name: Collect five alternating native runs per engine
         shell: bash
@@ -145,6 +161,44 @@ jobs:
             --output .artifacts/competition/data-table-without-frame-timing --repetitions 5 \
             2>&1 | tee .artifacts/competition/data-without-frame-timing-measurement.log
 
+      - name: Compare 100,025-node native virtual trees
+        shell: bash
+        timeout-minutes: 25
+        run: |
+          set -o pipefail
+          unset KAEL_HEADLESS
+          python benchmarks/desktop-comparison/measure.py \
+            --kael .artifacts/competition/binaries/kael-tree \
+            --gpui-kit .artifacts/competition/binaries/gpui-kit-tree \
+            --contract native-virtual-tree-v1 \
+            --output .artifacts/competition/native-virtual-tree --repetitions 5 \
+            2>&1 | tee .artifacts/competition/tree-measurement.log
+          python benchmarks/desktop-comparison/measure.py \
+            --kael .artifacts/competition/binaries/kael-tree-without-frame-timing \
+            --gpui-kit .artifacts/competition/binaries/gpui-kit-tree-without-frame-timing \
+            --contract native-virtual-tree-v1 --without-frame-timing \
+            --output .artifacts/competition/native-virtual-tree-without-frame-timing --repetitions 5 \
+            2>&1 | tee .artifacts/competition/tree-without-frame-timing-measurement.log
+
+      - name: Compare persistent native dock workspaces
+        shell: bash
+        timeout-minutes: 25
+        run: |
+          set -o pipefail
+          unset KAEL_HEADLESS
+          python benchmarks/desktop-comparison/measure.py \
+            --kael .artifacts/competition/binaries/kael-workspace \
+            --gpui-kit .artifacts/competition/binaries/gpui-kit-workspace \
+            --contract native-dock-workspace-v1 \
+            --output .artifacts/competition/native-dock-workspace --repetitions 5 \
+            2>&1 | tee .artifacts/competition/workspace-measurement.log
+          python benchmarks/desktop-comparison/measure.py \
+            --kael .artifacts/competition/binaries/kael-workspace-without-frame-timing \
+            --gpui-kit .artifacts/competition/binaries/gpui-kit-workspace-without-frame-timing \
+            --contract native-dock-workspace-v1 --without-frame-timing \
+            --output .artifacts/competition/native-dock-workspace-without-frame-timing --repetitions 5 \
+            2>&1 | tee .artifacts/competition/workspace-without-frame-timing-measurement.log
+
       - name: Preserve raw comparison evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -158,6 +212,10 @@ jobs:
             .artifacts/competition/editor-document-without-frame-timing
             .artifacts/competition/native-data-table
             .artifacts/competition/data-table-without-frame-timing
+            .artifacts/competition/native-virtual-tree
+            .artifacts/competition/native-virtual-tree-without-frame-timing
+            .artifacts/competition/native-dock-workspace
+            .artifacts/competition/native-dock-workspace-without-frame-timing
           if-no-files-found: error
 
   benchmark:

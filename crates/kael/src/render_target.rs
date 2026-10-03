@@ -1,4 +1,13 @@
 //! Bounded GPU targets for custom fragment rendering and direct UI composition.
+// GTK's software scene renderer retains the portable public API and model
+// validation, but has no programmable GPU transport/registry consumer.
+#![cfg_attr(
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        feature = "webview-wayland-gtk4"
+    ),
+    allow(dead_code)
+)]
 
 use std::{
     collections::BTreeMap,

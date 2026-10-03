@@ -298,6 +298,19 @@ impl PlatformTextSystem for DirectWriteTextSystem {
             })
     }
 
+    fn layout_line_geometry(
+        &self,
+        text: &str,
+        font_size: Pixels,
+        runs: &[FontRun],
+        byte_ranges: &[std::ops::Range<usize>],
+    ) -> Option<LineTextGeometry> {
+        self.0
+            .write()
+            .layout_line_geometry(text, font_size, runs, byte_ranges)
+            .log_err()
+    }
+
     fn layout_line_with_features(
         &self,
         text: &str,
@@ -586,20 +599,31 @@ impl DirectWriteState {
         }
     }
 
-    fn layout_line(
+    fn native_line_layout(
         &mut self,
         text: &str,
         font_size: Pixels,
         font_runs: &[FontRun],
-    ) -> Result<LineLayout> {
-        if font_runs.is_empty() {
-            return Ok(LineLayout {
-                font_size,
-                ..Default::default()
-            });
+    ) -> Result<(IDWriteTextLayout, f32, f32)> {
+        anyhow::ensure!(
+            !font_runs.is_empty() && font_size.0.is_finite() && font_size.0 > 0.0,
+            "invalid DirectWrite line font"
+        );
+        let mut bytes = 0usize;
+        for run in font_runs {
+            bytes = bytes
+                .checked_add(run.len)
+                .context("font run byte overflow")?;
+            anyhow::ensure!(
+                text.is_char_boundary(bytes) && self.fonts.get(run.font_id.0).is_some(),
+                "invalid DirectWrite font run"
+            );
         }
+        anyhow::ensure!(
+            bytes == text.len() && text.encode_utf16().count() <= MAX_DIRECTWRITE_TEXT_UNITS,
+            "DirectWrite line source limit exceeded"
+        );
         unsafe {
-            let text_renderer = self.components.text_renderer.clone();
             let text_wide = text.encode_utf16().collect_vec();
 
             let mut utf8_offset = 0usize;
@@ -697,12 +721,109 @@ impl DirectWriteState {
                 text_layout.SetTypography(&font_info.features, text_range)?;
             }
 
+            Ok((text_layout, max_ascent, max_descent))
+        }
+    }
+
+    fn layout_line_geometry(
+        &mut self,
+        text: &str,
+        font_size: Pixels,
+        font_runs: &[FontRun],
+        byte_ranges: &[std::ops::Range<usize>],
+    ) -> Result<LineTextGeometry> {
+        if text.is_empty() {
+            return LineTextGeometry::new(text, Vec::new(), px(0.0))
+                .context("invalid empty geometry");
+        }
+        anyhow::ensure!(
+            byte_ranges.iter().all(|r| r.start <= r.end
+                && r.end <= text.len()
+                && text.is_char_boundary(r.start)
+                && text.is_char_boundary(r.end)),
+            "invalid DirectWrite geometry source span"
+        );
+        let (layout, _, _) = self.native_line_layout(text, font_size, font_runs)?;
+        let mut requested = byte_ranges.to_vec();
+        requested.sort_unstable_by_key(|range| (range.start, range.end));
+        let mut converter = StringIndexConverter::new(text);
+        let mut clusters = Vec::new();
+        for range in requested {
+            let mut position = u32::try_from(text[..range.start].encode_utf16().count())?;
+            let end = u32::try_from(text[..range.end].encode_utf16().count())?;
+            while position < end {
+                let mut x = 0.0;
+                let mut y = 0.0;
+                let mut metrics = DWRITE_HIT_TEST_METRICS::default();
+                unsafe {
+                    layout.HitTestTextPosition(position, false, &mut x, &mut y, &mut metrics)
+                }?;
+                let cluster_end = metrics
+                    .textPosition
+                    .checked_add(metrics.length)
+                    .context("DirectWrite cluster position overflow")?;
+                anyhow::ensure!(
+                    metrics.length > 0
+                        && cluster_end > position
+                        && metrics.left.is_finite()
+                        && metrics.width.is_finite(),
+                    "invalid DirectWrite hit-test cluster"
+                );
+                converter.advance_to_utf16_ix(metrics.textPosition as usize);
+                let start = converter.utf8_ix;
+                converter.advance_to_utf16_ix(cluster_end as usize);
+                let finish = converter.utf8_ix;
+                let rtl = metrics.bidiLevel % 2 != 0;
+                let left = metrics.left;
+                let right = metrics.left + metrics.width;
+                clusters.push(ShapedTextCluster {
+                    bytes: start..finish,
+                    leading: px(if rtl { right } else { left }),
+                    trailing: px(if rtl { left } else { right }),
+                    right_to_left: rtl,
+                });
+                position = cluster_end;
+            }
+        }
+        let mut x = 0.0;
+        let mut y = 0.0;
+        let mut metrics = DWRITE_HIT_TEST_METRICS::default();
+        unsafe {
+            layout.HitTestTextPosition(
+                u32::try_from(text.encode_utf16().count())?,
+                false,
+                &mut x,
+                &mut y,
+                &mut metrics,
+            )
+        }?;
+        LineTextGeometry::new(text, clusters, px(x)).context("invalid DirectWrite cluster geometry")
+    }
+
+    fn layout_line(
+        &mut self,
+        text: &str,
+        font_size: Pixels,
+        font_runs: &[FontRun],
+    ) -> Result<LineLayout> {
+        if font_runs.is_empty() {
+            return Ok(LineLayout {
+                font_size,
+                ..Default::default()
+            });
+        }
+        unsafe {
+            let text_renderer = self.components.text_renderer.clone();
+            let (text_layout, max_ascent, max_descent) =
+                self.native_line_layout(text, font_size, font_runs)?;
+
             let mut runs = Vec::new();
             let renderer_context = RendererContext {
                 text_system: self,
                 index_converter: StringIndexConverter::new(text),
                 runs: &mut runs,
                 width: 0.0,
+                baseline: None,
             };
             text_layout.Draw(
                 Some(&renderer_context as *const _ as _),
@@ -741,100 +862,8 @@ impl DirectWriteState {
         }
         unsafe {
             let text_renderer = self.components.text_renderer.clone();
-            let text_wide = text.encode_utf16().collect_vec();
-
-            let mut utf8_offset = 0usize;
-            let mut utf16_offset = 0u32;
-            let text_layout = {
-                let first_run = &font_runs[0];
-                let font_info = &self.fonts[first_run.font_id.0];
-                let collection = if font_info.is_system_font {
-                    &self.system_font_collection
-                } else {
-                    &self.custom_font_collection
-                };
-                let cache_key = (first_run.font_id.0, font_size.0.to_bits());
-                let format: IDWriteTextFormat1 =
-                    if let Some(cached) = self.text_format_cache.get(&cache_key) {
-                        cached.clone()
-                    } else {
-                        let fmt: IDWriteTextFormat1 = self
-                            .components
-                            .factory
-                            .CreateTextFormat(
-                                &HSTRING::from(&font_info.font_family),
-                                collection,
-                                font_info.font_face.GetWeight(),
-                                font_info.font_face.GetStyle(),
-                                DWRITE_FONT_STRETCH_NORMAL,
-                                font_size.0,
-                                &HSTRING::from(&self.components.locale),
-                            )?
-                            .cast()?;
-                        if let Some(ref fallbacks) = font_info.fallbacks {
-                            fmt.SetFontFallback(fallbacks)?;
-                        }
-                        self.text_format_cache.insert(cache_key, fmt.clone());
-                        fmt
-                    };
-
-                let layout = self.components.factory.CreateTextLayout(
-                    &text_wide,
-                    &format,
-                    f32::INFINITY,
-                    f32::INFINITY,
-                )?;
-                let current_text = &text[utf8_offset..(utf8_offset + first_run.len)];
-                utf8_offset += first_run.len;
-                let current_text_utf16_length = current_text.encode_utf16().count() as u32;
-                let text_range = DWRITE_TEXT_RANGE {
-                    startPosition: utf16_offset,
-                    length: current_text_utf16_length,
-                };
-                layout.SetTypography(&font_info.features, text_range)?;
-                utf16_offset += current_text_utf16_length;
-
-                layout
-            };
-
-            let mut first_run = true;
-            let mut max_ascent = 0.0_f32;
-            let mut max_descent = 0.0_f32;
-            for run in font_runs {
-                let font_info = &self.fonts[run.font_id.0];
-                let mut metrics = std::mem::zeroed();
-                font_info.font_face.GetMetrics(&mut metrics);
-                let font_scale = font_size.0 / metrics.Base.designUnitsPerEm as f32;
-                max_ascent = max_ascent.max(metrics.Base.ascent as f32 * font_scale);
-                max_descent = max_descent.max(-(metrics.Base.descent as f32 * font_scale));
-
-                if first_run {
-                    first_run = false;
-                    continue;
-                }
-
-                let current_text = &text[utf8_offset..(utf8_offset + run.len)];
-                utf8_offset += run.len;
-                let current_text_utf16_length = current_text.encode_utf16().count() as u32;
-
-                let collection = if font_info.is_system_font {
-                    &self.system_font_collection
-                } else {
-                    &self.custom_font_collection
-                };
-                let text_range = DWRITE_TEXT_RANGE {
-                    startPosition: utf16_offset,
-                    length: current_text_utf16_length,
-                };
-                utf16_offset += current_text_utf16_length;
-                text_layout.SetFontCollection(collection, text_range)?;
-                text_layout
-                    .SetFontFamilyName(&HSTRING::from(&font_info.font_family), text_range)?;
-                text_layout.SetFontSize(font_size.0, text_range)?;
-                text_layout.SetFontStyle(font_info.font_face.GetStyle(), text_range)?;
-                text_layout.SetFontWeight(font_info.font_face.GetWeight(), text_range)?;
-                text_layout.SetTypography(&font_info.features, text_range)?;
-            }
+            let (text_layout, max_ascent, max_descent) =
+                self.native_line_layout(text, font_size, font_runs)?;
 
             // Apply additional OpenType features over the entire text range.
             // Create a new IDWriteTypography with the requested features and
@@ -853,7 +882,7 @@ impl DirectWriteState {
             }
             let full_range = DWRITE_TEXT_RANGE {
                 startPosition: 0,
-                length: text_wide.len() as u32,
+                length: text.encode_utf16().count() as u32,
             };
             text_layout.SetTypography(&extra_typography, full_range)?;
 
@@ -863,6 +892,7 @@ impl DirectWriteState {
                 index_converter: StringIndexConverter::new(text),
                 runs: &mut runs,
                 width: 0.0,
+                baseline: None,
             };
             text_layout.Draw(
                 Some(&renderer_context as *const _ as _),
@@ -1607,6 +1637,7 @@ struct RendererContext<'t, 'a, 'b> {
     index_converter: StringIndexConverter<'a>,
     runs: &'b mut Vec<ShapedRun>,
     width: f32,
+    baseline: Option<f32>,
 }
 
 #[derive(Debug)]
@@ -1707,8 +1738,8 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
     fn DrawGlyphRun(
         &self,
         clientdrawingcontext: *const ::core::ffi::c_void,
-        _baselineoriginx: f32,
-        _baselineoriginy: f32,
+        baselineoriginx: f32,
+        baselineoriginy: f32,
         _measuringmode: DWRITE_MEASURING_MODE,
         glyphrun: *const DWRITE_GLYPH_RUN,
         glyphrundescription: *const DWRITE_GLYPH_RUN_DESCRIPTION,
@@ -1815,7 +1846,10 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
             ));
         }
 
-        let mut cluster_analyzer = ClusterAnalyzer::new(cluster_map, glyph_count);
+        let cluster_analyzer = ClusterAnalyzer::new(cluster_map, glyph_count);
+        let right_to_left = glyphrun.bidiLevel % 2 != 0;
+        let mut pen = baselineoriginx;
+        let baseline = *context.baseline.get_or_insert(baselineoriginy);
         let mut utf16_idx = desc.textPosition as usize;
         let mut glyph_idx: usize = 0;
         let mut glyphs = Vec::with_capacity(glyph_count);
@@ -1835,16 +1869,29 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
                 let is_emoji = color_font
                     && is_color_glyph(&font_face, id, &context.text_system.components.factory);
                 let this_glyph_idx = glyph_idx + cluster_glyph_idx;
+                let advance = glyph_advances[this_glyph_idx];
+                let offset = glyph_offsets[this_glyph_idx];
+                if right_to_left {
+                    pen -= advance;
+                }
                 glyphs.push(ShapedGlyph {
                     id,
                     position: point(
-                        px(context.width + glyph_offsets[this_glyph_idx].advanceOffset),
-                        px(0.0),
+                        px(pen
+                            + if right_to_left {
+                                -offset.advanceOffset
+                            } else {
+                                offset.advanceOffset
+                            }),
+                        px(baselineoriginy - baseline - offset.ascenderOffset),
                     ),
                     index: context.index_converter.utf8_ix,
                     is_emoji,
                 });
-                context.width += glyph_advances[this_glyph_idx];
+                if !right_to_left {
+                    pen += advance;
+                }
+                context.width = context.width.max(pen).max(baselineoriginx);
             }
             glyph_idx = glyph_end;
         }
@@ -1927,6 +1974,13 @@ impl<'a> StringIndexConverter<'a> {
     }
 
     fn advance_to_utf16_ix(&mut self, utf16_target: usize) {
+        // Native fallback/bidi callbacks may arrive in visual rather than
+        // logical order. Seek backwards from the source, never reuse a later
+        // byte offset for an earlier native UTF-16 position.
+        if utf16_target < self.utf16_ix {
+            self.utf8_ix = 0;
+            self.utf16_ix = 0;
+        }
         for (ix, c) in self.text[self.utf8_ix..].char_indices() {
             if self.utf16_ix >= utf16_target {
                 self.utf8_ix += ix;
@@ -2271,6 +2325,107 @@ mod tests {
         assert_eq!(next, Some((5, 1)));
         let next = analyzer.next();
         assert_eq!(next, None);
+    }
+
+    fn native_text_system() -> super::DirectWriteTextSystem {
+        let devices = crate::platform::windows::DirectXDevices::new()
+            .expect("native D3D11 device required for DirectWrite");
+        super::DirectWriteTextSystem::new(&devices).expect("native DirectWrite required")
+    }
+
+    #[test]
+    fn native_directwrite_geometry_matches_bidirectional_glyph_origins_and_requested_spans() {
+        use crate::{FontRun, PlatformTextSystem, font, px};
+        let system = native_text_system();
+        let font_id = system.font_id(&font("Segoe UI")).unwrap();
+        let text = "abc אבג العربية 日本語 👩🏽‍💻 café";
+        let runs = [FontRun {
+            len: text.len(),
+            font_id,
+        }];
+        let start = text.find("אבג").unwrap();
+        let requested = start..start + "אבג".len();
+        let geometry = system
+            .layout_line_geometry(text, px(24.0), &runs, std::slice::from_ref(&requested))
+            .unwrap();
+        assert!(
+            geometry
+                .clusters
+                .iter()
+                .all(|c| c.bytes.start < requested.end && c.bytes.end > requested.start)
+        );
+        assert!(
+            geometry
+                .clusters
+                .iter()
+                .all(|c| c.right_to_left && c.leading > c.trailing)
+        );
+        let line = system.layout_line(text, px(24.0), &runs);
+        let hebrew: Vec<_> = line
+            .runs
+            .iter()
+            .flat_map(|r| &r.glyphs)
+            .filter(|g| requested.contains(&g.index))
+            .collect();
+        assert_eq!(
+            hebrew.len(),
+            3,
+            "native Hebrew fixture must produce three actual glyphs"
+        );
+        assert!(
+            hebrew
+                .windows(2)
+                .all(|pair| pair[0].position.x > pair[1].position.x),
+            "RTL glyph advances were painted as LTR"
+        );
+        for glyph in hebrew {
+            let cluster = geometry.cluster_for_byte(glyph.index).unwrap();
+            assert!(
+                (f32::from(glyph.position.x - cluster.trailing)).abs() < 0.1,
+                "native glyph origin {:?} differs from hit-test cluster {:?}",
+                glyph.position,
+                cluster
+            );
+        }
+    }
+
+    #[test]
+    fn native_directwrite_geometry_preserves_combining_clusters_and_rejects_invalid_byte_spans() {
+        use crate::{FontRun, PlatformTextSystem, font, px};
+        let system = native_text_system();
+        let font_id = system.font_id(&font("Segoe UI")).unwrap();
+        let text = "café 👩🏽‍💻";
+        let runs = [FontRun {
+            len: text.len(),
+            font_id,
+        }];
+        let geometry = system
+            .layout_line_geometry(text, px(24.0), &runs, &[0..text.len()])
+            .unwrap();
+        let accent = text.find('́').unwrap();
+        let cluster = geometry.cluster_for_byte(accent).unwrap();
+        assert_eq!(
+            &text[cluster.bytes.clone()],
+            "é",
+            "combining mark was given an invented scalar subdivision"
+        );
+        assert!(
+            system
+                .layout_line_geometry(text, px(24.0), &runs, &[accent + 1..text.len()])
+                .is_none()
+        );
+        assert!(geometry.end_caret.0.is_finite());
+    }
+
+    #[test]
+    fn native_directwrite_source_seek_supports_visual_callback_order() {
+        let mut converter = super::StringIndexConverter::new("a👩日本b");
+        converter.advance_to_utf16_ix(5);
+        assert_eq!(converter.utf8_ix, 11);
+        converter.advance_to_utf16_ix(1);
+        assert_eq!(converter.utf8_ix, 1);
+        converter.advance_to_utf16_ix(3);
+        assert_eq!(converter.utf8_ix, 5);
     }
 
     #[test]

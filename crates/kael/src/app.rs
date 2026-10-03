@@ -34395,6 +34395,7 @@ pub struct App {
         FxHashMap<TypeId, Vec<Rc<dyn Fn(&dyn Any, DispatchPhase, &mut Self)>>>,
     pending_effects: VecDeque<Effect>,
     pub(crate) pending_notifications: FxHashSet<EntityId>,
+    pending_frame_polling: FxHashSet<WindowId>,
     pub(crate) pending_global_notifications: FxHashSet<TypeId>,
     pub(crate) observers: SubscriberSet<EntityId, Handler>,
     // TypeId is the type of the event that the listener callback expects
@@ -34498,6 +34499,7 @@ impl App {
                 global_action_listeners: FxHashMap::default(),
                 pending_effects: VecDeque::new(),
                 pending_notifications: FxHashSet::default(),
+                pending_frame_polling: FxHashSet::default(),
                 pending_global_notifications: FxHashSet::default(),
                 observers: SubscriberSet::new(),
                 tracked_entities: FxHashMap::default(),
@@ -37982,6 +37984,27 @@ impl App {
                 }
             }
         }
+
+        // Model notifications can arrive after the platform stopped its idle
+        // frame clock. Resume only affected windows after all observer effects
+        // have settled, including the test-support draw that prepares a scene
+        // without presenting it. Coalesce repeated notifications per window.
+        let mut pending = mem::take(&mut self.pending_frame_polling);
+        for id in pending.drain() {
+            match self.windows.get(id) {
+                Some(Some(window)) => window.update_frame_polling(),
+                Some(None) => {
+                    // A reentrant update still owns the window. Its outer
+                    // effect flush will run after the lease is returned.
+                    self.pending_frame_polling.insert(id);
+                }
+                None => {}
+            }
+        }
+        // Retain the bounded window-set allocation across update cycles.
+        if self.pending_frame_polling.is_empty() {
+            self.pending_frame_polling = pending;
+        }
     }
 
     /// Repeatedly called during `flush_effects` to release any entities whose
@@ -38052,10 +38075,11 @@ impl App {
     }
 
     fn apply_refresh_effect(&mut self) {
-        for window in self.windows.values_mut() {
+        for (id, window) in self.windows.iter_mut() {
             if let Some(window) = window.as_mut() {
                 window.refreshing = true;
                 window.invalidator.set_dirty(true);
+                self.pending_frame_polling.insert(id);
             }
         }
     }
@@ -39438,8 +39462,10 @@ impl App {
                     .push_back(Effect::Notify { emitter: entity_id });
             }
         } else {
-            for invalidator in window_invalidators.values() {
-                invalidator.invalidate_view(entity_id, self);
+            for (id, invalidator) in &window_invalidators {
+                if invalidator.invalidate_view(entity_id, self) {
+                    self.pending_frame_polling.insert(*id);
+                }
             }
         }
 

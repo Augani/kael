@@ -1,6 +1,7 @@
 use crate::{
     AtlasAllocationClass, AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTile, Bounds,
-    DevicePixels, PlatformAtlas, Point, Size, platform::AtlasTextureList,
+    DevicePixels, PlatformAtlas, Point, Size,
+    platform::{AtlasTextureList, AtlasTileAllocations, allocate_native_atlas_texture_id},
 };
 use anyhow::{Context as _, Result};
 use blade_graphics as gpu;
@@ -177,8 +178,17 @@ impl BladeAtlas {
     /// Advance the atlas frame clock so tiles fetched after this call are protected from
     /// eviction until the following frame.
     #[allow(dead_code)]
-    pub(crate) fn mark_scene_used(&self, scene: &crate::Scene) {
-        self.0.lock().policy.mark_scene_used(scene);
+    pub(crate) fn mark_scene_used(&self, scene: &crate::Scene) -> anyhow::Result<()> {
+        let mut state = self.0.lock();
+        anyhow::ensure!(
+            scene.atlas_tiles().all(|tile| state
+                .storage
+                .get(tile.texture_id)
+                .is_some_and(|texture| texture.allocations.contains(tile))),
+            "scene contains a stale or foreign atlas tile"
+        );
+        state.policy.mark_scene_used(scene);
+        Ok(())
     }
 
     pub(crate) fn set_admission_limits(&self, bytes: Option<u64>) {
@@ -497,6 +507,7 @@ impl BladeAtlasState {
             }
         }
 
+        let id = allocate_native_atlas_texture_id(kind)?;
         let raw = self.gpu.create_texture(gpu::TextureDesc {
             name: "atlas",
             format,
@@ -523,18 +534,11 @@ impl BladeAtlasState {
         );
 
         let texture_list = &mut self.storage[kind];
-        let index = texture_list.free_list.pop();
-
-        let texture_index = index.unwrap_or(texture_list.textures.len());
-        let texture_index = u32::try_from(texture_index)
-            .map_err(|_| anyhow::anyhow!("Blade atlas texture index space exhausted"))?;
         let atlas_texture = BladeAtlasTexture {
-            id: AtlasTextureId {
-                index: texture_index,
-                kind,
-            },
+            id,
             allocation_class,
             allocator: etagere::BucketedAtlasAllocator::new(size.into()),
+            allocations: AtlasTileAllocations::default(),
             format,
             raw,
             raw_view,
@@ -546,15 +550,7 @@ impl BladeAtlasState {
 
         self.initializations.push(atlas_texture.id);
 
-        let slot = if let Some(ix) = index {
-            texture_list.textures[ix] = Some(atlas_texture);
-            texture_list.textures.get_mut(ix)
-        } else {
-            texture_list.textures.push(Some(atlas_texture));
-            texture_list.textures.last_mut()
-        };
-        slot.and_then(Option::as_mut)
-            .ok_or_else(|| anyhow::anyhow!("Blade atlas texture slot was not initialized"))
+        Ok(texture_list.insert(id.index, atlas_texture))
     }
 
     fn upload_texture(
@@ -652,44 +648,43 @@ impl BladeAtlasState {
 
     fn release_tile(&mut self, tile: AtlasTile) {
         let id = tile.texture_id;
-        let Some(texture_slot) = self.storage[id.kind].textures.get_mut(id.index as usize) else {
+        let Some(texture) = self.storage[id.kind].get_mut(id.index) else {
             return;
         };
-        if texture_slot.as_ref().is_none_or(|texture| texture.id != id) {
+        if texture.id != id {
             return;
         }
-        if let Some(mut texture) = texture_slot.take() {
-            texture
-                .allocator
-                .deallocate(etagere::AllocId::from(tile.tile_id));
-            texture.decrement_ref_count();
-            if texture.is_unreferenced() {
-                self.storage[id.kind]
-                    .free_list
-                    .push(texture.id.index as usize);
-                self.initializations.retain(|pending| *pending != id);
-                self.uploads.retain(|pending| pending.id != id);
-                for chunk in &mut self.upload_belt.chunks {
-                    if chunk.sync.is_none()
-                        && !self
-                            .uploads
-                            .iter()
-                            .any(|upload| upload.data.buffer == chunk.raw)
-                    {
-                        chunk.used = 0;
-                    }
+        let Some(allocation) = texture.allocations.release(&tile) else {
+            return;
+        };
+        texture.allocator.deallocate(allocation);
+        texture.decrement_ref_count();
+        if texture.is_unreferenced() {
+            let mut texture = self.storage[id.kind]
+                .remove(id.index)
+                .expect("live atlas page");
+            self.initializations.retain(|pending| *pending != id);
+            self.uploads.retain(|pending| pending.id != id);
+            for chunk in &mut self.upload_belt.chunks {
+                if chunk.sync.is_none()
+                    && !self
+                        .uploads
+                        .iter()
+                        .any(|upload| upload.data.buffer == chunk.raw)
+                {
+                    chunk.used = 0;
                 }
-                self.upload_belt.trim(&self.gpu);
-                texture.destroy(&self.gpu);
-            } else {
-                *texture_slot = Some(texture);
             }
+            self.upload_belt.trim(&self.gpu);
+            texture.destroy(&self.gpu);
         }
     }
 
     fn flush_initializations(&mut self, encoder: &mut gpu::CommandEncoder) {
         for id in self.initializations.drain(..) {
-            let texture = &self.storage[id];
+            let Some(texture) = self.storage.get(id) else {
+                continue;
+            };
             encoder.init_texture(texture.raw);
         }
     }
@@ -699,7 +694,9 @@ impl BladeAtlasState {
 
         let mut transfers = encoder.transfer("atlas");
         for upload in self.uploads.drain(..) {
-            let texture = &self.storage[upload.id];
+            let Some(texture) = self.storage.get(upload.id) else {
+                continue;
+            };
             transfers.copy_buffer_to_texture(
                 upload.data,
                 upload.bounds.size.width.to_bytes(texture.bytes_per_pixel()),
@@ -748,28 +745,13 @@ impl ops::IndexMut<AtlasTextureKind> for BladeAtlasStorage {
     }
 }
 
-impl ops::Index<AtlasTextureId> for BladeAtlasStorage {
-    type Output = BladeAtlasTexture;
-    fn index(&self, id: AtlasTextureId) -> &Self::Output {
-        let textures = match id.kind {
-            crate::AtlasTextureKind::Monochrome => &self.monochrome_textures,
-            crate::AtlasTextureKind::Polychrome => &self.polychrome_textures,
-        };
-        textures[id.index as usize].as_ref().unwrap()
-    }
-}
-
 impl BladeAtlasStorage {
     fn get(&self, id: AtlasTextureId) -> Option<&BladeAtlasTexture> {
         let textures = match id.kind {
             AtlasTextureKind::Monochrome => &self.monochrome_textures,
             AtlasTextureKind::Polychrome => &self.polychrome_textures,
         };
-        textures
-            .textures
-            .get(id.index as usize)
-            .and_then(Option::as_ref)
-            .filter(|texture| texture.id == id)
+        textures.get(id.index).filter(|texture| texture.id == id)
     }
 
     fn destroy(&mut self, gpu: &gpu::Context) {
@@ -786,6 +768,7 @@ struct BladeAtlasTexture {
     id: AtlasTextureId,
     allocation_class: AtlasAllocationClass,
     allocator: BucketedAtlasAllocator,
+    allocations: AtlasTileAllocations,
     raw: gpu::Texture,
     raw_view: gpu::TextureView,
     format: gpu::TextureFormat,
@@ -795,16 +778,9 @@ struct BladeAtlasTexture {
 
 impl BladeAtlasTexture {
     fn allocate(&mut self, size: Size<DevicePixels>) -> Option<AtlasTile> {
-        let allocation = self.allocator.allocate(size.into())?;
-        let tile = AtlasTile {
-            texture_id: self.id,
-            tile_id: allocation.id.into(),
-            padding: 0,
-            bounds: Bounds {
-                origin: allocation.rectangle.min.into(),
-                size,
-            },
-        };
+        let tile = self
+            .allocations
+            .allocate(&mut self.allocator, self.id, size)?;
         self.live_atlas_keys += 1;
         Some(tile)
     }

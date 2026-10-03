@@ -2,9 +2,38 @@
 
 use accesskit::{ActionData, ActionRequest};
 
+/// Raw native identities survive until current-model resolution. Native atomic
+/// edits can also enqueue one already-normalized immutable-document request.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum PendingAccessibilityAction {
+    Raw(ActionRequest),
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "freebsd", test)),
+        allow(dead_code)
+    )]
+    Normalized(super::AccessibilityActionRequest),
+}
+impl PendingAccessibilityAction {
+    pub(crate) fn normalize(
+        self,
+        tree: &super::AccessibilityTree,
+    ) -> Option<super::AccessibilityActionRequest> {
+        match self {
+            Self::Raw(request) if request.target_tree == accesskit::TreeId::ROOT => tree
+                .normalize_accesskit_action(
+                    super::AccessibilityId(request.target_node.0),
+                    request.action,
+                    request.data,
+                ),
+            Self::Raw(_) => None,
+            Self::Normalized(request) => tree.validate_action_request(request),
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct PendingActionQueue {
-    requests: Vec<ActionRequest>,
+    requests: Vec<PendingAccessibilityAction>,
     text_bytes: usize,
     dropped: usize,
 }
@@ -34,6 +63,22 @@ impl PendingActionQueue {
             Some(ActionData::Value(value)) => value.len(),
             _ => 0,
         };
+        self.push_event(PendingAccessibilityAction::Raw(request), bytes)
+    }
+
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "freebsd", test)),
+        allow(dead_code)
+    )]
+    pub(crate) fn push_normalized(&mut self, request: super::AccessibilityActionRequest) -> bool {
+        let bytes = request
+            .payload
+            .as_ref()
+            .map_or(0, super::AccessibilityActionPayload::value_len_bytes);
+        self.push_event(PendingAccessibilityAction::Normalized(request), bytes)
+    }
+
+    fn push_event(&mut self, request: PendingAccessibilityAction, bytes: usize) -> bool {
         if self.requests.len() >= Self::MAX_REQUESTS
             || bytes > Self::MAX_TEXT_BYTES - self.text_bytes
         {
@@ -47,7 +92,7 @@ impl PendingActionQueue {
 
     /// Move accepted requests out for processing outside the queue lock, and
     /// reset pending-byte/drop accounting for the next batch.
-    pub(crate) fn take(&mut self) -> Vec<ActionRequest> {
+    pub(crate) fn take(&mut self) -> Vec<PendingAccessibilityAction> {
         self.text_bytes = 0;
         self.dropped = 0;
         std::mem::take(&mut self.requests)
@@ -94,7 +139,13 @@ mod tests {
         }
         assert_eq!(queue.len(), PendingActionQueue::MAX_REQUESTS);
         assert_eq!(queue.dropped(), 500);
-        assert_eq!(queue.take(), expected);
+        assert_eq!(
+            queue.take(),
+            expected
+                .into_iter()
+                .map(PendingAccessibilityAction::Raw)
+                .collect::<Vec<_>>()
+        );
         assert!(queue.is_empty());
         assert_eq!(queue.dropped(), 0);
         assert!(queue.push(request(0, None)));
@@ -125,6 +176,40 @@ mod tests {
     }
 
     #[test]
+    fn raw_and_atomic_edit_requests_share_fifo_and_utf8_byte_admission() {
+        use super::super::{
+            AccessibilityAction, AccessibilityActionPayload, AccessibilityActionRequest,
+            AccessibilityId,
+        };
+        let mut queue = PendingActionQueue::default();
+        let edit = AccessibilityActionRequest::with_payload(
+            AccessibilityId::new(),
+            AccessibilityAction::ReplaceSelectedText,
+            AccessibilityActionPayload::TextReplacement {
+                document_id: AccessibilityId::new(),
+                start: 0,
+                end: 0,
+                value: "🙂".repeat(PendingActionQueue::MAX_TEXT_BYTES / 4),
+            },
+        );
+        assert!(queue.push(request(0, None)));
+        assert!(queue.push_normalized(edit.clone()));
+        assert_eq!(queue.text_bytes(), PendingActionQueue::MAX_TEXT_BYTES);
+        assert!(!queue.push(request(1, Some(ActionData::Value("x".into())))));
+        assert!(queue.push(request(2, None)));
+        assert_eq!(
+            queue.take(),
+            vec![
+                PendingAccessibilityAction::Raw(request(0, None)),
+                PendingAccessibilityAction::Normalized(edit),
+                PendingAccessibilityAction::Raw(request(2, None))
+            ]
+        );
+        assert_eq!(queue.text_bytes(), 0);
+        assert_eq!(queue.dropped(), 0);
+    }
+
+    #[test]
     fn oversized_single_value_is_rejected_without_any_pending_work() {
         let mut queue = PendingActionQueue::default();
         assert!(!queue.push(request(
@@ -137,7 +222,10 @@ mod tests {
         assert_eq!(queue.text_bytes(), 0);
         assert_eq!(queue.dropped(), 1);
         assert!(queue.push(request(1, None)));
-        assert_eq!(queue.take(), [request(1, None)]);
+        assert_eq!(
+            queue.take(),
+            [PendingAccessibilityAction::Raw(request(1, None))]
+        );
         assert_eq!(queue.dropped(), 0);
     }
 }

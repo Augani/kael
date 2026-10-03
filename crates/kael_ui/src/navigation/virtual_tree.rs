@@ -1479,6 +1479,90 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn native_fixture_hierarchy_retains_twenty_five_projects_and_four_thousand_children() {
+        let nodes = (0..25)
+            .map(|directory| {
+                let root = directory * 4001;
+                TreeNode::new(root, format!("Project {directory:02}")).with_children(
+                    (1..=4000)
+                        .map(|file| TreeNode::new(root + file, format!("document_{file:04}.rs")))
+                        .collect(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let expanded = (0..25)
+            .map(|directory| directory * 4001)
+            .collect::<HashSet<_>>();
+        let mut model = VirtualTreeModel::new(&nodes, &expanded).unwrap();
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| crate::theme::install_theme(cx, Theme::dark()));
+        let state = cx.new(|cx| VirtualTreeState::new(cx));
+        let context = cx.update(|cx| {
+            state
+                .read(cx)
+                .accessibility_preparation_context("Tree navigation", true)
+        });
+        let executor = cx.background_executor.clone();
+        let worker = executor.clone();
+        let model = executor.block_test(executor.spawn(async move {
+            model.prepare_accessibility(context, &worker).unwrap();
+            model
+        }));
+        let root = model.data.accessibility.as_ref().unwrap().root;
+        let (view, window) = cx.add_window_view(|_, cx| TestTreeView {
+            model,
+            state,
+            selected: Rc::new(Cell::new(None)),
+            toggles: Rc::new(RefCell::new(Vec::new())),
+            outside_focus: cx.focus_handle().tab_index(0).tab_stop(true),
+        });
+        let previous = window.update(|window, cx| {
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            let projects = &tree.get(root).unwrap().children;
+            assert_eq!(projects.len(), 25);
+            assert!(view.read(cx).state.read(cx).last_rendered_range.len() <= 6);
+            for project in projects {
+                let project = tree.get(*project).unwrap();
+                assert_eq!(project.parent, Some(root));
+                assert_eq!(project.children.len(), 4000);
+                for child in &project.children {
+                    assert_eq!(tree.get(*child).unwrap().parent, Some(project.id));
+                }
+            }
+            let update = tree.to_accesskit_tree_update(None, None);
+            let native_root = update.nodes.iter().find(|(id, _)| id.0 == root.0).unwrap();
+            assert_eq!(native_root.1.children().len(), 25);
+            for project in projects {
+                let native_project = update
+                    .nodes
+                    .iter()
+                    .find(|(id, _)| id.0 == project.0)
+                    .unwrap();
+                assert_eq!(native_project.1.children().len(), 4000);
+            }
+            tree.clone()
+        });
+        window.update(|window, cx| window.focus(&view.read(cx).state.read(cx).focus_handle));
+        window.simulate_keystrokes("end");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            assert_eq!(tree.get(root).unwrap().children.len(), 25);
+            let last = *tree.get(root).unwrap().children.last().unwrap();
+            assert_eq!(tree.get(last).unwrap().children.len(), 4000);
+            let update = tree.to_accesskit_tree_update_after(Some(&previous), None, None);
+            assert!(
+                update.nodes.len() < 30,
+                "viewport focus/geometry delta stays bounded"
+            );
+            if let Some((_, native_root)) = update.nodes.iter().find(|(id, _)| id.0 == root.0) {
+                assert_eq!(native_root.children().len(), 25);
+            }
+        });
+    }
+
+    #[::core::prelude::v1::test]
     fn hundred_thousand_rows_mount_only_the_viewport_and_end_scrolls_into_view() {
         let nodes = (0..100_000)
             .map(|id| TreeNode::new(id, format!("File {id}")))

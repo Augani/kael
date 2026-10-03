@@ -1,4 +1,5 @@
 use super::window_layer_id;
+use crate::accessibility::dom_projection::reachable_nodes;
 use crate::{
     AccessibilityAction, AccessibilityActionRequest, AccessibilityId, AccessibilityNode,
     AccessibilityRole, AccessibilityState, AccessibilityTree, AccessibilityValue,
@@ -14,8 +15,8 @@ use web_sys::{Element, Event, EventTarget, HtmlCanvasElement, HtmlElement, Keybo
 
 /// A retained canvas can expose a very large logical data set while only
 /// painting a small viewport. Keep the browser accessibility mirror bounded as
-/// a final safety net; virtualized controls should already register only their
-/// mounted semantic nodes.
+/// a final safety net. Mounted controls and active descendants take precedence
+/// over the bounded sample from immutable logical subtrees.
 const MAX_DOM_ACCESSIBILITY_NODES: usize = 4_096;
 const MAX_PENDING_ACCESSIBILITY_ACTIONS: usize = 256;
 
@@ -347,6 +348,12 @@ impl BrowserAccessibilityManager {
             .map_err(js_error)?;
         self.canvas
             .set_attribute(
+                "data-kael-accessibility-node-limit",
+                &MAX_DOM_ACCESSIBILITY_NODES.to_string(),
+            )
+            .map_err(js_error)?;
+        self.canvas
+            .set_attribute(
                 "data-kael-accessibility-truncated",
                 if truncated { "true" } else { "false" },
             )
@@ -468,33 +475,17 @@ fn keyboard_action(key: &str, actions: &[AccessibilityAction]) -> Option<Accessi
         .find(|candidate| actions.contains(candidate))
 }
 
-fn reachable_nodes(tree: &AccessibilityTree, limit: usize) -> (Vec<AccessibilityId>, bool) {
-    if limit == 0 || tree.get(tree.root).is_none() {
-        return (Vec::new(), !tree.nodes.is_empty());
-    }
-    let mut ordered = Vec::with_capacity(tree.node_count().min(limit));
-    let mut queue = VecDeque::from([tree.root]);
-    let mut visited = HashSet::new();
-    let mut truncated = false;
-    while let Some(id) = queue.pop_front() {
-        if !visited.insert(id) {
-            continue;
-        }
-        let Some(node) = tree.get(id) else { continue };
-        if id != tree.root && node.states.contains(AccessibilityState::HIDDEN) {
-            continue;
-        }
-        if ordered.len() == limit {
-            truncated = true;
-            break;
-        }
-        ordered.push(id);
-        queue.extend(node.children.iter().copied());
-    }
-    (ordered, truncated)
-}
-
 fn apply_node(element: &HtmlElement, node: &AccessibilityNode) -> Result<()> {
+    element
+        .set_attribute(
+            "data-kael-a11y-has-bounds",
+            if node.bounds.is_some_and(|bounds| bounds.has_area()) {
+                "true"
+            } else {
+                "false"
+            },
+        )
+        .map_err(js_error)?;
     set_or_remove(element, "role", Some(dom_role(node.role)))?;
     set_or_remove(element, "aria-label", node.label.as_deref())?;
     set_or_remove(element, "aria-description", node.description.as_deref())?;

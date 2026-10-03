@@ -118,6 +118,7 @@ export KAEL_NATIVE_RENDERER_SMOKE_PNG="${evidence_dir}/native-renderer.png"
 grep -Fq "NATIVE_RENDERER_SMOKE_GPU: backend=blade-vulkan" \
   "${evidence_dir}/native-renderer.log"
 grep -Fq "NATIVE_RENDERER_SMOKE_OK:" "${evidence_dir}/native-renderer.log"
+grep -Fq "NATIVE_IDLE_MODEL_FRAME_OK:" "${evidence_dir}/native-renderer.log"
 grep -Fq "text_probe_pixels=" "${evidence_dir}/native-renderer.log"
 test -s "${evidence_dir}/native-renderer.png"
 

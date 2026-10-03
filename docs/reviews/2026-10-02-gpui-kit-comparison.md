@@ -76,7 +76,23 @@ instrumentation. The maintained workflow now builds both engines with and
 without framework frame timing and retains five alternating repetitions per
 engine, mode and contract. Both modes retain common application callback and
 process counters. No overhead result is claimed until these runs finish.
-The three contracts produce sixty retained runs in the maintained workflow.
+The maintained workflow now has five contracts and produces one hundred retained
+runs. `native-virtual-tree-v1` exercises 100,025 real tree nodes, selection/reveal,
+collapse/expand and immutable model replacement. `native-dock-workspace-v1`
+exercises twelve Unicode panes, three tab groups, two split axes, tab movement,
+split/merge, ratio changes, zoom and actual native JSON save/restore. Both new
+contracts execute successfully in native Kael and GPUI Kit quick runs; quick
+runs validate fixture behavior and do not qualify as performance samples.
+Independent collector validation checks complete node hashes and exact native
+workspace pane identities/topology/content. The benchmark README records the
+controlled-flattening versus routed-tree-action costs, complete versus mounted
+semantics, binary/n-ary split normalization and native chrome differences.
+
+The earlier sixty-run workflow at `0adb736` succeeded and preserved raw runs.
+That source predates the fractional CoreText glyph correction. Its native
+submission timings remain historical data; they cannot establish a visually
+correct current framework ranking. The five-contract workflow must run again
+against the corrected source.
 
 macOS process CPU counters are Mach absolute ticks. The collector preserves the
 raw values and converts them using `mach_timebase_info`, with widened arithmetic.

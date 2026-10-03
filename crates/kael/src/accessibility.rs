@@ -22,6 +22,13 @@ mod text;
 pub use text::*;
 #[cfg(not(target_family = "wasm"))]
 mod action_queue;
+#[cfg(any(target_family = "wasm", test))]
+pub(crate) mod dom_projection;
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "freebsd", target_os = "windows")
+))]
+pub(crate) use action_queue::PendingAccessibilityAction;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use action_queue::PendingActionQueue;
 
@@ -432,6 +439,14 @@ pub enum AccessibilityAction {
     SetValue,
     /// Set directed text selection or caret using the prepared document.
     SetTextSelection,
+    /// Replace an immutable document range as one editing transaction.
+    ReplaceSelectedText,
+    /// Copy a checked document range to the platform clipboard.
+    CopyText,
+    /// Copy and atomically remove a checked document range.
+    CutText,
+    /// Atomically replace a checked document range with clipboard text.
+    PasteText,
     /// Open the element's associated menu.
     ShowMenu,
     /// Dismiss the element (e.g., close a dialog).
@@ -456,6 +471,10 @@ impl AccessibilityAction {
             Self::Decrement => "decrement",
             Self::SetValue => "set-value",
             Self::SetTextSelection => "set-text-selection",
+            Self::ReplaceSelectedText => "replace-selected-text",
+            Self::CopyText => "copy-text",
+            Self::CutText => "cut-text",
+            Self::PasteText => "paste-text",
             Self::ShowMenu => "show-menu",
             Self::Dismiss => "dismiss",
             Self::Custom(_) => "custom",
@@ -477,6 +496,8 @@ impl AccessibilityAction {
             Self::Decrement => Action::Decrement,
             Self::SetValue => Action::SetValue,
             Self::SetTextSelection => Action::SetTextSelection,
+            Self::ReplaceSelectedText => Action::ReplaceSelectedText,
+            Self::CopyText | Self::CutText | Self::PasteText => Action::CustomAction,
             Self::ShowMenu => Action::Click,
             Self::Dismiss => Action::Collapse,
             Self::Custom(_) => Action::CustomAction,
@@ -498,6 +519,7 @@ impl AccessibilityAction {
             Action::Decrement => Some(Self::Decrement),
             Action::SetValue => Some(Self::SetValue),
             Action::SetTextSelection => Some(Self::SetTextSelection),
+            Action::ReplaceSelectedText => Some(Self::ReplaceSelectedText),
             _ => None,
         }
     }
@@ -521,6 +543,28 @@ pub enum AccessibilityActionPayload {
         /// Active endpoint or caret.
         focus: usize,
     },
+    /// Reveal a run's checked byte span without changing selection or focus.
+    TextReveal {
+        /// Immutable document owning the byte span.
+        document_id: AccessibilityId,
+        /// First byte of the targeted run.
+        start: usize,
+        /// Exclusive last byte of the targeted run.
+        end: usize,
+        /// Native suggested viewport placement.
+        alignment: AccessibilityTextAlignment,
+    },
+    /// Atomic editing request against one immutable document revision.
+    TextReplacement {
+        /// Immutable document owning the editing range.
+        document_id: AccessibilityId,
+        /// Inclusive range start in UTF-8 bytes.
+        start: usize,
+        /// Exclusive range end in UTF-8 bytes.
+        end: usize,
+        /// Replacement UTF-8 text, charged to the native queue byte budget.
+        value: String,
+    },
 }
 
 impl AccessibilityActionPayload {
@@ -530,21 +574,26 @@ impl AccessibilityActionPayload {
             Self::Value(_) => "value",
             Self::NumericValue(_) => "numeric-value",
             Self::TextSelection { .. } => "text-selection",
+            Self::TextReveal { .. } => "text-reveal",
+            Self::TextReplacement { .. } => "text-replacement",
         }
     }
 
     /// Byte length of text payload data without exposing the payload text.
     pub fn value_len_bytes(&self) -> usize {
         match self {
-            Self::Value(value) => value.len(),
-            Self::NumericValue(_) | Self::TextSelection { .. } => 0,
+            Self::Value(value) | Self::TextReplacement { value, .. } => value.len(),
+            Self::NumericValue(_) | Self::TextSelection { .. } | Self::TextReveal { .. } => 0,
         }
     }
 
     /// Whether the payload carries a finite numeric value.
     pub fn has_finite_numeric_value(&self) -> bool {
         match self {
-            Self::Value(_) | Self::TextSelection { .. } => false,
+            Self::Value(_)
+            | Self::TextSelection { .. }
+            | Self::TextReveal { .. }
+            | Self::TextReplacement { .. } => false,
             Self::NumericValue(value) => value.is_finite(),
         }
     }
@@ -657,6 +706,14 @@ impl AccessibilityActionRequest {
         if node
             .states
             .intersects(AccessibilityState::DISABLED | AccessibilityState::HIDDEN)
+        {
+            return None;
+        }
+        if node.states.contains(AccessibilityState::READ_ONLY)
+            && matches!(
+                action,
+                accesskit::Action::SetValue | accesskit::Action::ReplaceSelectedText
+            )
         {
             return None;
         }
@@ -1085,6 +1142,8 @@ pub struct AccessibilityNode {
     pub text_document: Option<std::sync::Arc<AccessibilityTextDocument>>,
     /// Directed UTF-8 selection within `text_document`.
     pub text_selection: Option<AccessibilityTextSelection>,
+    /// Actual bounded text-run geometry for this viewport.
+    pub text_geometry: Option<std::sync::Arc<AccessibilityTextGeometry>>,
 }
 
 impl AccessibilityNode {
@@ -1113,6 +1172,7 @@ impl AccessibilityNode {
             active_descendant: None,
             text_document: None,
             text_selection: None,
+            text_geometry: None,
         }
     }
 
@@ -1149,6 +1209,9 @@ impl AccessibilityNode {
             // Native range providers read text from retained runs. Avoid copying
             // the full document into every root record on caret-only updates.
             node.clear_value();
+            if self.actions.contains(&AccessibilityAction::ScrollToVisible) {
+                node.add_child_action(accesskit::Action::ScrollIntoView);
+            }
             if self.role == AccessibilityRole::TextInput && document.is_multiline() {
                 node.set_role(accesskit::Role::MultilineTextInput);
             }
@@ -1166,6 +1229,25 @@ impl AccessibilityNode {
         }
         for action in &self.actions {
             node.add_action(action.to_accesskit());
+        }
+        let custom_actions = self
+            .actions
+            .iter()
+            .filter_map(|action| {
+                let (id, label) = match action {
+                    AccessibilityAction::CopyText => (i32::MIN, "Copy text"),
+                    AccessibilityAction::CutText => (i32::MIN + 1, "Cut text"),
+                    AccessibilityAction::PasteText => (i32::MIN + 2, "Paste text"),
+                    _ => return None,
+                };
+                Some(accesskit::CustomAction {
+                    id,
+                    description: label.into(),
+                })
+            })
+            .collect::<Vec<_>>();
+        if !custom_actions.is_empty() {
+            node.set_custom_actions(custom_actions);
         }
 
         if include_children {
@@ -1386,6 +1468,213 @@ pub struct AccessibilityTree {
 }
 
 impl AccessibilityTree {
+    /// Normalize against the current tree, resolving exported text-run IDs to
+    /// their owning control. Lookup visits bounded mounted nodes and prepared
+    /// text owners, never a document's individual runs or immutable tree rows.
+    pub fn normalize_accesskit_action(
+        &self,
+        target: AccessibilityId,
+        action: accesskit::Action,
+        data: Option<accesskit::ActionData>,
+    ) -> Option<AccessibilityActionRequest> {
+        if let Some(node) = self.get(target) {
+            if !self.is_exported(target) {
+                return None;
+            }
+            let clipboard_action = match data.as_ref() {
+                Some(accesskit::ActionData::CustomAction(i32::MIN)) => {
+                    Some(AccessibilityAction::CopyText)
+                }
+                Some(accesskit::ActionData::CustomAction(id)) if *id == i32::MIN + 1 => {
+                    Some(AccessibilityAction::CutText)
+                }
+                Some(accesskit::ActionData::CustomAction(id)) if *id == i32::MIN + 2 => {
+                    Some(AccessibilityAction::PasteText)
+                }
+                _ => None,
+            };
+            if action == accesskit::Action::CustomAction
+                && let Some(action) = clipboard_action
+            {
+                let document = node.text_document.as_ref()?;
+                let raw = document.export_selection(node.text_selection?)?;
+                return self.normalize_text_clipboard(target, raw, action);
+            }
+            if action == accesskit::Action::ReplaceSelectedText {
+                let accesskit::ActionData::Value(value) = data? else {
+                    return None;
+                };
+                let document = node.text_document.as_ref()?;
+                let raw = document.export_selection(node.text_selection?)?;
+                return self.normalize_text_replacement(target, raw, value.into());
+            }
+            return AccessibilityActionRequest::from_accesskit_for_node_with_data(
+                target, node, action, data,
+            );
+        }
+        if action != accesskit::Action::ScrollIntoView {
+            return None;
+        }
+        let owner = self.nodes.text_owner(target)?;
+        if !self.is_exported(owner.id)
+            || owner
+                .states
+                .intersects(AccessibilityState::DISABLED | AccessibilityState::HIDDEN)
+            || !owner
+                .actions
+                .contains(&AccessibilityAction::ScrollToVisible)
+        {
+            return None;
+        }
+        let document = owner.text_document.as_ref()?;
+        let bytes = document.run_bytes(target)?;
+        Some(AccessibilityActionRequest::with_payload(
+            owner.id,
+            AccessibilityAction::ScrollToVisible,
+            AccessibilityActionPayload::TextReveal {
+                document_id: document.id(),
+                start: bytes.start,
+                end: bytes.end,
+                alignment: AccessibilityTextAlignment::from_data(data),
+            },
+        ))
+    }
+
+    /// Normalize one atomic replacement captured by a native text provider.
+    /// Raw run IDs preserve origin until this conversion; foreign/stale IDs,
+    /// unsupported editing, and read-only/disabled/hidden controls are rejected.
+    pub fn normalize_text_replacement(
+        &self,
+        owner_id: AccessibilityId,
+        selection: accesskit::TextSelection,
+        value: String,
+    ) -> Option<AccessibilityActionRequest> {
+        let owner = self.get(owner_id)?;
+        if !self.is_exported(owner_id)
+            || owner.states.intersects(
+                AccessibilityState::DISABLED
+                    | AccessibilityState::HIDDEN
+                    | AccessibilityState::READ_ONLY,
+            )
+            || !owner
+                .actions
+                .contains(&AccessibilityAction::ReplaceSelectedText)
+        {
+            return None;
+        }
+        let document = owner.text_document.as_ref()?;
+        let selection = document.import_selection(selection)?;
+        Some(AccessibilityActionRequest::with_payload(
+            owner_id,
+            AccessibilityAction::ReplaceSelectedText,
+            AccessibilityActionPayload::TextReplacement {
+                document_id: document.id(),
+                start: selection.anchor.min(selection.focus),
+                end: selection.anchor.max(selection.focus),
+                value,
+            },
+        ))
+    }
+
+    /// Capture a native clipboard operation without mutating selection first.
+    pub fn normalize_text_clipboard(
+        &self,
+        owner_id: AccessibilityId,
+        selection: accesskit::TextSelection,
+        action: AccessibilityAction,
+    ) -> Option<AccessibilityActionRequest> {
+        if !matches!(
+            action,
+            AccessibilityAction::CopyText
+                | AccessibilityAction::CutText
+                | AccessibilityAction::PasteText
+        ) {
+            return None;
+        }
+        let owner = self.get(owner_id)?;
+        if !self.is_exported(owner_id)
+            || !owner.actions.contains(&action)
+            || owner
+                .states
+                .intersects(AccessibilityState::DISABLED | AccessibilityState::HIDDEN)
+            || (action != AccessibilityAction::CopyText
+                && owner.states.contains(AccessibilityState::READ_ONLY))
+        {
+            return None;
+        }
+        let document = owner.text_document.as_ref()?;
+        let selection = document.import_selection(selection)?;
+        Some(AccessibilityActionRequest::with_payload(
+            owner_id,
+            action,
+            AccessibilityActionPayload::TextSelection {
+                document_id: document.id(),
+                anchor: selection.anchor,
+                focus: selection.focus,
+            },
+        ))
+    }
+
+    /// Revalidate a previously normalized request before deferred dispatch.
+    pub fn validate_action_request(
+        &self,
+        request: AccessibilityActionRequest,
+    ) -> Option<AccessibilityActionRequest> {
+        let node = self.get(request.node_id)?;
+        if !self.is_exported(node.id)
+            || node
+                .states
+                .intersects(AccessibilityState::DISABLED | AccessibilityState::HIDDEN)
+            || !node.actions.contains(&request.action)
+        {
+            return None;
+        }
+        if node.states.contains(AccessibilityState::READ_ONLY)
+            && matches!(
+                request.action,
+                AccessibilityAction::SetValue
+                    | AccessibilityAction::CutText
+                    | AccessibilityAction::PasteText
+                    | AccessibilityAction::ReplaceSelectedText
+            )
+        {
+            return None;
+        }
+        let selection = match request.payload.as_ref() {
+            Some(AccessibilityActionPayload::TextSelection {
+                document_id,
+                anchor,
+                focus,
+            }) => Some((*document_id, *anchor, *focus)),
+            Some(AccessibilityActionPayload::TextReveal {
+                document_id,
+                start,
+                end,
+                ..
+            }) => Some((*document_id, *start, *end)),
+            Some(AccessibilityActionPayload::TextReplacement {
+                document_id,
+                start,
+                end,
+                ..
+            }) => {
+                if node.states.contains(AccessibilityState::READ_ONLY) {
+                    return None;
+                }
+                Some((*document_id, *start, *end))
+            }
+            _ => None,
+        };
+        if let Some((id, anchor, focus)) = selection {
+            let document = node.text_document.as_ref()?;
+            if document.id() != id
+                || !document.contains_selection(AccessibilityTextSelection { anchor, focus })
+            {
+                return None;
+            }
+        }
+        Some(request)
+    }
     /// Create a new tree with the given root node.
     pub fn new(root: AccessibilityNode) -> Self {
         let root_id = root.id;
@@ -1636,7 +1925,7 @@ impl AccessibilityTree {
 
             nodes.push((accesskit::NodeId(id.0), ak_node));
             if let Some(document) = &node.text_document {
-                nodes.extend(document.export_runs());
+                nodes.extend(document.export_runs(node.text_geometry.as_deref()));
             }
         }
 
@@ -1791,7 +2080,20 @@ impl AccessibilityTree {
                     .and_then(|node| node.text_document.as_ref())
                     .is_some_and(|old| std::sync::Arc::ptr_eq(old, document));
                 if !retained {
-                    nodes.extend(document.export_runs());
+                    nodes.extend(document.export_runs(node.text_geometry.as_deref()));
+                } else {
+                    nodes.extend(
+                        document.export_geometry_after(
+                            node.text_geometry.as_deref(),
+                            retained
+                                .then(|| {
+                                    previous
+                                        .get(node.id)
+                                        .and_then(|old| old.text_geometry.as_deref())
+                                })
+                                .flatten(),
+                        ),
+                    );
                 }
             }
         }
@@ -2702,6 +3004,8 @@ pub struct AccessibilityAttributes {
     pub text_document: Option<std::sync::Arc<AccessibilityTextDocument>>,
     /// Directed UTF-8 selection in `text_document`.
     pub text_selection: Option<AccessibilityTextSelection>,
+    /// Actual bounded text-run geometry for this viewport.
+    pub text_geometry: Option<std::sync::Arc<AccessibilityTextGeometry>>,
 }
 
 impl AccessibilityAttributes {
@@ -2726,6 +3030,11 @@ impl AccessibilityAttributes {
     ) -> Self {
         self.text_document = Some(document);
         self.text_selection = Some(selection);
+        self
+    }
+    /// Attach validated, bounded geometry for the prepared text document.
+    pub fn text_geometry(mut self, geometry: std::sync::Arc<AccessibilityTextGeometry>) -> Self {
+        self.text_geometry = Some(geometry);
         self
     }
     /// Create attributes for the given role.
@@ -3143,6 +3452,7 @@ impl AccessibilityAttributes {
             active_descendant: self.active_descendant,
             text_document: self.text_document.clone(),
             text_selection: self.text_selection,
+            text_geometry: self.text_geometry.clone(),
         }
     }
 

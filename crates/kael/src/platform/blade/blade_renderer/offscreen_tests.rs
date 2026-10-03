@@ -438,3 +438,67 @@ fn blade_readback_timeout_retains_staging_until_real_fence_completion() {
     assert!(renderer.deferred_readbacks.is_empty());
     renderer.destroy();
 }
+
+#[test]
+fn blade_atlas_pressure_retains_replayed_pixels_and_reuploads_after_retirement() {
+    use crate::PlatformAtlas;
+    use crate::scene::sprite_sampling_tests::*;
+    let mut renderer = renderer(gpu::AlphaMode::PreMultiplied);
+    renderer.update_drawable_size(size(DevicePixels(32), DevicePixels(40)));
+    let atlas = renderer.atlas.clone();
+    let scene = packed_sprite_scene(&*atlas);
+    assert_packed_sprite_pixels(&renderer.render_scene_to_bgra(&scene).unwrap().bgra);
+    let identities: Vec<_> = scene.atlas_tiles().map(|tile| tile.texture_id).collect();
+    remove_packed_sprite_keys(&*atlas);
+    reject_packed_sprite_growth_before_raster(&*atlas);
+    assert_eq!(atlas.evict_to_budget_keeping(0, 4), 0);
+    assert_packed_sprite_pixels(&renderer.render_scene_to_bgra(&scene).unwrap().bgra);
+    for id in &identities {
+        assert!(atlas.get_texture_info(*id).is_some());
+    }
+    assert!(renderer.wait_for_gpu());
+    for _ in 0..4 {
+        atlas.advance_frame();
+    }
+    for id in &identities {
+        assert!(atlas.get_texture_info(*id).is_none());
+    }
+    atlas.set_hard_admission_limits(crate::AtlasAdmissionLimits::default());
+    let restored = packed_sprite_scene(&*atlas);
+    assert!(
+        restored
+            .atlas_tiles()
+            .all(|tile| !identities.contains(&tile.texture_id))
+    );
+    assert_packed_sprite_pixels(&renderer.render_scene_to_bgra(&restored).unwrap().bgra);
+    assert!(renderer.render_scene_to_bgra(&scene).is_err());
+    renderer.destroy();
+}
+
+#[test]
+fn blade_surviving_atlas_page_reuse_rejects_retired_tile_before_gpu_submission() {
+    use crate::PlatformAtlas;
+    use crate::scene::sprite_sampling_tests::*;
+    let mut renderer = renderer(gpu::AlphaMode::PreMultiplied);
+    let atlas = renderer.atlas.clone();
+    let first = surviving_page_tile(&*atlas, 994, [0, 0, 255, 255]);
+    let survivor = surviving_page_tile(&*atlas, 995, [0, 255, 0, 255]);
+    assert_eq!(first.texture_id, survivor.texture_id);
+    let old_scene = surviving_page_scene(first.clone());
+    let red = renderer.render_scene_to_bgra(&old_scene).unwrap();
+    assert_eq!(&red.bgra[(8 * 16 + 8) * 4..][..4], &[0, 0, 255, 255]);
+    atlas.remove(&surviving_page_key(994));
+    assert!(renderer.wait_for_gpu());
+    for _ in 0..4 {
+        atlas.advance_frame();
+    }
+    let replacement = surviving_page_tile(&*atlas, 996, [255, 0, 0, 255]);
+    assert_eq!(replacement.texture_id, first.texture_id);
+    assert_eq!(replacement.bounds, first.bounds);
+    let blue = renderer
+        .render_scene_to_bgra(&surviving_page_scene(replacement))
+        .unwrap();
+    assert_eq!(&blue.bgra[(8 * 16 + 8) * 4..][..4], &[255, 0, 0, 255]);
+    assert!(renderer.render_scene_to_bgra(&old_scene).is_err());
+    renderer.destroy();
+}

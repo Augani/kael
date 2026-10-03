@@ -188,19 +188,25 @@ jobs:
           bash scripts/ci/audit-dependencies.sh
 
       - name: Execute Metal retained-scene runtime proof
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         shell: bash
         timeout-minutes: 30
         run: bash scripts/ci/verify-macos-native-renderer.sh
 
       - name: Execute native macOS outline accessibility protocol
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         shell: bash
         timeout-minutes: 10
         run: bash scripts/ci/verify-macos-native-accessibility.sh
 
+      - name: Execute real macOS Editor native text protocol
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        shell: bash
+        timeout-minutes: 20
+        run: bash scripts/ci/verify-macos-native-text-accessibility.sh
+
       - name: Install pinned Python for macOS browser performance
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.12'
@@ -208,14 +214,14 @@ jobs:
           cache-dependency-path: scripts/browser-matrix-requirements.txt
 
       - name: Restore pinned Playwright Chromium
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/Library/Caches/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/browser-matrix-requirements.txt') }}
 
       - name: Install macOS browser performance runner
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         shell: bash
         run: |
           cargo install wasm-bindgen-cli --version 0.2.122 --locked
@@ -224,7 +230,7 @@ jobs:
           python3 -m playwright install chromium
 
       - name: Enforce real Metal-backed browser performance
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         shell: bash
         env:
           KAEL_BROWSER_MATRIX_ARTIFACT_DIR: target/browser-hardware-macos
@@ -245,6 +251,7 @@ jobs:
           path: |
             target/native-renderer-smoke/macos
             target/native-accessibility-smoke/macos
+            target/native-accessibility-smoke/macos-text
             target/browser-hardware-macos
           if-no-files-found: warn
 
@@ -263,7 +270,7 @@ jobs:
           bash scripts/ci/install-linux-deps.sh
           sudo apt-get install --yes --no-install-recommends \
             at-spi2-core dbus-x11 python3-gi gir1.2-atspi-2.0 mesa-vulkan-drivers vulkan-tools \
-            weston xwayland xvfb xdotool x11-apps x11-utils
+            weston xwayland xvfb xdotool xclip x11-apps x11-utils
 
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
@@ -290,13 +297,18 @@ jobs:
           KAEL_NATIVE_RENDERER_USE_SOFTWARE: 1
         run: bash scripts/ci/verify-linux-native-accessibility.sh
 
-      - name: Execute embedded WebView under Wayland and XWayland
+      - name: Execute native Linux Unicode editor protocols
+        if: ${{ !cancelled() }}
         shell: bash
         timeout-minutes: 20
-        # GitHub-hosted Ubuntu blocks the user namespaces required by
-        # bubblewrap. Kael keeps WebKitGTK's sandbox enabled for applications.
         env:
-          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1'
+          KAEL_NATIVE_RENDERER_USE_SOFTWARE: 1
+        run: bash scripts/ci/verify-linux-native-accessibility.sh --text
+
+      - name: Execute GTK4 atlas admission and retirement contracts
+        if: ${{ !cancelled() }}
+        shell: bash
+        timeout-minutes: 20
         run: |
           set -o pipefail
           mkdir -p target/native-renderer-smoke/linux/gtk4-atlas
@@ -307,9 +319,36 @@ jobs:
             target/native-renderer-smoke/linux/gtk4-atlas/native-tests.log
           grep -Fq 'gtk4_retired_entry_does_not_unlink_same_key_replacement ... ok' \
             target/native-renderer-smoke/linux/gtk4-atlas/native-tests.log
-          bash scripts/ci/verify-linux-native-accessibility.sh --gtk4
-          bash scripts/ci/run-linux-webview-wayland-gtk4.sh
-          bash scripts/ci/run-linux-webview-xwayland.sh
+
+      - name: Execute idle native GTK4 accessibility actions
+        if: ${{ !cancelled() }}
+        shell: bash
+        timeout-minutes: 20
+        run: bash scripts/ci/verify-linux-native-accessibility.sh --gtk4
+
+      - name: Execute native GTK4 Unicode editor protocols
+        if: ${{ !cancelled() }}
+        shell: bash
+        timeout-minutes: 20
+        run: bash scripts/ci/verify-linux-native-accessibility.sh --gtk4 --text
+
+      - name: Execute embedded GTK4 WebView under Wayland
+        if: ${{ !cancelled() }}
+        shell: bash
+        timeout-minutes: 20
+        # GitHub-hosted Ubuntu blocks the user namespaces required by
+        # bubblewrap. Kael keeps WebKitGTK's sandbox enabled for applications.
+        env:
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1'
+        run: bash scripts/ci/run-linux-webview-wayland-gtk4.sh
+
+      - name: Execute embedded WebView under XWayland
+        if: ${{ !cancelled() }}
+        shell: bash
+        timeout-minutes: 20
+        env:
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1'
+        run: bash scripts/ci/run-linux-webview-xwayland.sh
 
       - name: Upload Linux runtime evidence
         if: always()
@@ -320,6 +359,8 @@ jobs:
             target/native-renderer-smoke/linux
             target/native-accessibility-smoke/linux
             target/native-accessibility-smoke/linux-gtk4
+            target/native-accessibility-smoke/linux-text
+            target/native-accessibility-smoke/linux-gtk4-text
             ${{ runner.temp }}/kael-webview-wayland-gtk4/*.log
             ${{ runner.temp }}/kael-webview-xwayland/*.log
           if-no-files-found: warn

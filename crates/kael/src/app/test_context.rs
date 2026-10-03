@@ -310,6 +310,14 @@ impl TestAppContext {
         &self.text_system
     }
 
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn use_native_text_system_for_test(&mut self) {
+        self.text_system = Arc::new(TextSystem::new(Arc::new(
+            crate::platform::MacTextSystem::new(),
+        )));
+        self.app.borrow_mut().text_system = self.text_system.clone();
+    }
+
     /// Simulates writing to the platform clipboard
     pub fn write_to_clipboard(&self, item: ClipboardItem) {
         self.test_platform.write_to_clipboard(item)
@@ -1231,6 +1239,8 @@ mod tests {
         });
 
         let handle = window.into();
+        cx.test_window(handle)
+            .run_request_frame(crate::RequestFrameOptions::default());
         assert!(!cx.test_window(handle).0.lock().frame_polling_active);
 
         cx.simulate_system_power_event(SystemPowerEvent::PowerModeChanged);

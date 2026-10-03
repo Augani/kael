@@ -483,6 +483,15 @@ mod native {
                     render_count.load(Ordering::Acquire)
                 );
                 for revision in 1..REQUIRED_RENDER_REVISIONS {
+                    // Let the visible window stop its frame clock before a
+                    // worker-style model notification. No input, resize, or
+                    // explicit Window::refresh may supply this first wakeup.
+                    if revision == 1 {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(1250))
+                            .await;
+                    }
+                    let revision_started_at = Instant::now();
                     let revision_deadline = Instant::now() + SMOKE_TIMEOUT;
                     let prior_count = render_count.load(Ordering::Acquire);
                     if let Err(error) = window.update(cx, |view, window, cx| {
@@ -493,9 +502,13 @@ mod native {
                         // the display link for an occluded automation window.
                         // It also proves retained redraws survive viewport changes.
                         #[cfg(target_os = "macos")]
-                        window.resize(size(px(WIDTH + revision as f32), px(HEIGHT)));
+                        if revision > 1 {
+                            window.resize(size(px(WIDTH + revision as f32), px(HEIGHT)));
+                        }
                         #[cfg(not(target_os = "macos"))]
-                        window.refresh();
+                        if revision > 1 {
+                            window.refresh();
+                        }
                     }) {
                         eprintln!(
                             "NATIVE_RENDERER_SMOKE_FAIL: schedule revision {revision}: {error:#}"
@@ -508,7 +521,23 @@ mod native {
                         "NATIVE_RENDERER_SMOKE_STAGE: scheduled revision={revision} prior_render_calls={prior_count} current_render_calls={}",
                         render_count.load(Ordering::Acquire)
                     );
-                    while render_count.load(Ordering::Acquire) <= prior_count {
+                    loop {
+                        #[cfg(any(feature = "inspector", debug_assertions))]
+                        let submitted = window
+                            .update(cx, |_, window, _| {
+                                window.frame_submissions().last().is_some_and(|frame| {
+                                    frame.submitted_at >= revision_started_at
+                                })
+                            })
+                            .unwrap_or(false);
+                        #[cfg(not(any(feature = "inspector", debug_assertions)))]
+                        let submitted = {
+                            let _ = revision_started_at;
+                            true
+                        };
+                        if render_count.load(Ordering::Acquire) > prior_count && submitted {
+                            break;
+                        }
                         if Instant::now() >= revision_deadline {
                             eprintln!(
                                 "NATIVE_RENDERER_SMOKE_FAIL: timed out waiting for retained frame revision {revision}"
@@ -520,6 +549,10 @@ mod native {
                         cx.background_executor()
                             .timer(Duration::from_millis(16))
                             .await;
+                    }
+                    #[cfg(any(feature = "inspector", debug_assertions))]
+                    if revision == 1 {
+                        println!("NATIVE_IDLE_MODEL_FRAME_OK: model notification resumed CPU platform submission after 1250ms without input, resize or explicit refresh; compositor display checked separately");
                     }
                 }
 

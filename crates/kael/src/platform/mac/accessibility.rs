@@ -9,13 +9,13 @@
 //! to an [`accesskit::TreeUpdate`] and fed to the adapter; action requests from
 //! assistive technology are collected for the window to route back into kael.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use accesskit::{ActionHandler, ActionRequest, ActivationHandler, TreeUpdate};
-use accesskit_macos::SubclassingAdapter;
+use accesskit_macos::{SubclassingAdapter, TextEditHandler, TextEditOperation, TextEditRequest};
 
 use crate::{
     AccessibilityAction, AccessibilityActionRequest, AccessibilityRole, AccessibilityState,
@@ -101,6 +101,10 @@ pub fn action_to_ns_action(action: AccessibilityAction) -> &'static str {
         AccessibilityAction::Increment => "NSAccessibilityIncrementAction",
         AccessibilityAction::Decrement => "NSAccessibilityDecrementAction",
         AccessibilityAction::SetValue => "NSAccessibilitySetValueAction",
+        AccessibilityAction::ReplaceSelectedText => "NSAccessibilitySetValueAction",
+        AccessibilityAction::CopyText => "NSAccessibilityCopyAction",
+        AccessibilityAction::CutText => "NSAccessibilityCutAction",
+        AccessibilityAction::PasteText => "NSAccessibilityPasteAction",
         AccessibilityAction::SetTextSelection => "NSAccessibilitySelectedTextRangeAttribute",
         AccessibilityAction::ShowMenu => "NSAccessibilityShowMenuAction",
         AccessibilityAction::Dismiss => "NSAccessibilityCancelAction",
@@ -138,12 +142,17 @@ impl ActivationHandler for InitialTreeHandler {
 }
 
 struct CollectingActionHandler {
+    latest: SharedUpdate,
+    alive: Rc<Cell<bool>>,
     pending: PendingActions,
     wake: ActionWake,
 }
 
 impl ActionHandler for CollectingActionHandler {
     fn do_action(&mut self, request: ActionRequest) {
+        if !self.alive.get() {
+            return;
+        }
         let (needs_wake, first_overflow) = if let Ok(mut pending) = self.pending.lock() {
             let was_empty = pending.is_empty();
             debug_assert_eq!(was_empty, pending.len() == 0);
@@ -170,8 +179,60 @@ impl ActionHandler for CollectingActionHandler {
     }
 }
 
+impl TextEditHandler for CollectingActionHandler {
+    fn edit_text(&mut self, request: TextEditRequest) -> bool {
+        if request.target_tree != accesskit::TreeId::ROOT || !self.alive.get() {
+            return false;
+        }
+        let normalized = self.latest.lock().ok().and_then(|latest| {
+            let tree = latest.as_ref()?;
+            let owner = crate::AccessibilityId(request.target_node.0);
+            match request.operation {
+                TextEditOperation::Replace(value) => {
+                    tree.normalize_text_replacement(owner, request.selection, value)
+                }
+                operation => tree.normalize_text_clipboard(
+                    owner,
+                    request.selection,
+                    match operation {
+                        TextEditOperation::Copy => AccessibilityAction::CopyText,
+                        TextEditOperation::Cut => AccessibilityAction::CutText,
+                        TextEditOperation::Paste => AccessibilityAction::PasteText,
+                        _ => unreachable!(),
+                    },
+                ),
+            }
+        });
+        let Some(normalized) = normalized else {
+            return false;
+        };
+        let (accepted, needs_wake, overflow) = if let Ok(mut pending) = self.pending.lock() {
+            let empty = pending.is_empty();
+            let accepted = pending.push_normalized(normalized);
+            (
+                accepted,
+                accepted && empty,
+                !accepted && pending.dropped() == 1,
+            )
+        } else {
+            (false, false, false)
+        };
+        if overflow {
+            PendingActionQueue::report_overflow();
+        }
+        if needs_wake {
+            let wake = self.wake.borrow().clone();
+            if let Some(wake) = wake {
+                wake();
+            }
+        }
+        accepted
+    }
+}
+
 /// A live NSAccessibility provider for a GPUI window, backed by AccessKit.
 pub struct MacAccessibilityProvider {
+    alive: Rc<Cell<bool>>,
     adapter: Option<SubclassingAdapter>,
     latest: SharedUpdate,
     pending_actions: PendingActions,
@@ -188,6 +249,7 @@ impl MacAccessibilityProvider {
     /// `view` must be a valid, unreleased pointer to an `NSView` that outlives
     /// this provider.
     pub unsafe fn new(view: *mut c_void) -> Self {
+        let alive = Rc::new(Cell::new(true));
         let latest: SharedUpdate = Arc::new(Mutex::new(None));
         let pending_actions: PendingActions = Arc::new(Mutex::new(PendingActionQueue::default()));
         let action_wake: ActionWake = Rc::new(RefCell::new(None));
@@ -195,11 +257,16 @@ impl MacAccessibilityProvider {
             latest: latest.clone(),
         };
         let action_handler = CollectingActionHandler {
+            latest: latest.clone(),
+            alive: alive.clone(),
             pending: pending_actions.clone(),
             wake: action_wake.clone(),
         };
-        let adapter = unsafe { SubclassingAdapter::new(view, activation_handler, action_handler) };
+        let adapter = unsafe {
+            SubclassingAdapter::new_with_text_handler(view, activation_handler, action_handler)
+        };
         Self {
+            alive,
             adapter: Some(adapter),
             latest,
             pending_actions,
@@ -212,6 +279,7 @@ impl MacAccessibilityProvider {
     /// `NSView` is available).
     pub fn detached() -> Self {
         Self {
+            alive: Rc::new(Cell::new(true)),
             adapter: None,
             latest: Arc::new(Mutex::new(None)),
             pending_actions: Arc::new(Mutex::new(PendingActionQueue::default())),
@@ -271,23 +339,25 @@ impl MacAccessibilityProvider {
             .lock()
             .map(|mut pending| pending.take())
             .unwrap_or_default();
-        for request in requests {
-            if request.target_tree != accesskit::TreeId::ROOT {
-                continue;
-            }
-            let node_id = crate::AccessibilityId(request.target_node.0);
-            if let Some(node) = tree.get(node_id) {
-                if let Some(request) = AccessibilityActionRequest::from_accesskit_for_node_with_data(
-                    node_id,
-                    node,
-                    request.action,
-                    request.data,
-                ) {
-                    out.push(request);
-                }
-            }
-        }
+        out.extend(
+            requests
+                .into_iter()
+                .filter_map(|request| request.normalize(tree)),
+        );
         out
+    }
+}
+
+impl Drop for MacAccessibilityProvider {
+    fn drop(&mut self) {
+        self.alive.set(false);
+        *self.action_wake.borrow_mut() = None;
+        if let Ok(mut latest) = self.latest.lock() {
+            *latest = None;
+        }
+        if let Ok(mut pending) = self.pending_actions.lock() {
+            pending.take();
+        }
     }
 }
 
@@ -443,6 +513,8 @@ mod tests {
         let wake_count = wakes.clone();
         provider.set_action_wake(move || wake_count.set(wake_count.get() + 1));
         let mut handler = CollectingActionHandler {
+            latest: provider.latest.clone(),
+            alive: provider.alive.clone(),
             pending: provider.pending_actions.clone(),
             wake: provider.action_wake.clone(),
         };
@@ -490,6 +562,8 @@ mod tests {
             checked.set(true);
         });
         let mut handler = CollectingActionHandler {
+            latest: provider.latest.clone(),
+            alive: provider.alive.clone(),
             pending: provider.pending_actions.clone(),
             wake: provider.action_wake.clone(),
         };
@@ -506,6 +580,8 @@ mod tests {
         let wake_count = wakes.clone();
         provider.set_action_wake(move || wake_count.set(wake_count.get() + 1));
         let mut handler = CollectingActionHandler {
+            latest: provider.latest.clone(),
+            alive: provider.alive.clone(),
             pending: provider.pending_actions.clone(),
             wake: provider.action_wake.clone(),
         };
@@ -541,6 +617,85 @@ mod tests {
         assert!(
             weak.upgrade().is_none(),
             "wake callbacks must not outlive their provider"
+        );
+    }
+
+    #[test]
+    fn atomic_text_transport_rechecks_origin_and_releases_closed_provider() {
+        use crate::{
+            AccessibilityNode, AccessibilityTextDocument, AccessibilityTextSelection,
+            AccessibilityTree,
+        };
+        use std::cell::Cell;
+        fn tree(
+            document: Arc<AccessibilityTextDocument>,
+            owner: crate::AccessibilityId,
+        ) -> AccessibilityTree {
+            let mut root = AccessibilityNode::new(AccessibilityRole::TextInput);
+            root.id = owner;
+            root.actions = vec![
+                AccessibilityAction::ReplaceSelectedText,
+                AccessibilityAction::CopyText,
+            ];
+            root.text_document = Some(document);
+            root.text_selection = Some(AccessibilityTextSelection {
+                anchor: 1,
+                focus: 7,
+            });
+            AccessibilityTree::new(root)
+        }
+        let owner = crate::AccessibilityId::new();
+        let original = tree(AccessibilityTextDocument::new("A日本🙂"), owner);
+        let selection = *original.to_accesskit_tree_update(None, None).nodes[0]
+            .1
+            .text_selection()
+            .unwrap();
+        let mut provider = MacAccessibilityProvider::detached();
+        provider.update_tree(&original);
+        let wakes = Rc::new(Cell::new(0));
+        let wake_count = wakes.clone();
+        provider.set_action_wake(move || wake_count.set(wake_count.get() + 1));
+        let mut handler = CollectingActionHandler {
+            latest: provider.latest.clone(),
+            alive: provider.alive.clone(),
+            pending: provider.pending_actions.clone(),
+            wake: provider.action_wake.clone(),
+        };
+        let request = |operation| TextEditRequest {
+            target_tree: accesskit::TreeId::ROOT,
+            target_node: accesskit::NodeId(owner.0),
+            selection,
+            operation,
+        };
+        assert!(handler.edit_text(request(TextEditOperation::Replace("新🙂".into()))));
+        assert!(handler.edit_text(request(TextEditOperation::Copy)));
+        assert_eq!(wakes.get(), 1);
+        let replacement = tree(AccessibilityTextDocument::new("A別語🙂"), owner);
+        assert!(
+            provider.drain_actions(&replacement).is_empty(),
+            "deferred operations cannot target a replaced document"
+        );
+        provider.update_tree(&replacement);
+        assert!(
+            !handler.edit_text(request(TextEditOperation::Copy)),
+            "retained native run IDs are stale after replacement"
+        );
+        provider.update_tree(&original);
+        assert!(handler.edit_text(request(TextEditOperation::Copy)));
+        assert_eq!(wakes.get(), 2);
+        let pending = provider.pending_actions.clone();
+        drop(provider);
+        assert!(
+            pending.lock().unwrap().is_empty(),
+            "closed provider releases queued payloads"
+        );
+        assert!(!handler.edit_text(request(TextEditOperation::Copy)));
+        handler.do_action(press_request(owner));
+        assert!(pending.lock().unwrap().is_empty());
+        assert_eq!(
+            wakes.get(),
+            2,
+            "retained handlers cannot wake a closed window"
         );
     }
 }

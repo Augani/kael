@@ -3,6 +3,7 @@
 // the LICENSE-APACHE file) or the MIT license (found in
 // the LICENSE-MIT file), at your option.
 
+use crate::context::{ActionHandlerNoMut, ActionHandlerWrapper, TextEditHandlerWrapper};
 use accesskit::{ActionHandler, ActivationHandler, TreeUpdate};
 use objc2::{
     ClassType, DeclaredClass,
@@ -20,7 +21,7 @@ use objc2::{
 };
 use objc2_app_kit::{NSView, NSWindow};
 use objc2_foundation::{NSArray, NSObject, NSPoint};
-use std::{cell::RefCell, ffi::c_void, sync::Mutex};
+use std::{cell::RefCell, ffi::c_void, rc::Rc, sync::Mutex};
 
 use crate::{Adapter, event::QueuedEvents};
 
@@ -138,13 +139,35 @@ impl SubclassingAdapter {
     ) -> Self {
         let view = view as *mut NSView;
         let retained_view = unsafe { Id::retain(view) }.unwrap();
-        Self::new_internal(retained_view, activation_handler, action_handler)
+        Self::new_internal(
+            retained_view,
+            activation_handler,
+            Rc::new(ActionHandlerWrapper::new(action_handler)),
+        )
+    }
+
+    /// Create a subclassing adapter with atomic selected-text/clipboard support.
+    /// Existing `new` behavior remains unchanged when no text handler is supplied.
+    ///
+    /// # Safety
+    /// `view` must be a valid, unreleased pointer to an `NSView`.
+    pub unsafe fn new_with_text_handler(
+        view: *mut c_void,
+        activation_handler: impl 'static + ActivationHandler,
+        action_handler: impl 'static + ActionHandler + crate::TextEditHandler,
+    ) -> Self {
+        let retained_view = unsafe { Id::retain(view as *mut NSView) }.unwrap();
+        Self::new_internal(
+            retained_view,
+            activation_handler,
+            Rc::new(TextEditHandlerWrapper::new(action_handler)),
+        )
     }
 
     fn new_internal(
         retained_view: Id<NSView>,
         activation_handler: impl 'static + ActivationHandler,
-        action_handler: impl 'static + ActionHandler,
+        action_handler: Rc<dyn ActionHandlerNoMut>,
     ) -> Self {
         let view = Id::as_ptr(&retained_view) as *mut NSView;
         if !unsafe {
@@ -154,7 +177,9 @@ impl SubclassingAdapter {
         {
             panic!("subclassing adapter already instantiated on view {view:?}");
         }
-        let adapter = unsafe { Adapter::new(view as *mut c_void, false, action_handler) };
+        let adapter = unsafe {
+            Adapter::with_wrapped_action_handler(view as *mut c_void, false, action_handler)
+        };
         // Cast to a pointer and back to force the lifetime to 'static
         // SAFETY: We know the class will live as long as the instance,
         // and we only use this reference while the instance is alive.
@@ -227,7 +252,11 @@ impl SubclassingAdapter {
     ) -> Self {
         let window = unsafe { &*(window as *const NSWindow) };
         let retained_view = window.contentView().unwrap();
-        Self::new_internal(retained_view, activation_handler, action_handler)
+        Self::new_internal(
+            retained_view,
+            activation_handler,
+            Rc::new(ActionHandlerWrapper::new(action_handler)),
+        )
     }
 
     /// If and only if the tree has been initialized, call the provided function

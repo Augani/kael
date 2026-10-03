@@ -313,6 +313,69 @@ and native Linux/Windows editor protocol tests remain open. A licensed named
 Linux adapter fork and native CI evidence are required before closing this scope;
 the shared consumer tests do not substitute for AT-SPI or UIA runtime proof.
 
+## Native text/disclosure follow-on after checkpoint 0adb736
+
+The named `kael_accesskit_atspi_common` and `kael_accesskit_unix` packages now
+provide capability-derived native disclosure states/actions and an opt-in atomic
+EditableText transport. Insert/delete/copy/cut/paste capture one originating
+document range; the common queue and foreground Editor validate its immutable
+document identity again. Read-only text permits Copy and selection. Disabled,
+hidden, collapsed and released objects reject mutations. Existing adapter
+constructors retain their unsupported-operation behavior.
+
+The checkpoint Linux artifact contained repeated libatspi cache-signal signature
+errors. The Unix fork now sends AddAccessible's single struct argument rather
+than flattening its fields, and a real zbus serializer regression checks both
+AddAccessible and RemoveAccessible envelopes. The hierarchy regression in the
+component suite independently confirms 25 project roots with 4,000 document
+children each through the actual Window/AccessKit full and incremental exports.
+This establishes two source-level defects and invariants; a fresh actual Linux
+AT-SPI run is still required to prove the cache/disclosure behavior end to end.
+
+The Mac fork supplies native visible ranges, visible-range reveal, exact
+UTF-16 string/attributed-string reads, shaped glyph bounds/hit testing and
+optional atomic selected-text replacement/clipboard actions. Reveals preserve
+selection and carry the original run ID. AccessKit's current reveal protocol
+addresses a run, so this does not claim arbitrary character-level reveal
+precision. Setter ranges that overflow, split a surrogate or require rounding
+an atomic character are rejected. Detached views return empty screen geometry.
+
+Focused evidence is retained in `.artifacts/kael-atspi-fork-tests.log` (13
+translation tests), `.artifacts/kael-atspi-cache-envelope-tests.log` (actual zbus
+wire signatures), `.artifacts/kael-macos-native-text-geometry.log` (three adapter
+unit tests plus both real Objective-C outline/text harnesses), and
+`.artifacts/kael-macos-text-origin-provider-tests.log` (origin revalidation and
+closed-provider release). The native Mac harness enumerates 100,025 rows and
+checks real hidden-window screen conversion, UTF-16 text, geometry, selection,
+reveal, edits and guards. It does not substitute for the real Editor example's
+presentation, clipboard and undo acceptance.
+
+The subsequent real Editor app acceptance is recorded in
+`.artifacts/native-ui-followon/editor_accessibility.log` with
+`NATIVE_TEXT_ACCESSIBILITY_OK platform=macos` and clean fixture completion.
+The owned Window's native protocol objects passed full Unicode text, selection,
+shaped bounds/hit testing, visible ranges, reveal, EOF, read-only/disabled guards,
+atomic replacement/Undo/Redo and delayed old-origin rejection. The dedicated
+native-text evidence document retains the exact executed binary hash and scope.
+Clipboard, physical IME and presentation pixel acceptance remain separate.
+
+All named adapters use path/version/package dependencies and retain upstream
+source hashes, licenses, exact upstream manifests and complete patch records.
+The standalone external consumer resolves their aliases without root patch
+overrides. `cargo package --list` checks archive membership; no registry package
+was published. Cargo's reserved `Cargo.toml.orig` filename is excluded, with its
+unchanged upstream bytes shipped as `UPSTREAM-Cargo.toml`.
+
+The Linux tree client retains exact 25-by-4,000 hierarchy bounds and compares
+D-Bus service/path identity across collapse/re-expansion. The dedicated
+`native-text-accessibility-atspi.py` client requires the actual Unicode fixture's
+full text, scalar offsets/EOF, word navigation, visible/offscreen glyph geometry,
+selection-preserving reveal, clipboard, atomic edit/undo/redo, read-only/disabled
+guards and a clean fixture completion. GNOME's independent D-Bus XML/C contract
+confirms InsertText length is UTF-8 bytes, whereas positions are character
+offsets. The client also checks the actual clipboard rather than relying on
+CopyText's C/GI success boolean for its void D-Bus reply.
+
 ## Required remaining evidence
 
 - [x] Checked decoded-byte and pending admission before built-in image work.

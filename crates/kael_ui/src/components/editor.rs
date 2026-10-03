@@ -907,24 +907,40 @@ impl FoldLineIndex {
 enum DisplayLineIndex {
     Unfolded(usize),
     Folded(Arc<FoldLineIndex>),
+    FoldedWithEof(Arc<FoldLineIndex>),
 }
 impl DisplayLineIndex {
     fn len(&self) -> usize {
         match self {
             Self::Unfolded(lines) => *lines,
             Self::Folded(index) => index.visible_lines,
+            Self::FoldedWithEof(index) => index.visible_lines + 1,
         }
     }
     fn line_for_row(&self, row: usize) -> Option<usize> {
         match self {
             Self::Unfolded(lines) => (row < *lines).then_some(row),
             Self::Folded(index) => index.line_for_row(row),
+            Self::FoldedWithEof(index) => {
+                if row == index.visible_lines {
+                    Some(index.total_lines)
+                } else {
+                    index.line_for_row(row)
+                }
+            }
         }
     }
     fn row_for_line(&self, line: usize) -> Option<usize> {
         match self {
             Self::Unfolded(lines) => (line < *lines).then_some(line),
             Self::Folded(index) => index.row_for_line(line),
+            Self::FoldedWithEof(index) => {
+                if line == index.total_lines {
+                    Some(index.visible_lines)
+                } else {
+                    index.row_for_line(line)
+                }
+            }
         }
     }
     fn visible_range(&self, range: Range<usize>) -> Vec<usize> {
@@ -933,13 +949,27 @@ impl DisplayLineIndex {
     fn is_fold_header(&self, line: usize) -> bool {
         match self {
             Self::Unfolded(_) => false,
-            Self::Folded(index) => index.is_header(line),
+            Self::Folded(index) | Self::FoldedWithEof(index) => index.is_header(line),
         }
     }
 }
 
+#[derive(Clone, PartialEq)]
+struct EditorGeometryKey {
+    document: AccessibilityId,
+    bounds: Bounds<Pixels>,
+    viewport: Bounds<Pixels>,
+    scroll_x: Pixels,
+    font_size: Pixels,
+    gutter: Pixels,
+    fold_revision: u64,
+    first_row: usize,
+    last_row: usize,
+}
+
 pub struct EditorState {
     focus_handle: FocusHandle,
+    accessibility_id: AccessibilityId,
     rope: Rope,
     cursor: Position,
     selection: Option<Selection>,
@@ -952,6 +982,9 @@ pub struct EditorState {
     content_version: u64,
     accessibility_document: Option<(u64, Arc<AccessibilityTextDocument>)>,
     accessibility_preparation_task: Option<Task<()>>,
+    accessibility_geometry: Option<(EditorGeometryKey, Arc<AccessibilityTextGeometry>)>,
+    accessibility_reveal: Option<(AccessibilityId, Range<usize>, AccessibilityTextAlignment)>,
+    reveal_eof: bool,
 
     parser: Parser,
     syntax_tree: Option<Tree>,
@@ -960,9 +993,14 @@ pub struct EditorState {
 
     scroll_handle: ScrollHandle,
     scroll_offset_x: Pixels,
+    pending_cursor_scroll: bool,
     max_line_width: Pixels,
     line_layouts: HashMap<usize, ShapedLine>,
     line_content_hashes: HashMap<usize, u64>,
+    line_geometry_compatible: HashMap<usize, bool>,
+    line_text_runs: HashMap<usize, Vec<TextRun>>,
+    line_geometry_candidates: HashMap<usize, Vec<(Pixels, usize)>>,
+    line_native_geometry: HashMap<usize, (Vec<Range<usize>>, Option<Arc<LineTextGeometry>>)>,
     cached_highlight_spans: Vec<HighlightSpan>,
     highlight_cache_version: u64,
     highlight_cache_first_line: usize,
@@ -981,6 +1019,7 @@ pub struct EditorState {
     pub show_line_numbers: bool,
     tab_size: usize,
     read_only: bool,
+    disabled: bool,
 
     pub font_size: Pixels,
     pub line_height: Pixels,
@@ -1026,6 +1065,7 @@ pub struct EditorState {
     fold_ranges: Vec<FoldRange>,
     folded: Vec<FoldRange>,
     fold_line_index: Option<Arc<FoldLineIndex>>,
+    fold_layout_revision: u64,
 
     diagnostics: Vec<EditorDiagnostic>,
 }
@@ -1090,6 +1130,7 @@ impl EditorState {
 
         Self {
             focus_handle: cx.focus_handle(),
+            accessibility_id: AccessibilityId::new(),
             rope: Rope::from_str("\n"),
             cursor: Position::zero(),
             selection: None,
@@ -1100,15 +1141,23 @@ impl EditorState {
             content_version: 0,
             accessibility_document: None,
             accessibility_preparation_task: None,
+            accessibility_geometry: None,
+            accessibility_reveal: None,
+            reveal_eof: false,
             parser,
             syntax_tree: None,
             highlight_query: None,
             language: Language::Plain,
             scroll_handle: ScrollHandle::new(),
             scroll_offset_x: px(0.0),
+            pending_cursor_scroll: false,
             max_line_width: px(0.0),
             line_layouts: HashMap::new(),
             line_content_hashes: HashMap::new(),
+            line_geometry_compatible: HashMap::new(),
+            line_text_runs: HashMap::new(),
+            line_geometry_candidates: HashMap::new(),
+            line_native_geometry: HashMap::new(),
             cached_highlight_spans: Vec::new(),
             highlight_cache_version: u64::MAX,
             highlight_cache_first_line: 0,
@@ -1124,6 +1173,7 @@ impl EditorState {
             show_line_numbers: true,
             tab_size: 4,
             read_only: false,
+            disabled: false,
             font_size: px(14.0),
             line_height: px(20.0),
             font_family_override: None,
@@ -1162,6 +1212,7 @@ impl EditorState {
             fold_ranges: Vec::new(),
             folded: Vec::new(),
             fold_line_index: None,
+            fold_layout_revision: 0,
             diagnostics: Vec::new(),
         }
     }
@@ -1225,6 +1276,11 @@ impl EditorState {
         self.line_height = px((size * 1.5).round());
         self.line_layouts.clear();
         self.line_content_hashes.clear();
+        self.accessibility_geometry = None;
+        self.line_geometry_compatible.clear();
+        self.line_text_runs.clear();
+        self.line_geometry_candidates.clear();
+        self.line_native_geometry.clear();
         cx.notify();
     }
 
@@ -1232,6 +1288,11 @@ impl EditorState {
         self.font_family_override = Some(family.into());
         self.line_layouts.clear();
         self.line_content_hashes.clear();
+        self.accessibility_geometry = None;
+        self.line_geometry_compatible.clear();
+        self.line_text_runs.clear();
+        self.line_geometry_candidates.clear();
+        self.line_native_geometry.clear();
         cx.notify();
     }
 
@@ -1268,6 +1329,7 @@ impl EditorState {
     fn paint_cursor_blink(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.blink_paint_epoch = self.blink_paint_epoch.wrapping_add(1);
         if !self.focus_handle.is_focused(window)
+            || self.disabled
             || !window.is_window_active()
             || !window.is_window_visible()
             || window.reduce_motion()
@@ -1386,6 +1448,9 @@ impl EditorState {
         focus: usize,
         cx: &mut Context<Self>,
     ) -> Result<(), &'static str> {
+        if self.disabled {
+            return Err("text is disabled");
+        }
         let selection = AccessibilityTextSelection { anchor, focus };
         if !self
             .prepared_accessibility_document()
@@ -1403,6 +1468,501 @@ impl EditorState {
             .chars()
             .take(MAX_ACCESSIBILITY_VALUE_CHARS)
             .collect()
+    }
+
+    fn checked_accessibility_range(
+        &self,
+        id: AccessibilityId,
+        start: usize,
+        end: usize,
+    ) -> Result<Range<usize>, &'static str> {
+        if self.disabled {
+            return Err("text is disabled");
+        }
+        if start > end
+            || !self
+                .prepared_accessibility_document()
+                .is_some_and(|document| {
+                    document.id() == id
+                        && document.contains_selection(AccessibilityTextSelection {
+                            anchor: start,
+                            focus: end,
+                        })
+                })
+        {
+            return Err("text action requires the originating current prepared document");
+        }
+        Ok(start..end)
+    }
+
+    fn replace_accessibility_text(
+        &mut self,
+        id: AccessibilityId,
+        start: usize,
+        end: usize,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<(), &'static str> {
+        if self.read_only || self.disabled {
+            return Err("text is read-only");
+        }
+        let range = self.checked_accessibility_range(id, start, end)?;
+        self.marked_range = None;
+        self.replace_input_range(range, text, false, cx);
+        self.ensure_cursor_visible(cx);
+        cx.notify();
+        Ok(())
+    }
+
+    fn accessibility_clipboard(
+        &mut self,
+        action: AccessibilityAction,
+        id: AccessibilityId,
+        anchor: usize,
+        focus: usize,
+        cx: &mut Context<Self>,
+    ) -> Result<(), &'static str> {
+        let range = self.checked_accessibility_range(id, anchor.min(focus), anchor.max(focus))?;
+        match action {
+            AccessibilityAction::CopyText => cx.write_to_clipboard(ClipboardItem::new_string(
+                self.rope.byte_slice(range).to_string(),
+            )),
+            AccessibilityAction::CutText => {
+                if self.read_only || self.disabled {
+                    return Err("text is read-only");
+                }
+                cx.write_to_clipboard(ClipboardItem::new_string(
+                    self.rope.byte_slice(range.clone()).to_string(),
+                ));
+                self.replace_accessibility_text(id, range.start, range.end, "", cx)?;
+            }
+            AccessibilityAction::PasteText => {
+                if self.read_only || self.disabled {
+                    return Err("text is read-only");
+                }
+                let text = cx
+                    .read_from_clipboard()
+                    .map_err(|_| "clipboard unavailable")?
+                    .and_then(|item| item.text())
+                    .ok_or("clipboard has no text")?;
+                self.replace_accessibility_text(id, range.start, range.end, &text, cx)?;
+            }
+            _ => return Err("unsupported clipboard operation"),
+        }
+        Ok(())
+    }
+
+    fn reveal_accessibility_text(
+        &mut self,
+        id: AccessibilityId,
+        start: usize,
+        end: usize,
+        alignment: AccessibilityTextAlignment,
+        cx: &mut Context<Self>,
+    ) -> Result<(), &'static str> {
+        let range = self.checked_accessibility_range(id, start, end)?;
+        let byte = if matches!(
+            alignment,
+            AccessibilityTextAlignment::Bottom
+                | AccessibilityTextAlignment::BottomRight
+                | AccessibilityTextAlignment::Right
+        ) {
+            end
+        } else {
+            start
+        };
+        let pos = self.byte_offset_to_pos(byte);
+        self.reveal_eof |= pos.line >= self.total_lines();
+        if self.display_line_index().row_for_line(pos.line).is_none() {
+            self.folded
+                .retain(|fold| !(pos.line > fold.start_line && pos.line <= fold.end_line));
+            self.rebuild_fold_line_index();
+            self.invalidate_all_caches();
+        }
+        let row = self
+            .buffer_line_to_display_row(pos.line)
+            .ok_or("text row is not displayed")?;
+        let viewport = self.scroll_handle.bounds();
+        let target = px(12.0) + self.line_height * row as f32;
+        let offset = self.scroll_handle.offset();
+        let top = -offset.y;
+        let height = viewport.size.height;
+        let y = match alignment {
+            AccessibilityTextAlignment::Top | AccessibilityTextAlignment::TopLeft => -target,
+            AccessibilityTextAlignment::Bottom | AccessibilityTextAlignment::BottomRight => {
+                -(target + self.line_height - height)
+            }
+            _ if target < top => -target,
+            _ if target + self.line_height > top + height => -(target + self.line_height - height),
+            _ => offset.y,
+        }
+        .min(px(0.0));
+        // Layout will clamp against the newly expanded document, not old folds.
+        self.scroll_handle.set_offset(point(offset.x, y));
+        self.accessibility_reveal = Some((id, range, alignment));
+        cx.notify();
+        Ok(())
+    }
+
+    fn finish_accessibility_reveal(&mut self, cx: &mut Context<Self>) {
+        let Some((id, range, alignment)) = self.accessibility_reveal.take() else {
+            return;
+        };
+        if self
+            .checked_accessibility_range(id, range.start, range.end)
+            .is_err()
+        {
+            return;
+        }
+        let byte = if matches!(
+            alignment,
+            AccessibilityTextAlignment::Bottom
+                | AccessibilityTextAlignment::BottomRight
+                | AccessibilityTextAlignment::Right
+        ) {
+            range.end
+        } else {
+            range.start
+        };
+        let pos = self.byte_offset_to_pos(byte);
+        let x = self.line_caret_x(pos.line, pos.col);
+        let width = (self.scroll_handle.bounds().size.width
+            - if self.show_line_numbers {
+                px(80.0)
+            } else {
+                px(12.0)
+            }
+            - px(20.0))
+        .max(px(1.0));
+        let before = self.scroll_offset_x;
+        self.scroll_offset_x = match alignment {
+            AccessibilityTextAlignment::Left | AccessibilityTextAlignment::TopLeft => x,
+            AccessibilityTextAlignment::Right | AccessibilityTextAlignment::BottomRight => {
+                x - width
+            }
+            _ if x < before => x,
+            _ if x > before + width => x - width,
+            _ => before,
+        }
+        .max(px(0.0));
+        if before != self.scroll_offset_x {
+            cx.notify();
+        }
+    }
+
+    // Equivalent to LTR layout caret placement, with bounded binary searches
+    // rather than walking every preceding glyph for every selectable unit.
+    fn shaped_x(layout: &ShapedLine, byte: usize) -> Pixels {
+        layout
+            .runs
+            .iter()
+            .find_map(|run| {
+                let index = run.glyphs.partition_point(|glyph| glyph.index < byte);
+                run.glyphs.get(index).map(|glyph| glyph.position.x)
+            })
+            .unwrap_or(layout.width)
+    }
+
+    fn native_geometry_for_line(&self, line: usize) -> Option<&LineTextGeometry> {
+        self.line_native_geometry.get(&line)?.1.as_deref()
+    }
+
+    fn line_caret_x(&self, line: usize, byte: usize) -> Pixels {
+        self.line_layouts.get(&line).map_or(px(0.0), |layout| {
+            self.native_geometry_for_line(line)
+                .and_then(|geometry| geometry.caret_for_byte(byte, layout.len()))
+                .unwrap_or_else(|| layout.x_for_index(byte))
+        })
+    }
+
+    fn line_range_rectangles(&self, line: usize, range: Range<usize>) -> Vec<Range<Pixels>> {
+        if let Some(geometry) = self.native_geometry_for_line(line) {
+            return geometry.rectangles_for_bytes(range);
+        }
+        let a = self.line_caret_x(line, range.start);
+        let b = self.line_caret_x(line, range.end);
+        vec![a.min(b)..a.max(b)]
+    }
+
+    fn bounds_for_byte_range(&self, range: Range<usize>) -> Option<Bounds<Pixels>> {
+        let bounds = self.last_bounds?;
+        let start = self.byte_offset_to_pos(range.start);
+        let row = self.buffer_line_to_display_row(start.line)?;
+        let y = bounds.top() + px(12.0) + self.line_height * row as f32;
+        let viewport = self.scroll_handle.bounds();
+        if y + self.line_height < viewport.top() || y >= viewport.bottom() {
+            return None;
+        }
+        let gutter = if self.show_line_numbers {
+            px(80.0)
+        } else {
+            px(12.0)
+        };
+        let end = self.byte_offset_to_pos(range.end);
+        let first_fragment = self
+            .line_range_rectangles(
+                start.line,
+                start.col..if end.line == start.line {
+                    end.col
+                } else {
+                    self.line_len(start.line)
+                },
+            )
+            .into_iter()
+            .next();
+        let (x, end_x) = first_fragment.map_or_else(
+            || {
+                let caret = self.line_caret_x(start.line, start.col);
+                (caret, caret)
+            },
+            |rectangle| (rectangle.start, rectangle.end),
+        );
+        let width = (end_x - x).max(px(1.0));
+        let x = bounds.left() + gutter + x - self.scroll_offset_x;
+        Some(Bounds::new(point(x, y), size(width, self.line_height)))
+    }
+
+    fn prepare_accessibility_geometry(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        first_row: usize,
+        last_row: usize,
+        visible_lines: &[usize],
+        text_system: &WindowTextSystem,
+    ) -> Option<Arc<AccessibilityTextGeometry>> {
+        let document = self.prepared_accessibility_document()?;
+        let gutter = if self.show_line_numbers {
+            px(80.0)
+        } else {
+            px(12.0)
+        };
+        let key = EditorGeometryKey {
+            document: document.id(),
+            bounds,
+            viewport: self.scroll_handle.bounds(),
+            scroll_x: self.scroll_offset_x,
+            font_size: self.font_size,
+            gutter,
+            fold_revision: self.fold_layout_revision,
+            first_row,
+            last_row,
+        };
+        let native_caret_covered =
+            self.native_geometry_for_line(self.cursor.line)
+                .is_none_or(|geometry| {
+                    self.line_layouts
+                        .get(&self.cursor.line)
+                        .is_none_or(|layout| {
+                            geometry
+                                .caret_for_byte(self.cursor.col, layout.len())
+                                .is_some()
+                        })
+                });
+        if let Some((old, geometry)) = &self.accessibility_geometry
+            && *old == key
+            && self.accessibility_reveal.is_none()
+            && native_caret_covered
+        {
+            return Some(geometry.clone());
+        }
+        let gutter = if self.show_line_numbers {
+            px(80.0)
+        } else {
+            px(12.0)
+        };
+        let width = (key.viewport.size.width - gutter).max(px(1.0));
+        let mut runs = Vec::new();
+        for &line in visible_lines {
+            let start = self.rope.line_to_byte(line);
+            let line_bytes = self.rope.line(line).len_bytes();
+            let row = self.buffer_line_to_display_row(line)?;
+            let y = bounds.top() + px(12.0) + self.line_height * row as f32;
+            if y + self.line_height < key.viewport.top() || y >= key.viewport.bottom() {
+                continue;
+            }
+            let layout = self.line_layouts.get(&line);
+            let compatible = layout.is_none_or(|layout| {
+                *self
+                    .line_geometry_compatible
+                    .entry(line)
+                    .or_insert_with(|| {
+                        let mut previous = None;
+                        layout.runs.iter().flat_map(|run| &run.glyphs).all(|glyph| {
+                            let valid = previous.is_none_or(|(index, x)| {
+                                glyph.index >= index && glyph.position.x >= x
+                            });
+                            previous = Some((glyph.index, glyph.position.x));
+                            valid
+                        })
+                    })
+            });
+            let mut requested_runs = Vec::new();
+            if let Some(layout) = layout {
+                let candidates = self
+                    .line_geometry_candidates
+                    .entry(line)
+                    .or_insert_with(|| {
+                        let mut candidates = layout
+                            .runs
+                            .iter()
+                            .flat_map(|run| &run.glyphs)
+                            .map(|glyph| (glyph.position.x, glyph.index))
+                            .collect::<Vec<_>>();
+                        if !candidates.windows(2).all(|pair| pair[0].0 <= pair[1].0) {
+                            candidates.sort_unstable_by(|a, b| {
+                                a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                        }
+                        candidates
+                    });
+                let first = candidates
+                    .partition_point(|(x, _)| *x < self.scroll_offset_x)
+                    .saturating_sub(1);
+                let last =
+                    (candidates.partition_point(|(x, _)| *x <= self.scroll_offset_x + width) + 1)
+                        .min(candidates.len());
+                for &(_, byte) in &candidates[first..last] {
+                    requested_runs
+                        .extend(document.runs_for_bytes(start + byte..start + byte).take(1));
+                }
+            } else {
+                requested_runs.extend(document.runs_for_bytes(start..start + line_bytes));
+            }
+            // A pending reveal needs its actual caret even before horizontal
+            // scrolling mounts it. One extra bounded run also keeps EOF honest.
+            let caret_byte = self
+                .accessibility_reveal
+                .as_ref()
+                .map(|(_, range, alignment)| {
+                    if matches!(
+                        alignment,
+                        AccessibilityTextAlignment::Bottom
+                            | AccessibilityTextAlignment::BottomRight
+                            | AccessibilityTextAlignment::Right
+                    ) {
+                        range.end
+                    } else {
+                        range.start
+                    }
+                })
+                .filter(|byte| self.byte_offset_to_pos(*byte).line == line);
+            if let Some(byte) = caret_byte {
+                requested_runs.extend(document.runs_for_bytes(byte..byte).take(1));
+            }
+            if self.cursor.line == line {
+                let byte = self.pos_to_byte_offset(self.cursor);
+                requested_runs.extend(document.runs_for_bytes(byte..byte).take(1));
+            }
+            let last_byte = start + layout.map_or(0, ShapedLine::len);
+            requested_runs.extend(document.runs_for_bytes(last_byte..last_byte).take(1));
+            requested_runs.retain(|run| run.hard_line == line);
+            requested_runs.sort_unstable_by_key(|run| run.bytes.start);
+            requested_runs.dedup_by_key(|run| run.bytes.start);
+            let native = layout.and_then(|layout| {
+                let requested = requested_runs
+                    .iter()
+                    .map(|run| {
+                        (run.bytes.start - start).min(layout.len())
+                            ..(run.bytes.end - start).min(layout.len())
+                    })
+                    .collect::<Vec<_>>();
+                let entry = self
+                    .line_native_geometry
+                    .entry(line)
+                    .or_insert_with(|| (Vec::new(), None));
+                if entry.0 != requested {
+                    entry.1 = self.line_text_runs.get(&line).and_then(|fonts| {
+                        text_system
+                            .line_text_geometry(&layout.text, self.font_size, fonts, &requested)
+                            .map(Arc::new)
+                    });
+                    entry.0 = requested;
+                }
+                entry.1.clone()
+            });
+            for run in requested_runs {
+                let mut byte = run.bytes.start - start;
+                let mut edges = Vec::with_capacity(run.character_lengths.len());
+                let mut valid = true;
+                for &length in run.character_lengths {
+                    let pair = if let Some(native) = &native {
+                        if byte >= layout.map_or(0, ShapedLine::len) {
+                            Some((native.end_caret, native.end_caret))
+                        } else {
+                            native
+                                .cluster_for_byte(byte)
+                                .filter(|cluster| {
+                                    cluster.right_to_left
+                                        == (run.direction
+                                            == AccessibilityTextDirection::RightToLeft)
+                                })
+                                .map(|cluster| (cluster.leading, cluster.trailing))
+                        }
+                    } else if compatible && run.direction == AccessibilityTextDirection::LeftToRight
+                    {
+                        Some((
+                            layout.map_or(px(0.0), |layout| Self::shaped_x(layout, byte)),
+                            layout.map_or(px(0.0), |layout| {
+                                Self::shaped_x(layout, byte + usize::from(length))
+                            }),
+                        ))
+                    } else {
+                        None
+                    };
+                    let Some(pair) = pair else {
+                        valid = false;
+                        break;
+                    };
+                    edges.push(pair);
+                    byte += usize::from(length);
+                }
+                if !valid {
+                    continue;
+                }
+                let caret = native.as_ref().map_or(px(0.0), |native| native.end_caret);
+                let left = edges
+                    .iter()
+                    .map(|&(a, b)| a.min(b))
+                    .reduce(Pixels::min)
+                    .unwrap_or(caret);
+                let right = edges
+                    .iter()
+                    .map(|&(a, b)| a.max(b))
+                    .reduce(Pixels::max)
+                    .unwrap_or(caret);
+                if right < self.scroll_offset_x || left > self.scroll_offset_x + width {
+                    continue;
+                }
+                let rtl = run.direction == AccessibilityTextDirection::RightToLeft;
+                let positions = edges
+                    .iter()
+                    .map(|(a, b)| {
+                        f32::from(if rtl {
+                            right - (*a).max(*b)
+                        } else {
+                            (*a).min(*b) - left
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let widths = edges
+                    .iter()
+                    .map(|(a, b)| f32::from((*b - *a).abs()))
+                    .collect::<Vec<_>>();
+                runs.push(AccessibilityTextRunGeometry {
+                    run_id: run.id,
+                    bounds: AccessibilityRect::from_bounds(Bounds::new(
+                        point(bounds.left() + gutter + left - self.scroll_offset_x, y),
+                        size((right - left).max(px(1.0)), self.line_height),
+                    )),
+                    direction: run.direction,
+                    character_positions: positions.into(),
+                    character_widths: widths.into(),
+                });
+            }
+        }
+        let geometry = AccessibilityTextGeometry::new(&document, runs).ok()?;
+        self.accessibility_geometry = Some((key, geometry.clone()));
+        Some(geometry)
     }
 
     pub fn has_selection(&self) -> bool {
@@ -1442,6 +2002,40 @@ impl EditorState {
 
     pub fn is_read_only(&self) -> bool {
         self.read_only
+    }
+
+    /// Toggle user/native editing. Pending IME composition is finished without
+    /// committing another edit; selection and reading remain available.
+    pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
+        if self.read_only != read_only {
+            self.read_only = read_only;
+            self.marked_range = None;
+            cx.notify();
+        }
+    }
+
+    /// Whether user input and native text actions are disabled.
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    /// Disable input without changing document content or editing history.
+    /// The next paint removes focus/tab participation and native actions.
+    pub fn set_disabled(&mut self, disabled: bool, cx: &mut Context<Self>) {
+        if self.disabled != disabled {
+            self.disabled = disabled;
+            if disabled {
+                self.marked_range = None;
+                self.blink_task = None;
+                self.cursor_visible = true;
+                self.autoscroll_task = None;
+                self.is_selecting = false;
+                self.dragging_h_scrollbar = false;
+                self.pending_cursor_scroll = false;
+                self.accessibility_reveal = None;
+            }
+            cx.notify();
+        }
     }
 
     pub fn search_query_len_bytes(&self) -> usize {
@@ -1855,6 +2449,7 @@ impl EditorState {
     }
 
     fn rebuild_fold_line_index(&mut self) {
+        self.fold_layout_revision = self.fold_layout_revision.wrapping_add(1);
         self.fold_line_index = if self.folded.is_empty() {
             None
         } else {
@@ -1866,14 +2461,29 @@ impl EditorState {
     }
 
     fn display_line_index(&self) -> DisplayLineIndex {
+        let eof = self.reveal_eof
+            || self.cursor.line >= self.total_lines()
+            || self.selection.is_some_and(|selection| {
+                selection.anchor.line >= self.total_lines()
+                    || selection.cursor.line >= self.total_lines()
+            });
         if self.folded.is_empty() {
-            DisplayLineIndex::Unfolded(self.total_lines())
-        } else {
-            DisplayLineIndex::Folded(
-                self.fold_line_index
-                    .clone()
-                    .expect("fold mutations prepare their retained interval index"),
+            DisplayLineIndex::Unfolded(
+                self.total_lines()
+                    + usize::from(
+                        eof && self.rope.line(self.rope.len_lines() - 1).len_bytes() == 0,
+                    ),
             )
+        } else {
+            let index = self
+                .fold_line_index
+                .clone()
+                .expect("fold mutations prepare their retained interval index");
+            if eof {
+                DisplayLineIndex::FoldedWithEof(index)
+            } else {
+                DisplayLineIndex::Folded(index)
+            }
         }
     }
 
@@ -2080,7 +2690,7 @@ impl EditorState {
         insert_text: &str,
         cx: &mut Context<Self>,
     ) {
-        if self.read_only {
+        if self.read_only || self.disabled {
             return;
         }
 
@@ -2151,6 +2761,9 @@ impl EditorState {
     }
 
     pub fn set_content(&mut self, content: &str, cx: &mut Context<Self>) {
+        self.reveal_eof = false;
+        self.accessibility_reveal = None;
+        self.accessibility_geometry = None;
         self.reparse_task = None;
         self.content_version = self.content_version.wrapping_add(1);
         self.rope = if content.is_empty() {
@@ -2442,6 +3055,9 @@ impl EditorState {
     }
 
     fn insert_text_at_cursor(&mut self, text: &str, cx: &mut Context<Self>) {
+        if self.read_only || self.disabled {
+            return;
+        }
         if let Some(selection) = self.selection.take() {
             self.delete_selection_internal(selection, cx);
         }
@@ -2683,7 +3299,7 @@ impl EditorState {
     /// Replace the current selection as one undoable edit. This is useful for
     /// document formatting commands and does not reload/reset the document.
     pub fn replace_selection(&mut self, text: &str, cx: &mut Context<Self>) {
-        if self.read_only {
+        if self.read_only || self.disabled {
             return;
         }
         let range = self.input_replacement_range();
@@ -2694,7 +3310,7 @@ impl EditorState {
     }
 
     pub fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
-        if self.read_only {
+        if self.read_only || self.disabled {
             return;
         }
         self.marked_range = None;
@@ -2731,7 +3347,7 @@ impl EditorState {
     }
 
     pub fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
-        if self.read_only {
+        if self.read_only || self.disabled {
             return;
         }
         self.marked_range = None;
@@ -2768,6 +3384,9 @@ impl EditorState {
     }
 
     pub fn move_up(&mut self, _: &MoveUp, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         if self.is_overlay_active(cx) {
             cx.propagate();
             return;
@@ -2781,6 +3400,9 @@ impl EditorState {
     }
 
     pub fn move_down(&mut self, _: &MoveDown, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         if self.is_overlay_active(cx) {
             cx.propagate();
             return;
@@ -2794,6 +3416,9 @@ impl EditorState {
     }
 
     pub fn move_left(&mut self, _: &MoveLeft, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         if self.cursor.col > 0 {
             self.cursor.col = self.previous_grapheme_column(self.cursor);
         } else if self.cursor.line > 0 {
@@ -2805,6 +3430,9 @@ impl EditorState {
     }
 
     pub fn move_right(&mut self, _: &MoveRight, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         let line_len = self.line_len(self.cursor.line);
         if self.cursor.col < line_len {
             self.cursor.col = self.next_grapheme_column(self.cursor);
@@ -2817,12 +3445,18 @@ impl EditorState {
     }
 
     pub fn move_word_left(&mut self, _: &MoveWordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         self.cursor = self.find_word_boundary_left(self.cursor);
         self.selection = None;
         cx.notify();
     }
 
     pub fn move_word_right(&mut self, _: &MoveWordRight, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         self.cursor = self.find_word_boundary_right(self.cursor);
         self.selection = None;
         cx.notify();
@@ -2834,12 +3468,18 @@ impl EditorState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.disabled {
+            return;
+        }
         self.cursor.col = 0;
         self.selection = None;
         cx.notify();
     }
 
     pub fn move_to_line_end(&mut self, _: &MoveToLineEnd, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         self.cursor.col = self.line_len(self.cursor.line);
         self.selection = None;
         cx.notify();
@@ -2851,12 +3491,18 @@ impl EditorState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.disabled {
+            return;
+        }
         self.cursor = Position::zero();
         self.selection = None;
         cx.notify();
     }
 
     pub fn move_to_doc_end(&mut self, _: &MoveToDocEnd, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         let last = self.total_lines() - 1;
         self.cursor = Position::new(last, self.line_len(last));
         self.selection = None;
@@ -2864,6 +3510,9 @@ impl EditorState {
     }
 
     pub fn page_up(&mut self, _: &PageUp, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         let page_size = 30;
         self.cursor.line = self.cursor.line.saturating_sub(page_size);
         self.clamp_cursor();
@@ -2872,6 +3521,9 @@ impl EditorState {
     }
 
     pub fn page_down(&mut self, _: &PageDown, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         let page_size = 30;
         self.cursor.line = min(self.cursor.line + page_size, self.total_lines() - 1);
         self.clamp_cursor();
@@ -2886,6 +3538,9 @@ impl EditorState {
     }
 
     pub fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         self.start_selection_if_needed();
         if self.cursor.line > 0 {
             self.cursor.line -= 1;
@@ -2898,6 +3553,9 @@ impl EditorState {
     }
 
     pub fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         self.start_selection_if_needed();
         if self.cursor.line < self.total_lines() - 1 {
             self.cursor.line += 1;
@@ -2910,6 +3568,9 @@ impl EditorState {
     }
 
     pub fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         self.start_selection_if_needed();
         if self.cursor.col > 0 {
             self.cursor.col = self.previous_grapheme_column(self.cursor);
@@ -2924,6 +3585,9 @@ impl EditorState {
     }
 
     pub fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         self.start_selection_if_needed();
         let line_len = self.line_len(self.cursor.line);
         if self.cursor.col < line_len {
@@ -2944,6 +3608,9 @@ impl EditorState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.disabled {
+            return;
+        }
         self.start_selection_if_needed();
         self.cursor.col = 0;
         if let Some(ref mut sel) = self.selection {
@@ -2958,6 +3625,9 @@ impl EditorState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.disabled {
+            return;
+        }
         self.start_selection_if_needed();
         self.cursor.col = self.line_len(self.cursor.line);
         if let Some(ref mut sel) = self.selection {
@@ -2967,6 +3637,9 @@ impl EditorState {
     }
 
     pub fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         let start = Position::zero();
         let last = self.total_lines() - 1;
         let end = Position::new(last, self.line_len(last));
@@ -2976,7 +3649,7 @@ impl EditorState {
     }
 
     pub fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
-        if self.read_only {
+        if self.read_only || self.disabled {
             return;
         }
         if let Some(selection) = self
@@ -3027,7 +3700,7 @@ impl EditorState {
     }
 
     pub fn delete(&mut self, _: &Delete, _: &mut Window, cx: &mut Context<Self>) {
-        if self.read_only {
+        if self.read_only || self.disabled {
             return;
         }
         if let Some(selection) = self
@@ -3067,7 +3740,7 @@ impl EditorState {
     }
 
     pub fn delete_word(&mut self, _: &DeleteWord, _: &mut Window, cx: &mut Context<Self>) {
-        if self.read_only {
+        if self.read_only || self.disabled {
             return;
         }
         let word_start = self.find_word_boundary_left(self.cursor);
@@ -3102,7 +3775,7 @@ impl EditorState {
             cx.propagate();
             return;
         }
-        if self.read_only {
+        if self.read_only || self.disabled {
             return;
         }
 
@@ -3146,7 +3819,7 @@ impl EditorState {
             cx.propagate();
             return;
         }
-        if self.read_only {
+        if self.read_only || self.disabled {
             return;
         }
         let spaces = " ".repeat(self.tab_size);
@@ -3154,6 +3827,9 @@ impl EditorState {
     }
 
     pub fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         if let Some(selection) = &self.selection {
             let text = self.get_selection_text(selection);
             cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -3161,7 +3837,7 @@ impl EditorState {
     }
 
     pub fn cut(&mut self, _: &Cut, _: &mut Window, cx: &mut Context<Self>) {
-        if self.read_only {
+        if self.read_only || self.disabled {
             return;
         }
         if let Some(selection) = self.selection.take() {
@@ -3173,7 +3849,7 @@ impl EditorState {
     }
 
     pub fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
-        if self.read_only {
+        if self.read_only || self.disabled {
             return;
         }
         if let Ok(Some(item)) = cx.read_from_clipboard()
@@ -3337,7 +4013,7 @@ impl EditorState {
     }
 
     pub fn replace_current(&mut self, replacement: &str, cx: &mut Context<Self>) {
-        if self.read_only {
+        if self.read_only || self.disabled {
             return;
         }
         let idx = match self.current_match_idx {
@@ -3367,7 +4043,7 @@ impl EditorState {
     }
 
     pub fn replace_all(&mut self, replacement: &str, cx: &mut Context<Self>) {
-        if self.read_only || self.search_matches.is_empty() {
+        if self.read_only || self.disabled || self.search_matches.is_empty() {
             return;
         }
         let matches: Vec<_> = self.search_matches.iter().rev().copied().collect();
@@ -3397,6 +4073,11 @@ impl EditorState {
     fn invalidate_all_caches(&mut self) {
         self.line_layouts.clear();
         self.line_content_hashes.clear();
+        self.accessibility_geometry = None;
+        self.line_geometry_compatible.clear();
+        self.line_text_runs.clear();
+        self.line_geometry_candidates.clear();
+        self.line_native_geometry.clear();
         self.highlight_cache_version = u64::MAX;
     }
 
@@ -3412,6 +4093,11 @@ impl EditorState {
         }
         self.line_layouts.clear();
         self.line_content_hashes.clear();
+        self.accessibility_geometry = None;
+        self.line_geometry_compatible.clear();
+        self.line_text_runs.clear();
+        self.line_geometry_candidates.clear();
+        self.line_native_geometry.clear();
         self.highlight_cache_version = u64::MAX;
     }
 
@@ -3484,6 +4170,9 @@ impl EditorState {
     }
 
     fn ensure_cursor_visible(&mut self, cx: &mut Context<Self>) {
+        // A newly mounted line obtains native caret metrics during paint.
+        // Finish horizontal visibility once, preserving later manual scrolling.
+        self.pending_cursor_scroll = true;
         if self.cursor.line < self.total_lines()
             && self
                 .display_line_index()
@@ -3529,19 +4218,39 @@ impl EditorState {
             self.scroll_handle.set_offset(point(offset.x, new_offset_y));
         }
 
-        if let Some(layout) = self.line_layouts.get(&self.cursor.line) {
-            let cursor_x = layout.x_for_index(self.cursor.col);
+        self.ensure_cursor_horizontal_visible(content_width);
+
+        cx.notify();
+    }
+
+    fn ensure_cursor_horizontal_visible(&mut self, content_width: Pixels) -> bool {
+        let before = self.scroll_offset_x;
+        if self.line_layouts.contains_key(&self.cursor.line) {
+            let cursor_x = self.line_caret_x(self.cursor.line, self.cursor.col);
             let visible_left = self.scroll_offset_x;
             let visible_right = visible_left + content_width - px(20.0);
-
             if cursor_x < visible_left {
                 self.scroll_offset_x = (cursor_x - px(20.0)).max(px(0.0));
             } else if cursor_x > visible_right {
                 self.scroll_offset_x = cursor_x - content_width + px(40.0);
             }
         }
+        before != self.scroll_offset_x
+    }
 
-        cx.notify();
+    fn finish_cursor_scroll(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.pending_cursor_scroll) {
+            let gutter = if self.show_line_numbers {
+                px(80.0)
+            } else {
+                px(12.0)
+            };
+            if self
+                .ensure_cursor_horizontal_visible(self.scroll_handle.bounds().size.width - gutter)
+            {
+                cx.notify();
+            }
+        }
     }
 
     pub fn scroll_horizontal(&mut self, delta: Pixels, cx: &mut Context<Self>) {
@@ -3587,7 +4296,10 @@ impl EditorState {
 
         let relative_x = mouse_pos.x - bounds.left() - gutter_width + self.scroll_offset_x;
         let col = if let Some(layout) = self.line_layouts.get(&line) {
-            let idx = layout.closest_index_for_x(relative_x);
+            let idx = self.native_geometry_for_line(line).map_or_else(
+                || layout.closest_index_for_x(relative_x),
+                |geometry| geometry.closest_byte_for_x(relative_x, layout.len()),
+            );
             idx.min(self.line_len(line))
         } else {
             let approx_char_width = px(8.4);
@@ -3684,6 +4396,9 @@ impl EditorState {
         _window: &Window,
         cx: &mut Context<Self>,
     ) {
+        if self.disabled {
+            return;
+        }
         let click_x = event.position.x - bounds.left();
         let padding_top = px(12.0);
         let display_row = ((event.position.y - bounds.top() - padding_top) / line_height)
@@ -3747,6 +4462,9 @@ impl EditorState {
         _window: &Window,
         cx: &mut Context<Self>,
     ) {
+        if self.disabled {
+            return;
+        }
         if self.dragging_h_scrollbar {
             if event.pressed_button != Some(MouseButton::Left) {
                 self.dragging_h_scrollbar = false;
@@ -3873,7 +4591,7 @@ impl EntityInputHandler for EditorState {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.read_only {
+        if self.read_only || self.disabled {
             return;
         }
         let composing = self.marked_range.is_some();
@@ -3916,7 +4634,7 @@ impl EntityInputHandler for EditorState {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.read_only {
+        if self.read_only || self.disabled {
             return;
         }
         let range = range_utf16
@@ -3952,12 +4670,12 @@ impl EntityInputHandler for EditorState {
 
     fn bounds_for_range(
         &mut self,
-        _range_utf16: Range<usize>,
+        range_utf16: Range<usize>,
         _bounds: Bounds<Pixels>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        self.last_bounds
+        self.bounds_for_byte_range(self.range_from_utf16(&range_utf16))
     }
 
     fn character_index_for_point(
@@ -4195,7 +4913,7 @@ impl Element for EditorElement {
         }
 
         let text_style = window.text_style();
-        let mut shaped_layouts: Vec<(usize, Option<ShapedLine>, u64)> =
+        let mut shaped_layouts: Vec<(usize, Option<(ShapedLine, Vec<TextRun>)>, u64)> =
             Vec::with_capacity(visible_buffer_lines.len());
         let mut max_line_width = px(0.0);
 
@@ -4301,7 +5019,7 @@ impl Element for EditorElement {
                 cx,
             );
 
-            shaped_layouts.push((line_idx, Some(shaped), line_hash));
+            shaped_layouts.push((line_idx, Some((shaped, text_runs)), line_hash));
         }
 
         self.state.update(cx, |state, _| {
@@ -4311,8 +5029,25 @@ impl Element for EditorElement {
             state
                 .line_content_hashes
                 .retain(|line_idx, _| visible_buffer_lines.binary_search(line_idx).is_ok());
+            state
+                .line_geometry_compatible
+                .retain(|line_idx, _| visible_buffer_lines.binary_search(line_idx).is_ok());
+            state
+                .line_text_runs
+                .retain(|line, _| visible_buffer_lines.binary_search(line).is_ok());
+            state
+                .line_geometry_candidates
+                .retain(|line, _| visible_buffer_lines.binary_search(line).is_ok());
+            state
+                .line_native_geometry
+                .retain(|line, _| visible_buffer_lines.binary_search(line).is_ok());
             for (idx, layout, hash) in shaped_layouts {
-                if let Some(shaped) = layout {
+                state.line_geometry_compatible.remove(&idx);
+                state.line_native_geometry.remove(&idx);
+                state.line_geometry_candidates.remove(&idx);
+                state.line_text_runs.remove(&idx);
+                if let Some((shaped, text_runs)) = layout {
+                    state.line_text_runs.insert(idx, text_runs);
                     state.line_layouts.insert(idx, shaped);
                 }
                 state.line_content_hashes.insert(idx, hash);
@@ -4321,6 +5056,22 @@ impl Element for EditorElement {
                 state.max_line_width = max_line_width;
             }
         });
+
+        if let Some(geometry) = self.state.update(cx, |state, _| {
+            state.prepare_accessibility_geometry(
+                bounds,
+                first_visible_display_row,
+                last_visible_display_row,
+                visible_buffer_lines,
+                window.text_system(),
+            )
+        }) {
+            window.set_accessibility_text_geometry(self.state.read(cx).accessibility_id, geometry);
+        }
+        self.state
+            .update(cx, |state, cx| state.finish_accessibility_reveal(cx));
+        self.state
+            .update(cx, |state, cx| state.finish_cursor_scroll(cx));
 
         if show_line_numbers {
             window.paint_quad(PaintQuad {
@@ -4440,7 +5191,12 @@ impl Element for EditorElement {
 
         if let Some(selection) = &selection {
             let (start, end) = selection.range();
-            for line_idx in start.line..=end.line {
+            // A Select All range can cover millions of logical rows; only the
+            // mounted source rows can contribute painted selection fragments.
+            for &line_idx in visible_buffer_lines {
+                if line_idx < start.line || line_idx > end.line {
+                    continue;
+                }
                 let dr = match buf_to_disp(line_idx) {
                     Some(d) => d,
                     None => continue,
@@ -4457,22 +5213,22 @@ impl Element for EditorElement {
                     line_len
                 };
 
-                let (sel_x, sel_width) =
-                    if let Some(layout) = self.state.read(cx).line_layouts.get(&line_idx) {
-                        let x_start = layout.x_for_index(start_col);
-                        let x_end = layout.x_for_index(end_col);
-                        (
-                            bounds.left() + gutter_width + x_start - scroll_offset_x,
-                            x_end - x_start,
-                        )
-                    } else {
-                        (bounds.left() + gutter_width - scroll_offset_x, px(0.0))
-                    };
-
-                window.paint_quad(fill(
-                    Bounds::new(point(sel_x, line_y), size(sel_width, line_height)),
-                    sel_color,
-                ));
+                for rectangle in self
+                    .state
+                    .read(cx)
+                    .line_range_rectangles(line_idx, start_col..end_col)
+                {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(
+                                bounds.left() + gutter_width + rectangle.start - scroll_offset_x,
+                                line_y,
+                            ),
+                            size(rectangle.end - rectangle.start, line_height),
+                        ),
+                        sel_color,
+                    ));
+                }
             }
         }
 
@@ -4671,13 +5427,10 @@ impl Element for EditorElement {
                     0
                 };
                 let cursor_y = bounds.top() + padding_top + line_height * cursor_display_row as f32;
-                let cursor_x = if let Some(layout) =
-                    self.state.read(cx).line_layouts.get(&cursor.line)
-                {
-                    bounds.left() + gutter_width + layout.x_for_index(cursor_col) - scroll_offset_x
-                } else {
-                    bounds.left() + gutter_width - scroll_offset_x
-                };
+                let cursor_x = bounds.left()
+                    + gutter_width
+                    + self.state.read(cx).line_caret_x(cursor.line, cursor_col)
+                    - scroll_offset_x;
 
                 let cursor_draw_color = self
                     .state
@@ -4918,6 +5671,7 @@ impl EditorElement {
 
 #[derive(IntoElement)]
 pub struct Editor {
+    disabled: Option<bool>,
     state: Entity<EditorState>,
     accessibility_label: SharedString,
     min_lines: Option<usize>,
@@ -4943,6 +5697,7 @@ impl Editor {
     pub fn new(state: &Entity<EditorState>) -> Self {
         Self {
             state: state.clone(),
+            disabled: None,
             accessibility_label: "Code editor".into(),
             min_lines: None,
             max_lines: None,
@@ -4967,6 +5722,13 @@ impl Editor {
     /// Set the label announced for the editor by assistive technology.
     pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
         self.accessibility_label = label.into();
+        self
+    }
+
+    /// Disable user/native input while keeping complete readable text visible.
+    /// Omission preserves the controller's `set_disabled` configuration.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = Some(disabled);
         self
     }
 
@@ -5109,6 +5871,9 @@ impl RenderOnce for Editor {
     fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let syn_fn = self.syntax_color_fn.take();
         self.state.update(cx, |state, cx| {
+            if let Some(disabled) = self.disabled {
+                state.set_disabled(disabled, cx);
+            }
             state.bind_cursor_blink(window, cx);
             state.prepare_accessibility_document(cx);
             state.cursor_color_override = self.cursor_color;
@@ -5136,17 +5901,24 @@ impl RenderOnce for Editor {
         let max_height = self.max_lines.map(|lines| px(lines as f32 * 20.0));
         let scroll_handle = self.state.read(cx).scroll_handle.clone();
 
-        let (accessibility_document, selection, read_only, focus_handle) = {
+        let (accessibility_document, selection, read_only, disabled, focus_handle) = {
             let state = self.state.read(cx);
             let (anchor, focus) = state.selection_bytes();
             (
                 state.prepared_accessibility_document(),
                 AccessibilityTextSelection { anchor, focus },
                 state.read_only,
+                state.disabled,
                 state.focus_handle(cx),
             )
         };
         let mut accessibility_state = AccessibilityState::NONE;
+        if disabled {
+            accessibility_state |= AccessibilityState::DISABLED;
+            if focus_handle.is_focused(window) {
+                window.blur();
+            }
+        }
         if read_only {
             accessibility_state |= AccessibilityState::READ_ONLY;
         }
@@ -5159,10 +5931,23 @@ impl RenderOnce for Editor {
         }
         if accessibility_document.is_some() {
             accessibility_actions.push(AccessibilityAction::SetTextSelection);
+            accessibility_actions.push(AccessibilityAction::ScrollToVisible);
+            accessibility_actions.push(AccessibilityAction::CopyText);
+            if !read_only {
+                accessibility_actions.extend([
+                    AccessibilityAction::ReplaceSelectedText,
+                    AccessibilityAction::CutText,
+                    AccessibilityAction::PasteText,
+                ]);
+            }
         } else {
             accessibility_state |= AccessibilityState::BUSY;
         }
+        if disabled {
+            accessibility_actions.clear();
+        }
         let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::TextInput)
+            .id(self.state.read(cx).accessibility_id)
             .label(self.accessibility_label.to_string())
             .states(accessibility_state)
             .actions(accessibility_actions);
@@ -5207,10 +5992,104 @@ impl RenderOnce for Editor {
                 }
             })
             .key_context("Editor")
-            .track_focus(&focus_handle.tab_index(0).tab_stop(true))
+            .track_focus(&focus_handle.tab_index(0).tab_stop(!disabled))
             .w_full()
             .h_full()
             .max_h_full();
+
+        base = base
+            .on_accessibility_action(AccessibilityAction::SetValue, {
+                let state = self.state.downgrade();
+                move |request, _, cx| {
+                    if let Some(AccessibilityActionPayload::Value(value)) = request.payload.as_ref()
+                    {
+                        let _ = state.update(cx, |state, cx| {
+                            if !state.read_only && !state.disabled {
+                                state.marked_range = None;
+                                state.replace_input_range(
+                                    0..state.rope.len_bytes(),
+                                    value,
+                                    false,
+                                    cx,
+                                );
+                                state.ensure_cursor_visible(cx);
+                                cx.notify();
+                            }
+                        });
+                    }
+                }
+            })
+            .on_accessibility_action(AccessibilityAction::ScrollToVisible, {
+                let state = self.state.downgrade();
+                move |request, _, cx| {
+                    if let Some(AccessibilityActionPayload::TextReveal {
+                        document_id,
+                        start,
+                        end,
+                        alignment,
+                    }) = request.payload.as_ref()
+                    {
+                        let _ = state.update(cx, |state, cx| {
+                            let _ = state.reveal_accessibility_text(
+                                *document_id,
+                                *start,
+                                *end,
+                                *alignment,
+                                cx,
+                            );
+                        });
+                    }
+                }
+            })
+            .on_accessibility_action(AccessibilityAction::ReplaceSelectedText, {
+                let state = self.state.downgrade();
+                move |request, _, cx| {
+                    if let Some(AccessibilityActionPayload::TextReplacement {
+                        document_id,
+                        start,
+                        end,
+                        value,
+                    }) = request.payload.as_ref()
+                    {
+                        let _ = state.update(cx, |state, cx| {
+                            let _ = state.replace_accessibility_text(
+                                *document_id,
+                                *start,
+                                *end,
+                                value,
+                                cx,
+                            );
+                        });
+                    }
+                }
+            });
+        for action in [
+            AccessibilityAction::CopyText,
+            AccessibilityAction::CutText,
+            AccessibilityAction::PasteText,
+        ] {
+            base = base.on_accessibility_action(action, {
+                let state = self.state.downgrade();
+                move |request, _, cx| {
+                    if let Some(AccessibilityActionPayload::TextSelection {
+                        document_id,
+                        anchor,
+                        focus,
+                    }) = request.payload.as_ref()
+                    {
+                        let _ = state.update(cx, |state, cx| {
+                            let _ = state.accessibility_clipboard(
+                                action,
+                                *document_id,
+                                *anchor,
+                                *focus,
+                                cx,
+                            );
+                        });
+                    }
+                }
+            });
+        }
 
         if let Some(h) = min_height {
             base = base.min_h(h);
@@ -5270,6 +6149,9 @@ impl RenderOnce for Editor {
             .on_mouse_down(MouseButton::Left, {
                 let state = self.state.clone();
                 move |event: &MouseDownEvent, window: &mut Window, cx: &mut App| {
+                    if state.read(cx).disabled {
+                        return;
+                    }
                     let (bounds, gutter_width, line_height) = {
                         let s = state.read(cx);
                         let b = s.last_bounds.unwrap_or_default();
@@ -5799,6 +6681,440 @@ mod tests {
             window.focus(&state.focus_handle(cx));
         });
         (state, window)
+    }
+
+    #[::core::prelude::v1::test]
+    fn text_geometry_is_shaped_bounded_and_reused_across_caret_redraws() {
+        let mut cx = TestAppContext::single();
+        let content = "café 日本🙂 e\u{301}\n".repeat(100_000);
+        let (state, window) = document_window(&mut cx, &content);
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let geometry = window
+                .accessibility_tree()
+                .get(state.read(cx).accessibility_id)
+                .unwrap()
+                .text_geometry
+                .clone()
+                .unwrap();
+            assert!(!geometry.runs().is_empty());
+            assert!(
+                geometry.runs().len() <= 27,
+                "100k document only exports viewport geometry"
+            );
+            let line = state.read(cx).line_layouts.get(&0).unwrap().clone();
+            let run = &geometry.runs()[0];
+            assert_eq!(run.character_positions[0], 0.0);
+            let expected_width = f32::from(line.x_for_index(1));
+            assert_eq!(run.character_widths[0], expected_width);
+            let document = state.read(cx).prepared_accessibility_document().unwrap();
+            for byte in [0, 1, "café".len(), 0, 1] {
+                state.update(cx, |state, cx| {
+                    state.set_selection_bytes(byte, byte, cx).unwrap()
+                });
+                window.draw(cx).clear();
+                let next = window
+                    .accessibility_tree()
+                    .get(state.read(cx).accessibility_id)
+                    .unwrap()
+                    .text_geometry
+                    .as_ref()
+                    .unwrap();
+                assert!(
+                    Arc::ptr_eq(&geometry, next),
+                    "caret repaint shares actual geometry"
+                );
+                assert!(Arc::ptr_eq(
+                    &document,
+                    &state.read(cx).prepared_accessibility_document().unwrap()
+                ));
+            }
+            let first_word = state.update(cx, |state, cx| {
+                let utf16 = state.range_to_utf16(&(0.."café".len()));
+                state
+                    .bounds_for_range(utf16, Bounds::default(), window, cx)
+                    .unwrap()
+            });
+            assert_eq!(first_word.size.height, state.read(cx).line_height);
+            assert_eq!(first_word.size.width, line.x_for_index("café".len()));
+            assert!(first_word.size.width < state.read(cx).scroll_handle.bounds().size.width);
+            state.update(cx, |state, cx| {
+                state
+                    .set_selection_bytes(content.len(), content.len(), cx)
+                    .unwrap()
+            });
+            window.draw(cx).clear();
+            let state = state.read(cx);
+            assert_eq!(state.buffer_line_to_display_row(100_000), Some(100_000));
+            assert_eq!(state.selection_bytes(), (content.len(), content.len()));
+            assert!(
+                state
+                    .bounds_for_byte_range(content.len()..content.len())
+                    .is_some(),
+                "EOF caret has real final-row geometry"
+            );
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn directional_native_geometry_drives_caret_pointer_selection_and_ime_fragments() {
+        let mut cx = TestAppContext::single();
+        let content = "abc אבג xyz";
+        let (state, window) = document_window(&mut cx, content);
+        window.update(|window, cx| {
+            let mut logical = 0;
+            let clusters = content
+                .char_indices()
+                .enumerate()
+                .map(|(index, (byte, character))| {
+                    let rtl = (4..7).contains(&index);
+                    let (leading, trailing) = if rtl {
+                        (
+                            px(70.0 - (index - 4) as f32 * 10.0),
+                            px(60.0 - (index - 4) as f32 * 10.0),
+                        )
+                    } else {
+                        (px(logical as f32 * 10.0), px((logical + 1) as f32 * 10.0))
+                    };
+                    logical += 1;
+                    ShapedTextCluster {
+                        bytes: byte..byte + character.len_utf8(),
+                        leading,
+                        trailing,
+                        right_to_left: rtl,
+                    }
+                })
+                .collect();
+            let native = Arc::new(LineTextGeometry::new(content, clusters, px(110.0)).unwrap());
+            state.update(cx, |state, _| {
+                // Inject a provider's native metrics into the headless test's
+                // deterministic glyph backend, keeping its exact cached spans.
+                state.line_native_geometry.get_mut(&0).unwrap().1 = Some(native.clone());
+                state.accessibility_geometry = None;
+            });
+            window.draw(cx).clear();
+            let state = state.read(cx);
+            assert_eq!(state.line_caret_x(0, 4), px(70.0));
+            assert_eq!(
+                state.line_range_rectangles(0, 2..6),
+                vec![px(20.0)..px(40.0), px(60.0)..px(70.0)]
+            );
+            let bounds = state.last_bounds.unwrap();
+            assert_eq!(
+                state.position_for_mouse(
+                    point(bounds.left() + px(80.0) + px(69.0), bounds.top() + px(15.0)),
+                    bounds,
+                    px(80.0),
+                    state.line_height,
+                ),
+                Position::new(0, 4)
+            );
+            let ime = state.bounds_for_byte_range(4..6).unwrap();
+            assert_eq!(ime.left(), bounds.left() + px(80.0) + px(60.0));
+            assert_eq!(ime.size.width, px(10.0));
+            let geometry = &state.accessibility_geometry.as_ref().unwrap().1;
+            let rtl = geometry
+                .runs()
+                .iter()
+                .find(|run| run.direction == AccessibilityTextDirection::RightToLeft)
+                .unwrap();
+            assert_eq!(&*rtl.character_positions, &[0.0, 10.0, 20.0]);
+            assert_eq!(&*rtl.character_widths, &[10.0; 3]);
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn text_reveal_unfolds_offscreen_row_without_changing_selection_composition_or_focus() {
+        let mut cx = TestAppContext::single();
+        let content = "row 日本🙂\n".repeat(1000);
+        let (state, window) = document_window(&mut cx, &content);
+        window.run_until_parked();
+        window.update(|window, cx| {
+            state.update(cx, |state, cx| {
+                state.folded = vec![FoldRange {
+                    start_line: 10,
+                    end_line: 200,
+                }];
+                state.rebuild_fold_line_index();
+                state.set_selection_bytes("row 日".len(), 0, cx).unwrap();
+                state.marked_range = Some(0..3);
+            });
+            window.draw(cx).clear();
+            let document = state.read(cx).prepared_accessibility_document().unwrap();
+            let (before_selection, before_cursor, before_history) = {
+                let state = state.read(cx);
+                (
+                    state.selection_bytes(),
+                    state.cursor(),
+                    (state.undo_depth(), state.redo_depth()),
+                )
+            };
+            let byte = state.read(cx).rope.line_to_byte(150);
+            state.update(cx, |state, cx| {
+                state
+                    .reveal_accessibility_text(
+                        document.id(),
+                        byte,
+                        byte + 3,
+                        AccessibilityTextAlignment::Top,
+                        cx,
+                    )
+                    .unwrap()
+            });
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+            let state = state.read(cx);
+            assert_eq!(state.selection_bytes(), before_selection);
+            assert_eq!(state.cursor(), before_cursor);
+            assert_eq!(state.marked_range, Some(0..3));
+            assert_eq!((state.undo_depth(), state.redo_depth()), before_history);
+            assert!(state.focus_handle.is_focused(window));
+            assert!(!state.is_line_folded(150));
+            assert!(state.scroll_handle.offset().y < px(-1000.0));
+            assert!(state.bounds_for_byte_range(byte..byte + 3).is_some());
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn native_range_clipboard_edits_are_atomic_readonly_and_stale_safe() {
+        let mut cx = TestAppContext::single();
+        let content = "café 日本🙂\nsecond\n";
+        let (state, window) = document_window(&mut cx, content);
+        window.update(|window, cx| {
+            let start = content.find("日本").unwrap();
+            let end = start + "日本🙂".len();
+            let original = state.read(cx).prepared_accessibility_document().unwrap();
+            state.update(cx, |state, cx| {
+                state.set_selection_bytes(1, 1, cx).unwrap();
+                state
+                    .accessibility_clipboard(
+                        AccessibilityAction::CopyText,
+                        original.id(),
+                        end,
+                        start,
+                        cx,
+                    )
+                    .unwrap();
+                assert_eq!(state.selection_bytes(), (1, 1));
+                assert_eq!(state.undo_depth(), 0);
+                state.set_read_only(true, cx);
+                assert!(
+                    state
+                        .accessibility_clipboard(
+                            AccessibilityAction::CutText,
+                            original.id(),
+                            start,
+                            end,
+                            cx
+                        )
+                        .is_err()
+                );
+                assert!(
+                    state
+                        .accessibility_clipboard(
+                            AccessibilityAction::PasteText,
+                            original.id(),
+                            start,
+                            end,
+                            cx
+                        )
+                        .is_err()
+                );
+                assert!(
+                    state
+                        .replace_accessibility_text(original.id(), start, end, "bad", cx)
+                        .is_err()
+                );
+                state
+                    .accessibility_clipboard(
+                        AccessibilityAction::CopyText,
+                        original.id(),
+                        start,
+                        end,
+                        cx,
+                    )
+                    .unwrap();
+                state.set_read_only(false, cx);
+                assert!(
+                    state
+                        .replace_accessibility_text(original.id(), start + 1, end, "bad", cx)
+                        .is_err()
+                );
+                state
+                    .accessibility_clipboard(
+                        AccessibilityAction::CutText,
+                        original.id(),
+                        start,
+                        end,
+                        cx,
+                    )
+                    .unwrap();
+                assert_eq!(state.undo_depth(), 1);
+                assert_eq!(state.content(), "café \nsecond\n");
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.content(), content);
+                state.prepare_accessibility_document(cx);
+                assert!(
+                    state
+                        .accessibility_clipboard(
+                            AccessibilityAction::CopyText,
+                            original.id(),
+                            start,
+                            end,
+                            cx
+                        )
+                        .is_err()
+                );
+                let current = state.prepared_accessibility_document().unwrap();
+                state
+                    .accessibility_clipboard(
+                        AccessibilityAction::PasteText,
+                        current.id(),
+                        0,
+                        "café".len(),
+                        cx,
+                    )
+                    .unwrap();
+                assert_eq!(state.content(), "日本🙂 日本🙂\nsecond\n");
+                assert_eq!(state.undo_depth(), 1, "paste commits one range replacement");
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.content(), content);
+            });
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().unwrap().text().as_deref(),
+                Some("日本🙂")
+            );
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn deferred_text_reveal_and_edit_reject_replaced_document_then_full_value_undoes_atomically() {
+        let mut cx = TestAppContext::single();
+        let content = format!("original\n{}", "more 日本🙂\n".repeat(100));
+        let replacement = format!("modified\n{}", "more 日本🙂\n".repeat(100));
+        let (state, window) = document_window(&mut cx, &content);
+        window.run_until_parked();
+        window.update(|window, cx| {
+            let old = state.read(cx).prepared_accessibility_document().unwrap();
+            let id = state.read(cx).accessibility_id;
+            let byte = state.read(cx).rope.line_to_byte(99);
+            window.dispatch_accessibility_action_for_test(
+                AccessibilityActionRequest::with_payload(
+                    id,
+                    AccessibilityAction::ScrollToVisible,
+                    AccessibilityActionPayload::TextReveal {
+                        document_id: old.id(),
+                        start: byte,
+                        end: byte + 4,
+                        alignment: AccessibilityTextAlignment::Top,
+                    },
+                ),
+            );
+            window.dispatch_accessibility_action_for_test(
+                AccessibilityActionRequest::with_payload(
+                    id,
+                    AccessibilityAction::ReplaceSelectedText,
+                    AccessibilityActionPayload::TextReplacement {
+                        document_id: old.id(),
+                        start: 0,
+                        end: 3,
+                        value: "BAD".into(),
+                    },
+                ),
+            );
+            state.update(cx, |state, cx| {
+                state.set_content(&replacement, cx);
+                state.prepare_accessibility_document(cx);
+                assert_ne!(
+                    state.prepared_accessibility_document().unwrap().id(),
+                    old.id()
+                );
+            });
+            window.draw(cx).clear();
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert_eq!(state.read(cx).content(), replacement);
+            assert_eq!(state.read(cx).undo_depth(), 0);
+            assert_eq!(state.read(cx).scroll_handle.offset().y, px(0.0));
+            window.dispatch_accessibility_action_for_test(
+                AccessibilityActionRequest::with_payload(
+                    state.read(cx).accessibility_id,
+                    AccessibilityAction::SetValue,
+                    AccessibilityActionPayload::Value("native café 日本🙂\n".into()),
+                ),
+            );
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert_eq!(state.read(cx).content(), "native café 日本🙂\n");
+            assert_eq!(state.read(cx).undo_depth(), 1);
+            state.update(cx, |state, cx| state.undo(&Undo, window, cx));
+            assert_eq!(state.read(cx).content(), replacement);
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn disabled_document_preserves_reading_and_rejects_queued_native_keyboard_and_ime_input() {
+        let mut cx = TestAppContext::single();
+        let content = "native café 日本🙂\n";
+        let (state, window) = document_window(&mut cx, content);
+        let id = window.update(|window, cx| {
+            let id = state.read(cx).accessibility_id;
+            window.dispatch_accessibility_action_for_test(
+                AccessibilityActionRequest::with_payload(
+                    id,
+                    AccessibilityAction::SetValue,
+                    AccessibilityActionPayload::Value("BAD\n".into()),
+                ),
+            );
+            state.update(cx, |state, cx| {
+                state.marked_range = Some(0..3);
+                state.set_disabled(true, cx);
+                assert!(state.marked_range.is_none());
+                state.insert_text_at_cursor("BAD", cx);
+                state.replace_text_in_range(None, "BAD", window, cx);
+                state.move_right(&MoveRight, window, cx);
+                assert_eq!(state.content(), content);
+                assert_eq!(state.selection_bytes(), (0, 0));
+                assert_eq!(state.undo_depth(), 0);
+            });
+            window.draw(cx).clear();
+            let node = window.accessibility_tree().get(id).unwrap();
+            assert!(node.states.contains(AccessibilityState::DISABLED));
+            assert!(node.actions.is_empty());
+            assert_eq!(node.text_document.as_ref().unwrap().text(), content);
+            assert!(!state.read(cx).focus_handle.is_focused(window));
+            id
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert_eq!(
+                state.read(cx).content(),
+                content,
+                "queued pre-disable SetValue is rejected"
+            );
+            state.update(cx, |state, cx| state.set_disabled(false, cx));
+            window.draw(cx).clear();
+            assert!(
+                window
+                    .accessibility_tree()
+                    .get(id)
+                    .unwrap()
+                    .actions
+                    .contains(&AccessibilityAction::SetValue)
+            );
+            window.dispatch_accessibility_action_for_test(
+                AccessibilityActionRequest::with_payload(
+                    id,
+                    AccessibilityAction::SetValue,
+                    AccessibilityActionPayload::Value("enabled 日本🙂\n".into()),
+                ),
+            );
+        });
+        window.run_until_parked();
+        window.update(|_, cx| assert_eq!(state.read(cx).content(), "enabled 日本🙂\n"));
     }
 
     #[::core::prelude::v1::test]

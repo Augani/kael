@@ -29,11 +29,70 @@ use objc2_foundation::{
 };
 use std::rc::{Rc, Weak};
 
-use crate::{context::Context, filters::filter, util::*};
+use crate::{
+    context::Context,
+    filters::filter,
+    text_edit::{TextEditOperation, TextEditRequest},
+    util::*,
+};
 
 const SCROLL_TO_VISIBLE_ACTION: &str = "AXScrollToVisible";
 const EXPAND_ACTION: &str = "AXExpand";
 const COLLAPSE_ACTION: &str = "AXCollapse";
+
+fn supports_text_edit(node: &Node, context: &Context, operation: &TextEditOperation) -> bool {
+    if !can_act(node)
+        || !node.supports_text_ranges()
+        || !context.action_handler.supports_text_edits()
+    {
+        return false;
+    }
+    match operation {
+        TextEditOperation::Replace(_) => {
+            !node.is_read_only() && node.supports_action(Action::ReplaceSelectedText, &filter)
+        }
+        operation => {
+            let id = match operation {
+                TextEditOperation::Copy => i32::MIN,
+                TextEditOperation::Cut => i32::MIN + 1,
+                TextEditOperation::Paste => i32::MIN + 2,
+                _ => unreachable!(),
+            };
+            (matches!(operation, TextEditOperation::Copy) || !node.is_read_only())
+                && node
+                    .data()
+                    .custom_actions()
+                    .iter()
+                    .any(|action| action.id == id)
+        }
+    }
+}
+
+fn dispatch_text_edit(
+    node: &Node,
+    tree: &Tree,
+    context: &Context,
+    operation: TextEditOperation,
+) -> bool {
+    if !supports_text_edit(node, context, &operation) {
+        return false;
+    }
+    if node.text_selection().is_none() {
+        return false;
+    }
+    let Some(selection) = node.data().text_selection().copied() else {
+        return false;
+    };
+    let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) else {
+        return false;
+    };
+    context.action_handler.edit_text(TextEditRequest {
+        target_node,
+        target_tree,
+        selection,
+        operation,
+    })
+}
 
 // NSAccessibility outlines enumerate every disclosed row in preorder. The
 // generic consumer `items` iterator stops at an item and therefore only exposes
@@ -353,7 +412,17 @@ fn ns_sub_role(node: &Node) -> &'static NSAccessibilitySubrole {
 }
 
 fn can_act(node: &Node) -> bool {
-    !node.is_disabled() && filter(node) == FilterResult::Include
+    if node.is_disabled() || node.data().is_hidden() || filter(node) != FilterResult::Include {
+        return false;
+    }
+    let mut parent = node.parent();
+    while let Some(ancestor) = parent {
+        if ancestor.is_disabled() || ancestor.data().is_hidden() {
+            return false;
+        }
+        parent = ancestor.parent();
+    }
+    true
 }
 
 pub(crate) fn can_be_focused(node: &Node) -> bool {
@@ -630,7 +699,9 @@ declare_class!(
         #[method(setAccessibilityValue:)]
         fn set_value(&self, value: &NSObject) {
             if let Some(string) = downcast_ref::<NSString>(value) {
+                if string.len() > 16 * 1024 * 1024 { return; }
                 self.resolve_action(|node, tree, context| {
+                    if node.is_read_only() || !node.supports_action(Action::SetValue, &filter) { return; }
                     if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
                         context.do_action(ActionRequest {
                             action: Action::SetValue,
@@ -642,6 +713,7 @@ declare_class!(
                 });
             } else if let Some(number) = downcast_ref::<NSNumber>(value) {
                 self.resolve_action(|node, tree, context| {
+                    if node.is_read_only() || !node.supports_action(Action::SetValue, &filter) { return; }
                     if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
                         context.do_action(ActionRequest {
                             action: Action::SetValue,
@@ -828,6 +900,18 @@ declare_class!(
             .flatten()
         }
 
+        #[method(setAccessibilitySelectedText:)]
+        fn set_selected_text(&self, value: &NSString) {
+            // Bound the Rust copy independently of the native NSString owner.
+            if value.len() > 16 * 1024 * 1024 { return; }
+            self.resolve_action(|node, tree, context| {
+                if !supports_text_edit(node, context, &TextEditOperation::Replace(String::new())) { return; }
+                let value = value.to_string();
+                if value.len() > 16 * 1024 * 1024 { return; }
+                dispatch_text_edit(node, tree, context, TextEditOperation::Replace(value));
+            });
+        }
+
         #[method(accessibilitySelectedTextRange)]
         fn selected_text_range(&self) -> NSRange {
             self.resolve(|node| {
@@ -839,6 +923,33 @@ declare_class!(
                 NSRange::new(0, 0)
             })
             .unwrap_or_else(|| NSRange::new(0, 0))
+        }
+
+        #[method(accessibilityVisibleCharacterRange)]
+        fn visible_character_range(&self) -> NSRange {
+            self.resolve(|node| {
+                if node.supports_text_ranges() { visible_character_range(node) }
+                else { NSRange::new(0, 0) }
+            }).unwrap_or_else(|| NSRange::new(0, 0))
+        }
+
+        #[method(setAccessibilityVisibleCharacterRange:)]
+        fn set_visible_character_range(&self, range: NSRange) {
+            self.resolve_action(|node, tree, context| {
+                if node.supports_text_ranges() && node.supports_action(Action::ScrollIntoView, &filter) {
+                    if let Some(range) = from_ns_range(node, range) {
+                        // AccessKit's reveal action addresses a run. Keep the
+                        // originating run identity in the queued request so a
+                        // replaced document cannot reveal an unrelated range.
+                        if let Some((target_node, target_tree)) = tree.state().locate_node(range.start().inner_node().id()) {
+                            context.do_action(ActionRequest {
+                                action: Action::ScrollIntoView, target_tree, target_node,
+                                data: Some(ActionData::ScrollHint(accesskit::ScrollHint::TopEdge)),
+                            });
+                        }
+                    }
+                }
+            });
         }
 
         #[method(accessibilityInsertionPointLineNumber)]
@@ -878,7 +989,9 @@ declare_class!(
                 };
 
                 if node.supports_text_ranges() {
-                    let point = from_ns_point(&view, node, point);
+                    let Some(point) = from_ns_point(&view, node, point) else {
+                        return NSRange::new(0, 0);
+                    };
                     let pos = node.text_position_at_point(point);
                     return to_ns_range_for_character(&pos);
                 }
@@ -891,8 +1004,8 @@ declare_class!(
         fn string_for_range(&self, range: NSRange) -> Option<Id<NSString>> {
             self.resolve(|node| {
                 if node.supports_text_ranges() {
-                    if let Some(range) = from_ns_range(node, range) {
-                        let text = range.text();
+                    let mut text = String::new();
+                    if traverse_ns_range(node, range, |_, part| text.push_str(part)).is_some() {
                         return Some(NSString::from_str(&text));
                     }
                 }
@@ -905,10 +1018,9 @@ declare_class!(
         fn attributed_string_for_range(&self, range: NSRange) -> Option<Id<NSAttributedString>> {
             self.resolve(|node| {
                 if node.supports_text_ranges() {
-                    if let Some(range) = from_ns_range(node, range) {
-                        let mut result = NSMutableAttributedString::new();
-                        unsafe { result.beginEditing() };
-                        range.traverse_text::<_, ()>(|node, text| {
+                    let mut result = NSMutableAttributedString::new();
+                    unsafe { result.beginEditing() };
+                    let valid = traverse_ns_range(node, range, |node, text| {
                             let ns_text = NSString::from_str(text);
                             let mut attrs = NSMutableDictionary::new();
                             if let Some(color) = node.background_color() {
@@ -996,9 +1108,9 @@ declare_class!(
                             }
                             let part = unsafe { NSAttributedString::new_with_attributes(&ns_text, &attrs) };
                             unsafe { result.appendAttributedString(&part) };
-                            None
                         });
-                        unsafe { result.endEditing() };
+                    unsafe { result.endEditing() };
+                    if valid.is_some() {
                         return Some(Id::into_super(result));
                     }
                 }
@@ -1302,7 +1414,10 @@ declare_class!(
         #[method_id(accessibilityActionNames)]
         fn action_names(&self) -> Id<NSArray<NSString>> {
             let mut result = vec![];
-            self.resolve_action(|node, _, _| {
+            self.resolve_action(|node, _, context| {
+                for (operation, name) in [(TextEditOperation::Copy, "Copy text"), (TextEditOperation::Cut, "Cut text"), (TextEditOperation::Paste, "Paste text")] {
+                    if supports_text_edit(node, context, &operation) { result.push(NSString::from_str(name)); }
+                }
                 if node.supports_action(Action::ScrollIntoView, &filter) {
                     result.push(ns_string!(SCROLL_TO_VISIBLE_ACTION).copy());
                 }
@@ -1319,6 +1434,11 @@ declare_class!(
         #[method(accessibilityPerformAction:)]
         fn perform_action(&self, action: &NSString) {
             self.resolve_action(|node, tree, context| {
+                let operation = if action == ns_string!("Copy text") { Some(TextEditOperation::Copy) }
+                    else if action == ns_string!("Cut text") { Some(TextEditOperation::Cut) }
+                    else if action == ns_string!("Paste text") { Some(TextEditOperation::Paste) }
+                    else { None };
+                if let Some(operation) = operation { dispatch_text_edit(node, tree, context, operation); return; }
                 let requested = if action == ns_string!(SCROLL_TO_VISIBLE_ACTION) {
                     node.supports_action(Action::ScrollIntoView, &filter).then_some(Action::ScrollIntoView)
                 } else if action == ns_string!(EXPAND_ACTION) {
@@ -1341,7 +1461,7 @@ declare_class!(
 
         #[method(isAccessibilitySelectorAllowed:)]
         fn is_selector_allowed(&self, selector: Sel) -> bool {
-            self.resolve(|node| {
+            self.resolve_with_context(|node, _, context| {
                 if !can_act(node) && (
                     selector == sel!(setAccessibilityFocused:)
                     || selector == sel!(accessibilityPerformPress)
@@ -1349,6 +1469,8 @@ declare_class!(
                     || selector == sel!(accessibilityPerformDecrement)
                     || selector == sel!(setAccessibilityValue:)
                     || selector == sel!(setAccessibilitySelectedTextRange:)
+                    || selector == sel!(setAccessibilitySelectedText:)
+                    || selector == sel!(setAccessibilityVisibleCharacterRange:)
                     || selector == sel!(setAccessibilitySelected:)
                     || selector == sel!(setAccessibilityDisclosed:)
                     || selector == sel!(accessibilityPerformPick)
@@ -1377,12 +1499,19 @@ declare_class!(
                 if selector == sel!(accessibilityPerformDecrement) {
                     return node.supports_decrement(&filter);
                 }
+                if selector == sel!(setAccessibilitySelectedText:) {
+                    return supports_text_edit(node, context, &TextEditOperation::Replace(String::new()));
+                }
+                if selector == sel!(setAccessibilityVisibleCharacterRange:) {
+                    return node.supports_text_ranges() && node.supports_action(Action::ScrollIntoView, &filter);
+                }
                 if selector == sel!(setAccessibilitySelectedTextRange:) {
                     return node.supports_text_ranges() && node.supports_action(Action::SetTextSelection, &filter);
                 }
                 if selector == sel!(accessibilityNumberOfCharacters)
                     || selector == sel!(accessibilitySelectedText)
                     || selector == sel!(accessibilitySelectedTextRange)
+                    || selector == sel!(accessibilityVisibleCharacterRange)
                     || selector == sel!(accessibilityInsertionPointLineNumber)
                     || selector == sel!(accessibilityRangeForLine:)
                     || selector == sel!(accessibilityRangeForPosition:)
@@ -1397,7 +1526,7 @@ declare_class!(
                     return node.supports_text_ranges();
                 }
                 if selector == sel!(setAccessibilityValue:) {
-                    return (node.supports_text_ranges() && !node.is_read_only()) || node.supports_action(Action::SetValue, &filter);
+                    return !node.is_read_only() && node.supports_action(Action::SetValue, &filter);
                 }
                 if selector == sel!(isAccessibilitySelected) {
                     let wrapper = NodeWrapper(node);

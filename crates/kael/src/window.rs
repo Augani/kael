@@ -4288,6 +4288,34 @@ impl Window {
         self.next_frame.accessibility_nodes.push(node);
     }
 
+    /// Attach actual text geometry produced during this frame's paint. The
+    /// owner must already be registered with the same immutable document.
+    /// This visits mounted frame nodes only, never logical document runs.
+    pub fn set_accessibility_text_geometry(
+        &mut self,
+        owner: crate::AccessibilityId,
+        geometry: std::sync::Arc<crate::AccessibilityTextGeometry>,
+    ) -> bool {
+        let Some(node) = self
+            .next_frame
+            .accessibility_nodes
+            .iter_mut()
+            .rev()
+            .find(|node| node.id == owner)
+        else {
+            return false;
+        };
+        if !node
+            .text_document
+            .as_ref()
+            .is_some_and(|document| document.id() == geometry.document_id())
+        {
+            return false;
+        }
+        node.text_geometry = Some(geometry);
+        true
+    }
+
     /// Attach a retained logical subtree to its explicitly identified painted root.
     /// Reusing the same Arc avoids copying offscreen nodes on redraws. A subtree
     /// is released when its root is no longer painted, including cached replay.

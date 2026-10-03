@@ -21,7 +21,7 @@ use std::sync::{
 };
 
 use accesskit::{ActionHandler, ActionRequest, ActivationHandler, DeactivationHandler, TreeUpdate};
-use accesskit_unix::Adapter;
+use accesskit_unix::{Adapter, TextEditHandler, TextEditOperation, TextEditRequest};
 use futures::{StreamExt, channel::mpsc};
 
 use crate::{PermissionStatus, accessibility::PendingActionQueue};
@@ -48,6 +48,7 @@ impl ActivationHandler for InitialTreeHandler {
 }
 
 struct CollectingActionHandler {
+    latest: SharedUpdate,
     pending: PendingActions,
     wake: ActionWake,
     alive: Arc<AtomicBool>,
@@ -82,6 +83,60 @@ impl ActionHandler for CollectingActionHandler {
     }
 }
 
+impl TextEditHandler for CollectingActionHandler {
+    fn edit_text(&mut self, request: TextEditRequest) -> bool {
+        if request.target_tree != accesskit::TreeId::ROOT || !self.alive.load(Ordering::Acquire) {
+            return false;
+        }
+        let normalized = self.latest.lock().ok().and_then(|latest| {
+            let tree = latest.as_ref()?;
+            let owner = crate::AccessibilityId(request.target_node.0);
+            match request.operation {
+                TextEditOperation::Replace(value) => {
+                    tree.normalize_text_replacement(owner, request.selection, value)
+                }
+                operation => tree.normalize_text_clipboard(
+                    owner,
+                    request.selection,
+                    match operation {
+                        TextEditOperation::Copy => crate::AccessibilityAction::CopyText,
+                        TextEditOperation::Cut => crate::AccessibilityAction::CutText,
+                        TextEditOperation::Paste => crate::AccessibilityAction::PasteText,
+                        _ => unreachable!(),
+                    },
+                ),
+            }
+        });
+        let Some(normalized) = normalized else {
+            return false;
+        };
+        let (accepted, needs_wake, first_overflow) = if let Ok(mut pending) = self.pending.lock() {
+            if !self.alive.load(Ordering::Acquire) {
+                return false;
+            }
+            let was_empty = pending.is_empty();
+            let accepted = pending.push_normalized(normalized);
+            (
+                accepted,
+                accepted && was_empty,
+                !accepted && pending.dropped() == 1,
+            )
+        } else {
+            (false, false, false)
+        };
+        if first_overflow {
+            PendingActionQueue::report_overflow();
+        }
+        if needs_wake
+            && let Ok(mut wake) = self.wake.lock()
+            && let Some(sender) = wake.as_mut()
+        {
+            let _ = sender.try_send(());
+        }
+        accepted
+    }
+}
+
 struct NoopDeactivationHandler;
 
 impl DeactivationHandler for NoopDeactivationHandler {
@@ -107,11 +162,12 @@ impl AtSpiAccessibleRoot {
         let pending_actions: PendingActions = Arc::new(Mutex::new(PendingActionQueue::default()));
         let action_wake: ActionWake = Arc::new(Mutex::new(None));
         let alive = Arc::new(AtomicBool::new(true));
-        let adapter = Adapter::new(
+        let adapter = Adapter::new_with_text_handler(
             InitialTreeHandler {
                 latest: latest.clone(),
             },
             CollectingActionHandler {
+                latest: latest.clone(),
                 pending: pending_actions.clone(),
                 wake: action_wake.clone(),
                 alive: alive.clone(),
@@ -182,24 +238,11 @@ impl AtSpiAccessibleRoot {
             .lock()
             .map(|mut pending| pending.take())
             .unwrap_or_default();
-        for request in pending {
-            if request.target_tree != accesskit::TreeId::ROOT {
-                continue;
-            }
-            let node_id = crate::AccessibilityId(request.target_node.0);
-            if let Some(node) = tree.get(node_id) {
-                if let Some(request) =
-                    crate::AccessibilityActionRequest::from_accesskit_for_node_with_data(
-                        node_id,
-                        node,
-                        request.action,
-                        request.data,
-                    )
-                {
-                    out.push(request);
-                }
-            }
-        }
+        out.extend(
+            pending
+                .into_iter()
+                .filter_map(|request| request.normalize(tree)),
+        );
         out
     }
 }
@@ -245,6 +288,7 @@ mod action_queue_tests {
         let (sender, mut receiver) = mpsc::channel(1);
         let wake = Arc::new(Mutex::new(Some(sender)));
         let mut handler = CollectingActionHandler {
+            latest: Arc::new(Mutex::new(None)),
             pending: pending.clone(),
             wake: wake.clone(),
             alive: Arc::new(AtomicBool::new(true)),
@@ -264,11 +308,15 @@ mod action_queue_tests {
                 .unwrap()
                 .take()
                 .into_iter()
-                .map(|r| r.target_node.0)
+                .map(|r| match r {
+                    crate::accessibility::PendingAccessibilityAction::Raw(r) => r.target_node.0,
+                    _ => panic!("expected raw native request"),
+                })
                 .collect::<Vec<_>>(),
             [1, 2, 3]
         );
         CollectingActionHandler {
+            latest: Arc::new(Mutex::new(None)),
             pending,
             wake,
             alive: Arc::new(AtomicBool::new(true)),
@@ -283,6 +331,7 @@ mod action_queue_tests {
         let (sender, receiver) = mpsc::channel(1);
         drop(receiver);
         let mut handler = CollectingActionHandler {
+            latest: Arc::new(Mutex::new(None)),
             pending: pending.clone(),
             wake: Arc::new(Mutex::new(Some(sender))),
             alive: Arc::new(AtomicBool::new(true)),
@@ -301,6 +350,7 @@ mod action_queue_tests {
         let pending = Arc::new(Mutex::new(PendingActionQueue::default()));
         let (sender, mut receiver) = mpsc::channel(1);
         let mut handler = CollectingActionHandler {
+            latest: Arc::new(Mutex::new(None)),
             pending: pending.clone(),
             wake: Arc::new(Mutex::new(Some(sender))),
             alive: Arc::new(AtomicBool::new(false)),
@@ -308,5 +358,110 @@ mod action_queue_tests {
         handler.do_action(request(1));
         assert!(pending.lock().unwrap().is_empty());
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn atomic_text_worker_transport_keeps_fifo_wakes_and_document_identity() {
+        use crate::{
+            AccessibilityAction as Action, AccessibilityNode, AccessibilityRole,
+            AccessibilityTextDocument, AccessibilityTextSelection, AccessibilityTree,
+        };
+        fn tree(
+            document: Arc<AccessibilityTextDocument>,
+            owner: crate::AccessibilityId,
+        ) -> AccessibilityTree {
+            let mut root = AccessibilityNode::new(AccessibilityRole::TextInput);
+            root.id = owner;
+            root.actions = vec![
+                Action::Click,
+                Action::ReplaceSelectedText,
+                Action::CopyText,
+                Action::CutText,
+                Action::PasteText,
+            ];
+            root.text_document = Some(document);
+            root.text_selection = Some(AccessibilityTextSelection {
+                anchor: 1,
+                focus: 7,
+            });
+            AccessibilityTree::new(root)
+        }
+        fn selection(tree: &AccessibilityTree) -> accesskit::TextSelection {
+            *tree.to_accesskit_tree_update(None, None).nodes[0]
+                .1
+                .text_selection()
+                .unwrap()
+        }
+        let document = AccessibilityTextDocument::new("A日本🙂");
+        let owner = crate::AccessibilityId::new();
+        let original = tree(document, owner);
+        let raw_selection = selection(&original);
+        let latest = Arc::new(Mutex::new(Some(original.clone())));
+        let pending = Arc::new(Mutex::new(PendingActionQueue::default()));
+        let (sender, mut receiver) = mpsc::channel(1);
+        let alive = Arc::new(AtomicBool::new(true));
+        let mut handler = CollectingActionHandler {
+            latest: latest.clone(),
+            pending: pending.clone(),
+            wake: Arc::new(Mutex::new(Some(sender))),
+            alive: alive.clone(),
+        };
+        handler = std::thread::spawn(move || {
+            handler.do_action(request(owner.0));
+            for operation in [
+                TextEditOperation::Replace("新🙂".into()),
+                TextEditOperation::Copy,
+            ] {
+                assert!(handler.edit_text(TextEditRequest {
+                    target_tree: accesskit::TreeId::ROOT,
+                    target_node: accesskit::NodeId(owner.0),
+                    selection: raw_selection,
+                    operation
+                }));
+            }
+            handler
+        })
+        .join()
+        .unwrap();
+        assert_eq!(receiver.try_recv(), Ok(()));
+        assert!(
+            receiver.try_recv().is_err(),
+            "one batch produces one foreground wake"
+        );
+        let batch = pending.lock().unwrap().take();
+        assert_eq!(
+            batch
+                .iter()
+                .cloned()
+                .filter_map(|event| event.normalize(&original))
+                .map(|event| event.action)
+                .collect::<Vec<_>>(),
+            [Action::Click, Action::ReplaceSelectedText, Action::CopyText]
+        );
+        let replacement = tree(AccessibilityTextDocument::new("A別語🙂"), owner);
+        assert_eq!(
+            batch
+                .iter()
+                .cloned()
+                .filter_map(|event| event.normalize(&replacement))
+                .count(),
+            1,
+            "queued atomic text operations are rejected after document replacement; ordinary Click remains valid"
+        );
+        *latest.lock().unwrap() = Some(replacement);
+        assert!(!handler.edit_text(TextEditRequest {
+            target_tree: accesskit::TreeId::ROOT,
+            target_node: accesskit::NodeId(owner.0),
+            selection: raw_selection,
+            operation: TextEditOperation::Cut
+        }));
+        alive.store(false, Ordering::Release);
+        assert!(!handler.edit_text(TextEditRequest {
+            target_tree: accesskit::TreeId::ROOT,
+            target_node: accesskit::NodeId(owner.0),
+            selection: raw_selection,
+            operation: TextEditOperation::Copy
+        }));
+        assert!(pending.lock().unwrap().is_empty());
     }
 }

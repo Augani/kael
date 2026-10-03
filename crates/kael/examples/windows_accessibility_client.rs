@@ -1,5 +1,9 @@
-//! External UIA client for the production virtual-tree example. It uses no
+//! External UIA client for the production virtual-tree and Unicode editor examples. It uses no
 //! synthetic keyboard/pointer input and never substitutes model-only tests.
+
+#[cfg(target_os = "windows")]
+#[path = "windows_accessibility_client/text.rs"]
+mod text_client;
 
 #[cfg(target_os = "windows")]
 fn main() -> anyhow::Result<()> {
@@ -71,6 +75,9 @@ fn main() -> anyhow::Result<()> {
     let _com = ComGuard;
     let uia: IUIAutomation =
         unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }?;
+    if std::env::args().nth(3).as_deref() == Some("--text") {
+        return text_client::run(&uia, process_id, &app_log);
+    }
     let window = wait(|| {
         let hwnd = unsafe { FindWindowW(PCWSTR::null(), w!("Kael virtual tree")) }?;
         let mut actual = 0;
@@ -93,7 +100,7 @@ fn main() -> anyhow::Result<()> {
     })?;
     let project = unsafe { projects.GetElement(24) }?;
     ensure!(
-        unsafe { project.CurrentName() }?.to_string() == "Project 25",
+        unsafe { project.CurrentName() }? == "Project 25",
         "native project order changed"
     );
     let mut rows = 25;
@@ -111,7 +118,7 @@ fn main() -> anyhow::Result<()> {
     ensure!(rows == 100_025, "full native tree omitted offscreen rows");
     let last = unsafe { children(&uia, &project)?.GetElement(3_999) }?;
     ensure!(
-        unsafe { last.CurrentName() }?.to_string() == "document_4000.rs",
+        unsafe { last.CurrentName() }? == "document_4000.rs",
         "last offscreen native row missing"
     );
     let parent = unsafe { walker.GetParentElement(&last) }?;

@@ -3,6 +3,16 @@
 //! Compute writes associated linear RGBA directly; unlike fragment rendering,
 //! no blend stage converts straight colors. WebGL2 returns typed unsupported
 //! errors for dispatch and buffer operations.
+// GTK's software scene renderer retains the portable public API and model
+// validation, but has no programmable GPU transport/registry consumer.
+#![cfg_attr(
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        feature = "webview-wayland-gtk4"
+    ),
+    allow(dead_code)
+)]
+
 #[cfg(not(target_arch = "wasm32"))]
 use crate::render_target::{DeviceBudget, TargetRegistry};
 use crate::{
@@ -19,7 +29,6 @@ use std::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use std::{collections::BTreeSet, sync::Weak};
-
 const MAX_GPU_BUFFER_BYTES: u64 = 128 * 1024 * 1024;
 
 /// A native compute entry point authored in WGSL.

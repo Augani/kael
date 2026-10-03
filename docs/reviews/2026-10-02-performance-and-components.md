@@ -14,6 +14,13 @@ runs and their limitations. Kael has lower idle wakeups and active CPU in that
 navigation/detail workload, while physical footprint and p99 draw latency need
 further work. Component, GPU completion, and controlled power comparisons remain.
 
+The [October 3 native quality follow-up](2026-10-03-native-quality-followup.md)
+records corrected fractional glyph rasterization, model-only idle wake-up,
+actual clipboard/composition acceptance and fresh filesystem/document/workspace
+pixels. Five maintained benchmark contracts now cover the application-shaped
+surfaces. Historical comparisons remain qualified until corrected-source runs
+and the remaining platform runtime gates pass.
+
 ## Component coverage and gaps
 
 The library already contains most common controls, so component count alone is
@@ -55,7 +62,11 @@ sampling now uses those coordinates directly and clamps to the captured texel
 centers. Native red/blue-step and viewport-edge tests reproduced the distorted
 sampling and verify the corrected Gaussian output, alongside translucent tint
 and saturation tests. Blade output also follows the surface alpha convention.
-Browser blur remains a tint fallback.
+The continuation replaces the browser tint fallback with a bounded GPU Gaussian
+blur. Chrome on Metal passed its eight blur fixtures. A fractional-coordinate
+sampling correction also passed the unchanged eight blur fixtures on forced
+SwiftShader, with all fifteen mandatory browser GPU contracts passing locally;
+the fresh hosted browser run remains tracked separately.
 
 WGSL checks now validate shader semantics and layouts beyond parsing, including
 on Metal/DirectX test hosts. Blade assigns resource bindings at pipeline creation;
@@ -114,6 +125,13 @@ The maintained Cargo release benchmark independently measured 2.913 ms for
 registration, 3.282 ms for touches, and 1.194 ms for eviction. Different compiler
 contexts affect absolute timings; compare the standalone results to each other.
 The [measurement data](2026-10-02-benchmarks.json) preserves scope and sample counts.
+
+The maintained CPU planning and budget benchmarks have also executed on GitHub's
+macOS, Linux and Windows runners at commit `0adb736`. Their
+[raw numerical results](2026-10-02-cross-platform-bookkeeping-results.json)
+establish portable execution. Different runner hardware and incomplete hardware
+metadata prevent a cross-platform ranking; these workloads exclude driver
+allocations, native applications, presentation and power.
 
 ### Cache memory and pressure
 
@@ -211,8 +229,11 @@ without a coordinate click or another input event.
 The optional `custom-shaders` feature now provides typed render-target handles,
 WGSL fragment registration, reflected bindings and direct GPU texture display.
 Metal's seven custom-renderer regressions and Blade's five regressions have run
-on this host. Windows has compiled pixel tests that still need native execution;
-six browser fragment/context-loss regressions have run in real Chrome on this
+on this host. Windows CI has executed eight Direct3D 11 custom-renderer tests and
+six graph contracts using WARP, without skips. Linux CI has executed five custom,
+six graph and eight retained-scene contracts with llvmpipe. These software devices
+exercise the actual native backends; additional physical-device coverage remains.
+Six browser fragment/context-loss regressions have run in real Chrome on this
 host. GTK4/GSK has
 an explicit unsupported custom-rendering path until its native context/texture
 interop is implemented. `runtime_shaders` continues to control built-in Metal
@@ -224,8 +245,10 @@ and reuses compatible dead transient slots. Six shared native graph contracts
 have executed on both Metal and Blade. They verify buffer → image → fragment
 pixels, alias residency, cache invalidation, import validation, pressure release
 and invalidated-output recovery. Native compute supports bounded storage buffers
-and RGBA8/RGBA16F storage images. The same DirectX contracts have compiled;
-native Windows execution remains required in the completion ledger.
+and RGBA8/RGBA16F storage images. The same six DirectX contracts passed in native
+Windows CI using WARP. macOS CI, fresh populated application frames and the
+remaining accessibility/native interaction checks remain tracked in the
+completion ledger.
 
 The updated [render-target/shader design](../design/0001-render-targets-and-custom-shaders.md)
 defines the implementation boundaries and exit criteria. The non-media

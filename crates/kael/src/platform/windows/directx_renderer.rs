@@ -348,7 +348,7 @@ impl DirectXRenderer {
     }
 
     fn render_scene(&mut self, scene: &Scene) -> Result<()> {
-        self.atlas.mark_scene_used(scene);
+        self.atlas.mark_scene_used(scene)?;
         self.pre_draw()?;
         for batch in scene.batches() {
             match batch {

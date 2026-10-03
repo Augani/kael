@@ -23,7 +23,8 @@ use std::{
         all(target_os = "windows", feature = "custom-shaders"),
         all(
             any(target_os = "linux", target_os = "freebsd"),
-            any(feature = "x11", feature = "wayland")
+            any(feature = "x11", feature = "wayland"),
+            not(feature = "webview-wayland-gtk4")
         )
     )
 ))]

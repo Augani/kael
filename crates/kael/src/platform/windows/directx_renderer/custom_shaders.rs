@@ -297,10 +297,10 @@ impl DirectXCustomRenderer {
         for slot in &pipeline.resources {
             match (slot.kind, bindings.get(slot.binding)) {
                 (ShaderResourceSlotKind::Uniform, Some(ShaderBinding::Uniform(bytes))) => {
-                    if !pipeline.uniforms.contains_key(&slot.slot) {
-                        pipeline
-                            .uniforms
-                            .insert(slot.slot, uniform_buffer(device, bytes.len())?);
+                    if let std::collections::btree_map::Entry::Vacant(entry) =
+                        pipeline.uniforms.entry(slot.slot)
+                    {
+                        entry.insert(uniform_buffer(device, bytes.len())?);
                     }
                     let buffer = &pipeline.uniforms[&slot.slot];
                     update_uniform(context, buffer, bytes)?;
@@ -587,10 +587,10 @@ impl DirectXCustomRenderer {
         for slot in &pipeline.translation.resources {
             match bindings.get(slot.binding).unwrap() {
                 crate::ComputeBinding::Uniform(bytes) => {
-                    if !pipeline.uniforms.contains_key(&slot.slot) {
-                        pipeline
-                            .uniforms
-                            .insert(slot.slot, uniform_buffer(device, bytes.len())?);
+                    if let std::collections::btree_map::Entry::Vacant(entry) =
+                        pipeline.uniforms.entry(slot.slot)
+                    {
+                        entry.insert(uniform_buffer(device, bytes.len())?);
                     }
                     let raw = &pipeline.uniforms[&slot.slot];
                     update_uniform(context, raw, bytes)?;
@@ -764,11 +764,10 @@ impl DirectXCustomRenderer {
             });
         }
         let params = RenderTargetDisplayParams::new(surface, target, size);
-        if !self.samplers.contains_key(&ShaderSampler::LinearClamp) {
-            self.samplers.insert(
-                ShaderSampler::LinearClamp,
-                sampler(device, ShaderSampler::LinearClamp)?,
-            );
+        if let std::collections::btree_map::Entry::Vacant(entry) =
+            self.samplers.entry(ShaderSampler::LinearClamp)
+        {
+            entry.insert(sampler(device, ShaderSampler::LinearClamp)?);
         }
         let pipeline = self.display.as_ref().unwrap();
         update_uniform(context, &pipeline.params, bytemuck::bytes_of(&params))?;
@@ -1553,12 +1552,8 @@ struct Params { tint: vec4<f32> }
             )
             .unwrap();
         let result = renderer.read(&device, &context, &output).unwrap().pixels;
-        assert!(result[3] < result[(1 * 4 + 1) * 4 + 3]);
-        assert_pixel(
-            &result[(1 * 4 + 1) * 4..(1 * 4 + 2) * 4],
-            &[128, 0, 0, 128],
-            1,
-        );
+        assert!(result[3] < result[23]);
+        assert_pixel(&result[20..24], &[128, 0, 0, 128], 1);
     }
 
     #[test]
@@ -1702,6 +1697,131 @@ struct Params { tint: vec4<f32> }
         let scene = crate::scene::sprite_sampling_tests::packed_sprite_scene(&*renderer.atlas);
         let frame = renderer.render_scene_to_bgra(&scene).unwrap();
         crate::scene::sprite_sampling_tests::assert_packed_sprite_pixels(&frame.premultiplied_bgra);
+    }
+
+    #[test]
+    fn warp_atlas_pressure_retains_replayed_pixels_and_reuploads_after_retirement() {
+        use crate::PlatformAtlas;
+        use crate::scene::sprite_sampling_tests::*;
+        let (_window, mut renderer) = native_warp_renderer();
+        renderer
+            .resize(size(DevicePixels(32), DevicePixels(40)))
+            .unwrap();
+        let atlas = renderer.atlas.clone();
+        let scene = packed_sprite_scene(&*atlas);
+        assert_packed_sprite_pixels(
+            &renderer
+                .render_scene_to_bgra(&scene)
+                .unwrap()
+                .premultiplied_bgra,
+        );
+        let identities: Vec<_> = scene.atlas_tiles().map(|tile| tile.texture_id).collect();
+        remove_packed_sprite_keys(&*atlas);
+        reject_packed_sprite_growth_before_raster(&*atlas);
+        assert_eq!(atlas.evict_to_budget_keeping(0, 4), 0);
+        assert_packed_sprite_pixels(
+            &renderer
+                .render_scene_to_bgra(&scene)
+                .unwrap()
+                .premultiplied_bgra,
+        );
+        for id in &identities {
+            assert!(atlas.get_texture(*id).is_ok());
+        }
+        for _ in 0..4 {
+            atlas.advance_frame();
+        }
+        for id in &identities {
+            assert!(atlas.get_texture(*id).is_err());
+        }
+        atlas.set_hard_admission_limits(crate::AtlasAdmissionLimits::default());
+        let restored = packed_sprite_scene(&*atlas);
+        assert!(
+            restored
+                .atlas_tiles()
+                .all(|tile| !identities.contains(&tile.texture_id))
+        );
+        assert_packed_sprite_pixels(
+            &renderer
+                .render_scene_to_bgra(&restored)
+                .unwrap()
+                .premultiplied_bgra,
+        );
+    }
+
+    #[test]
+    fn warp_atlas_device_reset_rejects_old_scene_identity_and_rebuilds_pixels() {
+        use crate::scene::sprite_sampling_tests::*;
+        let (_window, mut renderer) = native_warp_renderer();
+        renderer
+            .resize(size(DevicePixels(32), DevicePixels(40)))
+            .unwrap();
+        let atlas = renderer.atlas.clone();
+        let old_scene = packed_sprite_scene(&*atlas);
+        assert_packed_sprite_pixels(
+            &renderer
+                .render_scene_to_bgra(&old_scene)
+                .unwrap()
+                .premultiplied_bgra,
+        );
+        let identities: Vec<_> = old_scene
+            .atlas_tiles()
+            .map(|tile| tile.texture_id)
+            .collect();
+        atlas.handle_device_lost(&renderer.devices.device, &renderer.devices.device_context);
+        for id in &identities {
+            assert!(atlas.get_texture(*id).is_err());
+        }
+        let restored = packed_sprite_scene(&*atlas);
+        assert!(
+            restored
+                .atlas_tiles()
+                .all(|tile| !identities.contains(&tile.texture_id))
+        );
+        // Direct3D propagates a checked stale-ID error, instead of binding a
+        // replacement texture under the previous device generation's identity.
+        assert!(renderer.render_scene_to_bgra(&old_scene).is_err());
+        assert_packed_sprite_pixels(
+            &renderer
+                .render_scene_to_bgra(&restored)
+                .unwrap()
+                .premultiplied_bgra,
+        );
+    }
+
+    #[test]
+    fn warp_surviving_atlas_page_reuse_rejects_retired_tile_before_gpu_submission() {
+        use crate::PlatformAtlas;
+        use crate::scene::sprite_sampling_tests::*;
+        let (_window, mut renderer) = native_warp_renderer();
+        renderer
+            .resize(size(DevicePixels(16), DevicePixels(16)))
+            .unwrap();
+        let atlas = renderer.atlas.clone();
+        let first = surviving_page_tile(&*atlas, 994, [0, 0, 255, 255]);
+        let survivor = surviving_page_tile(&*atlas, 995, [0, 255, 0, 255]);
+        assert_eq!(first.texture_id, survivor.texture_id);
+        let old_scene = surviving_page_scene(first.clone());
+        let red = renderer.render_scene_to_bgra(&old_scene).unwrap();
+        assert_eq!(
+            &red.premultiplied_bgra[(8 * 16 + 8) * 4..][..4],
+            &[0, 0, 255, 255]
+        );
+        atlas.remove(&surviving_page_key(994));
+        for _ in 0..4 {
+            atlas.advance_frame();
+        }
+        let replacement = surviving_page_tile(&*atlas, 996, [255, 0, 0, 255]);
+        assert_eq!(replacement.texture_id, first.texture_id);
+        assert_eq!(replacement.bounds, first.bounds);
+        let blue = renderer
+            .render_scene_to_bgra(&surviving_page_scene(replacement))
+            .unwrap();
+        assert_eq!(
+            &blue.premultiplied_bgra[(8 * 16 + 8) * 4..][..4],
+            &[255, 0, 0, 255]
+        );
+        assert!(renderer.render_scene_to_bgra(&old_scene).is_err());
     }
 
     #[test]

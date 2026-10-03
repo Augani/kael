@@ -3950,8 +3950,6 @@ name = "kael"
 version = "0.4.1"
 dependencies = [
  "accesskit",
- "accesskit_unix",
- "accesskit_windows",
  "anyhow",
  "as-raw-xcb-connection",
  "ashpd",
@@ -3992,6 +3990,8 @@ dependencies = [
  "js-sys",
  "kael-macros",
  "kael_accesskit_macos",
+ "kael_accesskit_unix",
+ "kael_accesskit_windows",
  "kael_collections",
  "kael_gpu_budget",
  "kael_http_client",
@@ -4039,6 +4039,7 @@ dependencies = [
  "thiserror 2.0.21",
  "time",
  "toml 1.1.6+spec-1.1.0",
+ "unicode-bidi",
  "unicode-segmentation",
  "usvg 0.48.1",
  "uuid",
@@ -4091,6 +4092,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kael_accesskit_atspi_common"
+version = "0.4.1"
+dependencies = [
+ "accesskit",
+ "accesskit_consumer",
+ "atspi-common",
+ "phf 0.13.1",
+ "serde",
+ "zvariant 5.15.0",
+]
+
+[[package]]
 name = "kael_accesskit_macos"
 version = "0.4.1"
 dependencies = [
@@ -4100,6 +4113,34 @@ dependencies = [
  "objc2 0.5.2",
  "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",
+]
+
+[[package]]
+name = "kael_accesskit_unix"
+version = "0.4.1"
+dependencies = [
+ "accesskit",
+ "async-channel",
+ "async-executor",
+ "async-task",
+ "atspi",
+ "futures-lite",
+ "futures-util",
+ "kael_accesskit_atspi_common",
+ "serde",
+ "zbus 5.19.0",
+]
+
+[[package]]
+name = "kael_accesskit_windows"
+version = "0.4.1"
+dependencies = [
+ "accesskit",
+ "accesskit_consumer",
+ "hashbrown 0.16.1",
+ "static_assertions",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]

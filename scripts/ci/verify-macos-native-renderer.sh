@@ -16,6 +16,9 @@ export KAEL_NATIVE_RENDERER_SMOKE_PNG="${evidence_dir}/native-renderer.png"
 export KAEL_GPU_FRAME_TIMING_SMOKE=1
 export CARGO_TARGET_DIR="${workspace_dir}/target"
 
+python3 "${workspace_dir}/scripts/ci/verify-programmable-renderer.py" \
+  --backend metal --evidence "${evidence_dir}/programmable"
+
 (
   cd "${workspace_dir}"
   cargo run -p kael --example native_renderer_smoke \
@@ -26,10 +29,8 @@ grep -Fq "NATIVE_RENDERER_SMOKE_GPU: backend=metal software=false" \
   "${evidence_dir}/native-renderer.log"
 grep -Fq "text_probe_pixels=" "${evidence_dir}/native-renderer.log"
 grep -Fq "NATIVE_RENDERER_SMOKE_OK:" "${evidence_dir}/native-renderer.log"
+grep -Fq "NATIVE_IDLE_MODEL_FRAME_OK:" "${evidence_dir}/native-renderer.log"
 grep -Fq "NATIVE_GPU_PRESENTATION_OK:" "${evidence_dir}/native-renderer.log"
 test -s "${evidence_dir}/native-renderer.png"
-
-python3 "${workspace_dir}/scripts/ci/verify-programmable-renderer.py" \
-  --backend metal --evidence "${evidence_dir}/programmable"
 
 echo "macOS Metal release proof passed; evidence: ${evidence_dir}"

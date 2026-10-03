@@ -51,7 +51,9 @@ pub(crate) fn accessibility_adjusted_value(
         AccessibilityAction::SetValue => match request.payload.as_ref()? {
             AccessibilityActionPayload::NumericValue(value) => *value,
             AccessibilityActionPayload::Value(value) => value.parse().ok()?,
-            AccessibilityActionPayload::TextSelection { .. } => return None,
+            AccessibilityActionPayload::TextSelection { .. }
+            | AccessibilityActionPayload::TextReveal { .. }
+            | AccessibilityActionPayload::TextReplacement { .. } => return None,
         },
         _ => return None,
     };

@@ -930,7 +930,11 @@ impl RenderOnce for Input {
                                     Some(AccessibilityActionPayload::NumericValue(value)) => {
                                         Some(value.to_string())
                                     }
-                                    Some(AccessibilityActionPayload::TextSelection { .. })
+                                    Some(
+                                        AccessibilityActionPayload::TextSelection { .. }
+                                        | AccessibilityActionPayload::TextReveal { .. }
+                                        | AccessibilityActionPayload::TextReplacement { .. },
+                                    )
                                     | None => None,
                                 };
                                 if let Some(value) = value {

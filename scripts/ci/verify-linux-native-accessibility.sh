@@ -8,27 +8,40 @@ fi
 workspace_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 profile=x11
 session=false
+text_protocol=false
 for option in "$@"; do
   case "${option}" in
     --gtk4) profile=gtk4 ;;
     --session) session=true ;;
+    --text) text_protocol=true ;;
     *) echo "Unknown native accessibility option: ${option}" >&2; exit 2 ;;
   esac
 done
 evidence_name=linux
 features=native,kael/font-kit,kael/x11
 session_options=()
+example_name=virtual_tree
+client_script=scripts/ci/native-accessibility-atspi.py
+success_marker='NATIVE_ACCESSIBILITY_RUNTIME_OK: backend=atspi'
 if [[ "${profile}" == gtk4 ]]; then
   evidence_name=linux-gtk4
   features=native,kael/webview-wayland-gtk4
   session_options+=(--gtk4)
+fi
+if [[ "${text_protocol}" == true ]]; then
+  evidence_name+=-text
+  features+=,editor
+  example_name=editor_accessibility
+  client_script=scripts/ci/native-text-accessibility-atspi.py
+  success_marker='NATIVE_TEXT_ACCESSIBILITY_OK platform=linux'
+  session_options+=(--text)
 fi
 evidence_dir="${workspace_dir}/target/native-accessibility-smoke/${evidence_name}"
 mkdir -p "${evidence_dir}"
 cd "${workspace_dir}"
 
 if [[ "${session}" == false ]]; then
-  cargo build --locked -p kael_ui --example virtual_tree --no-default-features \
+  cargo build --locked -p kael_ui --example "${example_name}" --no-default-features \
     --features "${features}" \
     2>&1 | tee "${evidence_dir}/build.log"
   # The accessibility bus/status and X server belong solely to this CI session.
@@ -37,7 +50,13 @@ if [[ "${session}" == false ]]; then
 fi
 
 unset KAEL_HEADLESS WAYLAND_DISPLAY
-export KAEL_LINUX_BACKEND=x11 KAEL_ACCESSIBILITY_SMOKE=1
+export KAEL_LINUX_BACKEND=x11
+unset KAEL_ACCESSIBILITY_SMOKE KAEL_NATIVE_TEXT_SMOKE
+if [[ "${text_protocol}" == true ]]; then
+  export KAEL_NATIVE_TEXT_SMOKE=1
+else
+  export KAEL_ACCESSIBILITY_SMOKE=1
+fi
 if [[ "${profile}" == gtk4 ]]; then
   export GDK_BACKEND=x11 GSK_RENDERER=cairo
 elif [[ "${KAEL_NATIVE_RENDERER_USE_SOFTWARE:-0}" == 1 ]]; then
@@ -64,6 +83,7 @@ export AT_SPI_BUS_ADDRESS
   echo "os=$(uname -srmo)"
   echo "display=${DISPLAY}"
   echo "profile=${profile}"
+  echo "fixture=${example_name}"
   echo "renderer=${GSK_RENDERER:-${VK_DRIVER_FILES:-automatic}}"
   echo "client=AT-SPI2 D-Bus through GLib introspection"
 } > "${evidence_dir}/environment.txt"
@@ -76,11 +96,32 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-"${workspace_dir}/target/debug/examples/virtual_tree" \
-  > "${evidence_dir}/virtual-tree.log" 2> "${evidence_dir}/virtual-tree.stderr.log" &
+app_log="${evidence_dir}/${example_name}.log"
+client_log="${evidence_dir}/atspi-client.log"
+"${workspace_dir}/target/debug/examples/${example_name}" \
+  > "${app_log}" 2> "${evidence_dir}/${example_name}.stderr.log" &
 owned_pid=$!
+client_options=(--pid "${owned_pid}" --app-log "${app_log}")
+if [[ "${text_protocol}" == true ]]; then
+  client_options+=(
+    --document crates/kael_ui/examples/fixtures/native_unicode_document.txt
+    --replacement crates/kael_ui/examples/fixtures/native_unicode_replacement.txt
+  )
+fi
 # Use the distribution Python that owns python3-gi, even if setup-python changed PATH.
-timeout --preserve-status 105s /usr/bin/python3 scripts/ci/native-accessibility-atspi.py \
-  --pid "${owned_pid}" --app-log "${evidence_dir}/virtual-tree.log" \
-  2>&1 | tee "${evidence_dir}/atspi-client.log"
-grep -Fq 'NATIVE_ACCESSIBILITY_RUNTIME_OK: backend=atspi' "${evidence_dir}/atspi-client.log"
+timeout --preserve-status 105s /usr/bin/python3 "${client_script}" \
+  "${client_options[@]}" 2>&1 | tee "${client_log}"
+grep -Fq "${success_marker}" "${client_log}"
+if [[ "${text_protocol}" == true ]]; then
+  # A client result cannot hide the fixture deadline or a failed final action.
+  for ((attempt=0; attempt<100; attempt++)); do
+    if ! kill -0 "${owned_pid}" 2>/dev/null; then break; fi
+    sleep 0.1
+  done
+  if kill -0 "${owned_pid}" 2>/dev/null; then
+    echo 'Native text fixture did not exit after successful client completion' >&2
+    exit 1
+  fi
+  wait "${owned_pid}"
+  grep -Fq 'NATIVE_TEXT_FIXTURE_COMPLETE' "${app_log}"
+fi

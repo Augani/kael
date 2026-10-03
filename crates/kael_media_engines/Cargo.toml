@@ -12,6 +12,7 @@ categories = ["multimedia"]
 readme = "README.md"
 repository.workspace = true
 license.workspace = true
+exclude = ["examples/", "benches/"]
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }

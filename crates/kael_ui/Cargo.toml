@@ -137,6 +137,12 @@ optional = true
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kael = { path = "../kael", version = "0.4.0", features = ["runtime_shaders", "test-support"] }
 
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2 = "0.5.2"
+objc2-foundation = { version = "0.2.2", features = ["NSArray", "NSData", "NSString", "NSObject", "NSGeometry", "NSObjCRuntime", "NSThread"] }
+objc2-app-kit = { version = "0.2.2", features = ["NSPasteboard", "NSPasteboardItem"] }
+raw-window-handle = "0.6"
+
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 anyhow.workspace = true
 js-sys = "0.3"
@@ -186,12 +192,19 @@ path = "examples/virtual_tree.rs"
 [[example]]
 name = "filesystem_explorer"
 path = "examples/filesystem_explorer.rs"
+required-features = ["native"]
 
 [[example]]
 name = "desktop_workspace"
 path = "examples/desktop_workspace.rs"
+required-features = ["native", "editor"]
 
 [[example]]
 name = "document_data_workbench"
 path = "examples/document_data_workbench.rs"
 required-features = ["native", "editor", "markdown"]
+
+[[example]]
+name = "editor_accessibility"
+path = "examples/editor_accessibility.rs"
+required-features = ["native", "editor"]

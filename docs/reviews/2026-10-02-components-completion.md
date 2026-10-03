@@ -69,3 +69,31 @@ The complete UI suite with Markdown and the real Rust grammar passed 441 tests i
 ## Matched rendered component workload
 
 `benchmarks/desktop-comparison/src/component_comparison.rs` adds a second native comparison contract, `native-editor-document-v1`, against the released pinned GPUI Kit Editor. Both processes render the same 416,000-byte, 16,001-hard-line Unicode Rust/Markdown fixture (`fnv1a64:694401c508afd37d`) in a 1100×760 window with Menlo 14 px and 21 px line height. Syntax is plain on both sides. Each selection, replacement, routed Undo, routed Redo, distant caret reveal and Home uses a separate paced frame; churn replaces complete documents every 30 ticks. Exact-byte document oracles validate each phase outside the paced samples. The fixture/count/font/command counters and CPU draw/submission scopes are reported explicitly. `--quick` is only a smoke mode and is excluded from rankings. Both engine-plus-frame-timing compile checks and the deterministic fixture/offset test passed. Native runs, release timing and wider table/tree/workspace comparisons are separate remaining evidence; a compile check is not a performance result.
+
+## Fresh native acceptance — October 3
+
+The fractional CoreText bounds correction restores complete native labels and
+rich text. `.artifacts/native-ui-idle-wake/filesystem-pointer-move.json` records
+an actual pointer drag of `readme` into `Archive` in the isolated filesystem
+fixture. Both parents refresh, the source disappears, and an independent disk
+oracle verifies the 29-byte destination with SHA-256
+`10c34bf9ad84ec7ddbadc2943e3bd8e20a2db348575d3dd57c8fd37886296ab9`.
+The hidden-file checkbox and complete native text pixels also pass.
+
+`.artifacts/native-ui-idle-wake/document-data-native-interactions.json` records
+real Markdown formatting/Undo, a remote `Café 日本語 👩‍💻` edit, captured record
+identity across reversed/normal queries, and a 2×2 Unicode TSV paste with one
+Undo/Redo transaction and zero pending writes. A native vertical wheel gesture
+changes the viewport while row zero remains frozen. Native horizontal wheel
+acceptance remains open; it is not inferred from the passing two-axis CPU
+regression.
+
+The real Editor native protocol subsequently passes actual clipboard and
+composition with restoration and one-step history. Physical input-source IME
+remains separate. Fresh workspace pixels show complete inspector/explorer/Notes
+text. Fresh integrated pointer tab movement/nested edge splits, keyboard edge docking,
+floating move/resize/redock, floating/nested save/reset/restore, Unicode inspector
+Undo/Redo and live preview pixels pass in
+`.artifacts/native-ui-idle-wake/workspace-native-interactions.json`. The native OS
+dead-key path composes `é` with one-step Undo/Redo. Full details and binary
+hashes are in [the follow-up](2026-10-03-native-quality-followup.md).

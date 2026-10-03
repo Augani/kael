@@ -5,7 +5,7 @@
 #[path = "native_outline/macos.rs"]
 mod native;
 #[cfg(target_os = "macos")]
-use native::{context, filters, node, util};
+use native::{context, filters, node, text_edit, util};
 
 #[cfg(target_os = "macos")]
 fn main() {

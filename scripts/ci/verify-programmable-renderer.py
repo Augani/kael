@@ -89,11 +89,14 @@ def main():
     minimum, compute = {
         'metal': (7, 'native_compute_runtime_buffers_uploads_and_gpu_display'),
         'blade': (5, 'blade_compute_runtime_arrays_uploads_and_loop_budget'),
-        'directx11': (8, 'warp_compute_runtime_arrays_exact_uploads_and_guarded_loops'),
+        'directx11': (11, 'warp_compute_runtime_arrays_exact_uploads_and_guarded_loops'),
     }[args.backend]
     custom_required = [compute]
     if args.backend == 'directx11':
-        custom_required.append('warp_packed_sprite_filtering_isolates_neighbor_texels_and_preserves_interpolation')
+        custom_required.extend(['warp_packed_sprite_filtering_isolates_neighbor_texels_and_preserves_interpolation',
+                                'warp_atlas_pressure_retains_replayed_pixels_and_reuploads_after_retirement',
+                                'warp_atlas_device_reset_rejects_old_scene_identity_and_rebuilds_pixels',
+                                'warp_surviving_atlas_page_reuse_rejects_retired_tile_before_gpu_submission'])
     run(command + ['custom_shaders::tests', '--', '--nocapture', '--test-threads=1'],
         args.evidence / 'custom-shaders-and-compute.log', minimum, custom_required)
     run(command + ['graph_tests', '--', '--nocapture', '--test-threads=1'],
@@ -102,7 +105,7 @@ def main():
          'image_compute_graph_caches_exact_uniforms_and_rejects_invalid_groups_before_allocation'])
     if args.backend == 'metal':
         run(command + ['offscreen_tests', '--', '--nocapture', '--test-threads=1'],
-            args.evidence / 'offscreen-scenes.log', 22,
+            args.evidence / 'offscreen-scenes.log', 26,
             ['translucent_paths_use_source_over_alpha',
              'backdrop_blur_preserves_premultiplied_color_with_translucent_tint',
              'backdrop_blur_keeps_capture_coordinates',
@@ -110,12 +113,17 @@ def main():
              'backdrop_blur_fractional_capture_includes_last_visible_texel',
              'backdrop_blur_respects_own_and_ancestor_rounded_clips',
              'packed_sprite_filtering_isolates_neighbor_texels_and_preserves_interpolation',
+             'atlas_pressure_retains_replayed_pixels_and_reuploads_after_retirement',
+             'surviving_atlas_page_reuse_rejects_retired_tile_before_gpu_submission',
+             'many_glyph_masks_upload_and_render_every_instance_in_one_batch',
+             'native_fractional_glyph_rasters_match_reserved_bounds_and_render_the_complete_line',
              'oversized_readbacks_fail_before_scratch_allocations',
              'offscreen_paths_allocate_on_use_reuse_capacity_and_survive_zero_size',
              'offscreen_gpu_frame_timing_is_opt_in_bounded_and_uses_actual_host_clock'])
         run(command + ['metal_atlas::tests', '--', '--nocapture', '--test-threads=1'],
-            args.evidence / 'ordered-atlas-uploads.log', 12,
-            ['atlas_texture_uploads_preserve_queued_old_read_then_publish_new_pixels',
+            args.evidence / 'ordered-atlas-uploads.log', 13,
+            ['native_atlas_identity_rejects_foreign_atlas_and_late_release',
+             'atlas_texture_uploads_preserve_queued_old_read_then_publish_new_pixels',
              'upload_capacity_rejects_before_raster_retains_pages_and_recovers_with_progress_wake',
              'staging_peak_admission_and_panicking_raster_reservations_roll_back',
              'sixty_four_mib_image_upload_uses_bounded_chunks_and_exact_boundary_pixels',
@@ -130,11 +138,27 @@ def main():
             'blade_backdrop_fractional_capture_includes_last_visible_texel',
             'blade_backdrop_respects_own_and_ancestor_rounded_clips',
             'blade_packed_sprite_filtering_isolates_neighbor_texels_and_preserves_interpolation',
+            'blade_atlas_pressure_retains_replayed_pixels_and_reuploads_after_retirement',
+            'blade_surviving_atlas_page_reuse_rejects_retired_tile_before_gpu_submission',
         ]
         if sys.platform == 'darwin':
             required.append('blade_scratch_probe_measures_actual_device_allocation_at_4k')
         run(command + ['offscreen_tests', '--', '--nocapture', '--test-threads=1'],
             args.evidence / 'offscreen-scenes.log', len(required), required)
+    if args.backend == 'blade':
+        run(command + ['blade_atlas::admission_tests', '--', '--nocapture', '--test-threads=1'],
+            args.evidence / 'atlas-admission.log', 1,
+            ['blade_atlas_admission_accounts_real_upload_buffers_before_raster'])
+    run(command + ['native_atlas_identity', '--', '--nocapture', '--test-threads=1'],
+        args.evidence / 'atlas-identity-lifetimes.log', 3,
+        ['native_atlas_identity_reuses_bounded_slots_without_aliasing_or_late_release',
+         'native_atlas_identity_survives_device_list_reset_and_failed_allocations',
+         'native_atlas_identity_exhaustion_fails_without_wrapping'])
+    run(command + ['atlas_tile_allocations::tests', '--', '--nocapture', '--test-threads=1'],
+        args.evidence / 'atlas-tile-residency.log', 3,
+        ['retired_tiles_never_alias_after_bucket_generation_wraps',
+         'exact_bounds_and_one_time_release_protect_live_allocations',
+         'checked_exhaustion_precedes_allocator_mutation_and_rollback_never_recycles'])
     print(f'PROGRAMMABLE_RENDERER_RUNTIME_OK: backend={args.backend}', flush=True)
 
 

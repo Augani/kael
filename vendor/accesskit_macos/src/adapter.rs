@@ -4,7 +4,7 @@
 // the LICENSE-MIT file), at your option.
 
 use crate::{
-    context::{ActionHandlerNoMut, ActionHandlerWrapper, Context},
+    context::{ActionHandlerNoMut, ActionHandlerWrapper, Context, TextEditHandlerWrapper},
     event::{EventGenerator, QueuedEvents, focus_event},
     filters::filter,
     node::can_be_focused,
@@ -91,13 +91,46 @@ impl Adapter {
         is_view_focused: bool,
         action_handler: impl 'static + ActionHandler,
     ) -> Self {
+        unsafe {
+            Self::with_wrapped_action_handler(
+                view,
+                is_view_focused,
+                Rc::new(ActionHandlerWrapper::new(action_handler)),
+            )
+        }
+    }
+
+    /// Create an adapter with atomic selected-text and clipboard support.
+    /// The handler runs on the main thread and must preserve request identity.
+    ///
+    /// # Safety
+    /// `view` must be a valid, unreleased pointer to an `NSView`.
+    pub unsafe fn new_with_text_handler(
+        view: *mut c_void,
+        is_view_focused: bool,
+        action_handler: impl 'static + ActionHandler + crate::TextEditHandler,
+    ) -> Self {
+        unsafe {
+            Self::with_wrapped_action_handler(
+                view,
+                is_view_focused,
+                Rc::new(TextEditHandlerWrapper::new(action_handler)),
+            )
+        }
+    }
+
+    pub(crate) unsafe fn with_wrapped_action_handler(
+        view: *mut c_void,
+        is_view_focused: bool,
+        action_handler: Rc<dyn ActionHandlerNoMut>,
+    ) -> Self {
         let view = unsafe { Id::retain(view as *mut NSView) }.unwrap();
         let view = WeakId::from_id(&view);
         let mtm = MainThreadMarker::new().unwrap();
         let state = State::Inactive {
             view,
             is_view_focused,
-            action_handler: Rc::new(ActionHandlerWrapper::new(action_handler)),
+            action_handler,
             mtm,
         };
         Self { state }
@@ -288,7 +321,9 @@ impl Adapter {
         let tree = context.tree.borrow();
         let state = tree.state();
         let root = state.root();
-        let point = from_ns_point(&view, &root, point);
+        let Some(point) = from_ns_point(&view, &root, point) else {
+            return null_mut();
+        };
         let node = root.node_at_point(point, &filter).unwrap_or(root);
         Id::autorelease_return(context.get_or_create_platform_node(node.id())) as *mut _
     }

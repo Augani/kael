@@ -420,7 +420,7 @@ unsafe fn build_classes() {
                 let marked_range = marked_range as Method0<NSRange>;
                 let selected_range = selected_range as Method0<NSRange>;
                 let first_rect_for_character_range =
-                    first_rect_for_character_range as Method2<NSRange, id, NSRect>;
+                    first_rect_for_character_range as Method2<NSRange, NSRangePointer, NSRect>;
                 let insert_text = insert_text as Method2<id, NSRange, ()>;
                 let set_marked_text = set_marked_text as Method3<id, NSRange, NSRange, ()>;
                 let unmark_text = unmark_text as Method0<()>;
@@ -6381,7 +6381,15 @@ extern "C" fn selected_range(this: id, _: Sel) -> NSRange {
     selected_range_result.map_or(NSRange::invalid(), |selection| selection.range.into())
 }
 
-extern "C" fn first_rect_for_character_range(this: id, _: Sel, range: NSRange, _: id) -> NSRect {
+extern "C" fn first_rect_for_character_range(
+    this: id,
+    _: Sel,
+    range: NSRange,
+    actual_range: NSRangePointer,
+) -> NSRect {
+    if !actual_range.0.is_null() {
+        unsafe { actual_range.0.write(NSRange::invalid()) };
+    }
     let frame = get_frame(this);
     with_input_handler(this, |input_handler| {
         input_handler.bounds_for_range(range.to_range()?)
@@ -6390,6 +6398,9 @@ extern "C" fn first_rect_for_character_range(this: id, _: Sel, range: NSRange, _
     .map_or(
         NSRect::new(NSPoint::new(0., 0.), NSSize::new(0., 0.)),
         |bounds| {
+            if !actual_range.0.is_null() {
+                unsafe { actual_range.0.write(range) };
+            }
             NSRect::new(
                 NSPoint::new(
                     frame.origin.x + bounds.origin.x.0 as f64,
@@ -6539,7 +6550,7 @@ extern "C" fn character_index_for_point(this: id, _: Sel, position: NSPoint) -> 
     })
     .flatten()
     .map(|index| index as u64)
-    .unwrap_or(NSUInteger::MAX as u64)
+    .unwrap_or(objc2_foundation::NSNotFound as u64)
 }
 
 fn screen_point_to_gpui_point(this: id, position: NSPoint) -> Point<Pixels> {

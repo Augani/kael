@@ -129,13 +129,14 @@ trait NSRangeExt {
 impl NSRangeExt for NSRange {
     fn invalid() -> Self {
         Self {
-            location: NSUInteger::MAX,
+            location: objc2_foundation::NSNotFound as NSUInteger,
             length: 0,
         }
     }
 
     fn is_valid(&self) -> bool {
-        self.location != NSUInteger::MAX
+        self.location != objc2_foundation::NSNotFound as NSUInteger
+            && self.location != NSUInteger::MAX
     }
 
     fn to_range(self) -> Option<Range<usize>> {
@@ -211,6 +212,21 @@ mod native_value_tests {
 
     #[test]
     fn native_ranges_and_geometry_fail_closed() {
+        assert_eq!(
+            NSRange::invalid().location,
+            objc2_foundation::NSNotFound as NSUInteger
+        );
+        assert!(
+            NSRange {
+                location: objc2_foundation::NSNotFound as NSUInteger,
+                length: 0,
+            }
+            .to_range()
+            .is_none()
+        );
+        assert!(NSRange::invalid().to_range().is_none());
+        assert!(NSRange::new(NSUInteger::MAX, 0).to_range().is_none());
+        assert_eq!(NSRange::new(0, 0).to_range(), Some(0..0));
         assert!(
             NSRange {
                 location: usize::MAX - 1,

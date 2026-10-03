@@ -533,6 +533,9 @@ features = [
 ]
 default-features = false
 
+[dependencies.unicode-bidi]
+version = "0.3.18"
+
 [dependencies.unicode-segmentation]
 workspace = true
 
@@ -693,7 +696,9 @@ default-features = false
 version = "1.2"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.accesskit_unix]
-version = "0.22.1"
+path = "../../vendor/accesskit_unix"
+version = "0.4.1"
+package = "kael_accesskit_unix"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.as-raw-xcb-connection]
 version = "1"
@@ -1062,7 +1067,9 @@ features = ["wgsl-in"]
 version = "0.5.15"
 
 [target.'cfg(target_os = "windows")'.dependencies.accesskit_windows]
-version = "0.34.0"
+path = "../../vendor/accesskit_windows"
+version = "0.4.1"
+package = "kael_accesskit_windows"
 
 [target.'cfg(target_os = "windows")'.dependencies.windows-collections]
 version = "0.2"

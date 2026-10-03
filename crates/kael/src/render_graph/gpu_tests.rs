@@ -1,4 +1,13 @@
 //! Identical actual-device graph contracts across every native backend.
+#![cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        any(feature = "x11", feature = "wayland"),
+        not(feature = "webview-wayland-gtk4")
+    )
+))]
 use crate::render_graph::GpuGraphRenderer;
 use crate::{
     GpuFragmentPass, GpuGraphBinding, GpuGraphError, GpuRenderGraph, MemoryPressureLevel,
@@ -17,7 +26,18 @@ pub(crate) trait NativeGraphTestRenderer: GpuGraphRenderer {
     fn allocated_bytes(&self) -> u64;
 }
 
-#[cfg(feature = "custom-shaders")]
+#[cfg(all(
+    feature = "custom-shaders",
+    any(
+        target_os = "macos",
+        target_os = "windows",
+        all(
+            any(target_os = "linux", target_os = "freebsd"),
+            any(feature = "x11", feature = "wayland"),
+            not(feature = "webview-wayland-gtk4")
+        )
+    )
+))]
 macro_rules! native_graph_tests {
     ($renderer:ty) => {
         #[test]
@@ -34,7 +54,18 @@ macro_rules! native_graph_tests {
         fn image_compute_graph_caches_exact_uniforms_and_rejects_invalid_groups_before_allocation() { $crate::render_graph::gpu_tests::image_compute_graph_caches_exact_uniforms_and_rejects_invalid_groups_before_allocation::<$renderer>(); }
     };
 }
-#[cfg(feature = "custom-shaders")]
+#[cfg(all(
+    feature = "custom-shaders",
+    any(
+        target_os = "macos",
+        target_os = "windows",
+        all(
+            any(target_os = "linux", target_os = "freebsd"),
+            any(feature = "x11", feature = "wayland"),
+            not(feature = "webview-wayland-gtk4")
+        )
+    )
+))]
 pub(crate) use native_graph_tests;
 
 fn shader(source: &str) -> ShaderHandle {

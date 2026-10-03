@@ -891,7 +891,10 @@ impl MetalRenderer {
             return;
         }
 
-        self.sprite_atlas.mark_scene_used(scene);
+        if let Err(error) = self.sprite_atlas.mark_scene_used(scene) {
+            log::warn!("Metal scene rejected before submission: {error:#}");
+            return;
+        }
 
         if let Err(error) = self.sprite_atlas.flush_uploads() {
             log::error!("failed to flush Metal atlas uploads: {error:#}");
@@ -1028,7 +1031,7 @@ impl MetalRenderer {
         let target_ref: &metal::TextureRef = &target;
 
         self.ensure_buffer_size(scene)?;
-        self.sprite_atlas.mark_scene_used(scene);
+        self.sprite_atlas.mark_scene_used(scene)?;
         self.sprite_atlas.flush_uploads()?;
         let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
 
@@ -1142,7 +1145,7 @@ impl MetalRenderer {
         scissor: Option<metal::MTLScissorRect>,
     ) -> Result<()> {
         self.ensure_buffer_size(scene)?;
-        self.sprite_atlas.mark_scene_used(scene);
+        self.sprite_atlas.mark_scene_used(scene)?;
         self.sprite_atlas.flush_uploads()?;
         let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
 
@@ -1411,7 +1414,7 @@ impl MetalRenderer {
         let target = self.device.new_texture(&descriptor);
 
         self.ensure_buffer_size(scene)?;
-        self.sprite_atlas.mark_scene_used(scene);
+        self.sprite_atlas.mark_scene_used(scene)?;
         self.sprite_atlas.flush_uploads()?;
         let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
         let command_queue = self.command_queue.clone();
@@ -2174,7 +2177,7 @@ impl MetalRenderer {
             let Some(atlas_texture) = self.sprite_atlas.metal_texture(snapshot.target.texture_id)
             else {
                 log::warn!("skipping cached-surface copy from a stale Metal atlas texture");
-                return false;
+                continue;
             };
             let blit_encoder = command_buffer.new_blit_command_encoder();
             blit_encoder.copy_from_texture(
@@ -2657,7 +2660,7 @@ impl MetalRenderer {
 
         let Some(texture) = self.sprite_atlas.metal_texture(texture_id) else {
             log::warn!("skipping monochrome sprites with a stale Metal atlas texture");
-            return false;
+            return true;
         };
         let texture_size = size(
             DevicePixels(texture.width() as i32),
@@ -2727,7 +2730,7 @@ impl MetalRenderer {
 
         let Some(texture) = self.sprite_atlas.metal_texture(texture_id) else {
             log::warn!("skipping polychrome sprites with a stale Metal atlas texture");
-            return false;
+            return true;
         };
         let texture_size = size(
             DevicePixels(texture.width() as i32),
@@ -3842,6 +3845,300 @@ mod offscreen_tests {
             .render_scene_to_bytes(&scene, size(DevicePixels(32), DevicePixels(40)))
             .unwrap();
         crate::scene::sprite_sampling_tests::assert_packed_sprite_pixels(&frame.bgra);
+    }
+
+    #[test]
+    fn native_fractional_glyph_rasters_match_reserved_bounds_and_render_the_complete_line() {
+        use crate::{
+            FontRun, GlyphRasterMode, MacTextSystem, PlatformAtlas, PlatformTextSystem,
+            RenderGlyphParams, font, px,
+        };
+        use std::borrow::Cow;
+        let mut renderer = headless().expect("native glyph regression requires Metal");
+        let fonts = MacTextSystem::new();
+        let font_id = fonts.font_id(&font("Helvetica")).unwrap();
+        let text = "Launch plan source Bold Table Overview Status";
+        let layout = fonts.layout_line(
+            text,
+            px(18.0),
+            &[FontRun {
+                font_id,
+                len: text.len(),
+            }],
+        );
+        let viewport = size(DevicePixels(1600), DevicePixels(64));
+        let mask_bounds = Bounds::new(
+            point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size(ScaledPixels(1600.0), ScaledPixels(64.0)),
+        );
+        let mut scene = Scene::default();
+        let mut expected = Vec::new();
+        let mut fractional = 0;
+        for run in &layout.runs {
+            for glyph in &run.glyphs {
+                let device_x = glyph.position.x.0 * 2.0;
+                let variant_x = ((device_x - device_x.floor()) * crate::SUBPIXEL_VARIANTS_X as f32)
+                    .floor() as u8;
+                fractional += usize::from(variant_x != 0);
+                let params = RenderGlyphParams {
+                    font_id: run.font_id,
+                    glyph_id: glyph.id,
+                    font_size: px(18.0),
+                    subpixel_variant: point(variant_x, 1),
+                    scale_factor: 2.0,
+                    is_emoji: false,
+                    raster_mode: GlyphRasterMode::Grayscale,
+                };
+                let bounds = fonts.glyph_raster_bounds(&params).unwrap();
+                if bounds.size.width.0 == 0 || bounds.size.height.0 == 0 {
+                    continue;
+                }
+                let (bitmap_size, payload) = fonts.rasterize_glyph(&params, bounds).unwrap();
+                assert_eq!(
+                    bitmap_size, bounds.size,
+                    "glyph {} fractional variant {:?} does not honor the declared raster bounds",
+                    glyph.index, params.subpixel_variant
+                );
+                let tile = renderer
+                    .sprite_atlas
+                    .get_or_insert_with_size(
+                        &crate::AtlasKey::Glyph(params),
+                        bounds.size,
+                        &mut || Ok(Some((bitmap_size, Cow::Borrowed(&payload)))),
+                    )
+                    .unwrap()
+                    .unwrap();
+                let x = expected.len() * 40 + 4;
+                let y = 8;
+                expected.push((x, y, bitmap_size, payload));
+                scene.insert_primitive(MonochromeSprite {
+                    order: 0,
+                    pad: 0,
+                    bounds: Bounds::new(
+                        point(ScaledPixels(x as f32), ScaledPixels(y as f32)),
+                        bitmap_size.map(Into::into),
+                    ),
+                    content_mask: ContentMask {
+                        bounds: mask_bounds,
+                    },
+                    color: hsla(0.0, 0.0, 1.0, 1.0),
+                    tile,
+                    transformation: TransformationMatrix::unit(),
+                    rounded_clip_bounds: Bounds::default(),
+                    rounded_clip_radii: Corners::default(),
+                    color_filter: ColorFilter::identity(),
+                });
+            }
+        }
+        assert!(
+            fractional > 10,
+            "fixture must exercise fractional glyph origins"
+        );
+        assert!(
+            expected.len() > 30,
+            "fixture must render the complete label set"
+        );
+        scene.finish();
+        let frame = renderer.render_scene_to_bytes(&scene, viewport).unwrap();
+        for (index, (x, y, bitmap_size, payload)) in expected.iter().enumerate() {
+            for row in 0..bitmap_size.height.0 as usize {
+                for column in 0..bitmap_size.width.0 as usize {
+                    let coverage = payload[row * bitmap_size.width.0 as usize + column];
+                    let alpha = ((coverage as f32 / 255.0).powf(0.85) * 255.0).round() as u8;
+                    let pixel = &frame.bgra[((y + row) * 1600 + x + column) * 4..][..4];
+                    assert!(
+                        pixel.iter().all(|channel| channel.abs_diff(alpha) <= 2),
+                        "glyph {index} raster pixel ({column},{row}) GPU={pixel:?} CPU alpha={alpha}"
+                    );
+                }
+            }
+        }
+        eprintln!(
+            "Metal painted {} real CoreText glyph rasters, {fractional} fractional origins, every CPU coverage pixel matched",
+            expected.len()
+        );
+    }
+
+    #[test]
+    fn many_glyph_masks_upload_and_render_every_instance_in_one_batch() {
+        use crate::{PlatformAtlas, RenderSvgParams};
+        use std::borrow::Cow;
+        let mut renderer = headless().expect("many-glyph regression requires Metal");
+        let viewport = size(DevicePixels(640), DevicePixels(32));
+        let mask = ContentMask {
+            bounds: Bounds::new(
+                point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size(ScaledPixels(640.0), ScaledPixels(32.0)),
+            ),
+        };
+        let mut scene = Scene::default();
+        let mut page = None;
+        for index in 0..64 {
+            let payload = vec![255; 8 * 16];
+            let tile = renderer
+                .sprite_atlas
+                .get_or_insert_with_size(
+                    &crate::AtlasKey::Svg(RenderSvgParams {
+                        path: format!("many-glyph-mask-{index}").into(),
+                        size: size(DevicePixels(8), DevicePixels(16)),
+                    }),
+                    size(DevicePixels(8), DevicePixels(16)),
+                    &mut || {
+                        Ok(Some((
+                            size(DevicePixels(8), DevicePixels(16)),
+                            Cow::Borrowed(&payload),
+                        )))
+                    },
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(*page.get_or_insert(tile.texture_id), tile.texture_id);
+            scene.insert_primitive(MonochromeSprite {
+                order: 0,
+                pad: 0,
+                bounds: Bounds::new(
+                    point(ScaledPixels(index as f32 * 10.0 + 0.25), ScaledPixels(8.25)),
+                    size(ScaledPixels(8.0), ScaledPixels(16.0)),
+                ),
+                content_mask: mask.clone(),
+                color: hsla(0.0, 0.0, 1.0, 1.0),
+                tile,
+                transformation: TransformationMatrix::unit(),
+                rounded_clip_bounds: Bounds::default(),
+                rounded_clip_radii: Corners::default(),
+                color_filter: ColorFilter::identity(),
+            });
+        }
+        scene.finish();
+        let frame = renderer.render_scene_to_bytes(&scene, viewport).unwrap();
+        for index in 0..64 {
+            let pixel = &frame.bgra[(16 * 640 + index * 10 + 4) * 4..][..4];
+            assert_eq!(
+                pixel,
+                &[255, 255, 255, 255],
+                "glyph {index} did not render: {pixel:?}"
+            );
+        }
+        eprintln!(
+            "Metal rendered all 64 packed glyph-mask instances; Rust monochrome stride={}",
+            std::mem::size_of::<MonochromeSprite>()
+        );
+    }
+
+    #[test]
+    fn atlas_pressure_retains_replayed_pixels_and_reuploads_after_retirement() {
+        use crate::PlatformAtlas;
+        use crate::scene::sprite_sampling_tests::*;
+        let mut renderer = headless().expect("atlas ownership regression requires Metal");
+        let atlas = renderer.sprite_atlas.clone();
+        let scene = packed_sprite_scene(&*atlas);
+        let viewport = size(DevicePixels(32), DevicePixels(40));
+        assert_packed_sprite_pixels(
+            &renderer
+                .render_scene_to_bytes(&scene, viewport)
+                .unwrap()
+                .bgra,
+        );
+        let identities: Vec<_> = scene.atlas_tiles().map(|tile| tile.texture_id).collect();
+        remove_packed_sprite_keys(&*atlas);
+        reject_packed_sprite_growth_before_raster(&*atlas);
+        assert_eq!(atlas.evict_to_budget_keeping(0, 4), 0);
+        assert_packed_sprite_pixels(
+            &renderer
+                .render_scene_to_bytes(&scene, viewport)
+                .unwrap()
+                .bgra,
+        );
+        for id in &identities {
+            assert!(atlas.metal_texture(*id).is_some());
+        }
+        for _ in 0..4 {
+            atlas.advance_frame();
+        }
+        for id in &identities {
+            assert!(atlas.metal_texture(*id).is_none());
+        }
+        atlas.set_hard_admission_limits(crate::AtlasAdmissionLimits::default());
+        let restored = packed_sprite_scene(&*atlas);
+        assert!(
+            restored
+                .atlas_tiles()
+                .all(|tile| !identities.contains(&tile.texture_id))
+        );
+        assert_packed_sprite_pixels(
+            &renderer
+                .render_scene_to_bytes(&restored, viewport)
+                .unwrap()
+                .bgra,
+        );
+        // Stale and cross-window scenes are rejected before GPU submission.
+        assert!(renderer.render_scene_to_bytes(&scene, viewport).is_err());
+        assert_packed_sprite_pixels(
+            &renderer
+                .render_scene_to_bytes(&restored, viewport)
+                .unwrap()
+                .bgra,
+        );
+        let mut foreign = headless().expect("foreign atlas regression requires Metal");
+        let foreign_scene = packed_sprite_scene(&*foreign.sprite_atlas);
+        assert_packed_sprite_pixels(
+            &foreign
+                .render_scene_to_bytes(&foreign_scene, viewport)
+                .unwrap()
+                .bgra,
+        );
+        assert!(foreign.render_scene_to_bytes(&restored, viewport).is_err());
+        assert_packed_sprite_pixels(
+            &foreign
+                .render_scene_to_bytes(&foreign_scene, viewport)
+                .unwrap()
+                .bgra,
+        );
+    }
+
+    #[test]
+    fn surviving_atlas_page_reuse_rejects_retired_tile_before_gpu_submission() {
+        use crate::PlatformAtlas;
+        use crate::scene::sprite_sampling_tests::*;
+        let mut renderer = headless().expect("tile identity regression requires Metal");
+        let atlas = renderer.sprite_atlas.clone();
+        let first = surviving_page_tile(&*atlas, 994, [0, 0, 255, 255]);
+        let survivor = surviving_page_tile(&*atlas, 995, [0, 255, 0, 255]);
+        assert_eq!(first.texture_id, survivor.texture_id);
+        let old_scene = surviving_page_scene(first.clone());
+        let viewport = size(DevicePixels(16), DevicePixels(16));
+        let red = renderer
+            .render_scene_to_bytes(&old_scene, viewport)
+            .unwrap();
+        assert_eq!(&red.bgra[(8 * 16 + 8) * 4..][..4], &[0, 0, 255, 255]);
+        atlas.remove(&surviving_page_key(994));
+        for _ in 0..4 {
+            atlas.advance_frame();
+        }
+        let replacement = surviving_page_tile(&*atlas, 996, [255, 0, 0, 255]);
+        assert_eq!(
+            replacement.texture_id, first.texture_id,
+            "fixture must keep the same page"
+        );
+        assert_eq!(
+            replacement.bounds, first.bounds,
+            "fixture must reuse exact region"
+        );
+        let current = renderer
+            .render_scene_to_bytes(&surviving_page_scene(replacement), viewport)
+            .unwrap();
+        assert_eq!(&current.bgra[(8 * 16 + 8) * 4..][..4], &[255, 0, 0, 255]);
+        let stale = renderer.render_scene_to_bytes(&old_scene, viewport);
+        if let Ok(frame) = &stale {
+            eprintln!(
+                "stale surviving-page GPU pixel BGRA={:?}",
+                &frame.bgra[(8 * 16 + 8) * 4..][..4]
+            );
+        }
+        assert!(
+            stale.is_err(),
+            "retired tile must be rejected before sampling replacement region"
+        );
     }
 
     #[test]

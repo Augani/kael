@@ -12,7 +12,8 @@ use windows::Win32::Graphics::{
 
 use crate::{
     AtlasAllocationClass, AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTile, Bounds,
-    DevicePixels, PlatformAtlas, Point, Size, platform::AtlasTextureList,
+    DevicePixels, PlatformAtlas, Point, Size,
+    platform::{AtlasTextureList, AtlasTileAllocations, allocate_native_atlas_texture_id},
 };
 
 pub(crate) struct DirectXAtlas(Mutex<DirectXAtlasState>);
@@ -31,6 +32,7 @@ struct DirectXAtlasTexture {
     allocation_class: AtlasAllocationClass,
     bytes_per_pixel: u32,
     allocator: BucketedAtlasAllocator,
+    allocations: AtlasTileAllocations,
     texture: ID3D11Texture2D,
     view: [Option<ID3D11ShaderResourceView>; 1],
     live_atlas_keys: u32,
@@ -76,8 +78,17 @@ impl DirectXAtlas {
         lock.policy.reset_runtime();
     }
 
-    pub(crate) fn mark_scene_used(&self, scene: &crate::Scene) {
-        self.0.lock().policy.mark_scene_used(scene);
+    pub(crate) fn mark_scene_used(&self, scene: &crate::Scene) -> anyhow::Result<()> {
+        let mut state = self.0.lock();
+        anyhow::ensure!(
+            scene.atlas_tiles().all(|tile| state
+                .texture(tile.texture_id)
+                .ok()
+                .is_some_and(|texture| texture.allocations.contains(tile))),
+            "scene contains a stale or foreign atlas tile"
+        );
+        state.policy.mark_scene_used(scene);
+        Ok(())
     }
 
     pub(crate) fn set_admission_limits(&self, bytes: Option<u64>) {
@@ -327,6 +338,7 @@ impl DirectXAtlasState {
                 bytes_per_pixel = 4;
             }
         }
+        let id = allocate_native_atlas_texture_id(kind)?;
         let texture_desc = D3D11_TEXTURE2D_DESC {
             Width: u32::try_from(size.width.0)
                 .map_err(|_| anyhow::anyhow!("invalid DirectX atlas width"))?,
@@ -358,7 +370,6 @@ impl DirectXAtlasState {
             AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
             AtlasTextureKind::Polychrome => &mut self.polychrome_textures,
         };
-        let index = texture_list.free_list.pop();
         let view = unsafe {
             let mut view = None;
             self.device
@@ -370,17 +381,12 @@ impl DirectXAtlasState {
                 )
             })?)]
         };
-        let texture_index = index.unwrap_or(texture_list.textures.len());
-        let texture_index = u32::try_from(texture_index)
-            .map_err(|_| anyhow::anyhow!("DirectX atlas texture index space exhausted"))?;
         let atlas_texture = DirectXAtlasTexture {
-            id: AtlasTextureId {
-                index: texture_index,
-                kind,
-            },
+            id,
             allocation_class,
             bytes_per_pixel,
             allocator: etagere::BucketedAtlasAllocator::new(size.into()),
+            allocations: AtlasTileAllocations::default(),
             texture,
             view,
             live_atlas_keys: 0,
@@ -388,15 +394,7 @@ impl DirectXAtlasState {
                 .saturating_mul(u64::from(texture_desc.Height))
                 .saturating_mul(u64::from(bytes_per_pixel)),
         };
-        let slot = if let Some(ix) = index {
-            texture_list.textures[ix] = Some(atlas_texture);
-            texture_list.textures.get_mut(ix)
-        } else {
-            texture_list.textures.push(Some(atlas_texture));
-            texture_list.textures.last_mut()
-        };
-        slot.and_then(Option::as_mut)
-            .ok_or_else(|| anyhow::anyhow!("DirectX atlas texture slot was not initialized"))
+        Ok(texture_list.insert(id.index, atlas_texture))
     }
 
     fn texture(&self, id: AtlasTextureId) -> anyhow::Result<&DirectXAtlasTexture> {
@@ -405,9 +403,7 @@ impl DirectXAtlasState {
             crate::AtlasTextureKind::Polychrome => &self.polychrome_textures,
         };
         textures
-            .textures
-            .get(id.index as usize)
-            .and_then(Option::as_ref)
+            .get(id.index)
             .filter(|texture| texture.id == id)
             .ok_or_else(|| anyhow::anyhow!("stale or invalid DirectX atlas texture id: {id:?}"))
     }
@@ -472,38 +468,28 @@ impl DirectXAtlasState {
             AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
             AtlasTextureKind::Polychrome => &mut self.polychrome_textures,
         };
-        let Some(texture_slot) = textures.textures.get_mut(id.index as usize) else {
+        let Some(texture) = textures.get_mut(id.index) else {
             return;
         };
-        if texture_slot.as_ref().is_none_or(|texture| texture.id != id) {
+        if texture.id != id {
             return;
         }
-        if let Some(mut texture) = texture_slot.take() {
-            texture
-                .allocator
-                .deallocate(etagere::AllocId::from(tile.tile_id));
-            texture.decrement_ref_count();
-            if texture.is_unreferenced() {
-                textures.free_list.push(id.index as usize);
-            } else {
-                *texture_slot = Some(texture);
-            }
+        let Some(allocation) = texture.allocations.release(&tile) else {
+            return;
+        };
+        texture.allocator.deallocate(allocation);
+        texture.decrement_ref_count();
+        if texture.is_unreferenced() {
+            textures.remove(id.index);
         }
     }
 }
 
 impl DirectXAtlasTexture {
     fn allocate(&mut self, size: Size<DevicePixels>) -> Option<AtlasTile> {
-        let allocation = self.allocator.allocate(size.into())?;
-        let tile = AtlasTile {
-            texture_id: self.id,
-            tile_id: allocation.id.into(),
-            bounds: Bounds {
-                origin: allocation.rectangle.min.into(),
-                size,
-            },
-            padding: 0,
-        };
+        let tile = self
+            .allocations
+            .allocate(&mut self.allocator, self.id, size)?;
         self.live_atlas_keys += 1;
         Some(tile)
     }

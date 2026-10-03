@@ -3,7 +3,10 @@
 // the LICENSE-APACHE file) or the MIT license (found in
 // the LICENSE-MIT file), at your option.
 
-use crate::node::PlatformNode;
+use crate::{
+    node::PlatformNode,
+    text_edit::{TextEditHandler, TextEditRequest},
+};
 use accesskit::{ActionHandler, ActionRequest};
 use accesskit_consumer::{NodeId, Tree};
 use hashbrown::HashMap;
@@ -15,6 +18,12 @@ use std::{cell::RefCell, rc::Rc};
 
 pub(crate) trait ActionHandlerNoMut {
     fn do_action(&self, request: ActionRequest);
+    fn supports_text_edits(&self) -> bool {
+        false
+    }
+    fn edit_text(&self, _request: TextEditRequest) -> bool {
+        false
+    }
 }
 
 pub(crate) struct ActionHandlerWrapper<H: ActionHandler>(RefCell<H>);
@@ -28,6 +37,24 @@ impl<H: 'static + ActionHandler> ActionHandlerWrapper<H> {
 impl<H: ActionHandler> ActionHandlerNoMut for ActionHandlerWrapper<H> {
     fn do_action(&self, request: ActionRequest) {
         self.0.borrow_mut().do_action(request)
+    }
+}
+
+pub(crate) struct TextEditHandlerWrapper<H>(RefCell<H>);
+impl<H: ActionHandler + TextEditHandler> TextEditHandlerWrapper<H> {
+    pub(crate) fn new(handler: H) -> Self {
+        Self(RefCell::new(handler))
+    }
+}
+impl<H: ActionHandler + TextEditHandler> ActionHandlerNoMut for TextEditHandlerWrapper<H> {
+    fn do_action(&self, request: ActionRequest) {
+        self.0.borrow_mut().do_action(request);
+    }
+    fn supports_text_edits(&self) -> bool {
+        true
+    }
+    fn edit_text(&self, request: TextEditRequest) -> bool {
+        self.0.borrow_mut().edit_text(request)
     }
 }
 

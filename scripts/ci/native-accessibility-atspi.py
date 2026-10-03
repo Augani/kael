@@ -6,7 +6,7 @@ import time
 import gi
 
 gi.require_version('Atspi', '2.0')
-from gi.repository import Atspi
+from gi.repository import Atspi, GLib
 
 
 def wait(read, seconds=30):
@@ -28,8 +28,22 @@ def require(condition, message):
 def children(node):
     node.clear_cache()
     count = node.get_child_count()
-    require(0 <= count <= 4_000, 'native hierarchy exceeded fixture bounds')
+    require(0 <= count <= 4_000,
+            f'native hierarchy exceeded fixture bounds: name={node.get_name()!r} '
+            f'role={node.get_role_name()!r} count={count}')
     return count
+
+
+def native_identity(node):
+    # libatspi disposes its cached GObject on Cache.RemoveAccessible. A fresh
+    # Python wrapper on re-expansion is expected; AT-SPI identity is the stable
+    # D-Bus service/path pair, not the client-side cache object's address.
+    require(node.app is not None, 'native application identity missing')
+    identity = (node.app.bus_name, node.path)
+    require(isinstance(identity[0], str) and identity[0].startswith(':') and
+            isinstance(identity[1], str) and identity[1].startswith('/'),
+            f'invalid native object identity: {identity!r}')
+    return identity
 
 
 def find_tree(app):
@@ -41,7 +55,7 @@ def find_tree(app):
         node = queue.pop(0)
         visited += 1
         require(visited <= 512, 'native tree root not found within layout bound')
-        if node.get_name() == 'Project files':
+        if node.get_name() == 'Project files' and node.get_role() == Atspi.Role.TREE:
             return node
         queue.extend(node.get_child_at_index(index) for index in range(children(node)))
     raise RuntimeError('native tree not ready')
@@ -85,12 +99,51 @@ def main():
         last = project.get_child_at_index(3_999)
         require(last.get_name() == 'document_4000.rs', 'last offscreen native row missing')
         require(last.get_parent() == project, 'offscreen native parent mismatch')
+        last_identity = native_identity(last)
+        def action(node, name):
+            node.clear_cache()
+            interface = node.get_action_iface()
+            require(interface is not None, f'native {name} interface missing')
+            names = [interface.get_action_name(index)
+                     for index in range(interface.get_n_actions())]
+            require(name in names, f'native {name} capability missing: {names}')
+            require(interface.do_action(names.index(name)), f'native {name} was rejected')
+
+        state = project.get_state_set()
+        require(state.contains(Atspi.StateType.EXPANDABLE), 'native branch is not expandable')
+        require(state.contains(Atspi.StateType.EXPANDED), 'native branch lacks expanded state')
+        time.sleep(2)
+        action(project, 'collapse')
+        def collapsed():
+            require(children(project) == 0, 'collapsed branch still exposes documents')
+            state = project.get_state_set()
+            require(state.contains(Atspi.StateType.COLLAPSED), 'native collapsed state missing')
+            require(not state.contains(Atspi.StateType.EXPANDED), 'native expanded state retained')
+            require('NATIVE_ACCESSIBILITY_MODEL: rows=96025' in args.app_log.read_text(),
+                    'foreground did not execute idle native collapse')
+        wait(collapsed)
+        try:
+            stale = last.get_action_iface()
+            require(stale is None or not stale.do_action(0),
+                    'collapsed retained native document accepted an action')
+        except GLib.GError:
+            pass  # The removed D-Bus object correctly rejects the stale handle.
+        action(project, 'expand')
+        def expanded():
+            require(children(project) == 4_000, 'native expand failed to restore descendants')
+            require(project.get_state_set().contains(Atspi.StateType.EXPANDED),
+                    'native expanded state did not return')
+            require('NATIVE_ACCESSIBILITY_DISCLOSURE: id=96024 expanded=true'
+                    in args.app_log.read_text(), 'foreground did not execute idle native expand')
+            restored = project.get_child_at_index(3_999)
+            require(native_identity(restored) == last_identity,
+                    'native D-Bus document identity changed across disclosure')
+            return restored
+        last = wait(expanded)
         actions = last.get_action_iface()
         require(actions is not None, 'offscreen row lacks its native action interface')
         names = [actions.get_action_name(index) for index in range(actions.get_n_actions())]
         require('click' in names, f'last row does not advertise Click: {names}')
-        # Upstream AccessKit AT-SPI currently exposes Click, while disclosure is
-        # keyboard-controlled. This proof specifically verifies idle native Click.
         time.sleep(2)
         require(actions.do_action(names.index('click')), 'native click was rejected')
         def selected():
@@ -103,7 +156,8 @@ def main():
                     'native active descendant did not receive focus')
         wait(selected)
         print(f'NATIVE_ACCESSIBILITY_RUNTIME_OK: backend=atspi rows={total} '
-              'projects=25 children=4000 last=100024 idle_select=true native_focus=true')
+              'projects=25 children=4000 last=100024 idle_select=true native_focus=true '
+              'native_disclosure=true stable_identity=true')
     finally:
         Atspi.exit()
 

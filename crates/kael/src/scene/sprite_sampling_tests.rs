@@ -137,3 +137,97 @@ pub(crate) fn assert_packed_sprite_pixels(bgra: &[u8]) {
         }
     }
 }
+
+/// Remove the fixture's cache owners; retained scenes keep the retired regions
+/// protected through the atlas's successful-frame guard.
+pub(crate) fn remove_packed_sprite_keys(atlas: &dyn PlatformAtlas) {
+    for path in ["sampler-owned", "sampler-neighbor"] {
+        atlas.remove(&AtlasKey::Svg(RenderSvgParams {
+            path: path.to_owned().into(),
+            size: size(DevicePixels(8), DevicePixels(8)),
+        }));
+    }
+    for id in [991, 992, 993] {
+        atlas.remove(&AtlasKey::Image(RenderImageParams {
+            image_id: ImageId(id),
+            frame_index: 0,
+        }));
+    }
+}
+
+pub(crate) fn reject_packed_sprite_growth_before_raster(atlas: &dyn PlatformAtlas) {
+    atlas.set_hard_admission_limits(crate::AtlasAdmissionLimits {
+        max_bytes: 0,
+        max_tiles: 0,
+        max_pages: 0,
+    });
+    let key = AtlasKey::Image(RenderImageParams {
+        image_id: ImageId(999),
+        frame_index: 0,
+    });
+    assert!(
+        atlas
+            .get_or_insert_with_size(
+                &key,
+                size(DevicePixels(8), DevicePixels(8)),
+                &mut || panic!("live pages must reject growth before raster")
+            )
+            .is_err()
+    );
+}
+
+pub(crate) fn surviving_page_key(id: usize) -> AtlasKey {
+    AtlasKey::CachedSurface(crate::CachedSurfaceParams {
+        cache_id: id as u64,
+        size: size(DevicePixels(1024), DevicePixels(512)),
+    })
+}
+
+pub(crate) fn surviving_page_tile(
+    atlas: &dyn PlatformAtlas,
+    id: usize,
+    color: [u8; 4],
+) -> AtlasTile {
+    atlas
+        .get_or_insert_with_size(
+            &surviving_page_key(id),
+            size(DevicePixels(1024), DevicePixels(512)),
+            &mut || {
+                Ok(Some((
+                    size(DevicePixels(1024), DevicePixels(512)),
+                    Cow::Owned(color.repeat(1024 * 512)),
+                )))
+            },
+        )
+        .unwrap()
+        .unwrap()
+}
+
+pub(crate) fn surviving_page_scene(tile: AtlasTile) -> Scene {
+    let bounds = Bounds::new(
+        point(ScaledPixels(0.0), ScaledPixels(0.0)),
+        size(ScaledPixels(16.0), ScaledPixels(16.0)),
+    );
+    let mut scene = Scene::default();
+    scene.insert_primitive(PolychromeSprite {
+        order: 0,
+        pad: 0,
+        grayscale: false,
+        opacity: 1.0,
+        bounds,
+        content_mask: ContentMask { bounds },
+        corner_radii: Corners::default(),
+        tile,
+        sprite_kind: crate::POLYCHROME_SPRITE_KIND_COLOR,
+        color: Hsla::transparent_black(),
+        pad3: 0,
+        pad2: 0,
+        blur_radius: 0.0,
+        rounded_clip_bounds: Bounds::default(),
+        rounded_clip_radii: Corners::default(),
+        transformation: TransformationMatrix::unit(),
+        color_filter: ColorFilter::identity(),
+    });
+    scene.finish();
+    scene
+}

@@ -10,6 +10,7 @@ import statistics
 import subprocess
 import time
 from pathlib import Path
+from workload_validation import TREE_HASHES, WORKSPACE_HASHES, validate_tree, validate_workspace
 
 PHASE_NAMES = ('idle-before', 'active', 'idle-after', 'churn')
 DATA_HASHES = {
@@ -26,7 +27,8 @@ def validate_workload(result, phases, engine, frame_timing, contract, rows):
         raise RuntimeError('workload contract mismatch')
     if result.get('quick', False):
         raise RuntimeError('quick smoke workloads cannot satisfy measured comparison')
-    component_contract = contract in ('native-editor-document-v1', 'native-data-table-v1')
+    component_contract = contract in ('native-editor-document-v1', 'native-data-table-v1',
+                                      'native-virtual-tree-v1', 'native-dock-workspace-v1')
     names = [phase.get('phase') for phase in phases]
     expected_names = ([name for phase in PHASE_NAMES for name in (phase, 'validation')]
                       + ['finished']) if component_contract else list(PHASE_NAMES)
@@ -98,6 +100,36 @@ def validate_workload(result, phases, engine, frame_timing, contract, rows):
             raise RuntimeError('missing native data-control oracles or bounded viewport proof')
         if result.get('final_hash') != oracles[-1]['ordered_hash']:
             raise RuntimeError('final data query differs from the last verified control snapshot')
+    elif contract == 'native-virtual-tree-v1':
+        expected_fixture = {
+            'root_count': 25, 'children_per_root': 4000, 'fixture_hash': TREE_HASHES[0],
+            'fixture_bytes': 6_100_975, 'fixture_hashes': TREE_HASHES,
+            'fixture_retained_datasets': 2, 'replacement_interval_updates': 30,
+            'tree_width_px': 780.0, 'tree_height_px': 704.0, 'row_height_px': 28.0,
+            'indent_px': 14.0, 'horizontal_scroll': False,
+            'font_family': 'Menlo', 'font_size_px': 14.0, 'line_height_px': 20.0,
+            'window_width_px': 1100, 'window_height_px': 760, 'theme_mode': 'dark',
+            'component': 'VirtualTreeList' if engine == 'kael' else 'Tree',
+        }
+        operations = ('selection_reveal', 'vertical_scroll', 'collapse_root', 'expand_root',
+                      'home', 'end_selection', 'replace_model')
+        validate_tree(result)
+    elif contract == 'native-dock-workspace-v1':
+        expected_fixture = {
+            'pane_count': 12, 'body_lines_per_pane': 32, 'fixture_hash': WORKSPACE_HASHES[0],
+            'fixture_bytes': 22_560, 'fixture_hashes': WORKSPACE_HASHES,
+            'fixture_retained_datasets': 2, 'replacement_interval_updates': 32,
+            'workspace_width_px': 1100.0, 'workspace_height_px': 704.0,
+            'initial_tab_groups': 3, 'initial_split_count': 2,
+            'initial_split_axes': ['horizontal', 'vertical'], 'initial_split_ratios': [0.5, 0.5],
+            'native_chrome_geometry': True, 'floating_panes': False, 'edge_docks': False,
+            'font_family': 'Menlo', 'font_size_px': 14.0, 'line_height_px': 20.0,
+            'window_width_px': 1100, 'window_height_px': 760, 'theme_mode': 'dark',
+            'component': 'DockWorkspace' if engine == 'kael' else 'DockArea+DockSkin',
+        }
+        operations = ('select_tab', 'move_tab', 'split_pane', 'merge_pane', 'resize_split',
+                      'zoom_group', 'unzoom_group', 'serialize_restore', 'replace_model')
+        validate_workspace(result)
     if component_contract:
         if any(result.get(key) != value
                or (type(value) is not bool and type(result.get(key)) is bool)
@@ -252,7 +284,9 @@ def main():
                         help='require builds with optional framework frame instrumentation disabled')
     parser.add_argument('--contract', choices=('native-navigation-detail-v1',
                                               'native-editor-document-v1',
-                                              'native-data-table-v1'),
+                                              'native-data-table-v1',
+                                              'native-virtual-tree-v1',
+                                              'native-dock-workspace-v1'),
                         default='native-navigation-detail-v1')
     args = parser.parse_args()
     if platform.system() != 'Darwin':
@@ -292,7 +326,9 @@ def main():
             reports.append(run(engine, executable, helper, destination, index,
                                frame_timing=not args.without_frame_timing,
                                contract=args.contract,
-                               rows=16_001 if args.contract == 'native-editor-document-v1' else 100_000))
+                               rows={'native-editor-document-v1': 16_001,
+                                     'native-virtual-tree-v1': 100_025,
+                                     'native-dock-workspace-v1': 12}.get(args.contract, 100_000)))
     (destination / 'runs.json').write_text(json.dumps(reports, indent=2) + '\n')
 
 

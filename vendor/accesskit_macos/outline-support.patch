@@ -11,16 +11,18 @@
  authors = ["The AccessKit contributors"]
  build = false
  autolib = false
-@@ -21,7 +21,7 @@
+@@ -21,8 +21,9 @@
  autoexamples = false
  autotests = false
  autobenches = false
 -description = "AccessKit UI accessibility infrastructure: macOS adapter"
-+description = "Kael-maintained AccessKit macOS adapter with native outline support"
++description = "Kael-maintained AccessKit macOS adapter with native outline and text support"
  readme = "README.md"
++exclude = ["Cargo.toml.orig"]
  keywords = [
      "gui",
-@@ -30,7 +30,7 @@
+     "ui",
+@@ -30,7 +31,7 @@
  ]
  categories = ["gui"]
  license = "MIT OR Apache-2.0"
@@ -29,7 +31,7 @@
  resolver = "2"
  
  [package.metadata.docs.rs]
-@@ -40,21 +40,32 @@
+@@ -40,21 +41,32 @@
  name = "accesskit_macos"
  path = "src/lib.rs"
  
@@ -67,7 +69,15 @@
  version = "0.2.0"
  features = [
      "NSAccessibility",
-@@ -68,7 +79,7 @@
+@@ -62,13 +74,15 @@
+     "NSAccessibilityElement",
+     "NSAccessibilityProtocols",
+     "NSColor",
++    "NSApplication",
++    "NSGraphics",
+     "NSResponder",
+     "NSText",
+     "NSView",
      "NSWindow",
  ]
  
@@ -76,6 +86,128 @@
  version = "0.2.0"
  features = [
      "NSArray",
+--- a/src/adapter.rs
++++ b/src/adapter.rs
+@@ -4,7 +4,7 @@
+ // the LICENSE-MIT file), at your option.
+ 
+ use crate::{
+-    context::{ActionHandlerNoMut, ActionHandlerWrapper, Context},
++    context::{ActionHandlerNoMut, ActionHandlerWrapper, Context, TextEditHandlerWrapper},
+     event::{EventGenerator, QueuedEvents, focus_event},
+     filters::filter,
+     node::can_be_focused,
+@@ -91,13 +91,46 @@
+         is_view_focused: bool,
+         action_handler: impl 'static + ActionHandler,
+     ) -> Self {
++        unsafe {
++            Self::with_wrapped_action_handler(
++                view,
++                is_view_focused,
++                Rc::new(ActionHandlerWrapper::new(action_handler)),
++            )
++        }
++    }
++
++    /// Create an adapter with atomic selected-text and clipboard support.
++    /// The handler runs on the main thread and must preserve request identity.
++    ///
++    /// # Safety
++    /// `view` must be a valid, unreleased pointer to an `NSView`.
++    pub unsafe fn new_with_text_handler(
++        view: *mut c_void,
++        is_view_focused: bool,
++        action_handler: impl 'static + ActionHandler + crate::TextEditHandler,
++    ) -> Self {
++        unsafe {
++            Self::with_wrapped_action_handler(
++                view,
++                is_view_focused,
++                Rc::new(TextEditHandlerWrapper::new(action_handler)),
++            )
++        }
++    }
++
++    pub(crate) unsafe fn with_wrapped_action_handler(
++        view: *mut c_void,
++        is_view_focused: bool,
++        action_handler: Rc<dyn ActionHandlerNoMut>,
++    ) -> Self {
+         let view = unsafe { Id::retain(view as *mut NSView) }.unwrap();
+         let view = WeakId::from_id(&view);
+         let mtm = MainThreadMarker::new().unwrap();
+         let state = State::Inactive {
+             view,
+             is_view_focused,
+-            action_handler: Rc::new(ActionHandlerWrapper::new(action_handler)),
++            action_handler,
+             mtm,
+         };
+         Self { state }
+@@ -288,7 +321,9 @@
+         let tree = context.tree.borrow();
+         let state = tree.state();
+         let root = state.root();
+-        let point = from_ns_point(&view, &root, point);
++        let Some(point) = from_ns_point(&view, &root, point) else {
++            return null_mut();
++        };
+         let node = root.node_at_point(point, &filter).unwrap_or(root);
+         Id::autorelease_return(context.get_or_create_platform_node(node.id())) as *mut _
+     }
+--- a/src/context.rs
++++ b/src/context.rs
+@@ -3,7 +3,10 @@
+ // the LICENSE-APACHE file) or the MIT license (found in
+ // the LICENSE-MIT file), at your option.
+ 
+-use crate::node::PlatformNode;
++use crate::{
++    node::PlatformNode,
++    text_edit::{TextEditHandler, TextEditRequest},
++};
+ use accesskit::{ActionHandler, ActionRequest};
+ use accesskit_consumer::{NodeId, Tree};
+ use hashbrown::HashMap;
+@@ -15,6 +18,12 @@
+ 
+ pub(crate) trait ActionHandlerNoMut {
+     fn do_action(&self, request: ActionRequest);
++    fn supports_text_edits(&self) -> bool {
++        false
++    }
++    fn edit_text(&self, _request: TextEditRequest) -> bool {
++        false
++    }
+ }
+ 
+ pub(crate) struct ActionHandlerWrapper<H: ActionHandler>(RefCell<H>);
+@@ -28,6 +37,24 @@
+ impl<H: ActionHandler> ActionHandlerNoMut for ActionHandlerWrapper<H> {
+     fn do_action(&self, request: ActionRequest) {
+         self.0.borrow_mut().do_action(request)
++    }
++}
++
++pub(crate) struct TextEditHandlerWrapper<H>(RefCell<H>);
++impl<H: ActionHandler + TextEditHandler> TextEditHandlerWrapper<H> {
++    pub(crate) fn new(handler: H) -> Self {
++        Self(RefCell::new(handler))
++    }
++}
++impl<H: ActionHandler + TextEditHandler> ActionHandlerNoMut for TextEditHandlerWrapper<H> {
++    fn do_action(&self, request: ActionRequest) {
++        self.0.borrow_mut().do_action(request);
++    }
++    fn supports_text_edits(&self) -> bool {
++        true
++    }
++    fn edit_text(&self, request: TextEditRequest) -> bool {
++        self.0.borrow_mut().edit_text(request)
+     }
+ }
+ 
 --- a/src/filters.rs
 +++ b/src/filters.rs
 @@ -3,4 +3,22 @@
@@ -104,7 +236,7 @@
 +}
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -3,6 +3,7 @@
+@@ -3,9 +3,12 @@
  // the LICENSE-APACHE file) or the MIT license (found in
  // the LICENSE-MIT file), at your option.
  
@@ -112,14 +244,82 @@
  #![deny(unsafe_op_in_unsafe_fn)]
  
  mod context;
++mod text_edit;
++pub use text_edit::{TextEditHandler, TextEditOperation, TextEditRequest};
+ mod filters;
+ mod node;
+ mod util;
 --- a/src/node.rs
 +++ b/src/node.rs
-@@ -32,6 +32,73 @@
- use crate::{context::Context, filters::filter, util::*};
+@@ -29,9 +29,135 @@
+ };
+ use std::rc::{Rc, Weak};
+ 
+-use crate::{context::Context, filters::filter, util::*};
++use crate::{
++    context::Context,
++    filters::filter,
++    text_edit::{TextEditOperation, TextEditRequest},
++    util::*,
++};
  
  const SCROLL_TO_VISIBLE_ACTION: &str = "AXScrollToVisible";
 +const EXPAND_ACTION: &str = "AXExpand";
 +const COLLAPSE_ACTION: &str = "AXCollapse";
++
++fn supports_text_edit(node: &Node, context: &Context, operation: &TextEditOperation) -> bool {
++    if !can_act(node)
++        || !node.supports_text_ranges()
++        || !context.action_handler.supports_text_edits()
++    {
++        return false;
++    }
++    match operation {
++        TextEditOperation::Replace(_) => {
++            !node.is_read_only() && node.supports_action(Action::ReplaceSelectedText, &filter)
++        }
++        operation => {
++            let id = match operation {
++                TextEditOperation::Copy => i32::MIN,
++                TextEditOperation::Cut => i32::MIN + 1,
++                TextEditOperation::Paste => i32::MIN + 2,
++                _ => unreachable!(),
++            };
++            (matches!(operation, TextEditOperation::Copy) || !node.is_read_only())
++                && node
++                    .data()
++                    .custom_actions()
++                    .iter()
++                    .any(|action| action.id == id)
++        }
++    }
++}
++
++fn dispatch_text_edit(
++    node: &Node,
++    tree: &Tree,
++    context: &Context,
++    operation: TextEditOperation,
++) -> bool {
++    if !supports_text_edit(node, context, &operation) {
++        return false;
++    }
++    if node.text_selection().is_none() {
++        return false;
++    }
++    let Some(selection) = node.data().text_selection().copied() else {
++        return false;
++    };
++    let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) else {
++        return false;
++    };
++    context.action_handler.edit_text(TextEditRequest {
++        target_node,
++        target_tree,
++        selection,
++        operation,
++    })
++}
 +
 +// NSAccessibility outlines enumerate every disclosed row in preorder. The
 +// generic consumer `items` iterator stops at an item and therefore only exposes
@@ -188,18 +388,28 @@
  
  fn ns_role(node: &Node) -> &'static NSAccessibilityRole {
      let role = node.role();
-@@ -285,6 +352,10 @@
+@@ -285,6 +411,20 @@
      }
  }
  
 +fn can_act(node: &Node) -> bool {
-+    !node.is_disabled() && filter(node) == FilterResult::Include
++    if node.is_disabled() || node.data().is_hidden() || filter(node) != FilterResult::Include {
++        return false;
++    }
++    let mut parent = node.parent();
++    while let Some(ancestor) = parent {
++        if ancestor.is_disabled() || ancestor.data().is_hidden() {
++            return false;
++        }
++        parent = ancestor.parent();
++    }
++    true
 +}
 +
  pub(crate) fn can_be_focused(node: &Node) -> bool {
      filter(node) == FilterResult::Include && node.role() != Role::Window
  }
-@@ -331,6 +402,11 @@
+@@ -331,6 +471,11 @@
          }
          if let Some(value) = self.0.value() {
              return Some(Value::String(value));
@@ -211,7 +421,7 @@
          }
          if let Some(value) = self.0.numeric_value() {
              return Some(Value::Number(value));
-@@ -438,8 +514,7 @@
+@@ -438,8 +583,7 @@
                  if !wrapper.is_container_with_selectable_children() {
                      return None;
                  }
@@ -221,25 +431,28 @@
                      .filter(|item| item.is_selected() == Some(true))
                      .map(|child| context.get_or_create_platform_node(child.id()))
                      .collect::<Vec<Id<PlatformNode>>>();
-@@ -555,7 +630,7 @@
+@@ -555,7 +699,9 @@
          #[method(setAccessibilityValue:)]
          fn set_value(&self, value: &NSObject) {
              if let Some(string) = downcast_ref::<NSString>(value) {
 -                self.resolve_with_context(|node, tree, context| {
++                if string.len() > 16 * 1024 * 1024 { return; }
 +                self.resolve_action(|node, tree, context| {
++                    if node.is_read_only() || !node.supports_action(Action::SetValue, &filter) { return; }
                      if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
                          context.do_action(ActionRequest {
                              action: Action::SetValue,
-@@ -566,7 +641,7 @@
+@@ -566,7 +712,8 @@
                      }
                  });
              } else if let Some(number) = downcast_ref::<NSNumber>(value) {
 -                self.resolve_with_context(|node, tree, context| {
 +                self.resolve_action(|node, tree, context| {
++                    if node.is_read_only() || !node.supports_action(Action::SetValue, &filter) { return; }
                      if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
                          context.do_action(ActionRequest {
                              action: Action::SetValue,
-@@ -637,7 +712,7 @@
+@@ -637,7 +784,7 @@
  
          #[method(setAccessibilityFocused:)]
          fn set_focused(&self, focused: bool) {
@@ -248,7 +461,7 @@
                  if focused {
                      if node.is_focusable(&filter) {
                          if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
-@@ -667,7 +742,7 @@
+@@ -667,7 +814,7 @@
  
          #[method(accessibilityPerformPress)]
          fn press(&self) -> bool {
@@ -257,7 +470,7 @@
                  let clickable = node.is_clickable(&filter);
                  if clickable {
                      if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
-@@ -686,7 +761,7 @@
+@@ -686,7 +833,7 @@
  
          #[method(accessibilityPerformIncrement)]
          fn increment(&self) -> bool {
@@ -266,7 +479,7 @@
                  let supports_increment = node.supports_increment(&filter);
                  if supports_increment {
                      if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
-@@ -705,7 +780,7 @@
+@@ -705,7 +852,7 @@
  
          #[method(accessibilityPerformDecrement)]
          fn decrement(&self) -> bool {
@@ -275,7 +488,108 @@
                  let supports_decrement = node.supports_decrement(&filter);
                  if supports_decrement {
                      if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
-@@ -1005,8 +1080,8 @@
+@@ -753,6 +900,18 @@
+             .flatten()
+         }
+ 
++        #[method(setAccessibilitySelectedText:)]
++        fn set_selected_text(&self, value: &NSString) {
++            // Bound the Rust copy independently of the native NSString owner.
++            if value.len() > 16 * 1024 * 1024 { return; }
++            self.resolve_action(|node, tree, context| {
++                if !supports_text_edit(node, context, &TextEditOperation::Replace(String::new())) { return; }
++                let value = value.to_string();
++                if value.len() > 16 * 1024 * 1024 { return; }
++                dispatch_text_edit(node, tree, context, TextEditOperation::Replace(value));
++            });
++        }
++
+         #[method(accessibilitySelectedTextRange)]
+         fn selected_text_range(&self) -> NSRange {
+             self.resolve(|node| {
+@@ -764,6 +923,33 @@
+                 NSRange::new(0, 0)
+             })
+             .unwrap_or_else(|| NSRange::new(0, 0))
++        }
++
++        #[method(accessibilityVisibleCharacterRange)]
++        fn visible_character_range(&self) -> NSRange {
++            self.resolve(|node| {
++                if node.supports_text_ranges() { visible_character_range(node) }
++                else { NSRange::new(0, 0) }
++            }).unwrap_or_else(|| NSRange::new(0, 0))
++        }
++
++        #[method(setAccessibilityVisibleCharacterRange:)]
++        fn set_visible_character_range(&self, range: NSRange) {
++            self.resolve_action(|node, tree, context| {
++                if node.supports_text_ranges() && node.supports_action(Action::ScrollIntoView, &filter) {
++                    if let Some(range) = from_ns_range(node, range) {
++                        // AccessKit's reveal action addresses a run. Keep the
++                        // originating run identity in the queued request so a
++                        // replaced document cannot reveal an unrelated range.
++                        if let Some((target_node, target_tree)) = tree.state().locate_node(range.start().inner_node().id()) {
++                            context.do_action(ActionRequest {
++                                action: Action::ScrollIntoView, target_tree, target_node,
++                                data: Some(ActionData::ScrollHint(accesskit::ScrollHint::TopEdge)),
++                            });
++                        }
++                    }
++                }
++            });
+         }
+ 
+         #[method(accessibilityInsertionPointLineNumber)]
+@@ -803,7 +989,9 @@
+                 };
+ 
+                 if node.supports_text_ranges() {
+-                    let point = from_ns_point(&view, node, point);
++                    let Some(point) = from_ns_point(&view, node, point) else {
++                        return NSRange::new(0, 0);
++                    };
+                     let pos = node.text_position_at_point(point);
+                     return to_ns_range_for_character(&pos);
+                 }
+@@ -816,8 +1004,8 @@
+         fn string_for_range(&self, range: NSRange) -> Option<Id<NSString>> {
+             self.resolve(|node| {
+                 if node.supports_text_ranges() {
+-                    if let Some(range) = from_ns_range(node, range) {
+-                        let text = range.text();
++                    let mut text = String::new();
++                    if traverse_ns_range(node, range, |_, part| text.push_str(part)).is_some() {
+                         return Some(NSString::from_str(&text));
+                     }
+                 }
+@@ -830,10 +1018,9 @@
+         fn attributed_string_for_range(&self, range: NSRange) -> Option<Id<NSAttributedString>> {
+             self.resolve(|node| {
+                 if node.supports_text_ranges() {
+-                    if let Some(range) = from_ns_range(node, range) {
+-                        let mut result = NSMutableAttributedString::new();
+-                        unsafe { result.beginEditing() };
+-                        range.traverse_text::<_, ()>(|node, text| {
++                    let mut result = NSMutableAttributedString::new();
++                    unsafe { result.beginEditing() };
++                    let valid = traverse_ns_range(node, range, |node, text| {
+                             let ns_text = NSString::from_str(text);
+                             let mut attrs = NSMutableDictionary::new();
+                             if let Some(color) = node.background_color() {
+@@ -921,9 +1108,9 @@
+                             }
+                             let part = unsafe { NSAttributedString::new_with_attributes(&ns_text, &attrs) };
+                             unsafe { result.appendAttributedString(&part) };
+-                            None
+                         });
+-                        unsafe { result.endEditing() };
++                    unsafe { result.endEditing() };
++                    if valid.is_some() {
+                         return Some(Id::into_super(result));
+                     }
+                 }
+@@ -1005,8 +1192,8 @@
  
          #[method(setAccessibilitySelectedTextRange:)]
          fn set_selected_text_range(&self, range: NSRange) {
@@ -286,7 +600,7 @@
                      if let Some(range) = from_ns_range(node, range) {
                          if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
                              context.do_action(ActionRequest {
-@@ -1040,7 +1115,7 @@
+@@ -1040,7 +1227,7 @@
  
          #[method(setAccessibilitySelected:)]
          fn set_selected(&self, selected: bool) {
@@ -295,7 +609,7 @@
                  let wrapper = NodeWrapper(node);
                  if !node.is_clickable(&filter)
                      || !wrapper.is_item_like()
-@@ -1083,8 +1158,7 @@
+@@ -1083,8 +1270,7 @@
                  if !wrapper.is_container_with_selectable_children() {
                      return None;
                  }
@@ -305,7 +619,7 @@
                      .map(|child| context.get_or_create_platform_node(child.id()))
                      .collect::<Vec<Id<PlatformNode>>>();
                  Some(NSArray::from_vec(platform_nodes))
-@@ -1099,8 +1173,7 @@
+@@ -1099,8 +1285,7 @@
                  if !wrapper.is_container_with_selectable_children() {
                      return None;
                  }
@@ -315,7 +629,7 @@
                      .filter(|item| item.is_selected() == Some(true))
                      .map(|child| context.get_or_create_platform_node(child.id()))
                      .collect::<Vec<Id<PlatformNode>>>();
-@@ -1109,9 +1182,58 @@
+@@ -1109,9 +1294,58 @@
              .flatten()
          }
  
@@ -375,12 +689,15 @@
                  let wrapper = NodeWrapper(node);
                  let selectable = node.is_clickable(&filter)
                      && wrapper.is_item_like()
-@@ -1180,21 +1302,34 @@
+@@ -1180,21 +1414,42 @@
          #[method_id(accessibilityActionNames)]
          fn action_names(&self) -> Id<NSArray<NSString>> {
              let mut result = vec![];
 -            self.resolve(|node| {
-+            self.resolve_action(|node, _, _| {
++            self.resolve_action(|node, _, context| {
++                for (operation, name) in [(TextEditOperation::Copy, "Copy text"), (TextEditOperation::Cut, "Cut text"), (TextEditOperation::Paste, "Paste text")] {
++                    if supports_text_edit(node, context, &operation) { result.push(NSString::from_str(name)); }
++                }
                  if node.supports_action(Action::ScrollIntoView, &filter) {
                      result.push(ns_string!(SCROLL_TO_VISIBLE_ACTION).copy());
                  }
@@ -399,6 +716,11 @@
 -            self.resolve_with_context(|node, tree, context| {
 -                if action == ns_string!(SCROLL_TO_VISIBLE_ACTION) {
 +            self.resolve_action(|node, tree, context| {
++                let operation = if action == ns_string!("Copy text") { Some(TextEditOperation::Copy) }
++                    else if action == ns_string!("Cut text") { Some(TextEditOperation::Cut) }
++                    else if action == ns_string!("Paste text") { Some(TextEditOperation::Paste) }
++                    else { None };
++                if let Some(operation) = operation { dispatch_text_edit(node, tree, context, operation); return; }
 +                let requested = if action == ns_string!(SCROLL_TO_VISIBLE_ACTION) {
 +                    node.supports_action(Action::ScrollIntoView, &filter).then_some(Action::ScrollIntoView)
 +                } else if action == ns_string!(EXPAND_ACTION) {
@@ -414,10 +736,12 @@
                              target_tree,
                              target_node,
                              data: None,
-@@ -1207,9 +1342,32 @@
+@@ -1206,10 +1461,35 @@
+ 
          #[method(isAccessibilitySelectorAllowed:)]
          fn is_selector_allowed(&self, selector: Sel) -> bool {
-             self.resolve(|node| {
+-            self.resolve(|node| {
++            self.resolve_with_context(|node, _, context| {
 +                if !can_act(node) && (
 +                    selector == sel!(setAccessibilityFocused:)
 +                    || selector == sel!(accessibilityPerformPress)
@@ -425,6 +749,8 @@
 +                    || selector == sel!(accessibilityPerformDecrement)
 +                    || selector == sel!(setAccessibilityValue:)
 +                    || selector == sel!(setAccessibilitySelectedTextRange:)
++                    || selector == sel!(setAccessibilitySelectedText:)
++                    || selector == sel!(setAccessibilityVisibleCharacterRange:)
 +                    || selector == sel!(setAccessibilitySelected:)
 +                    || selector == sel!(setAccessibilityDisclosed:)
 +                    || selector == sel!(accessibilityPerformPick)
@@ -447,17 +773,37 @@
                  if selector == sel!(accessibilityPerformPress) {
                      return node.is_clickable(&filter);
                  }
-@@ -1218,6 +1376,9 @@
+@@ -1218,10 +1498,20 @@
                  }
                  if selector == sel!(accessibilityPerformDecrement) {
                      return node.supports_decrement(&filter);
++                }
++                if selector == sel!(setAccessibilitySelectedText:) {
++                    return supports_text_edit(node, context, &TextEditOperation::Replace(String::new()));
++                }
++                if selector == sel!(setAccessibilityVisibleCharacterRange:) {
++                    return node.supports_text_ranges() && node.supports_action(Action::ScrollIntoView, &filter);
 +                }
 +                if selector == sel!(setAccessibilitySelectedTextRange:) {
 +                    return node.supports_text_ranges() && node.supports_action(Action::SetTextSelection, &filter);
                  }
                  if selector == sel!(accessibilityNumberOfCharacters)
                      || selector == sel!(accessibilitySelectedText)
-@@ -1319,6 +1480,16 @@
+                     || selector == sel!(accessibilitySelectedTextRange)
++                    || selector == sel!(accessibilityVisibleCharacterRange)
+                     || selector == sel!(accessibilityInsertionPointLineNumber)
+                     || selector == sel!(accessibilityRangeForLine:)
+                     || selector == sel!(accessibilityRangeForPosition:)
+@@ -1236,7 +1526,7 @@
+                     return node.supports_text_ranges();
+                 }
+                 if selector == sel!(setAccessibilityValue:) {
+-                    return (node.supports_text_ranges() && !node.is_read_only()) || node.supports_action(Action::SetValue, &filter);
++                    return !node.is_read_only() && node.supports_action(Action::SetValue, &filter);
+                 }
+                 if selector == sel!(isAccessibilitySelected) {
+                     let wrapper = NodeWrapper(node);
+@@ -1319,6 +1609,16 @@
          Some(f(&node, &tree, &context))
      }
  
@@ -474,7 +820,7 @@
      fn resolve<F, T>(&self, f: F) -> Option<T>
      where
          F: FnOnce(&Node) -> T,
-@@ -1336,3 +1507,130 @@
+@@ -1336,3 +1636,130 @@
          })
      }
  }
@@ -605,7 +951,318 @@
 +        );
 +    }
 +}
---- a/tests/native_outline.rs
+--- a/src/subclass.rs
++++ b/src/subclass.rs
+@@ -3,6 +3,7 @@
+ // the LICENSE-APACHE file) or the MIT license (found in
+ // the LICENSE-MIT file), at your option.
+ 
++use crate::context::{ActionHandlerNoMut, ActionHandlerWrapper, TextEditHandlerWrapper};
+ use accesskit::{ActionHandler, ActivationHandler, TreeUpdate};
+ use objc2::{
+     ClassType, DeclaredClass,
+@@ -20,7 +21,7 @@
+ };
+ use objc2_app_kit::{NSView, NSWindow};
+ use objc2_foundation::{NSArray, NSObject, NSPoint};
+-use std::{cell::RefCell, ffi::c_void, sync::Mutex};
++use std::{cell::RefCell, ffi::c_void, rc::Rc, sync::Mutex};
+ 
+ use crate::{Adapter, event::QueuedEvents};
+ 
+@@ -138,13 +139,35 @@
+     ) -> Self {
+         let view = view as *mut NSView;
+         let retained_view = unsafe { Id::retain(view) }.unwrap();
+-        Self::new_internal(retained_view, activation_handler, action_handler)
++        Self::new_internal(
++            retained_view,
++            activation_handler,
++            Rc::new(ActionHandlerWrapper::new(action_handler)),
++        )
++    }
++
++    /// Create a subclassing adapter with atomic selected-text/clipboard support.
++    /// Existing `new` behavior remains unchanged when no text handler is supplied.
++    ///
++    /// # Safety
++    /// `view` must be a valid, unreleased pointer to an `NSView`.
++    pub unsafe fn new_with_text_handler(
++        view: *mut c_void,
++        activation_handler: impl 'static + ActivationHandler,
++        action_handler: impl 'static + ActionHandler + crate::TextEditHandler,
++    ) -> Self {
++        let retained_view = unsafe { Id::retain(view as *mut NSView) }.unwrap();
++        Self::new_internal(
++            retained_view,
++            activation_handler,
++            Rc::new(TextEditHandlerWrapper::new(action_handler)),
++        )
+     }
+ 
+     fn new_internal(
+         retained_view: Id<NSView>,
+         activation_handler: impl 'static + ActivationHandler,
+-        action_handler: impl 'static + ActionHandler,
++        action_handler: Rc<dyn ActionHandlerNoMut>,
+     ) -> Self {
+         let view = Id::as_ptr(&retained_view) as *mut NSView;
+         if !unsafe {
+@@ -154,7 +177,9 @@
+         {
+             panic!("subclassing adapter already instantiated on view {view:?}");
+         }
+-        let adapter = unsafe { Adapter::new(view as *mut c_void, false, action_handler) };
++        let adapter = unsafe {
++            Adapter::with_wrapped_action_handler(view as *mut c_void, false, action_handler)
++        };
+         // Cast to a pointer and back to force the lifetime to 'static
+         // SAFETY: We know the class will live as long as the instance,
+         // and we only use this reference while the instance is alive.
+@@ -227,7 +252,11 @@
+     ) -> Self {
+         let window = unsafe { &*(window as *const NSWindow) };
+         let retained_view = window.contentView().unwrap();
+-        Self::new_internal(retained_view, activation_handler, action_handler)
++        Self::new_internal(
++            retained_view,
++            activation_handler,
++            Rc::new(ActionHandlerWrapper::new(action_handler)),
++        )
+     }
+ 
+     /// If and only if the tree has been initialized, call the provided function
+--- /dev/null
++++ b/src/text_edit.rs
+@@ -0,0 +1,40 @@
++// Copyright 2026 The Kael contributors.
++// Licensed under Apache-2.0 or MIT, matching the adapter.
++
++use accesskit::{NodeId, TextSelection, TreeId};
++
++/// One foreground edit or platform clipboard operation.
++#[derive(Clone, Debug)]
++pub enum TextEditOperation {
++    /// Replace the captured range in one edit transaction.
++    Replace(String),
++    /// Copy the captured range without mutating selection or text.
++    Copy,
++    /// Copy and remove the captured range in one edit transaction.
++    Cut,
++    /// Insert platform clipboard text into the captured range.
++    Paste,
++}
++
++/// A native operation with immutable originating text-run identities.
++#[derive(Clone, Debug)]
++pub struct TextEditRequest {
++    /// Tree containing the owning text control.
++    pub target_tree: TreeId,
++    /// Owning text control's local identity.
++    pub target_node: NodeId,
++    /// Original run identities and character boundaries.
++    pub selection: TextSelection,
++    /// Requested edit or clipboard operation.
++    pub operation: TextEditOperation,
++}
++
++/// Optional native partial-edit transport, invoked on the main thread.
++///
++/// Returning `true` means the operation was admitted. Deferred handlers must
++/// retain the originating identities and revalidate them before model changes;
++/// a selection action followed by an edit action is not an atomic substitute.
++pub trait TextEditHandler {
++    /// Admit one immutable-origin operation, or return `false` without mutation.
++    fn edit_text(&mut self, request: TextEditRequest) -> bool;
++}
+--- a/src/util.rs
++++ b/src/util.rs
+@@ -3,7 +3,7 @@
+ // the LICENSE-APACHE file) or the MIT license (found in
+ // the LICENSE-MIT file), at your option.
+ 
+-use accesskit::{Color, Point, Rect};
++use accesskit::{Color, Point, Rect, TextDirection};
+ use accesskit_consumer::{Node, TextPosition, TextRange};
+ use objc2::encode::{Encoding, RefEncode};
+ use objc2::{msg_send, rc::Id, runtime::AnyObject};
+@@ -11,14 +11,67 @@
+ use objc2_foundation::{NSPoint, NSRange, NSRect, NSSize};
+ 
+ pub(crate) fn from_ns_range<'a>(node: &'a Node<'a>, ns_range: NSRange) -> Option<TextRange<'a>> {
++    let end_index = ns_range.location.checked_add(ns_range.length)?;
+     let pos = node.text_position_from_global_utf16_index(ns_range.location)?;
++    if pos.to_global_utf16_index() != ns_range.location {
++        return None;
++    }
+     let mut range = pos.to_degenerate_range();
+     if ns_range.length > 0 {
+-        let end =
+-            node.text_position_from_global_utf16_index(ns_range.location + ns_range.length)?;
++        let end = node.text_position_from_global_utf16_index(end_index)?;
++        if end.to_global_utf16_index() != end_index {
++            return None;
++        }
+         range.set_end(end);
+     }
+     Some(range)
++}
++
++// Native reads use UTF-16 indices, which can address individual scalars inside
++// a shaped atomic character. Setter conversion above deliberately requires an
++// exact AccessKit position; reads must neither reject nor round these scalars.
++pub(crate) fn traverse_ns_range(
++    node: &Node,
++    ns_range: NSRange,
++    mut visit: impl FnMut(&Node, &str),
++) -> Option<()> {
++    fn byte_index(text: &str, target: usize) -> Option<usize> {
++        let mut offset = 0;
++        for (byte, character) in text.char_indices() {
++            if offset == target {
++                return Some(byte);
++            }
++            offset += character.len_utf16();
++            if offset > target {
++                return None;
++            }
++        }
++        (offset == target).then_some(text.len())
++    }
++
++    let end = ns_range.location.checked_add(ns_range.length)?;
++    if end > node.document_range().end().to_global_utf16_index() {
++        return None;
++    }
++    let mut offset = 0;
++    let invalid = node.document_range().traverse_text(|run, text| {
++        let next = offset + text.encode_utf16().count();
++        if offset <= end && next >= ns_range.location {
++            let start = ns_range.location.saturating_sub(offset);
++            let local_end = end.saturating_sub(offset).min(next - offset);
++            let (Some(start), Some(local_end)) =
++                (byte_index(text, start), byte_index(text, local_end))
++            else {
++                return Some(());
++            };
++            if start < local_end {
++                visit(run, &text[start..local_end]);
++            }
++        }
++        offset = next;
++        None
++    });
++    invalid.is_none().then_some(())
+ }
+ 
+ pub(crate) fn to_ns_range(range: &TextRange) -> NSRange {
+@@ -35,8 +88,8 @@
+     to_ns_range(&range)
+ }
+ 
+-pub(crate) fn from_ns_point(view: &NSView, node: &Node, point: NSPoint) -> Point {
+-    let window = view.window().unwrap();
++pub(crate) fn from_ns_point(view: &NSView, node: &Node, point: NSPoint) -> Option<Point> {
++    let window = view.window()?;
+     let point = window.convertPointFromScreen(point);
+     let point = view.convertPoint_fromView(point, None);
+     // AccessKit coordinates are in physical (DPI-dependent) pixels, but
+@@ -51,11 +104,13 @@
+             (view_bounds.size.height - point.y) * factor
+         },
+     );
+-    node.transform().inverse() * point
++    Some(node.transform().inverse() * point)
+ }
+ 
+ pub(crate) fn to_ns_rect(view: &NSView, rect: Rect) -> NSRect {
+-    let window = view.window().unwrap();
++    let Some(window) = view.window() else {
++        return NSRect::ZERO;
++    };
+     // AccessKit coordinates are in physical (DPI-dependent)
+     // pixels, but macOS expects logical (DPI-independent)
+     // coordinates here.
+@@ -76,8 +131,77 @@
+         },
+     };
+     let rect = view.convertRect_toView(rect, None);
+-    let window = view.window().unwrap();
+     window.convertRectToScreen(rect)
++}
++
++// Native requests may scan retained runs, but do not allocate or rebuild text
++// metadata on caret paints. Only mounted, shaped glyphs intersecting the owner
++// viewport contribute; offscreen runs have no invented physical geometry.
++pub(crate) fn visible_character_range(node: &Node) -> NSRange {
++    let Some(clip) = node.bounding_box() else {
++        return NSRange::new(0, 0);
++    };
++    let mut offset = 0;
++    let mut first = None;
++    let mut last = 0;
++    node.document_range().traverse_text::<_, ()>(|run, text| {
++        let data = run.data();
++        if let (Some(bounds), Some(positions), Some(widths), Some(direction)) = (
++            run.raw_bounds(),
++            data.character_positions(),
++            data.character_widths(),
++            run.text_direction(),
++        ) {
++            let mut byte_offset = 0;
++            let mut local_utf16 = 0;
++            for (index, bytes) in data.character_lengths().iter().enumerate() {
++                let end = byte_offset + usize::from(*bytes);
++                let Some(character) = text.get(byte_offset..end) else {
++                    break;
++                };
++                let units = character.encode_utf16().count();
++                if let (Some(position), Some(width)) = (positions.get(index), widths.get(index)) {
++                    let start = f64::from(*position);
++                    let end = start + f64::from(*width);
++                    let mut rect = bounds;
++                    match direction {
++                        TextDirection::LeftToRight => {
++                            rect.x0 = bounds.x0 + start;
++                            rect.x1 = bounds.x0 + end;
++                        }
++                        TextDirection::RightToLeft => {
++                            rect.x0 = bounds.x1 - end;
++                            rect.x1 = bounds.x1 - start;
++                        }
++                        TextDirection::TopToBottom => {
++                            rect.y0 = bounds.y0 + start;
++                            rect.y1 = bounds.y0 + end;
++                        }
++                        TextDirection::BottomToTop => {
++                            rect.y0 = bounds.y1 - end;
++                            rect.y1 = bounds.y1 - start;
++                        }
++                    }
++                    let rect = run.transform().transform_rect_bbox(rect);
++                    let visible = !rect.intersect(clip).is_empty()
++                        // A newline or combining unit may have zero advance;
++                        // its real caret position is visible without fabricating
++                        // an area for its native bounding rectangle.
++                        || (rect.width() == 0.0 && rect.height() > 0.0 && rect.x0 >= clip.x0 && rect.x0 <= clip.x1 && rect.y0 < clip.y1 && rect.y1 > clip.y0)
++                        || (rect.height() == 0.0 && rect.width() > 0.0 && rect.y0 >= clip.y0 && rect.y0 <= clip.y1 && rect.x0 < clip.x1 && rect.x1 > clip.x0);
++                    if visible {
++                        first.get_or_insert(offset + local_utf16);
++                        last = offset + local_utf16 + units;
++                    }
++                }
++                local_utf16 += units;
++                byte_offset = end;
++            }
++        }
++        offset += text.encode_utf16().count();
++        None
++    });
++    first.map_or(NSRange::new(0, 0), |first| NSRange::from(first..last))
+ }
+ 
+ fn color_channel_to_f64(channel: u8) -> f64 {
+--- /dev/null
 +++ b/tests/native_outline.rs
 @@ -0,0 +1,21 @@
 +// Licensed under the Apache License, Version 2.0 or MIT, matching the adapter.
@@ -616,7 +1273,7 @@
 +#[path = "native_outline/macos.rs"]
 +mod native;
 +#[cfg(target_os = "macos")]
-+use native::{context, filters, node, util};
++use native::{context, filters, node, text_edit, util};
 +
 +#[cfg(target_os = "macos")]
 +fn main() {
@@ -629,9 +1286,9 @@
 +        "SKIP native_outline: AppKit protocol verification requires macOS; the macOS CI job must execute it."
 +    );
 +}
---- a/tests/native_outline/macos.rs
+--- /dev/null
 +++ b/tests/native_outline/macos.rs
-@@ -0,0 +1,403 @@
+@@ -0,0 +1,724 @@
 +// Licensed under the Apache License, Version 2.0 or MIT, matching the adapter.
 +#![allow(dead_code)]
 +
@@ -641,6 +1298,8 @@
 +pub(crate) mod filters;
 +#[path = "../../src/node.rs"]
 +pub(crate) mod node;
++#[path = "../../src/text_edit.rs"]
++pub(crate) mod text_edit;
 +#[path = "../../src/util.rs"]
 +pub(crate) mod util;
 +
@@ -651,7 +1310,7 @@
 +    msg_send, msg_send_id,
 +    rc::{Id, WeakId},
 +};
-+use objc2_app_kit::NSView;
++use objc2_app_kit::{NSApplication, NSBackingStoreType, NSView, NSWindow, NSWindowStyleMask};
 +use objc2_foundation::{MainThreadMarker, NSArray, NSInteger, NSRect, NSString};
 +use std::{cell::RefCell, rc::Rc, time::Instant};
 +
@@ -659,6 +1318,22 @@
 +impl ActionHandlerNoMut for Actions {
 +    fn do_action(&self, request: ActionRequest) {
 +        self.0.borrow_mut().push(request);
++    }
++}
++struct AtomicActions(
++    Rc<RefCell<Vec<ActionRequest>>>,
++    Rc<RefCell<Vec<text_edit::TextEditRequest>>>,
++);
++impl ActionHandlerNoMut for AtomicActions {
++    fn do_action(&self, request: ActionRequest) {
++        self.0.borrow_mut().push(request);
++    }
++    fn supports_text_edits(&self) -> bool {
++        true
++    }
++    fn edit_text(&self, request: text_edit::TextEditRequest) -> bool {
++        self.1.borrow_mut().push(request);
++        true
 +    }
 +}
 +struct Changes;
@@ -865,14 +1540,47 @@
 +    use objc2_foundation::NSRange;
 +    let marker =
 +        MainThreadMarker::new().expect("AppKit text-range test runs on process main thread");
++    let _application = NSApplication::sharedApplication(marker);
 +    let view = unsafe { NSView::new(marker) };
++    let window = unsafe {
++        NSWindow::initWithContentRect_styleMask_backing_defer(
++            marker.alloc(),
++            NSRect::new(
++                objc2_foundation::NSPoint::new(50.0, 50.0),
++                objc2_foundation::NSSize::new(200.0, 100.0),
++            ),
++            NSWindowStyleMask::Borderless,
++            NSBackingStoreType::NSBackingStoreBuffered,
++            false,
++        )
++    };
++    window.setContentView(Some(&view));
 +    let actions = Rc::new(RefCell::new(Vec::new()));
++    let edits = Rc::new(RefCell::new(Vec::new()));
 +    let first = "A🙂e\u{301}\r\n";
 +    let second = "第二行";
 +    let mut input = Node::new(Role::MultilineTextInput);
 +    input.set_children(vec![NodeId(20)]);
 +    input.add_action(Action::Focus);
 +    input.add_action(Action::SetTextSelection);
++    input.add_action(Action::SetValue);
++    input.add_action(Action::ReplaceSelectedText);
++    input.set_custom_actions(vec![
++        accesskit::CustomAction {
++            id: i32::MIN,
++            description: "Copy text".into(),
++        },
++        accesskit::CustomAction {
++            id: i32::MIN + 1,
++            description: "Cut text".into(),
++        },
++        accesskit::CustomAction {
++            id: i32::MIN + 2,
++            description: "Paste text".into(),
++        },
++    ]);
++    input.add_action(Action::ScrollIntoView);
++    input.set_bounds(accesskit::Rect::new(0.0, 0.0, 80.0, 30.0));
 +    input.set_text_selection(TextSelection {
 +        anchor: TextPosition {
 +            node: NodeId(12),
@@ -888,6 +1596,10 @@
 +    let mut first_run = Node::new(Role::TextRun);
 +    first_run.set_value(first);
 +    first_run.set_character_lengths(vec![1, 4, 1, 2, 2]);
++    first_run.set_bounds(accesskit::Rect::new(10.0, 5.0, 100.0, 15.0));
++    first_run.set_text_direction(accesskit::TextDirection::LeftToRight);
++    first_run.set_character_positions(vec![0.0, 10.0, 30.0, 40.0, 40.0]);
++    first_run.set_character_widths(vec![10.0, 20.0, 10.0, 0.0, 0.0]);
 +    let mut second_run = Node::new(Role::TextRun);
 +    second_run.set_value(second);
 +    second_run.set_character_lengths(vec![3, 3, 3]);
@@ -908,7 +1620,7 @@
 +    let context = Context::new(
 +        WeakId::from_id(&view),
 +        tree,
-+        Rc::new(Actions(actions.clone())),
++        Rc::new(AtomicActions(actions.clone(), edits.clone())),
 +        marker,
 +    );
 +    let input = context.get_or_create_platform_node(
@@ -942,6 +1654,105 @@
 +        value.unwrap().to_string(),
 +        format!("{first}{second}"),
 +        "native full value comes from retained runs"
++    );
++    let oversized = NSString::from_str(&"界".repeat(6 * 1024 * 1024));
++    assert!(oversized.len_utf16() < 16 * 1024 * 1024);
++    let _: () = unsafe { msg_send![&*input, setAccessibilitySelectedText: &*oversized] };
++    let _: () = unsafe { msg_send![&*input, setAccessibilityValue: &*oversized] };
++    assert!(
++        edits.borrow().is_empty(),
++        "UTF-8 bytes bound partial edits before copying"
++    );
++    assert!(
++        actions.borrow().is_empty(),
++        "UTF-8 bytes bound whole-value edits before copying"
++    );
++    drop(oversized);
++    let small = NSString::from_str("whole 日本🙂");
++    let _: () = unsafe { msg_send![&*input, setAccessibilityValue: &*small] };
++    let value_action = actions.borrow_mut().pop().unwrap();
++    assert_eq!(value_action.action, Action::SetValue);
++    assert_eq!(
++        value_action.data,
++        Some(ActionData::Value("whole 日本🙂".into()))
++    );
++    for (range, expected) in [
++        (NSRange::new(3, 1), "e"),
++        (NSRange::new(4, 1), "\u{301}"),
++        (NSRange::new(5, 1), "\r"),
++        (NSRange::new(6, 1), "\n"),
++        (NSRange::new(10, 0), ""),
++    ] {
++        let text: Option<Id<NSString>> =
++            unsafe { msg_send_id![&*input, accessibilityStringForRange: range] };
++        assert_eq!(text.unwrap().to_string(), expected, "exact UTF-16 read");
++        let styled: Option<Id<objc2_foundation::NSAttributedString>> =
++            unsafe { msg_send_id![&*input, accessibilityAttributedStringForRange: range] };
++        assert_eq!(
++            styled.unwrap().string().to_string(),
++            expected,
++            "exact attributed UTF-16 read"
++        );
++    }
++    let visible: NSRange = unsafe { msg_send![&*input, accessibilityVisibleCharacterRange] };
++    assert_eq!(
++        (visible.location, visible.length),
++        (0, 7),
++        "mounted glyphs and zero-advance line endings retain their real visible positions"
++    );
++    let frame: NSRect =
++        unsafe { msg_send![&*input, accessibilityFrameForRange: NSRange::new(1, 2)] };
++    let factor = window.backingScaleFactor();
++    assert_eq!(frame.size.width, 20.0 / factor);
++    assert_eq!(frame.size.height, 10.0 / factor);
++    let point = objc2_foundation::NSPoint::new(
++        frame.origin.x + frame.size.width / 2.0,
++        frame.origin.y + frame.size.height / 2.0,
++    );
++    let hit: NSRange = unsafe { msg_send![&*input, accessibilityRangeForPosition: point] };
++    assert_eq!(
++        (hit.location, hit.length),
++        (1, 2),
++        "actual screen glyph hit uses UTF-16"
++    );
++    let absent: NSRect =
++        unsafe { msg_send![&*input, accessibilityFrameForRange: NSRange::new(8, 1)] };
++    assert_eq!(
++        absent,
++        NSRect::ZERO,
++        "unmounted runs do not fabricate geometry"
++    );
++    let _: () =
++        unsafe { msg_send![&*input, setAccessibilityVisibleCharacterRange: NSRange::new(8, 1)] };
++    let reveal = actions.borrow_mut().pop().unwrap();
++    assert_eq!(reveal.action, Action::ScrollIntoView);
++    assert_eq!(
++        reveal.target_node,
++        NodeId(12),
++        "reveal retains originating run identity"
++    );
++    assert_eq!(
++        reveal.data,
++        Some(ActionData::ScrollHint(accesskit::ScrollHint::TopEdge))
++    );
++    let unchanged: NSRange = unsafe { msg_send![&*input, accessibilitySelectedTextRange] };
++    assert_eq!(
++        (unchanged.location, unchanged.length),
++        (1, 9),
++        "reveal does not mutate selection"
++    );
++    let invalid: Option<Id<NSString>> =
++        unsafe { msg_send_id![&*input, accessibilityStringForRange: NSRange::new(usize::MAX, 10)] };
++    assert!(invalid.is_none(), "overflowing native ranges are rejected");
++    let _: () = unsafe {
++        msg_send![&*input, setAccessibilitySelectedTextRange: NSRange::new(usize::MAX, 10)]
++    };
++    assert!(actions.borrow().is_empty());
++    let _: () =
++        unsafe { msg_send![&*input, setAccessibilitySelectedTextRange: NSRange::new(1, 1)] };
++    assert!(
++        actions.borrow().is_empty(),
++        "a native selection cannot split a surrogate/atomic character"
 +    );
 +    let _: () =
 +        unsafe { msg_send![&*input, setAccessibilitySelectedTextRange: NSRange::new(1, 2)] };
@@ -980,6 +1791,83 @@
 +            },
 +        }))
 +    );
++    let partial_settable: bool = unsafe {
++        msg_send![&*input, isAccessibilitySelectorAllowed: sel!(setAccessibilitySelectedText:)]
++    };
++    assert!(partial_settable);
++    let _: () = unsafe {
++        msg_send![&*input, setAccessibilitySelectedText: &*NSString::from_str("新🙂")]
++    };
++    let names: Id<NSArray<NSString>> = unsafe { msg_send_id![&*input, accessibilityActionNames] };
++    for name in ["Copy text", "Cut text", "Paste text"] {
++        assert!(
++            (0..names.len()).any(|index| unsafe { names.objectAtIndex(index) }.to_string() == name)
++        );
++        let _: () =
++            unsafe { msg_send![&*input, accessibilityPerformAction: &*NSString::from_str(name)] };
++    }
++    let captured = edits.borrow_mut().drain(..).collect::<Vec<_>>();
++    assert_eq!(captured.len(), 4);
++    assert!(
++        matches!(&captured[0].operation, text_edit::TextEditOperation::Replace(value) if value == "新🙂")
++    );
++    assert!(matches!(
++        captured[1].operation,
++        text_edit::TextEditOperation::Copy
++    ));
++    assert!(matches!(
++        captured[2].operation,
++        text_edit::TextEditOperation::Cut
++    ));
++    assert!(matches!(
++        captured[3].operation,
++        text_edit::TextEditOperation::Paste
++    ));
++    for request in captured {
++        assert_eq!(request.target_node, NodeId(10));
++        assert_eq!(request.selection.anchor.node, NodeId(12));
++        assert_eq!(request.selection.focus.node, NodeId(11));
++        assert_eq!(request.selection.anchor.character_index, 3);
++        assert_eq!(request.selection.focus.character_index, 1);
++    }
++    assert!(
++        actions.borrow().is_empty(),
++        "atomic edit never queues a preceding selection"
++    );
++    let mut read_only = context.tree.borrow().state().root().data().clone();
++    read_only.set_read_only();
++    context.tree.borrow_mut().update_and_process_changes(
++        TreeUpdate {
++            nodes: vec![(NodeId(10), read_only)],
++            tree: None,
++            tree_id: TreeId::ROOT,
++            focus: NodeId(10),
++        },
++        &mut Changes,
++    );
++    let partial_settable: bool = unsafe {
++        msg_send![&*input, isAccessibilitySelectorAllowed: sel!(setAccessibilitySelectedText:)]
++    };
++    assert!(
++        !partial_settable,
++        "read-only selected text cannot be replaced"
++    );
++    let _: () = unsafe {
++        msg_send![&*input, setAccessibilitySelectedText: &*NSString::from_str("invalid")]
++    };
++    for name in ["Copy text", "Cut text", "Paste text"] {
++        let _: () =
++            unsafe { msg_send![&*input, accessibilityPerformAction: &*NSString::from_str(name)] };
++    }
++    assert_eq!(
++        edits.borrow().len(),
++        1,
++        "read-only native text only permits Copy"
++    );
++    assert!(matches!(
++        edits.borrow_mut().pop().unwrap().operation,
++        text_edit::TextEditOperation::Copy
++    ));
 +    let mut disabled = Node::new(Role::MultilineTextInput);
 +    disabled.set_children(vec![NodeId(20)]);
 +    disabled.set_disabled();
@@ -1003,6 +1891,39 @@
 +        actions.borrow().is_empty(),
 +        "disabled text cannot dispatch a selection setter"
 +    );
++    let _: () = unsafe {
++        msg_send![&*input, setAccessibilitySelectedText: &*NSString::from_str("invalid")]
++    };
++    let _: () = unsafe {
++        msg_send![&*input, accessibilityPerformAction: &*NSString::from_str("Copy text")]
++    };
++    assert!(
++        edits.borrow().is_empty(),
++        "disabled partial edits and clipboard requests are inert"
++    );
++    let mut hidden = Node::new(Role::MultilineTextInput);
++    hidden.set_children(vec![NodeId(20)]);
++    hidden.set_hidden();
++    hidden.add_action(Action::SetTextSelection);
++    hidden.add_action(Action::ReplaceSelectedText);
++    context.tree.borrow_mut().update_and_process_changes(
++        TreeUpdate {
++            nodes: vec![(NodeId(10), hidden)],
++            tree: None,
++            tree_id: TreeId::ROOT,
++            focus: NodeId(10),
++        },
++        &mut Changes,
++    );
++    let _: () =
++        unsafe { msg_send![&*input, setAccessibilitySelectedTextRange: NSRange::new(0, 1)] };
++    let _: () = unsafe {
++        msg_send![&*input, setAccessibilitySelectedText: &*NSString::from_str("invalid")]
++    };
++    assert!(
++        actions.borrow().is_empty() && edits.borrow().is_empty(),
++        "a focused hidden control cannot dispatch native actions"
++    );
 +    let mut unsupported = Node::new(Role::MultilineTextInput);
 +    unsupported.set_children(vec![NodeId(20)]);
 +    context.tree.borrow_mut().update_and_process_changes(
@@ -1024,6 +1945,59 @@
 +        actions.borrow().is_empty(),
 +        "unadvertised selection setters are inert"
 +    );
++    window.setContentView(None);
++    let detached: NSRect =
++        unsafe { msg_send![&*input, accessibilityFrameForRange: NSRange::new(1, 2)] };
++    assert_eq!(
++        detached,
++        NSRect::ZERO,
++        "detached views safely reject screen geometry"
++    );
++    let detached_hit: NSRange = unsafe { msg_send![&*input, accessibilityRangeForPosition: point] };
++    assert_eq!((detached_hit.location, detached_hit.length), (0, 0));
++    let mut legacy_input = Node::new(Role::MultilineTextInput);
++    legacy_input.set_children(vec![NodeId(11)]);
++    legacy_input.add_action(Action::ReplaceSelectedText);
++    legacy_input.set_text_selection(TextSelection {
++        anchor: TextPosition {
++            node: NodeId(11),
++            character_index: 0,
++        },
++        focus: TextPosition {
++            node: NodeId(11),
++            character_index: 1,
++        },
++    });
++    let mut legacy_run = Node::new(Role::TextRun);
++    legacy_run.set_value("A");
++    legacy_run.set_character_lengths(vec![1]);
++    let legacy_context = Context::new(
++        WeakId::from_id(&view),
++        Tree::new(
++            TreeUpdate {
++                nodes: vec![(NodeId(10), legacy_input), (NodeId(11), legacy_run)],
++                tree: Some(accesskit::Tree::new(NodeId(10))),
++                tree_id: TreeId::ROOT,
++                focus: NodeId(10),
++            },
++            true,
++        ),
++        Rc::new(Actions(actions.clone())),
++        marker,
++    );
++    let legacy = legacy_context
++        .get_or_create_platform_node(legacy_context.tree.borrow().state().root().id());
++    let settable: bool = unsafe {
++        msg_send![&*legacy, isAccessibilitySelectorAllowed: sel!(setAccessibilitySelectedText:)]
++    };
++    assert!(
++        !settable,
++        "ordinary adapters do not claim unsupported atomic edits"
++    );
++    let _: () = unsafe {
++        msg_send![&*legacy, setAccessibilitySelectedText: &*NSString::from_str("invalid")]
++    };
++    assert!(actions.borrow().is_empty());
 +    drop(context);
 +    let _: () =
 +        unsafe { msg_send![&*input, setAccessibilitySelectedTextRange: NSRange::new(0, 1)] };
@@ -1031,11 +2005,15 @@
 +        actions.borrow().is_empty(),
 +        "released native text object cannot dispatch"
 +    );
++    let _: () = unsafe {
++        msg_send![&*input, setAccessibilitySelectedText: &*NSString::from_str("invalid")]
++    };
++    assert!(edits.borrow().is_empty());
 +    println!(
-+        "native NSAccessibility text selection: full multiline value, UTF-16 range/count, reversed selection, Unicode setter actions and released lifecycle passed"
++        "native NSAccessibility text selection: full multiline value, UTF-16 range/count, reversed selection, Unicode setter actions, visible glyph geometry/hit tests, immutable reveal/partial edits/clipboard, read-only/disabled and overflow/detached guards and released lifecycle passed"
 +    );
 +}
---- a/tests/native_text_selection.rs
+--- /dev/null
 +++ b/tests/native_text_selection.rs
 @@ -0,0 +1,19 @@
 +// Licensed under the Apache License, Version 2.0 or MIT, matching the adapter.
@@ -1045,7 +2023,7 @@
 +#[path = "native_outline/macos.rs"]
 +mod native;
 +#[cfg(target_os = "macos")]
-+use native::{context, filters, node, util};
++use native::{context, filters, node, text_edit, util};
 +
 +#[cfg(target_os = "macos")]
 +fn main() {

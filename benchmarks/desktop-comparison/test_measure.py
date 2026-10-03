@@ -175,6 +175,127 @@ class ComparisonEvidenceTests(unittest.TestCase):
             with self.subTest(operation=operation), self.assertRaises(RuntimeError):
                 self.validate_data(report)
 
+    def tree_report(self):
+        from workload_validation import TREE_HASHES
+        report = copy.deepcopy(self.report)
+        report.update(
+            contract='native-virtual-tree-v1', rows=100025, root_count=25,
+            children_per_root=4000, fixture_hash=TREE_HASHES[0], fixture_bytes=6100975,
+            fixture_hashes=TREE_HASHES, fixture_retained_datasets=2,
+            replacement_interval_updates=30, tree_width_px=780, tree_height_px=704,
+            row_height_px=28, indent_px=14, horizontal_scroll=False,
+            line_height_px=20, component='VirtualTreeList',
+            operations=dict.fromkeys(('selection_reveal', 'vertical_scroll', 'collapse_root',
+                                      'expand_root', 'home', 'end_selection', 'replace_model'), 10),
+            phase_oracles=[{
+                'phase': phase, 'correct': True, 'dataset_generation': 0,
+                'selected_id': 'project/00', 'scroll_target_id': 'project/00',
+                'collapsed_root': None, 'visible_nodes': 100025,
+                'verified_control_nodes': 100025, 'visible_hash': TREE_HASHES[0],
+                'fixture_hash': TREE_HASHES[0], 'native_mounted_rows': 26,
+                'mounted_indices': list(range(26)), 'reveal_target_mounted': True,
+            } for phase in ('idle-before', 'active', 'idle-after', 'churn')],
+        )
+        return report
+
+    def validate_tree_report(self, report, engine='kael'):
+        validate_workload(report, self.phases, engine, True, 'native-virtual-tree-v1', 100025)
+
+    def test_tree_fixture_hash_and_both_native_controls_are_accepted(self):
+        report = self.tree_report()
+        self.validate_tree_report(report)
+        report.update(engine='gpui-kit', component='Tree')
+        self.validate_tree_report(report, 'gpui-kit')
+
+    def test_tree_stale_projection_and_unmounted_reveal_are_rejected(self):
+        for key, value in (('dataset_generation', True), ('collapsed_root', 25),
+                           ('collapsed_root', 0), ('visible_nodes', 100024),
+                           ('verified_control_nodes', 100024), ('visible_hash', 'stale'),
+                           ('selected_id', 'project/25'), ('scroll_target_id', 'project/00/file/0100'),
+                           ('scroll_target_id', 'project/00/file/4000'),
+                           ('native_mounted_rows', 65), ('mounted_indices', [0, 0]),
+                           ('mounted_indices', list(range(65))), ('reveal_target_mounted', False)):
+            report = self.tree_report()
+            report['phase_oracles'][2][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(RuntimeError):
+                self.validate_tree_report(report)
+        for key, value in (('root_count', 24), ('indent_px', 16),
+                           ('fixture_bytes', 6100976), ('component', 'custom-tree')):
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                self.validate_tree_report(self.tree_report() | {key: value})
+        for operation in self.tree_report()['operations']:
+            report = self.tree_report()
+            report['operations'][operation] = 0
+            with self.subTest(operation=operation), self.assertRaises(RuntimeError):
+                self.validate_tree_report(report)
+
+    def workspace_report(self):
+        from workload_validation import PANE_IDS, WORKSPACE_HASHES
+        report = copy.deepcopy(self.report)
+        groups = [{'Tabs': {'panes': PANE_IDS[start:start + 4], 'active': PANE_IDS[start]}}
+                  for start in (0, 4, 8)]
+        layout = {'Split': {'axis': 'horizontal', 'children': [groups[0],
+                           {'Split': {'axis': 'vertical', 'children': groups[1:]}}]}}
+        report.update(
+            contract='native-dock-workspace-v1', rows=12, pane_count=12, body_lines_per_pane=32,
+            fixture_hash=WORKSPACE_HASHES[0], fixture_bytes=22560,
+            fixture_hashes=WORKSPACE_HASHES, fixture_retained_datasets=2,
+            replacement_interval_updates=32, workspace_width_px=1100, workspace_height_px=704,
+            initial_tab_groups=3, initial_split_count=2,
+            initial_split_axes=['horizontal', 'vertical'], initial_split_ratios=[0.5, 0.5],
+            native_chrome_geometry=True, floating_panes=False, edge_docks=False,
+            line_height_px=20, component='DockWorkspace',
+            operations=dict.fromkeys(('select_tab', 'move_tab', 'split_pane', 'merge_pane',
+                                      'resize_split', 'zoom_group', 'unzoom_group',
+                                      'serialize_restore', 'replace_model'), 10),
+            phase_oracles=[{
+                'phase': phase, 'correct': True, 'fixture_generation': 0,
+                'fixture_hash': WORKSPACE_HASHES[0], 'actual_layout': copy.deepcopy(layout),
+                'verified_pane_ids': PANE_IDS, 'verified_active_content': ['pane-00', 'pane-04', 'pane-08'],
+                'native_zoomed': False, 'root_split_ratio': 0.5,
+                'persistence_roundtrips_verified': index, 'native_layout_json_bytes': 458,
+                'content_verified': True,
+            } for index, phase in enumerate(('idle-before', 'active', 'idle-after', 'churn'))],
+        )
+        return report
+
+    def validate_workspace_report(self, report, engine='kael'):
+        validate_workload(report, self.phases, engine, True, 'native-dock-workspace-v1', 12)
+
+    def test_workspace_native_layouts_and_zoom_are_accepted_for_both_engines(self):
+        report = self.workspace_report()
+        self.validate_workspace_report(report)
+        report.update(engine='gpui-kit', component='DockArea+DockSkin')
+        report['phase_oracles'][1].update(native_zoomed=True, verified_active_content=['pane-00'])
+        self.validate_workspace_report(report, 'gpui-kit')
+
+    def test_workspace_lost_panes_stale_content_and_fake_persistence_are_rejected(self):
+        for key, value in (('fixture_generation', 2), ('fixture_hash', 'stale'),
+                           ('verified_pane_ids', ['pane-00']), ('verified_active_content', []),
+                           ('content_verified', False), ('native_zoomed', 1),
+                           ('root_split_ratio', float('nan')), ('root_split_ratio', True),
+                           ('persistence_roundtrips_verified', -1),
+                           ('native_layout_json_bytes', 0), ('actual_layout', None)):
+            report = self.workspace_report()
+            report['phase_oracles'][2][key] = value
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                self.validate_workspace_report(report)
+        report = self.workspace_report()
+        report['phase_oracles'][1]['actual_layout']['Split']['children'][0]['Tabs']['panes'][1] = 'pane-00'
+        with self.assertRaises(RuntimeError):
+            self.validate_workspace_report(report)
+        report = self.workspace_report()
+        for oracle in report['phase_oracles']:
+            oracle['persistence_roundtrips_verified'] = 0
+        with self.assertRaises(RuntimeError):
+            self.validate_workspace_report(report)
+        for operation in self.workspace_report()['operations']:
+            report = self.workspace_report()
+            report['operations'][operation] = 0
+            with self.subTest(operation=operation), self.assertRaises(RuntimeError):
+                self.validate_workspace_report(report)
+
+
 
 if __name__ == '__main__':
     unittest.main()

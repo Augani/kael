@@ -14,7 +14,7 @@ authors.workspace = true
 repository.workspace = true
 license.workspace = true
 readme = "README.md"
-exclude = ["examples/"]
+exclude = ["examples/", "benches/"]
 
 [package.metadata.docs.rs]
 default-target = "x86_64-unknown-linux-gnu"

@@ -61,6 +61,40 @@ values are computed from retained runs on native request instead of storing a
 full copy in each caret-only root update. Apple documents the
 [selection setter](https://developer.apple.com/documentation/appkit/nsaccessibilityprotocol/setaccessibilityselectedtextrange(_:)).
 
+## Native text follow-on
+
+The fork additionally implements Apple's [visible-character getter](https://developer.apple.com/documentation/appkit/nsaccessibilityprotocol/accessibilityvisiblecharacterrange()),
+[visible-range setter](https://developer.apple.com/documentation/appkit/nsaccessibilityprotocol/setaccessibilityvisiblecharacterrange(_:))
+and [selected-text setter](https://developer.apple.com/documentation/appkit/nsaccessibilityprotocol/setaccessibilityselectedtext(_:)).
+Mounted shaped run geometry supplies UTF-16 visible ranges, screen rectangles
+and range-at-position results, including zero-advance line endings. Logical
+unmounted runs retain their text without fabricated geometry. Detached views
+return empty screen geometry; overflowing or non-atomic UTF-16 setter ranges
+are rejected. String and attributed-string reads preserve exact valid UTF-16
+substrings inside combining units and CRLF; they do not reuse the atomic setter
+converter or silently round the requested range. Native reveal targets the original run with a TopEdge hint,
+without modifying selection. AccessKit reveal is run-level, so the host resolves
+its owning immutable document and run byte span; this does not claim arbitrary
+character-level reveal precision.
+
+`Adapter::new_with_text_handler` and `SubclassingAdapter::new_with_text_handler`
+are opt-in additions. Existing constructors retain their behavior and do not
+advertise the selected-text setter when atomic editing is unsupported. The
+handler receives the directed original run identities and one Replace/Copy/
+Cut/Paste operation. The native clipboard actions use the advertised reserved
+custom-action capabilities. Read-only text permits Copy and selection, while
+partial edits, Cut and Paste are rejected; disabled/hidden/retired objects do
+not dispatch. Kael queues one bounded normalized request, rechecks the immutable
+document at foreground execution, and releases queued work when the window closes.
+
+The native text harness exercises the actual Objective-C setter/action methods,
+real hidden-window screen conversion, Unicode glyph bounds/hit testing, visible
+ranges, immutable reveal/edit/clipboard request routing, read-only/disabled/
+focused-hidden guards, overflow, detached views and released contexts. It proves
+adapter protocol behavior; the shared `editor_accessibility` fixture and real
+assistive client are separately required to prove Editor presentation, shaped
+geometry, model mutation, clipboard and undo on a live platform window.
+
 ## Distribution and release order
 
 Kael's target-specific dependency has `path`, `version`, and `package` fields.
@@ -71,3 +105,8 @@ registry consumers receive the same adapter after that crate is published first.
 of this change. Restore the upstream package only when an upstream release
 supplies equivalent tested behavior, and preserve semantic identity during that
 transition.
+
+Cargo reserves `Cargo.toml.orig` when building an archive. Its exact upstream
+contents are shipped as `UPSTREAM-Cargo.toml`; any original reserved-name copy
+is excluded. Cargo generates its own normalized-manifest companion for the
+named fork.

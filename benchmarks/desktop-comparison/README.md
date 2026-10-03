@@ -6,8 +6,9 @@ Both binaries compile the same navigation/detail scene, shared 100,000-row
 model, 1100×760 window, font, row height, selection sequence, scroll positions,
 idle intervals, and sustained model replacements. Both initialize their default
 component libraries. It is a comparison of this concrete application contract;
-Tree, docking, and browser workloads need their own contracts. Two additional
-binaries compare the shipped editors and data controls using the contracts below.
+Four additional binaries compare the shipped editors, data controls, virtual
+trees and persistent docking using the contracts below. Browser applications
+require separate contracts.
 
 Use the same compiler and release profile for both binaries:
 
@@ -28,8 +29,8 @@ application, missing phase, or missing measurement rejects a run.
 The environment record captures display properties, power/thermal reports and
 a checkout fingerprint that includes untracked source files. Record build-time
 source separately when the checkout changes between compilation and collection.
-The scheduled/manual performance workflow retains all sixty runs as artifacts
-(three contracts, two instrumentation modes, five repetitions per engine);
+The scheduled/manual performance workflow retains all one hundred runs as artifacts
+(five contracts, two instrumentation modes, five repetitions per engine);
 hosted-runner measurements remain diagnostic unless their desktop conditions
 satisfy the same comparison contract.
 
@@ -123,6 +124,51 @@ The collector requires the fixed fixture, typography, geometry, every operation
 and all four successful control/model oracles. It rejects `--quick` and altered
 `--rows N` smoke workloads. Repeat with the binaries built without `frame-timing`
 and pass `--without-frame-timing`.
+
+## Native virtual tree contract
+
+`tree_comparison` renders Kael's `VirtualTreeList` and GPUI Kit's `Tree` in a
+780×704 px area, with Menlo 13 px/20 px typography, 28 px rows and 14 px indent.
+The shared 100,025-node fixture has 25 roots, each with 4,000 Unicode file labels;
+two immutable datasets retain 6,100,975 label/identity bytes each. Their hashes
+are `fnv1a64:0fbc5b81edc32f9b` and `fnv1a64:1bfc4b56d6a0a5eb`.
+
+Paced selection/reveal, vertical scroll, root collapse/expand, Home and End run
+against each shipped control. Churn replaces the model every thirty updates.
+Kael uses a controlled immutable model rebuild for expansion; GPUI Kit uses its
+public routed expansion actions. Wrapper/index rebuilding stays inside measured
+updates. Kael exports complete logical semantics; the pinned competitor exposes
+mounted rows. These implementation differences are reported explicitly.
+
+At each of the four phase boundaries, the oracle checks every visible native
+control ID, label and depth, the exact projection hash, stable selection and a
+physically mounted reveal target. Mounts must stay within 64 rows. The independent
+Python collector reconstructs the projection hash and selected/revealed indices.
+Collect separately named engine binaries using `--contract native-virtual-tree-v1`;
+repeat both instrumentation modes. `--quick` and altered `--children` are rejected
+as comparison measurements.
+
+## Native persistent workspace contract
+
+`workspace_comparison` renders `DockWorkspace` and GPUI Kit's `DockArea+DockSkin`
+with twelve panes, each containing 32 identical Unicode lines, in the same
+1100×704 px area. It begins with three tab groups and two nested horizontal/vertical
+splits at 0.5 ratios. Each dataset contains 22,560 bytes, with hashes
+`fnv1a64:8575d5bda29bda91` and `fnv1a64:42c3940aeb810ba1`.
+
+Paced public operations select/move tabs, split/merge panes, resize the root split,
+zoom/unzoom a group and serialize/restore actual native JSON. Churn alternates
+pane content every 32 updates. Native pane reconstruction and persistence costs
+remain in measured updates. Each phase verifies all twelve IDs, topology, active
+Unicode content, split ratios and complete JSON restoration outside timing.
+
+The engines retain their native chrome: Kael's minimum tab strip is 34 px and
+the pinned DockSkin bar is 30 px. Binary/n-ary same-axis splits are normalized
+for semantic comparison. Requested resize tolerance is 0.005 and persistence
+float tolerance is 0.01 px. GPUI Kit does not serialize zoom, so persistence runs
+after unzoom. This contract excludes floating panes and edge docks. Collect with
+`--contract native-dock-workspace-v1`, in both instrumentation modes; `--quick`
+is smoke evidence only.
 
 On macOS, the shared adapter uses the SDK's `proc_pid_rusage(RUSAGE_INFO_V4)` for
 CPU, resident bytes, physical footprint, idle/interrupt wakeups, I/O, and raw

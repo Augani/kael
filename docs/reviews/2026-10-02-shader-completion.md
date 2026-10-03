@@ -377,3 +377,56 @@ composes it directly into a styled native window. Its actual native Metal
 window capture passed and is retained at `.artifacts/kael-custom-shader-ui.png`
 (1,678,850 bytes), with `.artifacts/kael-custom-shader-ui-runtime.log`. Reproduce it with
 `KAEL_SHADER_CAPTURE_PATH`; this is application-window GPU composition evidence.
+
+
+## Native atlas logical identity follow-on
+
+A real Blade pressure/replay regression exposed page identity reuse after the four-frame retirement guard: the freed physical slot received the same `AtlasTextureId`, so a retained old scene could identify the newly populated page. The unchanged assertion failed in `.artifacts/kael-blade-atlas-retained-pressure.log`; it now passes with exact packed-edge BGRA `[0,0,255,255]` and interpolated interior `[83,0,172,255]` in `.artifacts/kael-blade-atlas-retained-pressure-green.log`.
+
+Metal, Blade and Direct3D now share a checked process-wide native logical ID allocator. IDs never recycle across atlas instances, windows, device resets, or failed post-reservation GPU allocations. The existing 8-byte tile identity/shader ABI is unchanged. Each atlas kind retains a bounded active-ID-to-physical-slot map; freed physical slots remain reusable, and the maps contain only resident pages. A local injected counter verifies exhaustion without poisoning the process allocator, and a 10,000-cycle model verifies one reused physical slot, stale lookup rejection and harmless late release. The logical ID limit fails admission instead of wrapping.
+
+Texture mappings remain live through the successful-frame retirement guard. Metal upload batches retain their concrete destination textures and driver allocation charges independently of IDs until completion or terminal teardown; this change does not alter upload ordering, peak accounting, staging bounds or timeout semantics. Every native scene is validated before GPU submission: all referenced page identities, logical tile identities and exact bounds must remain resident in that atlas. Offscreen Metal, Blade and Direct3D return a checked error for a stale or foreign scene; onscreen Metal rejects it before submission. Defensive missing-resource paths also avoid instance-buffer growth or binding replacement memory. GPU-target/buffer handles retain their separate window/device ownership checks. Native sprite identities themselves prevent cross-atlas aliasing even when a scene is presented to another window.
+
+The native CI helper additionally requires actual pressure/replay/reupload pixels on each backend, Blade upload admission before raster work, Direct3D simulated-device-reset reupload pixels, and logical identity lifetime/exhaustion models. The following regressions and new helper gates require fresh native execution after this source checkpoint; Windows runtime acceptance must come from the actual WARP job.
+
+The page fix also exposed a second identity layer. Etagere bucket allocation IDs
+reuse an eight-bit generation after 256 cycles, including while another tile
+keeps the same page alive. Each native page now owns a checked monotonic logical
+tile allocator and a bounded map to the private Etagere allocation plus exact
+rectangle. Retirement removes that map entry once; old, foreign-bound and duplicate
+releases cannot affect a replacement. The model exercises 512 actual allocator
+cycles, confirms raw Etagere ID reuse, and rejects the old logical tile throughout.
+All three models pass in `.artifacts/kael-atlas-tile-identity-tests.log`.
+
+The actual Metal surviving-page regression reproduced stale-scene aliasing:
+an old red sprite sampled replacement blue `[255,0,0,255]` after its exact region
+was reused (`.artifacts/kael-metal-surviving-page-tile-red.log`). The unchanged
+regression now rejects that scene before GPU submission while current pixels
+remain correct (`.artifacts/kael-metal-surviving-page-tile-green.log`). The CI
+helper requires the same real-pixel contract on Metal, Blade and WARP, plus
+foreign-atlas identity, pressure/reupload, device-reset, exhaustion and late-release
+contracts. Logical tile identity is per page; globally unique page identity makes
+the combined native tile identity unique across windows and devices.
+
+## Fractional native glyph admission follow-on
+
+Fresh visible native windows exposed truncated labels and blank data cells despite
+complete accessibility text. The first fractional-position macOS glyph reported
+an unpadded rectangle before admission, then enlarged its raster by a padding pixel.
+Strict atlas reservation rejected that mismatch, and line painting stopped at
+that glyph. The native red regression records a real CoreText glyph with declared
+18×26 pixels and returned 18×27 pixels in
+`.artifacts/kael-metal-native-fractional-glyph-red.log`. macOS now declares the
+complete antialias footprint before allocation and rasterizes exactly that size.
+The CoreGraphics baseline adjustment preserves its existing coverage positions.
+DirectWrite, Linux Swash and both browser raster paths already use identical
+declared and returned sizes; the strict atlas checks remain in place.
+
+A separate actual Metal test uploads 64 distinct small masks into one packed
+page and renders all 64 in one batch; every sampled mask is present and the
+monochrome instance stride is 160 bytes
+(`.artifacts/kael-metal-many-glyph-masks.log`). The mandatory native glyph
+regression additionally renders more than 30 real CoreText masks with fractional
+origins and compares every GPU coverage pixel against the native CPU raster.
+Fresh visible application captures are required after the fix; synthetic batches
+or accessibility text do not establish that populated table cells paint correctly.

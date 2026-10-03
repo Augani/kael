@@ -20,14 +20,19 @@ stabilised — minor version bumps may include breaking changes.
   inspectors with typed edits and bounded undo/redo history.
 - Added reusable lazy asynchronous filesystem models and a document/data
   workbench with rich Markdown preview and a bounded remote spreadsheet source.
-- Added matched native navigation, Unicode editor and 100,000-row data comparison contracts
+- Added matched native navigation, Unicode editor, 100,000-row data, virtual-tree
+  and persistent-docking comparison contracts
   against a pinned GPUI Kit release, raw process/frame evidence collection and
   separate builds with framework frame instrumentation disabled.
 - Added opt-in Metal GPU completion and drawable-presentation timestamps with
   bounded retention and no periodic UI work.
 - Added native accessibility protocol/client checks for AppKit, Windows UI
-  Automation and Linux AT-SPI. The licensed macOS adapter ships as the named
-  `kael_accesskit_macos` package with retained upstream provenance.
+  Automation and Linux AT-SPI. Licensed platform adapters ship as named Kael
+  packages with retained upstream sources, patches and licenses.
+- Added optional native shaped-text geometry for bidi caret edges and Unicode
+  clusters, plus a real Unicode editor fixture for native text protocol checks.
+- Added editor read-only and disabled modes with checked native selection,
+  reveal, editing and clipboard action routing.
 - Added viewport-mounted `VirtualTreeList`, reusable immutable `VirtualTreeModel`,
   and persistent `VirtualTreeState` for large project/file explorers, with one
   keyboard focus handle, controlled selection/expansion, mounted accessibility
@@ -58,6 +63,16 @@ stabilised — minor version bumps may include breaking changes.
 
 ### Fixed
 
+- Resume idle native frame polling when application models notify or refresh,
+  including updates that arrive without pointer or keyboard input.
+- Include fractional CoreText antialias padding in declared glyph bounds before
+  atlas admission, preserving complete text under checked raster budgets.
+- Use AppKit's `NSNotFound` sentinel for omitted composition ranges and the
+  correct pointer ABI for native candidate-rectangle queries.
+- Prevent atlas texture/tile identity reuse from accepting foreign-device or
+  retired scene sprites after allocator slot or internal generation reuse.
+- Prioritize mounted cells, focus and their ancestors in the bounded browser
+  accessibility mirror so large logical headers cannot hide visible controls.
 - Include line-clamp limits in wrapped-text cache keys, preserving the correct
   wrapping result when the same text is drawn with different limits.
 - Stop caret timers in blurred, deactivated and retained hidden editors, and
@@ -66,6 +81,13 @@ stabilised — minor version bumps may include breaking changes.
   expose complete prepared document text and checked native selection actions.
 - Reject native actions on disabled or hidden controls and reject deferred
   text selections whose prepared document identity has changed.
+- Keep partial native edits and clipboard operations tied to one immutable
+  document origin and one undoable transaction; revalidate actions before
+  deferred listener dispatch.
+- Apply native glyph vertical offsets when painting combining marks while
+  keeping line decorations on the text baseline.
+- Preserve the AT-SPI cache signal's protocol argument envelope and distinguish
+  logical offscreen accessibility from physically visible node bounds.
 - Require loaded remote-cell baselines for undoable edits, preserve captured
   query identities for asynchronous writes, and keep grid wheel axes independent.
 - Replace the browser backdrop tint fallback with bounded separable GPU blur,

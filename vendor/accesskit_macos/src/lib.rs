@@ -7,6 +7,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod context;
+mod text_edit;
+pub use text_edit::{TextEditHandler, TextEditOperation, TextEditRequest};
 mod filters;
 mod node;
 mod util;

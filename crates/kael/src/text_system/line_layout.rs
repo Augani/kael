@@ -49,7 +49,9 @@ pub struct ShapedGlyph {
     /// The ID for this glyph, as determined by the text system.
     pub id: GlyphId,
 
-    /// The position of this glyph in its containing line.
+    /// The position of this glyph in its containing line. x is the native
+    /// glyph origin; y is a displacement from the line baseline, positive down.
+    /// Decorations keep the line baseline and do not follow glyph displacements.
     pub position: Point<Pixels>,
 
     /// The index of this glyph in the original text.

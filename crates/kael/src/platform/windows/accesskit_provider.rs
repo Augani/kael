@@ -2,7 +2,7 @@
 
 use accesskit::{ActionHandler, ActionRequest, ActivationHandler, TreeUpdate};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -99,6 +99,8 @@ pub(crate) struct WindowsAccessibilityProvider {
     previous: RefCell<Option<crate::AccessibilityTree>>,
     pending: Pending,
     alive: Arc<AtomicBool>,
+    hwnd: HWND,
+    pending_host_focus: Cell<Option<crate::AccessibilityActionRequest>>,
 }
 
 impl WindowsAccessibilityProvider {
@@ -121,6 +123,8 @@ impl WindowsAccessibilityProvider {
             previous: RefCell::new(None),
             pending,
             alive,
+            hwnd,
+            pending_host_focus: Cell::new(None),
         }
     }
 
@@ -173,27 +177,62 @@ impl WindowsAccessibilityProvider {
             .lock()
             .map(|mut queue| queue.take())
             .unwrap_or_default();
-        raw.into_iter()
-            .filter_map(|request| {
-                if request.target_tree != accesskit::TreeId::ROOT {
-                    return None;
+        let requests: Vec<crate::AccessibilityActionRequest> = raw
+            .into_iter()
+            .filter_map(|request| request.normalize(tree))
+            .collect();
+        if let Some(request) = requests
+            .iter()
+            .rev()
+            .find(|request| request.action == crate::AccessibilityAction::Focus)
+        {
+            // SetFocus synchronously sends activation/focus messages. Defer it
+            // until the current App/window draw borrow has ended, coalescing to
+            // one owner-thread message and retaining the exact accepted target.
+            let already_pending = self
+                .pending_host_focus
+                .replace(Some(request.clone()))
+                .is_some();
+            if !already_pending {
+                if let Err(error) = unsafe {
+                    PostMessageW(
+                        Some(self.hwnd),
+                        super::events::WM_GPUI_ACCESSIBILITY_FOCUS,
+                        WPARAM(0),
+                        LPARAM(0),
+                    )
+                } {
+                    self.pending_host_focus.take();
+                    log::warn!("failed to queue native accessibility host focus: {error}");
                 }
-                let id = crate::AccessibilityId(request.target_node.0);
-                let node = tree.get(id)?;
-                crate::AccessibilityActionRequest::from_accesskit_for_node_with_data(
-                    id,
-                    node,
-                    request.action,
-                    request.data,
-                )
+            }
+        }
+        requests
+    }
+
+    pub(crate) fn take_valid_host_focus_request(&self) -> bool {
+        let Some(request) = self.pending_host_focus.take() else {
+            return false;
+        };
+        if !self.alive.load(Ordering::Acquire) {
+            return false;
+        }
+        self.latest
+            .lock()
+            .ok()
+            .and_then(|latest| {
+                latest
+                    .as_ref()
+                    .and_then(|tree| tree.validate_action_request(request))
             })
-            .collect()
+            .is_some()
     }
 }
 
 impl Drop for WindowsAccessibilityProvider {
     fn drop(&mut self) {
         self.alive.store(false, Ordering::Release);
+        self.pending_host_focus.take();
         if let Ok(mut queue) = self.pending.lock() {
             queue.take();
         }
@@ -233,8 +272,14 @@ mod tests {
         .join()
         .unwrap();
         let drained = pending.lock().unwrap().take();
-        assert_eq!(drained[0].target_node.0, 0x1_0000_0001);
-        assert_eq!(drained[1].target_node.0, 0x2_0000_0001);
+        assert_eq!(
+            drained[0],
+            crate::PendingAccessibilityAction::Raw(request(0x1_0000_0001))
+        );
+        assert_eq!(
+            drained[1],
+            crate::PendingAccessibilityAction::Raw(request(0x2_0000_0001))
+        );
         let mut woke = false;
         assert!(enqueue(
             &pending,

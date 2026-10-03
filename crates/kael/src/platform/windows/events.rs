@@ -28,6 +28,7 @@ pub(crate) const WM_GPUI_NETWORK_CHANGE: u32 = WM_USER + 10;
 pub(crate) const WM_GPUI_MEDIA_KEY: u32 = WM_USER + 11;
 pub(crate) const WM_GPUI_CONTEXT_MENU_ACTION: u32 = WM_USER + 12;
 pub(crate) const WM_GPUI_NOTIFICATION_ACTION: u32 = WM_USER + 13;
+pub(crate) const WM_GPUI_ACCESSIBILITY_FOCUS: u32 = WM_USER + 14;
 pub(crate) const WM_WTSSESSION_CHANGE: u32 = 0x02B1;
 
 const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
@@ -59,6 +60,18 @@ impl WindowsWindowInner {
         lparam: LPARAM,
     ) -> LRESULT {
         let handled = match msg {
+            WM_GPUI_ACCESSIBILITY_FOCUS => {
+                if self.accessibility_provider.take_valid_host_focus_request() {
+                    // Only the owning thread calls SetFocus, after adapter,
+                    // semantic-tree and App/window borrows have been released.
+                    // WM_SETFOCUS records actual host focus for UIA queries.
+                    let result = unsafe { SetFocus(Some(handle)) };
+                    if unsafe { GetFocus() } != handle {
+                        log::warn!("native accessibility host focus was not acquired: {result:?}");
+                    }
+                }
+                Some(0)
+            }
             WM_ACTIVATE => self.handle_activate_msg(wparam),
             WM_SETFOCUS => {
                 // UIA can restore keyboard focus without changing activation.

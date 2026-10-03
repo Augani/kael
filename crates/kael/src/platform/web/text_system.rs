@@ -714,7 +714,10 @@ impl WebTextState {
                 font_id,
                 ShapedGlyph {
                     id: GlyphId(u32::from(glyph.glyph_id)),
-                    position: point(px(origin_x + glyph.x), px(glyph.y)),
+                    position: point(
+                        px(origin_x + glyph.x + glyph.font_size * glyph.x_offset),
+                        px(glyph.y - glyph.font_size * glyph.y_offset),
+                    ),
                     index: first.start + glyph.start,
                     is_emoji: false,
                 },

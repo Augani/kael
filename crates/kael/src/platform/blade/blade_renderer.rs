@@ -1065,7 +1065,7 @@ impl BladeRenderer {
             );
         }
         let readback_layout = capture.then(|| self.scene_readback_layout()).transpose()?;
-        self.atlas.mark_scene_used(scene);
+        self.atlas.mark_scene_used(scene)?;
         self.command_encoder.start();
         self.atlas.before_frame(&mut self.command_encoder);
 

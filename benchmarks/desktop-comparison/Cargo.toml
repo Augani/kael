@@ -12,6 +12,14 @@ path = "src/component_comparison.rs"
 name = "data_comparison"
 path = "src/data_comparison.rs"
 
+[[bin]]
+name = "tree_comparison"
+path = "src/tree_comparison.rs"
+
+[[bin]]
+name = "workspace_comparison"
+path = "src/workspace_comparison.rs"
+
 [workspace]
 
 [features]

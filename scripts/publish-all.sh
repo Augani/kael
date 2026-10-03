@@ -51,6 +51,9 @@ crates=(
   kael_http_client
   kael_diagnostics
   kael_accesskit_macos
+  kael_accesskit_atspi_common
+  kael_accesskit_unix
+  kael_accesskit_windows
   kael
   kael_ui
 )

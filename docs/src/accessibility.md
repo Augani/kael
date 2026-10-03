@@ -171,6 +171,21 @@ When a logical tree or grid already represents the items, use
 list/item hierarchy. Visual text that duplicates an ancestor's semantic label
 can use `StyledText::accessibility_hidden(true)`.
 
+## Browser accessibility projection
+
+The browser DOM mirror retains at most 4,096 semantic nodes. It admits focused
+and physically mounted controls with their ancestors before sampling remaining
+logical descendants. This keeps visible cells and active descendants available
+when a grid has thousands of offscreen headers. Native adapters continue to use
+the retained complete logical snapshots.
+
+The canvas exposes `data-kael-accessibility-node-limit` and
+`data-kael-accessibility-truncated`; a truncated mirror does not imply complete
+DOM coverage of the application's logical model. Mirrored elements expose
+`data-kael-a11y-has-bounds` to distinguish mounted geometry from offscreen
+semantic records. These attributes support diagnostics; rendering remains
+limited to the viewport.
+
 ## Native text selection
 
 Editable components can attach an immutable `AccessibilityTextDocument` and a
@@ -322,12 +337,15 @@ window that renders accessible widgets (or custom elements with
 |----------|---------|--------|
 | macOS | [`accesskit_macos`] `SubclassingAdapter` over the window's `NSView` | Adapter-backed; serves a full `NSAccessibility` tree to VoiceOver |
 | Linux | [`accesskit_unix`] AT-SPI2 adapter (one per window, x11 and wayland) | Adapter-backed; exposes the tree on the AT-SPI2 D-Bus bus to Orca |
-| Windows | Hand-rolled UI Automation provider (`IRawElementProviderSimple`) | Native UIA, served via `WM_GETOBJECT` |
+| Windows | Named AccessKit Windows adapter with incremental consumer trees | Native UIA, served via `WM_GETOBJECT` |
 
-On macOS and Linux the tree is built once with AccessKit and the official
-adapters translate it to the platform protocol; Windows keeps its dedicated
-UIA provider. All three are driven from the same per-frame tree, so widget
-roles, labels, values, and focus stay consistent across platforms.
+All three native platforms use named Kael-maintained AccessKit adapters, with
+upstream provenance and licenses retained. Shared immutable snapshots and
+incremental updates preserve logical descendants and text runs across frames;
+the adapters translate these semantics to the native protocol. Kael uses direct
+path/version/package dependencies, so external consumers need no workspace
+patch overrides. Native runtime clients remain required to verify presentation
+and action routing on each platform.
 
 Notes:
 
@@ -345,8 +363,8 @@ Notes:
   UIA focus, invoke, toggle, expand/collapse, and range-value pattern calls
   into the same window route.
 
-[`accesskit_macos`]: https://crates.io/crates/accesskit_macos
-[`accesskit_unix`]: https://crates.io/crates/accesskit_unix
+[`accesskit_macos`]: https://github.com/Augani/kael/tree/main/vendor/accesskit_macos
+[`accesskit_unix`]: https://github.com/Augani/kael/tree/main/vendor/accesskit_unix
 
 ## Testing with a screen reader
 

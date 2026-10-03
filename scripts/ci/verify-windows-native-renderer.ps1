@@ -62,6 +62,9 @@ try {
     if (-not $rendererLog.Contains("NATIVE_RENDERER_SMOKE_OK:")) {
         throw "native renderer did not publish its success marker"
     }
+    if (-not $rendererLog.Contains("NATIVE_IDLE_MODEL_FRAME_OK:")) {
+        throw "Native model notification did not resume idle platform submission"
+    }
     if (-not $rendererLog.Contains("text_probe_pixels=")) {
         throw "native renderer did not prove retained text/glyph-atlas output"
     }

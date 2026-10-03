@@ -1,5 +1,45 @@
 mod app_menu;
 mod atlas_policy;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        any(feature = "x11", feature = "wayland"),
+        not(feature = "webview-wayland-gtk4")
+    )
+))]
+mod atlas_tile_allocations;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        any(feature = "x11", feature = "wayland"),
+        not(feature = "webview-wayland-gtk4")
+    )
+))]
+use atlas_tile_allocations::AtlasTileAllocations;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        any(feature = "x11", feature = "wayland"),
+        not(feature = "webview-wayland-gtk4")
+    )
+))]
+mod atlas_texture_list;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        any(feature = "x11", feature = "wayland"),
+        not(feature = "webview-wayland-gtk4")
+    )
+))]
+use atlas_texture_list::{AtlasTextureList, allocate_native_atlas_texture_id};
 /// Pure-logic core for the XDG GlobalShortcuts desktop portal used by Wayland global hotkeys.
 pub(crate) mod global_hotkey_portal;
 mod keyboard;
@@ -104,7 +144,6 @@ use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::io::Cursor;
-use std::ops;
 use std::time::Duration;
 use std::{
     fmt::{self, Debug},
@@ -1399,6 +1438,9 @@ pub(crate) trait PlatformTextSystem: Send + Sync {
     fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>>;
     fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>>;
     fn glyph_for_char(&self, font_id: FontId, ch: char) -> Option<GlyphId>;
+    /// Declare the exact bitmap extent before native atlas admission, including
+    /// subpixel antialias padding. `rasterize_glyph` must return this same size;
+    /// it cannot enlarge storage after the atlas reserves the declared bounds.
     fn glyph_raster_bounds(&self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>>;
     fn rasterize_glyph(
         &self,
@@ -1415,6 +1457,20 @@ pub(crate) trait PlatformTextSystem: Send + Sync {
     }
 
     fn layout_line(&self, text: &str, font_size: Pixels, runs: &[FontRun]) -> LineLayout;
+
+    /// Actual native caret/cluster edges for requested mounted UTF-8 spans.
+    /// Backends without this optional capability return None. Geometry is not
+    /// stored on every shared LineLayout or generated for offscreen documents.
+    fn layout_line_geometry(
+        &self,
+        text: &str,
+        font_size: Pixels,
+        runs: &[FontRun],
+        byte_ranges: &[std::ops::Range<usize>],
+    ) -> Option<crate::LineTextGeometry> {
+        let _ = (text, font_size, runs, byte_ranges);
+        None
+    }
 
     /// Layout text with additional OpenType font features applied.
     ///
@@ -1817,41 +1873,6 @@ pub(crate) trait PlatformAtlas: Send + Sync {
     fn clear(&self) {}
 }
 
-struct AtlasTextureList<T> {
-    textures: Vec<Option<T>>,
-    free_list: Vec<usize>,
-}
-
-impl<T> Default for AtlasTextureList<T> {
-    fn default() -> Self {
-        Self {
-            textures: Vec::default(),
-            free_list: Vec::default(),
-        }
-    }
-}
-
-impl<T> ops::Index<usize> for AtlasTextureList<T> {
-    type Output = Option<T>;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.textures[index]
-    }
-}
-
-impl<T> AtlasTextureList<T> {
-    #[allow(unused)]
-    fn drain(&mut self) -> std::vec::Drain<'_, Option<T>> {
-        self.free_list.clear();
-        self.textures.drain(..)
-    }
-
-    #[allow(dead_code)]
-    fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut T> {
-        self.textures.iter_mut().flatten()
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub(crate) struct AtlasTile {
@@ -1864,7 +1885,8 @@ pub(crate) struct AtlasTile {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub(crate) struct AtlasTextureId {
-    // We use u32 instead of usize for Metal Shader Language compatibility
+    // Logical identity, never a physical slot. Native backends issue checked
+    // process-wide IDs; u32 preserves the shared Metal/HLSL/WGSL tile ABI.
     pub(crate) index: u32,
     pub(crate) kind: AtlasTextureKind,
 }

@@ -3,6 +3,7 @@ mod font_features;
 mod line;
 mod line_layout;
 mod line_wrapper;
+mod text_geometry;
 
 pub use font_fallbacks::*;
 pub use font_features::*;
@@ -11,6 +12,7 @@ pub use line_layout::*;
 pub use line_wrapper::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+pub use text_geometry::*;
 
 use crate::{
     Bounds, DevicePixels, Hsla, Pixels, PlatformTextSystem, Point, Result, SharedString, Size,
@@ -393,6 +395,31 @@ impl WindowTextSystem {
         force_width: Option<Pixels>,
     ) -> ShapedLine {
         self.shape_line_with_spacing(text, font_size, runs, force_width, None)
+    }
+
+    /// Request actual native caret/cluster geometry for mounted text spans.
+    /// This opt-in path bypasses the global glyph cache; callers should retain
+    /// the result until their text, fonts or requested spans change.
+    pub fn line_text_geometry(
+        &self,
+        text: &str,
+        font_size: Pixels,
+        runs: &[TextRun],
+        byte_ranges: &[Range<usize>],
+    ) -> Option<LineTextGeometry> {
+        if !LineTextGeometry::requested_ranges_valid(text, byte_ranges) {
+            return None;
+        }
+        let mut font_runs = self.font_runs_pool.lock().pop().unwrap_or_default();
+        self.populate_font_runs(runs, &mut font_runs);
+        let geometry = self.platform_text_system.layout_line_geometry(
+            text,
+            font_size,
+            &font_runs,
+            byte_ranges,
+        );
+        self.font_runs_pool.lock().push(font_runs);
+        geometry
     }
 
     /// Shape a line of text with optional letter spacing applied to glyph positions.

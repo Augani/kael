@@ -62,6 +62,8 @@ pub struct AccessibilitySnapshot {
     pub root: AccessibilityId,
     pub(crate) nodes: HashMap<AccessibilityId, AccessibilityNode>,
     pub(crate) focused: Option<AccessibilityId>,
+    // Prepared once with the logical model; actions never scan all logical rows.
+    text_owners: Vec<AccessibilityId>,
     reclaimer: Option<crate::BackgroundExecutor>,
 }
 impl std::fmt::Debug for AccessibilitySnapshot {
@@ -132,10 +134,16 @@ impl AccessibilitySnapshot {
             .values()
             .find(|node| node.states.contains(super::AccessibilityState::FOCUSED))
             .map(|node| node.id);
+        let text_owners = map
+            .values()
+            .filter(|node| node.text_document.is_some())
+            .map(|node| node.id)
+            .collect();
         Ok(Arc::new(Self {
             root,
             nodes: map,
             focused,
+            text_owners,
             reclaimer: None,
         }))
     }
@@ -189,6 +197,27 @@ impl PartialEq for AccessibilityNodeMap {
     }
 }
 impl AccessibilityNodeMap {
+    pub(super) fn text_owner(&self, run: AccessibilityId) -> Option<&AccessibilityNode> {
+        let mut owners = self
+            .frame
+            .values()
+            .filter(|node| !self.removed.contains(&node.id))
+            .chain(
+                self.snapshots
+                    .values()
+                    .flat_map(|snapshot| snapshot.text_owners.iter())
+                    .filter(|id| !self.frame.contains_key(id))
+                    .filter_map(|id| self.get(id)),
+            )
+            .filter(|node| {
+                node.text_document
+                    .as_ref()
+                    .is_some_and(|document| document.run_bytes(run).is_some())
+            });
+        let owner = owners.next()?;
+        // Shared run identities under two controls are ambiguous and unsafe.
+        owners.next().is_none().then_some(owner)
+    }
     /// Insert or replace an ordinary frame node.
     pub fn insert(
         &mut self,
@@ -259,6 +288,11 @@ impl AccessibilityNodeMap {
                 .flat_map(|snapshot| snapshot.nodes.iter())
                 .filter(|(id, _)| !self.frame.contains_key(id) && !self.removed.contains(id)),
         )
+    }
+    /// Ordinary frame overlays, without scanning immutable logical subtrees.
+    #[cfg(any(target_family = "wasm", test))]
+    pub(crate) fn frame_nodes(&self) -> impl Iterator<Item = &AccessibilityNode> {
+        self.frame.values()
     }
     /// Iterate all effective node identities.
     pub fn keys(&self) -> impl Iterator<Item = &AccessibilityId> {

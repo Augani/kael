@@ -21,8 +21,9 @@ autobins = false
 autoexamples = false
 autotests = false
 autobenches = false
-description = "Kael-maintained AccessKit macOS adapter with native outline support"
+description = "Kael-maintained AccessKit macOS adapter with native outline and text support"
 readme = "README.md"
+exclude = ["Cargo.toml.orig"]
 keywords = [
     "gui",
     "ui",
@@ -73,6 +74,8 @@ features = [
     "NSAccessibilityElement",
     "NSAccessibilityProtocols",
     "NSColor",
+    "NSApplication",
+    "NSGraphics",
     "NSResponder",
     "NSText",
     "NSView",

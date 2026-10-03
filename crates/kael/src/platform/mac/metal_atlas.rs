@@ -1,6 +1,7 @@
 use crate::{
     AtlasAllocationClass, AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTile, Bounds,
-    DevicePixels, PlatformAtlas, Point, Size, platform::AtlasTextureList,
+    DevicePixels, PlatformAtlas, Point, Size,
+    platform::{AtlasTextureList, AtlasTileAllocations, allocate_native_atlas_texture_id},
 };
 use anyhow::{Context as _, Result};
 use collections::FxHashMap;
@@ -45,8 +46,16 @@ impl MetalAtlas {
 
     /// Refresh recency for every tile referenced by a retained scene.
     #[allow(dead_code)]
-    pub(crate) fn mark_scene_used(&self, scene: &crate::Scene) {
-        self.0.lock().policy.mark_scene_used(scene);
+    pub(crate) fn mark_scene_used(&self, scene: &crate::Scene) -> anyhow::Result<()> {
+        let mut state = self.0.lock();
+        anyhow::ensure!(
+            scene.atlas_tiles().all(|tile| state
+                .texture(tile.texture_id)
+                .is_some_and(|texture| texture.allocations.contains(tile))),
+            "scene contains a stale or foreign atlas tile"
+        );
+        state.policy.mark_scene_used(scene);
+        Ok(())
     }
 
     pub(crate) fn set_admission_limits(&self, bytes: Option<u64>) {
@@ -416,6 +425,7 @@ impl MetalAtlasState {
         }
         self.policy
             .check_page(self.allocated_bytes(), self.page_count(), added_bytes)?;
+        let id = allocate_native_atlas_texture_id(kind)?;
         let texture_descriptor = metal::TextureDescriptor::new();
         texture_descriptor.set_width(size.width.into());
         texture_descriptor.set_height(size.height.into());
@@ -448,32 +458,17 @@ impl MetalAtlasState {
             AtlasTextureKind::Polychrome => &mut self.polychrome_textures,
         };
 
-        let index = texture_list.free_list.pop();
-
-        let texture_index = index.unwrap_or(texture_list.textures.len());
-        let texture_index =
-            u32::try_from(texture_index).context("Metal atlas texture index space exhausted")?;
         let atlas_texture = MetalAtlasTexture {
-            id: AtlasTextureId {
-                index: texture_index,
-                kind,
-            },
+            id,
             allocation_class,
             allocator: etagere::BucketedAtlasAllocator::new(size.into()),
+            allocations: AtlasTileAllocations::default(),
             metal_texture: AssertSend(metal_texture),
             live_atlas_keys: 0,
             allocation_bytes,
         };
 
-        let slot = if let Some(ix) = index {
-            texture_list.textures[ix] = Some(atlas_texture);
-            texture_list.textures.get_mut(ix)
-        } else {
-            texture_list.textures.push(Some(atlas_texture));
-            texture_list.textures.last_mut()
-        };
-        slot.and_then(Option::as_mut)
-            .context("Metal atlas texture slot was not initialized")
+        Ok(texture_list.insert(id.index, atlas_texture))
     }
 
     fn texture(&self, id: AtlasTextureId) -> Option<&MetalAtlasTexture> {
@@ -481,11 +476,7 @@ impl MetalAtlasState {
             crate::AtlasTextureKind::Monochrome => &self.monochrome_textures,
             crate::AtlasTextureKind::Polychrome => &self.polychrome_textures,
         };
-        textures
-            .textures
-            .get(id.index as usize)
-            .and_then(Option::as_ref)
-            .filter(|texture| texture.id == id)
+        textures.get(id.index).filter(|texture| texture.id == id)
     }
 
     fn evict_to_budget(&mut self, max_bytes: u64) -> usize {
@@ -566,23 +557,19 @@ impl MetalAtlasState {
             AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
             AtlasTextureKind::Polychrome => &mut self.polychrome_textures,
         };
-        let Some(texture_slot) = textures.textures.get_mut(id.index as usize) else {
+        let Some(texture) = textures.get_mut(id.index) else {
             return;
         };
-        if texture_slot.as_ref().is_none_or(|texture| texture.id != id) {
+        if texture.id != id {
             return;
         }
-
-        if let Some(mut texture) = texture_slot.take() {
-            texture
-                .allocator
-                .deallocate(etagere::AllocId::from(tile.tile_id));
-            texture.decrement_ref_count();
-            if texture.is_unreferenced() {
-                textures.free_list.push(id.index as usize);
-            } else {
-                *texture_slot = Some(texture);
-            }
+        let Some(allocation) = texture.allocations.release(&tile) else {
+            return;
+        };
+        texture.allocator.deallocate(allocation);
+        texture.decrement_ref_count();
+        if texture.is_unreferenced() {
+            textures.remove(id.index);
         }
     }
 }
@@ -591,6 +578,7 @@ struct MetalAtlasTexture {
     id: AtlasTextureId,
     allocation_class: AtlasAllocationClass,
     allocator: BucketedAtlasAllocator,
+    allocations: AtlasTileAllocations,
     metal_texture: AssertSend<metal::Texture>,
     live_atlas_keys: u32,
     allocation_bytes: u64,
@@ -598,16 +586,9 @@ struct MetalAtlasTexture {
 
 impl MetalAtlasTexture {
     fn allocate(&mut self, size: Size<DevicePixels>) -> Option<AtlasTile> {
-        let allocation = self.allocator.allocate(size.into())?;
-        let tile = AtlasTile {
-            texture_id: self.id,
-            tile_id: allocation.id.into(),
-            bounds: Bounds {
-                origin: allocation.rectangle.min.into(),
-                size,
-            },
-            padding: 0,
-        };
+        let tile = self
+            .allocations
+            .allocate(&mut self.allocator, self.id, size)?;
         self.live_atlas_keys += 1;
         Some(tile)
     }
@@ -726,6 +707,48 @@ mod tests {
                 .try_into()
                 .unwrap()
         }
+    }
+
+    #[test]
+    fn native_atlas_identity_rejects_foreign_atlas_and_late_release() {
+        let device =
+            metal::Device::system_default().expect("atlas identity regression requires Metal");
+        let queue = device.new_command_queue();
+        let atlas = MetalAtlas::new(device.clone(), queue.clone());
+        let foreign = MetalAtlas::new(device, queue.clone());
+        let dimensions = size(DevicePixels(8), DevicePixels(8));
+        let first = atlas
+            .get_or_insert_with_size(&image_key(990), dimensions, &mut || {
+                Ok(Some((dimensions, Cow::Owned(vec![17; 8 * 8 * 4]))))
+            })
+            .unwrap()
+            .unwrap();
+        assert!(foreign.metal_texture(first.texture_id).is_none());
+        atlas.flush_uploads().unwrap();
+        let texture = atlas.metal_texture(first.texture_id).unwrap();
+        let (original, command) = read_pixel(&queue, &texture, first.bounds.origin);
+        wait(&command);
+        assert_eq!(pixel(&original), [17; 4]);
+        atlas.remove(&image_key(990));
+        for _ in 0..4 {
+            atlas.advance_frame();
+        }
+        assert!(atlas.metal_texture(first.texture_id).is_none());
+        let second = atlas
+            .get_or_insert_with_size(&image_key(991), dimensions, &mut || {
+                Ok(Some((dimensions, Cow::Owned(vec![29; 8 * 8 * 4]))))
+            })
+            .unwrap()
+            .unwrap();
+        assert_ne!(first.texture_id, second.texture_id);
+        atlas.0.lock().release_tile(first);
+        assert_eq!(atlas.0.lock().polychrome_textures.textures.len(), 1);
+        atlas.flush_uploads().unwrap();
+        let texture = atlas.metal_texture(second.texture_id).unwrap();
+        let (current, command) = read_pixel(&queue, &texture, second.bounds.origin);
+        wait(&command);
+        assert_eq!(pixel(&current), [29; 4]);
+        assert!(foreign.metal_texture(second.texture_id).is_none());
     }
 
     struct Gate(metal::SharedEvent);
@@ -1198,7 +1221,7 @@ mod tests {
                 target: tile.clone(),
             });
         for _ in 0..8 {
-            atlas.mark_scene_used(&scene);
+            atlas.mark_scene_used(&scene).unwrap();
             atlas.advance_frame();
             assert_eq!(atlas.evict_to_budget_keeping(0, 4), 0);
         }

@@ -1,2 +1,6 @@
 # Unified-diff context lines retain their required prefix on blank lines.
-vendor/accesskit_macos/outline-support.patch whitespace=-blank-at-eol
+vendor/accesskit_*/*.patch whitespace=-blank-at-eol
+# Preserve exact Unicode/line-ending fixture bytes on Windows checkout too.
+# One CRLF sentinel deliberately tests preservation alongside LF text.
+crates/kael_ui/examples/fixtures/native_unicode_document.txt -text whitespace=cr-at-eol
+crates/kael_ui/examples/fixtures/native_unicode_replacement.txt -text
