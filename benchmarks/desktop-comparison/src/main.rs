@@ -176,8 +176,7 @@ impl Workload {
 
     fn snapshot_gpu(&mut self) {
         #[cfg(target_os = "macos")]
-        let bytes =
-            metal::Device::system_default().map(|device| device.current_allocated_size());
+        let bytes = metal::Device::system_default().map(|device| device.current_allocated_size());
         #[cfg(not(target_os = "macos"))]
         let bytes: Option<u64> = None;
         self.gpu_samples.push((self.phase.to_string(), bytes));
