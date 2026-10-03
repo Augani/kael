@@ -515,3 +515,31 @@ physical display is asleep, the fixture remains inactive and a later native
 Copy does not complete. An owned-child foreground request is rejected. The
 earlier complete AppKit proof remains a historical checkpoint; no failed
 rerun replaces it or waives fresh physical acceptance.
+
+## GTK clipboard runtime correction and final Windows matrix
+
+At [`04799df`](https://github.com/Augani/kael/actions/runs/37156344449),
+the two asynchronous byte-bound tests pass, and GTK passes the complete
+105,391-byte Unicode Editor native protocol, including clipboard Paste, atomic
+Undo/Redo, replacement, read-only and disabled guards. The complete GTK outline
+client also passes for a second allocation-corrected run. The job itself fails:
+its combined GTK/UI lint graph enables mutually exclusive legacy backend
+flags, leaving their helpers unused, and its X11 text process fails to open
+the display before showing a window. Neither failure is treated as acceptance.
+The next focused job lints the selected GTK core and native UI graphs separately
+without warning exemptions, runs all clients even after a check fails, and
+preserves an authenticated `xdpyinfo` query before fixture startup. X11
+constructor errors now identify connection versus extension-query failure.
+
+The full [`01e1cad` Windows matrix](https://github.com/Augani/kael/actions/runs/37152134134)
+finishes successfully on both Windows 2022 and Windows 2025/VS2026: strict native
+quality, Direct3D retained scenes/shaders/resources, generated projects, WebView,
+complete outline/UIA text protocols and MSI all pass. This is checkpoint
+evidence; the resumed branch still requires the maintained full matrix.
+
+Fresh isolated package preflight after `04799df` passes all 38 extracted
+archives, with no registry upload. Strict macOS native all-target Clippy and
+the 46-page documentation check pass at `fb4e24c`. The complete hundred-run
+comparison at [`04799df`](https://github.com/Augani/kael/actions/runs/37156492270)
+is now running with actual native geometry and phase activity enforced;
+its outcome remains pending.
