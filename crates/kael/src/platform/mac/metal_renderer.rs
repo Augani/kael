@@ -1,4 +1,8 @@
 use super::metal_atlas::MetalAtlas;
+#[cfg(feature = "custom-shaders")]
+mod custom_shaders;
+#[cfg(all(test, feature = "custom-shaders"))]
+mod graph_tests;
 use crate::{
     AtlasTextureId, Background, BlurRect, Bounds, ContentMask, Corners, DevicePixels, Hsla,
     MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
@@ -8,6 +12,7 @@ use anyhow::Result;
 use block::ConcreteBlock;
 use objc2_foundation::NSSize;
 
+use crate::frame_timing::collector::GpuFrameTimingCollector;
 use core_foundation::base::TCFType;
 use core_video::{
     metal_texture::CVMetalTextureGetTexture, metal_texture_cache::CVMetalTextureCache,
@@ -19,6 +24,16 @@ use objc2::encode::{Encode, Encoding};
 use objc2::msg_send;
 use objc2::runtime::AnyObject;
 use parking_lot::Mutex;
+
+fn current_host_time() -> f64 {
+    // Keep host-only FFI inside this function: cbindgen also parses this file to
+    // generate the Metal shader header, whose language does not support double.
+    #[link(name = "QuartzCore", kind = "framework")]
+    unsafe extern "C" {
+        fn CACurrentMediaTime() -> f64;
+    }
+    unsafe { CACurrentMediaTime() }
+}
 
 #[repr(transparent)]
 struct CGColorSpacePtr(*mut c_void);
@@ -173,6 +188,10 @@ pub(crate) struct MetalRenderer {
     path_sample_count: u32,
     counters: RendererCounters,
     last_present_instant: Option<Instant>,
+    gpu_frame_timings: Option<Arc<Mutex<GpuFrameTimingCollector>>>,
+    gpu_frame_timing_trace: bool,
+    #[cfg(feature = "custom-shaders")]
+    custom: custom_shaders::MetalCustomRenderer,
 }
 
 #[repr(C)]
@@ -214,7 +233,9 @@ impl MetalRenderer {
             let layer_obj = (&*layer as *const _) as *mut AnyObject;
             let cs_ptr = CGColorSpacePtr(cg_color_space.as_ptr() as *mut c_void);
             let _: () = msg_send![layer_obj, setColorspace: cs_ptr];
-            let _: () = msg_send![layer_obj, setAllowsNextDrawableTimeout: false];
+            // A saturated drawable pool must yield so asynchronous upload and
+            // device-failure deadlines can be observed on subsequent frames.
+            let _: () = msg_send![layer_obj, setAllowsNextDrawableTimeout: true];
             let _: () = msg_send![layer_obj, setNeedsDisplayOnBoundsChange: true];
             let _: () = msg_send![layer_obj, setAutoresizingMask: CA_AUTORESIZING_MASK];
         }
@@ -257,7 +278,7 @@ impl MetalRenderer {
             RENDER_TARGET_PIXEL_FORMAT,
             PATH_SAMPLE_COUNT,
         );
-        let path_sprites_pipeline_state = build_path_sprite_pipeline_state(
+        let path_sprites_pipeline_state = build_premultiplied_pipeline_state(
             &device,
             &library,
             "path_sprites",
@@ -323,7 +344,7 @@ impl MetalRenderer {
             "underline_fragment",
             metal::MTLPixelFormat::RGBA16Float,
         );
-        let blur_horizontal_pipeline_state = build_pipeline_state(
+        let blur_horizontal_pipeline_state = build_premultiplied_pipeline_state(
             &device,
             &library,
             "blur_horizontal",
@@ -373,7 +394,7 @@ impl MetalRenderer {
         );
 
         let command_queue = device.new_command_queue();
-        let sprite_atlas = Arc::new(MetalAtlas::new(device.clone()));
+        let sprite_atlas = Arc::new(MetalAtlas::new(device.clone(), command_queue.clone()));
         let core_video_texture_cache = CVMetalTextureCache::new(None, device.clone(), None)
             .map_err(|status| {
                 anyhow::anyhow!("creating CoreVideo Metal texture cache failed with {status}")
@@ -415,6 +436,10 @@ impl MetalRenderer {
             path_sample_count: PATH_SAMPLE_COUNT,
             counters: RendererCounters::default(),
             last_present_instant: None,
+            gpu_frame_timings: None,
+            gpu_frame_timing_trace: false,
+            #[cfg(feature = "custom-shaders")]
+            custom: custom_shaders::MetalCustomRenderer::default(),
         })
     }
 
@@ -437,6 +462,216 @@ impl MetalRenderer {
     #[allow(dead_code)]
     pub fn set_atlas_byte_budget(&mut self, budget: Option<u64>) {
         self.atlas_byte_budget = budget;
+        self.sprite_atlas.set_admission_limits(budget);
+    }
+
+    pub(crate) fn gpu_allocated_bytes(&self) -> u64 {
+        self.device.current_allocated_size() as u64
+    }
+
+    pub(crate) fn set_gpu_frame_timing_enabled(&mut self, enabled: bool) -> bool {
+        self.gpu_frame_timing_trace =
+            enabled && std::env::var_os("KAEL_GPU_FRAME_TIMING_TRACE").is_some();
+        if enabled {
+            self.gpu_frame_timings
+                .get_or_insert_with(|| Arc::new(Mutex::new(GpuFrameTimingCollector::new())));
+        } else {
+            self.gpu_frame_timings = None;
+        }
+        true
+    }
+
+    pub(crate) fn take_gpu_frame_timings(&self) -> Vec<crate::GpuFrameTiming> {
+        self.gpu_frame_timings
+            .as_ref()
+            .map(|collector| collector.lock().take())
+            .unwrap_or_default()
+    }
+
+    /// The disabled path performs only an option check before the existing commit.
+    /// Neither block retains this renderer, its window, or any drawable/buffer.
+    fn commit_with_gpu_timing(
+        &self,
+        command_buffer: &metal::CommandBufferRef,
+        drawable: Option<&metal::MetalDrawableRef>,
+    ) {
+        if let Some(collector) = self.gpu_frame_timings.as_ref() {
+            let frame_id = collector.lock().begin(0.0, drawable.is_some());
+            if let Some(frame_id) = frame_id {
+                let trace = self.gpu_frame_timing_trace;
+                let completed_collector = Arc::downgrade(collector);
+                let completed = ConcreteBlock::new(move |buffer: &metal::CommandBufferRef| {
+                    if let Some(collector) = completed_collector.upgrade() {
+                        // Metal publishes both timestamps only after completion.
+                        let buffer = buffer.as_ptr().cast::<AnyObject>();
+                        let (start, end): (f64, f64) = unsafe {
+                            (
+                                msg_send![buffer, GPUStartTime],
+                                msg_send![buffer, GPUEndTime],
+                            )
+                        };
+                        if trace {
+                            let status: u64 = unsafe { msg_send![buffer, status] };
+                            eprintln!(
+                                "KAEL_GPU_TIMING_COMPLETE: frame_id={frame_id} status={status} gpu_start={start} gpu_end={end}"
+                            );
+                        }
+                        collector.lock().complete(frame_id, start, end);
+                    }
+                })
+                .copy();
+                command_buffer.add_completed_handler(&completed);
+                if let Some(drawable) = drawable {
+                    let presented_collector = Arc::downgrade(collector);
+                    let presented = ConcreteBlock::new(move |drawable: &metal::DrawableRef| {
+                        if let Some(collector) = presented_collector.upgrade() {
+                            let presented_time = drawable.presented_time();
+                            if trace {
+                                eprintln!(
+                                    "KAEL_GPU_TIMING_PRESENTED: frame_id={frame_id} presented_time={presented_time}"
+                                );
+                            }
+                            collector
+                                .lock()
+                                .presented(frame_id, presented_time);
+                        }
+                    })
+                    .copy();
+                    drawable.add_presented_handler(&presented);
+                }
+                collector.lock().submitted(frame_id, current_host_time());
+            }
+        }
+        command_buffer.commit();
+    }
+
+    pub(crate) fn shed_memory(&mut self, level: crate::MemoryPressureLevel) {
+        if level == crate::MemoryPressureLevel::Normal {
+            return;
+        }
+        self.path_intermediate_texture = None;
+        self.path_intermediate_msaa_texture = None;
+        self.cached_surface_texture = None;
+        self.blur_source_texture = None;
+        self.blur_horizontal_texture = None;
+        self.instance_buffer_pool.lock().buffers.clear();
+        #[cfg(feature = "custom-shaders")]
+        self.custom.shed();
+        // Retained command buffers own the objects they sample. Tile regions
+        // still in recent submitted frames remain protected from reuse.
+        self.sprite_atlas
+            .evict_to_budget_keeping(self.atlas_byte_budget.unwrap_or(0), 4);
+    }
+
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn create_gpu_buffer(
+        &mut self,
+        descriptor: crate::GpuBufferDescriptor,
+    ) -> std::result::Result<crate::GpuBuffer, crate::RenderTargetError> {
+        self.custom
+            .create_buffer(&self.device, &self.command_queue, descriptor)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn validate_gpu_buffer(
+        &self,
+        buffer: &crate::GpuBuffer,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.custom.validate_buffer(buffer)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn write_gpu_buffer(
+        &mut self,
+        buffer: &crate::GpuBuffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.custom
+            .write_buffer(&self.device, &self.command_queue, buffer, offset, bytes)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn read_gpu_buffer(
+        &mut self,
+        buffer: &crate::GpuBuffer,
+    ) -> std::result::Result<Vec<u8>, crate::RenderTargetError> {
+        self.custom
+            .read_buffer(&self.device, &self.command_queue, buffer)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn dispatch_compute(
+        &mut self,
+        shader: &crate::ComputeHandle,
+        bindings: &crate::ComputeBindings,
+        groups: [u32; 3],
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.custom
+            .dispatch(&self.device, &self.command_queue, shader, bindings, groups)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn write_render_target(
+        &mut self,
+        target: &crate::RenderTarget,
+        pixels: &[u8],
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.custom
+            .write_target(&self.device, &self.command_queue, target, pixels)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn create_render_target(
+        &mut self,
+        descriptor: crate::RenderTargetDescriptor,
+    ) -> std::result::Result<crate::RenderTarget, crate::RenderTargetError> {
+        self.custom
+            .create(&self.device, &self.command_queue, descriptor)
+    }
+
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn render_shader(
+        &mut self,
+        target: &crate::RenderTarget,
+        shader: &crate::ShaderHandle,
+        bindings: &crate::ShaderBindings,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.custom
+            .render(&self.device, &self.command_queue, target, shader, bindings)
+    }
+
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn read_render_target(
+        &mut self,
+        target: &crate::RenderTarget,
+    ) -> std::result::Result<crate::RenderTargetReadback, crate::RenderTargetError> {
+        self.custom.read(&self.device, &self.command_queue, target)
+    }
+
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn validate_render_target(
+        &self,
+        target: &crate::RenderTarget,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.custom.validate(target)
+    }
+
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn set_render_target_byte_budget(&mut self, bytes: u64) {
+        self.custom.set_budget(bytes);
+    }
+
+    #[cfg(feature = "custom-shaders")]
+    fn draw_render_target_surface(
+        &mut self,
+        surface: &PaintSurface,
+        target: &crate::RenderTarget,
+        viewport_size: Size<DevicePixels>,
+        encoder: &metal::RenderCommandEncoderRef,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.custom.draw(
+            &self.device,
+            surface,
+            target,
+            viewport_size,
+            encoder,
+            RENDER_TARGET_PIXEL_FORMAT,
+        )
     }
 
     pub fn set_presents_with_transaction(&mut self, presents_with_transaction: bool) {
@@ -518,8 +753,9 @@ impl MetalRenderer {
             ),
         );
         self.counters.capacity_growths = self.counters.capacity_growths.saturating_add(1);
-        self.update_path_intermediate_textures(self.drawable_capacity);
-        self.update_cached_surface_texture(self.drawable_capacity);
+        // Scratch targets belong to the primitive paths that use them. Growing
+        // a window must not allocate MSAA/path and subtree-cache textures for a
+        // scene that only draws quads, text, or images.
         log::trace!(
             "metal renderer drawable capacity grew to {:?}; resize_events={} capacity_growths={} path_allocations={} cached_surface_allocations={} blur_allocations={}",
             self.drawable_capacity,
@@ -531,13 +767,21 @@ impl MetalRenderer {
         );
     }
 
-    fn update_path_intermediate_textures(&mut self, size: Size<DevicePixels>) {
+    fn ensure_path_intermediate_textures(&mut self, size: Size<DevicePixels>) -> bool {
+        if size.width.0 <= 0 || size.height.0 <= 0 {
+            self.path_intermediate_texture = None;
+            self.path_intermediate_msaa_texture = None;
+            return false;
+        }
+
         if texture_covers(self.path_intermediate_texture.as_ref(), size)
             && (!self.uses_msaa()
                 || texture_covers(self.path_intermediate_msaa_texture.as_ref(), size))
         {
-            return;
+            return true;
         }
+
+        let size = scratch_texture_capacity(self.path_intermediate_texture.as_ref(), size);
 
         self.counters.path_texture_allocations =
             self.counters.path_texture_allocations.saturating_add(1);
@@ -559,12 +803,20 @@ impl MetalRenderer {
         } else {
             self.path_intermediate_msaa_texture = None;
         }
+        true
     }
 
-    fn update_cached_surface_texture(&mut self, size: Size<DevicePixels>) {
-        if texture_covers(self.cached_surface_texture.as_ref(), size) {
-            return;
+    fn ensure_cached_surface_texture(&mut self, size: Size<DevicePixels>) -> bool {
+        if size.width.0 <= 0 || size.height.0 <= 0 {
+            self.cached_surface_texture = None;
+            return false;
         }
+
+        if texture_covers(self.cached_surface_texture.as_ref(), size) {
+            return true;
+        }
+
+        let size = scratch_texture_capacity(self.cached_surface_texture.as_ref(), size);
 
         self.counters.cached_surface_texture_allocations = self
             .counters
@@ -578,6 +830,7 @@ impl MetalRenderer {
         texture_descriptor
             .set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
         self.cached_surface_texture = Some(self.device.new_texture(&texture_descriptor));
+        true
     }
 
     fn ensure_blur_textures(&mut self, size: Size<DevicePixels>) -> bool {
@@ -655,6 +908,16 @@ impl MetalRenderer {
             return;
         }
 
+        if let Err(error) = self.sprite_atlas.mark_scene_used(scene) {
+            log::warn!("Metal scene rejected before submission: {error:#}");
+            return;
+        }
+
+        if let Err(error) = self.sprite_atlas.flush_uploads() {
+            log::error!("failed to flush Metal atlas uploads: {error:#}");
+            return;
+        }
+
         loop {
             let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
 
@@ -674,12 +937,12 @@ impl MetalRenderer {
                     command_buffer.add_completed_handler(&block);
 
                     if self.presents_with_transaction {
-                        command_buffer.commit();
+                        self.commit_with_gpu_timing(&command_buffer, Some(drawable));
                         command_buffer.wait_until_scheduled();
                         drawable.present();
                     } else {
                         command_buffer.present_drawable(drawable);
-                        command_buffer.commit();
+                        self.commit_with_gpu_timing(&command_buffer, Some(drawable));
                     }
 
                     self.counters.frames_presented =
@@ -711,7 +974,7 @@ impl MetalRenderer {
                     // configured), protecting the frames still in flight, then advance the
                     // atlas clock so the next frame's glyphs are stamped fresh and protected.
                     if let Some(budget) = self.atlas_byte_budget {
-                        const IN_FLIGHT_FRAMES: u64 = 3;
+                        const IN_FLIGHT_FRAMES: u64 = 4;
                         self.sprite_atlas
                             .evict_to_budget_keeping(budget, IN_FLIGHT_FRAMES);
                     }
@@ -771,6 +1034,9 @@ impl MetalRenderer {
                 && height <= crate::MAX_ATLAS_TEXTURE_DIMENSION as u64,
             "offscreen viewport exceeds safe Metal texture dimensions"
         );
+        // Reject oversized captures before allocating the target, scratch
+        // textures, or instance buffers for a frame that cannot be returned.
+        let (bytes_per_row, buffer_len, packed_len) = checked_readback_layout(width, height, 4)?;
 
         let descriptor = metal::TextureDescriptor::new();
         descriptor.set_width(width);
@@ -782,6 +1048,8 @@ impl MetalRenderer {
         let target_ref: &metal::TextureRef = &target;
 
         self.ensure_buffer_size(scene)?;
+        self.sprite_atlas.mark_scene_used(scene)?;
+        self.sprite_atlas.flush_uploads()?;
         let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
 
         let command_queue = self.command_queue.clone();
@@ -830,7 +1098,6 @@ impl MetalRenderer {
             length: instance_offset as u64,
         });
 
-        let (bytes_per_row, buffer_len, packed_len) = checked_readback_layout(width, height, 4)?;
         let staging = self
             .device
             .new_buffer(buffer_len, MTLResourceOptions::StorageModeShared);
@@ -854,7 +1121,7 @@ impl MetalRenderer {
         );
         blit.end_encoding();
 
-        command_buffer.commit();
+        self.commit_with_gpu_timing(command_buffer, None);
         command_buffer.wait_until_completed();
 
         self.instance_buffer_pool.lock().release(instance_buffer);
@@ -895,6 +1162,8 @@ impl MetalRenderer {
         scissor: Option<metal::MTLScissorRect>,
     ) -> Result<()> {
         self.ensure_buffer_size(scene)?;
+        self.sprite_atlas.mark_scene_used(scene)?;
+        self.sprite_atlas.flush_uploads()?;
         let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
 
         let command_queue = self.command_queue.clone();
@@ -952,7 +1221,7 @@ impl MetalRenderer {
             length: instance_offset as u64,
         });
 
-        command_buffer.commit();
+        self.commit_with_gpu_timing(command_buffer, None);
         command_buffer.wait_until_completed();
 
         self.instance_buffer_pool.lock().release(instance_buffer);
@@ -986,6 +1255,7 @@ impl MetalRenderer {
                 && height <= crate::MAX_ATLAS_TEXTURE_DIMENSION as u64,
             "offscreen viewport exceeds safe Metal texture dimensions"
         );
+        let (bytes_per_row, buffer_len, packed_len) = checked_readback_layout(width, height, 4)?;
 
         let descriptor = metal::TextureDescriptor::new();
         descriptor.set_width(width);
@@ -1024,7 +1294,6 @@ impl MetalRenderer {
             Some(scissor),
         )?;
 
-        let (bytes_per_row, buffer_len, packed_len) = checked_readback_layout(width, height, 4)?;
         let staging = self
             .device
             .new_buffer(buffer_len, MTLResourceOptions::StorageModeShared);
@@ -1141,6 +1410,17 @@ impl MetalRenderer {
                 && height <= crate::MAX_ATLAS_TEXTURE_DIMENSION as u64,
             "offscreen viewport exceeds safe Metal texture dimensions"
         );
+        let (bytes_per_row, buffer_len, _) = checked_readback_layout(width, height, 8)?;
+        let decoded_len = width
+            .checked_mul(height)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .and_then(|values| usize::try_from(values).ok())
+            .filter(|values| {
+                values
+                    .checked_mul(mem::size_of::<f32>())
+                    .is_some_and(|bytes| bytes <= MAX_METAL_READBACK_BYTES)
+            })
+            .ok_or_else(|| anyhow::anyhow!("decoded Metal readback exceeds its memory budget"))?;
 
         let descriptor = metal::TextureDescriptor::new();
         descriptor.set_width(width);
@@ -1151,6 +1431,8 @@ impl MetalRenderer {
         let target = self.device.new_texture(&descriptor);
 
         self.ensure_buffer_size(scene)?;
+        self.sprite_atlas.mark_scene_used(scene)?;
+        self.sprite_atlas.flush_uploads()?;
         let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
         let command_queue = self.command_queue.clone();
         let command_buffer = command_queue.new_command_buffer();
@@ -1192,6 +1474,38 @@ impl MetalRenderer {
                     &mut instance_buffer,
                     &mut instance_offset,
                 ),
+                #[cfg(feature = "custom-shaders")]
+                PrimitiveBatch::Surfaces(surfaces) => {
+                    let mut rendered = true;
+                    for surface in surfaces {
+                        let crate::PaintSurfaceSource::RenderTarget { target, .. } =
+                            &surface.source
+                        else {
+                            error =
+                                Some("external video is not supported in the RGBA16F render path");
+                            rendered = false;
+                            break;
+                        };
+                        if self
+                            .custom
+                            .draw(
+                                &self.device,
+                                surface,
+                                target,
+                                viewport_size,
+                                command_encoder,
+                                MTLPixelFormat::RGBA16Float,
+                            )
+                            .is_err()
+                        {
+                            error =
+                                Some("custom GPU target display failed in the RGBA16F render path");
+                            rendered = false;
+                            break;
+                        }
+                    }
+                    rendered
+                }
                 _ => {
                     error = Some("primitive type not yet supported in the RGBA16F render path");
                     break;
@@ -1209,17 +1523,6 @@ impl MetalRenderer {
             length: instance_offset as u64,
         });
 
-        let (bytes_per_row, buffer_len, _) = checked_readback_layout(width, height, 8)?;
-        let decoded_len = width
-            .checked_mul(height)
-            .and_then(|pixels| pixels.checked_mul(4))
-            .and_then(|values| usize::try_from(values).ok())
-            .filter(|values| {
-                values
-                    .checked_mul(mem::size_of::<f32>())
-                    .is_some_and(|bytes| bytes <= MAX_METAL_READBACK_BYTES)
-            })
-            .ok_or_else(|| anyhow::anyhow!("decoded Metal readback exceeds its memory budget"))?;
         let staging = self
             .device
             .new_buffer(buffer_len, MTLResourceOptions::StorageModeShared);
@@ -1242,7 +1545,7 @@ impl MetalRenderer {
             metal::MTLBlitOption::empty(),
         );
         blit.end_encoding();
-        command_buffer.commit();
+        self.commit_with_gpu_timing(command_buffer, None);
         command_buffer.wait_until_completed();
         self.instance_buffer_pool.lock().release(instance_buffer);
 
@@ -1637,13 +1940,14 @@ impl MetalRenderer {
                 PrimitiveBatch::Paths(paths) => {
                     command_encoder.end_encoding();
 
-                    let did_draw = self.draw_paths_to_intermediate(
-                        paths,
-                        instance_buffer,
-                        instance_offset,
-                        viewport_size,
-                        command_buffer,
-                    );
+                    let did_draw = self.ensure_path_intermediate_textures(viewport_size)
+                        && self.draw_paths_to_intermediate(
+                            paths,
+                            instance_buffer,
+                            instance_offset,
+                            viewport_size,
+                            command_buffer,
+                        );
 
                     command_encoder = reopen_encoder(command_buffer, metal::MTLLoadAction::Load);
 
@@ -1782,6 +2086,11 @@ impl MetalRenderer {
                 mem::size_of::<BlurPass>() as u64,
                 &horizontal_pass as *const BlurPass as *const _,
             );
+            horizontal_encoder.set_fragment_bytes(
+                BlurInputIndex::BlurPass as u64,
+                mem::size_of::<BlurPass>() as u64,
+                &horizontal_pass as *const BlurPass as *const _,
+            );
             horizontal_encoder.set_vertex_bytes(
                 BlurInputIndex::ViewportSize as u64,
                 mem::size_of_val(&viewport_size) as u64,
@@ -1812,6 +2121,11 @@ impl MetalRenderer {
                 mem::size_of::<BlurPass>() as u64,
                 &composite_pass as *const BlurPass as *const _,
             );
+            composite_encoder.set_fragment_bytes(
+                BlurInputIndex::BlurPass as u64,
+                mem::size_of::<BlurPass>() as u64,
+                &composite_pass as *const BlurPass as *const _,
+            );
             composite_encoder.set_vertex_bytes(
                 BlurInputIndex::ViewportSize as u64,
                 mem::size_of_val(&viewport_size) as u64,
@@ -1836,8 +2150,14 @@ impl MetalRenderer {
         viewport_size: Size<DevicePixels>,
         command_buffer: &metal::CommandBufferRef,
     ) -> bool {
-        let Some(cached_surface_texture) = self.cached_surface_texture.clone() else {
+        if scene.cached_surface_snapshots.is_empty() {
             return true;
+        }
+        if !self.ensure_cached_surface_texture(viewport_size) {
+            return false;
+        }
+        let Some(cached_surface_texture) = self.cached_surface_texture.clone() else {
+            return false;
         };
 
         for snapshot in &scene.cached_surface_snapshots {
@@ -1874,7 +2194,7 @@ impl MetalRenderer {
             let Some(atlas_texture) = self.sprite_atlas.metal_texture(snapshot.target.texture_id)
             else {
                 log::warn!("skipping cached-surface copy from a stale Metal atlas texture");
-                return false;
+                continue;
             };
             let blit_encoder = command_buffer.new_blit_command_encoder();
             blit_encoder.copy_from_texture(
@@ -2357,7 +2677,7 @@ impl MetalRenderer {
 
         let Some(texture) = self.sprite_atlas.metal_texture(texture_id) else {
             log::warn!("skipping monochrome sprites with a stale Metal atlas texture");
-            return false;
+            return true;
         };
         let texture_size = size(
             DevicePixels(texture.width() as i32),
@@ -2427,7 +2747,7 @@ impl MetalRenderer {
 
         let Some(texture) = self.sprite_atlas.metal_texture(texture_id) else {
             log::warn!("skipping polychrome sprites with a stale Metal atlas texture");
-            return false;
+            return true;
         };
         let texture_size = size(
             DevicePixels(texture.width() as i32),
@@ -2497,12 +2817,6 @@ impl MetalRenderer {
         viewport_size: Size<DevicePixels>,
         command_encoder: &metal::RenderCommandEncoderRef,
     ) -> bool {
-        command_encoder.set_render_pipeline_state(&self.surfaces_pipeline_state);
-        command_encoder.set_vertex_buffer(
-            SurfaceInputIndex::Vertices as u64,
-            Some(&self.unit_vertices),
-            0,
-        );
         command_encoder.set_vertex_bytes(
             SurfaceInputIndex::ViewportSize as u64,
             mem::size_of_val(&viewport_size) as u64,
@@ -2510,35 +2824,54 @@ impl MetalRenderer {
         );
 
         for surface in surfaces {
+            let image_buffer = match &surface.source {
+                crate::PaintSurfaceSource::CoreVideo(image_buffer) => image_buffer,
+                #[cfg(feature = "custom-shaders")]
+                crate::PaintSurfaceSource::RenderTarget { target, .. } => {
+                    if let Err(error) = self.draw_render_target_surface(
+                        surface,
+                        target,
+                        viewport_size,
+                        command_encoder,
+                    ) {
+                        log::warn!("Metal GPU target display rejected: {error}");
+                    }
+                    continue;
+                }
+            };
+            command_encoder.set_render_pipeline_state(&self.surfaces_pipeline_state);
+            command_encoder.set_vertex_buffer(
+                SurfaceInputIndex::Vertices as u64,
+                Some(&self.unit_vertices),
+                0,
+            );
             let texture_size = size(
-                DevicePixels::from(surface.image_buffer.get_width() as i32),
-                DevicePixels::from(surface.image_buffer.get_height() as i32),
+                DevicePixels::from(image_buffer.get_width() as i32),
+                DevicePixels::from(image_buffer.get_height() as i32),
             );
 
-            if surface.image_buffer.get_pixel_format()
-                != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-            {
+            if image_buffer.get_pixel_format() != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange {
                 log::warn!("skipping Metal surface with unsupported pixel format");
                 continue;
             }
 
             let Ok(y_texture) = self.core_video_texture_cache.create_texture_from_image(
-                surface.image_buffer.as_concrete_TypeRef(),
+                image_buffer.as_concrete_TypeRef(),
                 None,
                 MTLPixelFormat::R8Unorm,
-                surface.image_buffer.get_width_of_plane(0),
-                surface.image_buffer.get_height_of_plane(0),
+                image_buffer.get_width_of_plane(0),
+                image_buffer.get_height_of_plane(0),
                 0,
             ) else {
                 log::warn!("failed to create Metal Y-plane texture");
                 continue;
             };
             let Ok(cb_cr_texture) = self.core_video_texture_cache.create_texture_from_image(
-                surface.image_buffer.as_concrete_TypeRef(),
+                image_buffer.as_concrete_TypeRef(),
                 None,
                 MTLPixelFormat::RG8Unorm,
-                surface.image_buffer.get_width_of_plane(1),
-                surface.image_buffer.get_height_of_plane(1),
+                image_buffer.get_width_of_plane(1),
+                image_buffer.get_height_of_plane(1),
                 1,
             ) else {
                 log::warn!("failed to create Metal chroma-plane texture");
@@ -2588,7 +2921,7 @@ impl MetalRenderer {
                 Some(cb_cr_texture_ref),
             );
 
-            let ycbcr_matrix = surface_ycbcr_matrix(&surface.image_buffer);
+            let ycbcr_matrix = surface_ycbcr_matrix(image_buffer);
             command_encoder.set_fragment_bytes(
                 SurfaceInputIndex::YCbCrMatrix as u64,
                 mem::size_of_val(&ycbcr_matrix) as u64,
@@ -2621,6 +2954,22 @@ fn texture_covers(texture: Option<&metal::Texture>, size: Size<DevicePixels>) ->
     };
 
     texture.width() as i32 >= size.width.0 && texture.height() as i32 >= size.height.0
+}
+
+fn scratch_texture_capacity(
+    texture: Option<&metal::Texture>,
+    requested: Size<DevicePixels>,
+) -> Size<DevicePixels> {
+    let Some(texture) = texture else {
+        return requested;
+    };
+    // Keep each used scratch target's own high-water mark. An earlier resize
+    // without this feature must not inflate its first allocation, and moving
+    // between portrait and landscape windows must not repeatedly reallocate.
+    size(
+        DevicePixels(requested.width.0.max(texture.width() as i32)),
+        DevicePixels(requested.height.0.max(texture.height() as i32)),
+    )
 }
 
 /// Select the YCbCr→RGB matrix for a video surface from its frame's tagged
@@ -2807,7 +3156,7 @@ fn build_pipeline_state(
     color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::SourceAlpha);
     color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::One);
     color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
-    color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::One);
+    color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
 
     device
         .new_render_pipeline_state(&descriptor)
@@ -2877,7 +3226,9 @@ fn build_quad_blend_fetch_pipeline_state(
     device.new_render_pipeline_state(&descriptor).ok()
 }
 
-fn build_path_sprite_pipeline_state(
+// Paths and blur scratch passes already emit premultiplied RGB. Applying
+// SourceAlpha again would darken translucent samples at each pass.
+fn build_premultiplied_pipeline_state(
     device: &metal::DeviceRef,
     library: &metal::LibraryRef,
     label: &str,
@@ -2911,7 +3262,7 @@ fn build_path_sprite_pipeline_state(
     color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::One);
     color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::One);
     color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
-    color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::One);
+    color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
 
     device
         .new_render_pipeline_state(&descriptor)
@@ -3051,6 +3402,8 @@ pub struct BlurPass {
     pub tint: Hsla,
     pub blur_radius: ScaledPixels,
     pub saturation: f32,
+    pub rounded_clip_bounds: Bounds<ScaledPixels>,
+    pub rounded_clip_radii: Corners<ScaledPixels>,
 }
 
 impl BlurPass {
@@ -3063,6 +3416,8 @@ impl BlurPass {
             tint: Hsla::transparent_black(),
             blur_radius: blur_rect.blur_radius,
             saturation: 1.0,
+            rounded_clip_bounds: Bounds::default(),
+            rounded_clip_radii: Corners::default(),
         }
     }
 
@@ -3075,6 +3430,8 @@ impl BlurPass {
             tint: blur_rect.tint,
             blur_radius: blur_rect.blur_radius,
             saturation: blur_rect.saturation,
+            rounded_clip_bounds: blur_rect.rounded_clip_bounds,
+            rounded_clip_radii: blur_rect.rounded_clip_radii,
         }
     }
 }
@@ -3120,7 +3477,7 @@ mod offscreen_tests {
         assert!(checked_readback_layout(16_384, 16_384, 4).is_err());
     }
 
-    fn full_viewport_quad(side: f32, color: Hsla) -> Quad {
+    pub(super) fn full_viewport_quad(side: f32, color: Hsla) -> Quad {
         let bounds = Bounds {
             origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
             size: size(ScaledPixels(side), ScaledPixels(side)),
@@ -3132,6 +3489,709 @@ mod offscreen_tests {
             transform: TransformationMatrix::unit(),
             ..Default::default()
         }
+    }
+
+    fn full_viewport_path(side: f32, color: Hsla) -> Path<ScaledPixels> {
+        let mut builder = crate::PathBuilder::fill();
+        builder.move_to(point(crate::px(0.0), crate::px(0.0)));
+        builder.line_to(point(crate::px(side), crate::px(0.0)));
+        builder.line_to(point(crate::px(side), crate::px(side)));
+        builder.line_to(point(crate::px(0.0), crate::px(side)));
+        builder.close();
+        let mut path = builder.build().unwrap();
+        path.color = Background::from(color);
+        path.content_mask = ContentMask {
+            bounds: path.bounds,
+        };
+        path.scale(1.0)
+    }
+
+    fn blur_rect(
+        bounds: Bounds<ScaledPixels>,
+        sigma: f32,
+        tint: Hsla,
+        saturation: f32,
+    ) -> BlurRect {
+        BlurRect {
+            order: 0,
+            blur_radius: ScaledPixels(sigma),
+            bounds,
+            content_mask: ContentMask { bounds },
+            corner_radii: Corners::default(),
+            tint,
+            saturation,
+            rounded_clip_bounds: Bounds::default(),
+            rounded_clip_radii: Corners::default(),
+        }
+    }
+
+    #[test]
+    fn resize_and_quad_render_leave_optional_scratch_unallocated() {
+        let Some(mut renderer) = headless() else {
+            return;
+        };
+        renderer.update_drawable_size(size(DevicePixels(3840), DevicePixels(2160)));
+        renderer.update_drawable_size(size(DevicePixels(1920), DevicePixels(1080)));
+
+        let mut scene = Scene::default();
+        scene.insert_primitive(full_viewport_quad(16.0, hsla(0.0, 1.0, 0.5, 1.0)));
+        scene.finish();
+        renderer
+            .render_scene_to_bytes(&scene, size(DevicePixels(16), DevicePixels(16)))
+            .unwrap();
+
+        assert!(renderer.path_intermediate_texture.is_none());
+        assert!(renderer.path_intermediate_msaa_texture.is_none());
+        assert!(renderer.cached_surface_texture.is_none());
+        assert!(renderer.blur_source_texture.is_none());
+        assert!(renderer.blur_horizontal_texture.is_none());
+        assert_eq!(renderer.counters.path_texture_allocations, 0);
+        assert_eq!(renderer.counters.cached_surface_texture_allocations, 0);
+        assert_eq!(renderer.counters.blur_texture_allocations, 0);
+    }
+
+    #[test]
+    fn offscreen_paths_allocate_on_use_reuse_capacity_and_survive_zero_size() {
+        let Some(mut renderer) = headless() else {
+            return;
+        };
+        let drawable_acquisition_is_bounded: bool = unsafe {
+            let layer = (&*renderer.layer as *const _) as *mut AnyObject;
+            msg_send![layer, allowsNextDrawableTimeout]
+        };
+        assert!(
+            drawable_acquisition_is_bounded,
+            "a blocked drawable pool must yield for GPU failure deadlines"
+        );
+        renderer.update_drawable_size(size(DevicePixels(128), DevicePixels(128)));
+        let mut scene = Scene::default();
+        scene.insert_primitive(full_viewport_path(16.0, hsla(0.0, 1.0, 0.5, 1.0)));
+        scene.finish();
+
+        let frame = renderer
+            .render_scene_to_bytes(&scene, size(DevicePixels(16), DevicePixels(16)))
+            .unwrap();
+        let center = ((8 * 16) + 8) * 4;
+        assert!(frame.bgra[center + 2] > 200 && frame.bgra[center + 3] > 200);
+        let texture = renderer.path_intermediate_texture.as_ref().unwrap();
+        assert_eq!((texture.width(), texture.height()), (16, 16));
+        assert!(renderer.path_intermediate_msaa_texture.is_some());
+        assert!(renderer.cached_surface_texture.is_none());
+        assert_eq!(renderer.counters.path_texture_allocations, 1);
+
+        for (width, height) in [(32, 16), (16, 32), (32, 16), (8, 8)] {
+            renderer
+                .render_scene_to_bytes(&scene, size(DevicePixels(width), DevicePixels(height)))
+                .unwrap();
+        }
+        let texture = renderer.path_intermediate_texture.as_ref().unwrap();
+        assert_eq!((texture.width(), texture.height()), (32, 32));
+        assert_eq!(renderer.counters.path_texture_allocations, 3);
+
+        renderer.update_drawable_size(size(DevicePixels(0), DevicePixels(0)));
+        assert!(renderer.path_intermediate_texture.is_none());
+        assert!(renderer.path_intermediate_msaa_texture.is_none());
+        renderer
+            .render_scene_to_bytes(&scene, size(DevicePixels(16), DevicePixels(16)))
+            .unwrap();
+        assert_eq!(renderer.counters.path_texture_allocations, 4);
+    }
+
+    #[test]
+    fn cached_subtree_scratch_allocates_only_for_snapshots() {
+        use crate::{CachedSurfaceParams, CachedSurfaceSnapshot, PlatformAtlas};
+        use std::borrow::Cow;
+
+        let Some(mut renderer) = headless() else {
+            return;
+        };
+        renderer.update_drawable_size(size(DevicePixels(128), DevicePixels(128)));
+        let viewport = size(DevicePixels(16), DevicePixels(16));
+        let tile = renderer
+            .sprite_atlas
+            .get_or_insert_with(
+                &CachedSurfaceParams {
+                    cache_id: 1,
+                    size: viewport,
+                }
+                .into(),
+                &mut || Ok(Some((viewport, Cow::Owned(vec![0; 16 * 16 * 4])))),
+            )
+            .unwrap()
+            .unwrap();
+        let mut scene = Scene::default();
+        scene.insert_primitive(full_viewport_quad(16.0, hsla(0.0, 1.0, 0.5, 1.0)));
+        scene.request_cached_surface_snapshot(CachedSurfaceSnapshot {
+            paint_operations: 0..scene.paint_operations.len(),
+            source_bounds: Bounds::new(point(DevicePixels(0), DevicePixels(0)), viewport),
+            target: tile,
+        });
+        scene.finish();
+
+        renderer.render_scene_to_bytes(&scene, viewport).unwrap();
+        let texture = renderer.cached_surface_texture.as_ref().unwrap();
+        assert_eq!((texture.width(), texture.height()), (16, 16));
+        assert_eq!(renderer.counters.cached_surface_texture_allocations, 1);
+        assert!(renderer.path_intermediate_texture.is_none());
+        renderer.render_scene_to_bytes(&scene, viewport).unwrap();
+        assert_eq!(renderer.counters.cached_surface_texture_allocations, 1);
+
+        renderer.update_drawable_size(size(DevicePixels(0), DevicePixels(0)));
+        assert!(renderer.cached_surface_texture.is_none());
+        renderer.render_scene_to_bytes(&scene, viewport).unwrap();
+        assert_eq!(renderer.counters.cached_surface_texture_allocations, 2);
+    }
+
+    #[test]
+    fn translucent_quads_use_source_over_alpha() {
+        let Some(mut renderer) = headless() else {
+            return;
+        };
+        let mut scene = Scene::default();
+        scene.insert_primitive(full_viewport_quad(16.0, hsla(0.0, 1.0, 0.5, 0.5)));
+        scene.insert_primitive(full_viewport_quad(16.0, hsla(2.0 / 3.0, 1.0, 0.5, 0.5)));
+        scene.finish();
+        let frame = renderer
+            .render_scene_to_bytes(&scene, size(DevicePixels(16), DevicePixels(16)))
+            .unwrap();
+        let center = ((8 * 16) + 8) * 4;
+        let pixel = &frame.bgra[center..center + 4];
+        // A half-alpha blue layer over half-alpha red yields premultiplied
+        // BGRA (0.5, 0, 0.25, 0.75), not additive alpha 1.0.
+        for (&actual, expected) in pixel.iter().zip([128u8, 0, 64, 191]) {
+            assert!(
+                actual.abs_diff(expected) <= 2,
+                "source-over pixel: {pixel:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn translucent_paths_use_source_over_alpha() {
+        let Some(mut renderer) = headless() else {
+            return;
+        };
+        let mut scene = Scene::default();
+        scene.insert_primitive(full_viewport_quad(16.0, hsla(0.0, 1.0, 0.5, 0.5)));
+        scene.insert_primitive(full_viewport_path(16.0, hsla(2.0 / 3.0, 1.0, 0.5, 0.5)));
+        scene.finish();
+        let frame = renderer
+            .render_scene_to_bytes(&scene, size(DevicePixels(16), DevicePixels(16)))
+            .unwrap();
+        let center = ((8 * 16) + 8) * 4;
+        let pixel = &frame.bgra[center..center + 4];
+        for (&actual, expected) in pixel.iter().zip([128u8, 0, 64, 191]) {
+            assert!(
+                actual.abs_diff(expected) <= 2,
+                "source-over path pixel: {pixel:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn backdrop_blur_preserves_premultiplied_color_with_translucent_tint() {
+        let Some(mut renderer) = headless() else {
+            return;
+        };
+        for (tint, saturation, expected) in [
+            (Hsla::transparent_black(), 1.0, [0u8, 0, 191, 191]),
+            (hsla(2.0 / 3.0, 1.0, 0.5, 0.25), 1.0, [64, 0, 143, 207]),
+            (Hsla::transparent_black(), 0.0, [27, 27, 91, 191]),
+        ] {
+            let mut scene = Scene::default();
+            let backdrop = full_viewport_quad(16.0, hsla(0.0, 1.0, 0.5, 0.5));
+            let bounds = backdrop.bounds;
+            scene.insert_primitive(backdrop);
+            scene.insert_primitive(blur_rect(bounds, 2.0, tint, saturation));
+            scene.finish();
+            let frame = renderer
+                .render_scene_to_bytes(&scene, size(DevicePixels(16), DevicePixels(16)))
+                .unwrap();
+            let center = ((8 * 16) + 8) * 4;
+            let pixel = &frame.bgra[center..center + 4];
+            // Retain the existing final pass's source-over semantics. For a
+            // uniform backdrop, blur changes no samples: composite the tint
+            // over its premultiplied sample, then that result over the target.
+            for (&actual, expected) in pixel.iter().zip(expected) {
+                assert!(
+                    actual.abs_diff(expected) <= 2,
+                    "blur pixel: {pixel:?}, expected channel {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn backdrop_blur_keeps_capture_coordinates() {
+        let Some(mut renderer) = headless() else {
+            return;
+        };
+        let mut scene = Scene::default();
+        scene.insert_primitive(full_viewport_quad(64.0, hsla(0.0, 1.0, 0.5, 1.0)));
+        let mut blue = full_viewport_quad(64.0, hsla(2.0 / 3.0, 1.0, 0.5, 1.0));
+        blue.bounds.origin.x = ScaledPixels(20.0);
+        blue.bounds.size.width = ScaledPixels(44.0);
+        scene.insert_primitive(blue);
+        let bounds = Bounds::new(
+            point(ScaledPixels(12.0), ScaledPixels(4.0)),
+            size(ScaledPixels(20.0), ScaledPixels(24.0)),
+        );
+        scene.insert_primitive(blur_rect(bounds, 2.0, Hsla::transparent_black(), 1.0));
+        scene.finish();
+        let frame = renderer
+            .render_scene_to_bytes(&scene, size(DevicePixels(64), DevicePixels(32)))
+            .unwrap();
+
+        // Gaussian weights for a red/blue step at x=20, sigma=2, radius=6.
+        // Samples remain in absolute viewport coordinates; the wider capture
+        // must not be rescaled into the panel's narrower 20-pixel rectangle.
+        for (x, expected) in [(18, [57u8, 0, 198, 255]), (22, [229, 0, 26, 255])] {
+            let offset = ((16 * 64) + x) * 4;
+            let pixel = &frame.bgra[offset..offset + 4];
+            for (&actual, expected) in pixel.iter().zip(expected) {
+                assert!(
+                    actual.abs_diff(expected) <= 2,
+                    "blur at x={x}: {pixel:?}, expected channel {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn backdrop_blur_clamps_capture_at_texel_centers() {
+        let Some(mut renderer) = headless() else {
+            return;
+        };
+        let mut scene = Scene::default();
+        let backdrop = full_viewport_quad(32.0, hsla(0.0, 1.0, 0.5, 1.0));
+        let bounds = backdrop.bounds;
+        scene.insert_primitive(backdrop);
+        let mut blue = full_viewport_quad(32.0, hsla(2.0 / 3.0, 1.0, 0.5, 1.0));
+        blue.bounds.origin.x = ScaledPixels(31.0);
+        blue.bounds.size.width = ScaledPixels(1.0);
+        scene.insert_primitive(blue);
+        scene.insert_primitive(blur_rect(bounds, 1.0, Hsla::transparent_black(), 1.0));
+        scene.finish();
+        let frame = renderer
+            .render_scene_to_bytes(&scene, size(DevicePixels(32), DevicePixels(32)))
+            .unwrap();
+        let offset = ((16 * 32) + 31) * 4;
+        let pixel = &frame.bgra[offset..offset + 4];
+        // Replicate the last blue texel at the viewport boundary. For sigma=1
+        // and radius=3, offsets >= 0 contribute 0.699525 of the Gaussian weight.
+        // Clamping to the texel's left edge would halve that blue contribution.
+        for (&actual, expected) in pixel.iter().zip([178u8, 0, 77, 255]) {
+            assert!(
+                actual.abs_diff(expected) <= 2,
+                "edge blur: {pixel:?}, expected channel {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn backdrop_blur_fractional_capture_includes_last_visible_texel() {
+        let mut renderer = headless().expect("fractional blur regression requires Metal");
+        let mut scene = Scene::default();
+        scene.insert_primitive(full_viewport_quad(64.0, hsla(0.0, 1.0, 0.5, 1.0)));
+        let mut blue = full_viewport_quad(32.0, hsla(2.0 / 3.0, 1.0, 0.5, 1.0));
+        blue.bounds.origin.x = ScaledPixels(32.0);
+        blue.bounds.size.width = ScaledPixels(1.0);
+        blue.content_mask.bounds = blue.bounds;
+        scene.insert_primitive(blue);
+        scene.insert_primitive(blur_rect(
+            Bounds::new(
+                point(ScaledPixels(12.8), ScaledPixels(4.2)),
+                size(ScaledPixels(20.0), ScaledPixels(20.0)),
+            ),
+            0.0,
+            Hsla::transparent_black(),
+            1.0,
+        ));
+        scene.finish();
+        let frame = renderer
+            .render_scene_to_bytes(&scene, size(DevicePixels(64), DevicePixels(32)))
+            .unwrap();
+        let pixel = &frame.bgra[((16 * 64) + 32) * 4..][..4];
+        assert_eq!(pixel, &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn backdrop_blur_respects_own_and_ancestor_rounded_clips() {
+        let mut renderer = headless().expect("rounded blur regression requires Metal");
+        for ancestor in [false, true] {
+            let mut scene = Scene::default();
+            scene.insert_primitive(full_viewport_quad(32.0, hsla(2.0 / 3.0, 1.0, 0.5, 1.0)));
+            let bounds = Bounds::new(
+                point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size(ScaledPixels(32.0), ScaledPixels(32.0)),
+            );
+            let mut panel = blur_rect(bounds, 1.0, hsla(0.0, 1.0, 0.5, 1.0), 1.0);
+            panel.corner_radii = Corners::all(ScaledPixels(8.0));
+            if ancestor {
+                panel.rounded_clip_bounds = Bounds::new(
+                    point(ScaledPixels(8.0), ScaledPixels(8.0)),
+                    size(ScaledPixels(16.0), ScaledPixels(16.0)),
+                );
+                panel.rounded_clip_radii = Corners::all(ScaledPixels(8.0));
+                panel.content_mask.bounds = Bounds::new(
+                    point(ScaledPixels(9.0), ScaledPixels(8.0)),
+                    size(ScaledPixels(15.0), ScaledPixels(16.0)),
+                );
+            }
+            scene.insert_primitive(panel);
+            scene.finish();
+            let frame = renderer
+                .render_scene_to_bytes(&scene, size(DevicePixels(32), DevicePixels(32)))
+                .unwrap();
+            assert_eq!(&frame.bgra[((16 * 32) + 16) * 4..][..4], &[0, 0, 255, 255]);
+            let outside = if ancestor { (9, 8) } else { (0, 0) };
+            assert_eq!(
+                &frame.bgra[((outside.1 * 32) + outside.0) * 4..][..4],
+                &[255, 0, 0, 255],
+                "ancestor={ancestor}"
+            );
+        }
+    }
+
+    #[test]
+    fn packed_sprite_filtering_isolates_neighbor_texels_and_preserves_interpolation() {
+        let mut renderer = headless().expect("atlas sampling regression requires Metal");
+        let scene =
+            crate::scene::sprite_sampling_tests::packed_sprite_scene(&*renderer.sprite_atlas);
+        let frame = renderer
+            .render_scene_to_bytes(&scene, size(DevicePixels(32), DevicePixels(40)))
+            .unwrap();
+        crate::scene::sprite_sampling_tests::assert_packed_sprite_pixels(&frame.bgra);
+    }
+
+    #[test]
+    fn native_fractional_glyph_rasters_match_reserved_bounds_and_render_the_complete_line() {
+        use crate::{
+            FontRun, GlyphRasterMode, MacTextSystem, PlatformAtlas, PlatformTextSystem,
+            RenderGlyphParams, font, px,
+        };
+        use std::borrow::Cow;
+        let mut renderer = headless().expect("native glyph regression requires Metal");
+        let fonts = MacTextSystem::new();
+        let font_id = fonts.font_id(&font("Helvetica")).unwrap();
+        let text = "Launch plan source Bold Table Overview Status";
+        let layout = fonts.layout_line(
+            text,
+            px(18.0),
+            &[FontRun {
+                font_id,
+                len: text.len(),
+            }],
+        );
+        let viewport = size(DevicePixels(1600), DevicePixels(64));
+        let mask_bounds = Bounds::new(
+            point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size(ScaledPixels(1600.0), ScaledPixels(64.0)),
+        );
+        let mut scene = Scene::default();
+        let mut expected = Vec::new();
+        let mut fractional = 0;
+        for run in &layout.runs {
+            for glyph in &run.glyphs {
+                let device_x = glyph.position.x.0 * 2.0;
+                let variant_x = ((device_x - device_x.floor()) * crate::SUBPIXEL_VARIANTS_X as f32)
+                    .floor() as u8;
+                fractional += usize::from(variant_x != 0);
+                let params = RenderGlyphParams {
+                    font_id: run.font_id,
+                    glyph_id: glyph.id,
+                    font_size: px(18.0),
+                    subpixel_variant: point(variant_x, 1),
+                    scale_factor: 2.0,
+                    is_emoji: false,
+                    raster_mode: GlyphRasterMode::Grayscale,
+                };
+                let bounds = fonts.glyph_raster_bounds(&params).unwrap();
+                if bounds.size.width.0 == 0 || bounds.size.height.0 == 0 {
+                    continue;
+                }
+                let (bitmap_size, payload) = fonts.rasterize_glyph(&params, bounds).unwrap();
+                assert_eq!(
+                    bitmap_size, bounds.size,
+                    "glyph {} fractional variant {:?} does not honor the declared raster bounds",
+                    glyph.index, params.subpixel_variant
+                );
+                let tile = renderer
+                    .sprite_atlas
+                    .get_or_insert_with_size(
+                        &crate::AtlasKey::Glyph(params),
+                        bounds.size,
+                        &mut || Ok(Some((bitmap_size, Cow::Borrowed(&payload)))),
+                    )
+                    .unwrap()
+                    .unwrap();
+                let x = expected.len() * 40 + 4;
+                let y = 8;
+                expected.push((x, y, bitmap_size, payload));
+                scene.insert_primitive(MonochromeSprite {
+                    order: 0,
+                    pad: 0,
+                    bounds: Bounds::new(
+                        point(ScaledPixels(x as f32), ScaledPixels(y as f32)),
+                        bitmap_size.map(Into::into),
+                    ),
+                    content_mask: ContentMask {
+                        bounds: mask_bounds,
+                    },
+                    color: hsla(0.0, 0.0, 1.0, 1.0),
+                    tile,
+                    transformation: TransformationMatrix::unit(),
+                    rounded_clip_bounds: Bounds::default(),
+                    rounded_clip_radii: Corners::default(),
+                    color_filter: ColorFilter::identity(),
+                });
+            }
+        }
+        assert!(
+            fractional > 10,
+            "fixture must exercise fractional glyph origins"
+        );
+        assert!(
+            expected.len() > 30,
+            "fixture must render the complete label set"
+        );
+        scene.finish();
+        let frame = renderer.render_scene_to_bytes(&scene, viewport).unwrap();
+        for (index, (x, y, bitmap_size, payload)) in expected.iter().enumerate() {
+            for row in 0..bitmap_size.height.0 as usize {
+                for column in 0..bitmap_size.width.0 as usize {
+                    let coverage = payload[row * bitmap_size.width.0 as usize + column];
+                    let alpha = ((coverage as f32 / 255.0).powf(0.85) * 255.0).round() as u8;
+                    let pixel = &frame.bgra[((y + row) * 1600 + x + column) * 4..][..4];
+                    assert!(
+                        pixel.iter().all(|channel| channel.abs_diff(alpha) <= 2),
+                        "glyph {index} raster pixel ({column},{row}) GPU={pixel:?} CPU alpha={alpha}"
+                    );
+                }
+            }
+        }
+        eprintln!(
+            "Metal painted {} real CoreText glyph rasters, {fractional} fractional origins, every CPU coverage pixel matched",
+            expected.len()
+        );
+    }
+
+    #[test]
+    fn many_glyph_masks_upload_and_render_every_instance_in_one_batch() {
+        use crate::{PlatformAtlas, RenderSvgParams};
+        use std::borrow::Cow;
+        let mut renderer = headless().expect("many-glyph regression requires Metal");
+        let viewport = size(DevicePixels(640), DevicePixels(32));
+        let mask = ContentMask {
+            bounds: Bounds::new(
+                point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size(ScaledPixels(640.0), ScaledPixels(32.0)),
+            ),
+        };
+        let mut scene = Scene::default();
+        let mut page = None;
+        for index in 0..64 {
+            let payload = vec![255; 8 * 16];
+            let tile = renderer
+                .sprite_atlas
+                .get_or_insert_with_size(
+                    &crate::AtlasKey::Svg(RenderSvgParams {
+                        path: format!("many-glyph-mask-{index}").into(),
+                        size: size(DevicePixels(8), DevicePixels(16)),
+                    }),
+                    size(DevicePixels(8), DevicePixels(16)),
+                    &mut || {
+                        Ok(Some((
+                            size(DevicePixels(8), DevicePixels(16)),
+                            Cow::Borrowed(&payload),
+                        )))
+                    },
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(*page.get_or_insert(tile.texture_id), tile.texture_id);
+            scene.insert_primitive(MonochromeSprite {
+                order: 0,
+                pad: 0,
+                bounds: Bounds::new(
+                    point(ScaledPixels(index as f32 * 10.0 + 0.25), ScaledPixels(8.25)),
+                    size(ScaledPixels(8.0), ScaledPixels(16.0)),
+                ),
+                content_mask: mask.clone(),
+                color: hsla(0.0, 0.0, 1.0, 1.0),
+                tile,
+                transformation: TransformationMatrix::unit(),
+                rounded_clip_bounds: Bounds::default(),
+                rounded_clip_radii: Corners::default(),
+                color_filter: ColorFilter::identity(),
+            });
+        }
+        scene.finish();
+        let frame = renderer.render_scene_to_bytes(&scene, viewport).unwrap();
+        for index in 0..64 {
+            let pixel = &frame.bgra[(16 * 640 + index * 10 + 4) * 4..][..4];
+            assert_eq!(
+                pixel,
+                &[255, 255, 255, 255],
+                "glyph {index} did not render: {pixel:?}"
+            );
+        }
+        eprintln!(
+            "Metal rendered all 64 packed glyph-mask instances; Rust monochrome stride={}",
+            std::mem::size_of::<MonochromeSprite>()
+        );
+    }
+
+    #[test]
+    fn atlas_pressure_retains_replayed_pixels_and_reuploads_after_retirement() {
+        use crate::PlatformAtlas;
+        use crate::scene::sprite_sampling_tests::*;
+        let mut renderer = headless().expect("atlas ownership regression requires Metal");
+        let atlas = renderer.sprite_atlas.clone();
+        let scene = packed_sprite_scene(&*atlas);
+        let viewport = size(DevicePixels(32), DevicePixels(40));
+        assert_packed_sprite_pixels(
+            &renderer
+                .render_scene_to_bytes(&scene, viewport)
+                .unwrap()
+                .bgra,
+        );
+        let identities: Vec<_> = scene.atlas_tiles().map(|tile| tile.texture_id).collect();
+        remove_packed_sprite_keys(&*atlas);
+        reject_packed_sprite_growth_before_raster(&*atlas);
+        assert_eq!(atlas.evict_to_budget_keeping(0, 4), 0);
+        assert_packed_sprite_pixels(
+            &renderer
+                .render_scene_to_bytes(&scene, viewport)
+                .unwrap()
+                .bgra,
+        );
+        for id in &identities {
+            assert!(atlas.metal_texture(*id).is_some());
+        }
+        for _ in 0..4 {
+            atlas.advance_frame();
+        }
+        for id in &identities {
+            assert!(atlas.metal_texture(*id).is_none());
+        }
+        atlas.set_hard_admission_limits(crate::AtlasAdmissionLimits::default());
+        let restored = packed_sprite_scene(&*atlas);
+        assert!(
+            restored
+                .atlas_tiles()
+                .all(|tile| !identities.contains(&tile.texture_id))
+        );
+        assert_packed_sprite_pixels(
+            &renderer
+                .render_scene_to_bytes(&restored, viewport)
+                .unwrap()
+                .bgra,
+        );
+        // Stale and cross-window scenes are rejected before GPU submission.
+        assert!(renderer.render_scene_to_bytes(&scene, viewport).is_err());
+        assert_packed_sprite_pixels(
+            &renderer
+                .render_scene_to_bytes(&restored, viewport)
+                .unwrap()
+                .bgra,
+        );
+        let mut foreign = headless().expect("foreign atlas regression requires Metal");
+        let foreign_scene = packed_sprite_scene(&*foreign.sprite_atlas);
+        assert_packed_sprite_pixels(
+            &foreign
+                .render_scene_to_bytes(&foreign_scene, viewport)
+                .unwrap()
+                .bgra,
+        );
+        assert!(foreign.render_scene_to_bytes(&restored, viewport).is_err());
+        assert_packed_sprite_pixels(
+            &foreign
+                .render_scene_to_bytes(&foreign_scene, viewport)
+                .unwrap()
+                .bgra,
+        );
+    }
+
+    #[test]
+    fn surviving_atlas_page_reuse_rejects_retired_tile_before_gpu_submission() {
+        use crate::PlatformAtlas;
+        use crate::scene::sprite_sampling_tests::*;
+        let mut renderer = headless().expect("tile identity regression requires Metal");
+        let atlas = renderer.sprite_atlas.clone();
+        let first = surviving_page_tile(&*atlas, 994, [0, 0, 255, 255]);
+        let survivor = surviving_page_tile(&*atlas, 995, [0, 255, 0, 255]);
+        assert_eq!(first.texture_id, survivor.texture_id);
+        let old_scene = surviving_page_scene(first.clone());
+        let viewport = size(DevicePixels(16), DevicePixels(16));
+        let red = renderer
+            .render_scene_to_bytes(&old_scene, viewport)
+            .unwrap();
+        assert_eq!(&red.bgra[(8 * 16 + 8) * 4..][..4], &[0, 0, 255, 255]);
+        atlas.remove(&surviving_page_key(994));
+        for _ in 0..4 {
+            atlas.advance_frame();
+        }
+        let replacement = surviving_page_tile(&*atlas, 996, [255, 0, 0, 255]);
+        assert_eq!(
+            replacement.texture_id, first.texture_id,
+            "fixture must keep the same page"
+        );
+        assert_eq!(
+            replacement.bounds, first.bounds,
+            "fixture must reuse exact region"
+        );
+        let current = renderer
+            .render_scene_to_bytes(&surviving_page_scene(replacement), viewport)
+            .unwrap();
+        assert_eq!(&current.bgra[(8 * 16 + 8) * 4..][..4], &[255, 0, 0, 255]);
+        let stale = renderer.render_scene_to_bytes(&old_scene, viewport);
+        if let Ok(frame) = &stale {
+            eprintln!(
+                "stale surviving-page GPU pixel BGRA={:?}",
+                &frame.bgra[(8 * 16 + 8) * 4..][..4]
+            );
+        }
+        assert!(
+            stale.is_err(),
+            "retired tile must be rejected before sampling replacement region"
+        );
+    }
+
+    #[test]
+    fn oversized_readbacks_fail_before_scratch_allocations() {
+        let Some(mut renderer) = headless() else {
+            return;
+        };
+        let mut scene = Scene::default();
+        scene.insert_primitive(full_viewport_path(16.0, hsla(0.0, 1.0, 0.5, 1.0)));
+        scene.finish();
+        let oversized = size(DevicePixels(16_384), DevicePixels(16_384));
+        let error = renderer
+            .render_scene_to_bytes(&scene, oversized)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("memory budget"));
+        let error = renderer
+            .render_damage_to_bytes(&scene, &scene, scene.paths[0].bounds, oversized)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("memory budget"));
+
+        // Eight-byte GPU pixels fit the staging limit here, while decoded
+        // four-channel f32 pixels exceed it. Both checks must happen first.
+        let error = renderer
+            .render_scene_to_f16(&scene, size(DevicePixels(4097), DevicePixels(4097)))
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("decoded Metal readback"));
+        assert!(renderer.path_intermediate_texture.is_none());
+        assert!(renderer.path_intermediate_msaa_texture.is_none());
+        assert!(renderer.cached_surface_texture.is_none());
+        assert_eq!(renderer.counters.path_texture_allocations, 0);
+        assert_eq!(renderer.counters.cached_surface_texture_allocations, 0);
+        assert_eq!(renderer.counters.blur_texture_allocations, 0);
+        assert!(renderer.instance_buffer_pool.lock().buffers.is_empty());
     }
 
     #[test]
@@ -3176,6 +4236,63 @@ mod offscreen_tests {
             r > 150 && r > g && r > b,
             "red quad should dominate the center pixel: r={r} g={g} b={b}"
         );
+    }
+
+    #[test]
+    fn offscreen_gpu_frame_timing_is_opt_in_bounded_and_uses_actual_host_clock() {
+        let mut renderer = headless().expect("GPU telemetry regression requires a Metal device");
+        let mut scene = Scene::default();
+        scene.insert_primitive(full_viewport_quad(16.0, hsla(0.0, 1.0, 0.5, 1.0)));
+        scene.finish();
+        let dimensions = size(DevicePixels(16), DevicePixels(16));
+        renderer.render_scene_to_bytes(&scene, dimensions).unwrap();
+        assert!(renderer.gpu_frame_timings.is_none());
+        assert!(renderer.take_gpu_frame_timings().is_empty());
+
+        assert!(renderer.set_gpu_frame_timing_enabled(true));
+        let before = current_host_time();
+        let frame = renderer.render_scene_to_bytes(&scene, dimensions).unwrap();
+        let after = current_host_time();
+        assert_eq!(&frame.bgra[((8 * 16) + 8) * 4..][..4], &[0, 0, 255, 255]);
+        let records = renderer.take_gpu_frame_timings();
+        assert_eq!(records.len(), 1);
+        let timing = records[0];
+        eprintln!("actual Metal GPU frame timing: {timing:?}; host window [{before}, {after}]");
+        assert!(timing.submitted_time_seconds >= before);
+        assert!(timing.gpu_start_time_seconds >= timing.submitted_time_seconds);
+        assert!(timing.gpu_end_time_seconds >= timing.gpu_start_time_seconds);
+        assert!(timing.gpu_end_time_seconds <= after);
+        assert_eq!(timing.presented_time_seconds, None);
+        assert!(renderer.take_gpu_frame_timings().is_empty());
+
+        for _ in 0..=crate::frame_timing::collector::MAX_GPU_FRAME_TIMINGS {
+            renderer.render_scene_to_bytes(&scene, dimensions).unwrap();
+        }
+        let retained = renderer.take_gpu_frame_timings();
+        assert_eq!(
+            retained.len(),
+            crate::frame_timing::collector::MAX_GPU_FRAME_TIMINGS
+        );
+        assert_eq!(
+            retained[0].frame_id, 2,
+            "the oldest undrained record must be evicted"
+        );
+
+        let collector = Arc::downgrade(renderer.gpu_frame_timings.as_ref().unwrap());
+        let pending = renderer.command_queue.new_command_buffer().to_owned();
+        let encoder = pending.new_blit_command_encoder();
+        encoder.end_encoding();
+        renderer.commit_with_gpu_timing(&pending, None);
+        renderer.set_gpu_frame_timing_enabled(false);
+        pending.wait_until_completed();
+        assert!(
+            collector.upgrade().is_none(),
+            "a completion callback must not retain a disabled session"
+        );
+        assert!(renderer.take_gpu_frame_timings().is_empty());
+        assert!(renderer.set_gpu_frame_timing_enabled(true));
+        renderer.render_scene_to_bytes(&scene, dimensions).unwrap();
+        assert_eq!(renderer.take_gpu_frame_timings()[0].frame_id, 0);
     }
 
     #[test]
@@ -3340,7 +4457,7 @@ mod offscreen_tests {
             order: 0,
             bounds,
             content_mask: ContentMask { bounds },
-            image_buffer,
+            source: crate::PaintSurfaceSource::CoreVideo(image_buffer),
         });
         scene.finish();
         let frame = renderer

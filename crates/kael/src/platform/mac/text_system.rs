@@ -1,8 +1,8 @@
 use crate::{
     Bounds, DevicePixels, Font, FontFallbacks, FontFeatures, FontId, FontMetrics, FontRun,
-    FontStyle, FontWeight, GlyphId, GlyphRasterMode, LineLayout, Pixels, PlatformTextSystem, Point,
-    RenderGlyphParams, Result, SUBPIXEL_VARIANTS_X, ShapedGlyph, ShapedRun, SharedString, Size,
-    point, px, size, swap_rgba_pa_to_bgra,
+    FontStyle, FontWeight, GlyphId, GlyphRasterMode, LineLayout, LineTextGeometry, Pixels,
+    PlatformTextSystem, Point, RenderGlyphParams, Result, SUBPIXEL_VARIANTS_X, ShapedGlyph,
+    ShapedRun, ShapedTextCluster, SharedString, Size, point, px, size, swap_rgba_pa_to_bgra,
 };
 use anyhow::anyhow;
 use collections::HashMap;
@@ -48,7 +48,8 @@ use pathfinder_geometry::{
     vector::{Vector2F, Vector2I},
 };
 use smallvec::SmallVec;
-use std::{borrow::Cow, char, convert::TryFrom, sync::Arc};
+use std::{borrow::Cow, char, convert::TryFrom, ops::Range, sync::Arc};
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::open_type::apply_features_and_fallbacks;
 
@@ -227,6 +228,22 @@ impl PlatformTextSystem for MacTextSystem {
 
     fn layout_line(&self, text: &str, font_size: Pixels, font_runs: &[FontRun]) -> LineLayout {
         self.0.write().layout_line(text, font_size, font_runs)
+    }
+
+    fn layout_line_geometry(
+        &self,
+        text: &str,
+        font_size: Pixels,
+        font_runs: &[FontRun],
+        byte_ranges: &[Range<usize>],
+    ) -> Option<LineTextGeometry> {
+        if !LineTextGeometry::requested_ranges_valid(text, byte_ranges) {
+            return None;
+        }
+        self.0
+            .write()
+            .layout_line_impl(text, font_size, font_runs, Some(byte_ranges))
+            .1
     }
 }
 
@@ -423,7 +440,7 @@ impl MacTextSystemState {
             .get(params.font_id.0)
             .ok_or_else(|| anyhow!("unknown macOS font id {}", params.font_id.0))?;
         let scale = Transform2F::from_scale(params.scale_factor);
-        Ok(font
+        let mut bounds: Bounds<DevicePixels> = font
             .raster_bounds(
                 params.glyph_id.0,
                 params.font_size.into(),
@@ -431,7 +448,25 @@ impl MacTextSystemState {
                 HintingOptions::None,
                 font_kit::canvas::RasterizationOptions::GrayscaleAa,
             )?
-            .into())
+            .into();
+        if bounds.size.width.0 > 0 && bounds.size.height.0 > 0 {
+            // The declared reservation must include the antialias fringe.
+            // Returning the unpadded font-kit rectangle and enlarging only
+            // the bitmap makes strict native atlases abort a fractional line.
+            bounds.size.width.0 = bounds
+                .size
+                .width
+                .0
+                .checked_add(i32::from(params.subpixel_variant.x > 0))
+                .ok_or_else(|| anyhow!("glyph width overflowed"))?;
+            bounds.size.height.0 = bounds
+                .size
+                .height
+                .0
+                .checked_add(i32::from(params.subpixel_variant.y > 0))
+                .ok_or_else(|| anyhow!("glyph height overflowed"))?;
+        }
+        Ok(bounds)
     }
 
     fn rasterize_glyph(
@@ -442,19 +477,8 @@ impl MacTextSystemState {
         if glyph_bounds.size.width.0 <= 0 || glyph_bounds.size.height.0 <= 0 {
             anyhow::bail!("glyph bounds are empty");
         } else {
-            // Add an extra pixel when the subpixel variant isn't zero to make room for anti-aliasing.
-            let width = glyph_bounds
-                .size
-                .width
-                .0
-                .checked_add(i32::from(params.subpixel_variant.x > 0))
-                .ok_or_else(|| anyhow!("glyph width overflowed"))?;
-            let height = glyph_bounds
-                .size
-                .height
-                .0
-                .checked_add(i32::from(params.subpixel_variant.y > 0))
-                .ok_or_else(|| anyhow!("glyph height overflowed"))?;
+            let width = glyph_bounds.size.width.0;
+            let height = glyph_bounds.size.height.0;
             anyhow::ensure!(
                 width <= crate::MAX_ATLAS_TEXTURE_DIMENSION as i32
                     && height <= crate::MAX_ATLAS_TEXTURE_DIMENSION as i32,
@@ -520,7 +544,10 @@ impl MacTextSystemState {
             // makes drawing text consistent with the font-kit's raster_bounds.
             cx.translate(
                 -glyph_bounds.origin.x.0 as CGFloat,
-                (glyph_bounds.origin.y.0 + glyph_bounds.size.height.0) as CGFloat,
+                // Keep the original font-kit baseline transform: the fringe
+                // enlarges storage, rather than shifting the painted glyph.
+                (glyph_bounds.origin.y.0 + glyph_bounds.size.height.0
+                    - i32::from(params.subpixel_variant.y > 0)) as CGFloat,
             );
             cx.scale(
                 params.scale_factor as CGFloat,
@@ -572,6 +599,16 @@ impl MacTextSystemState {
     }
 
     fn layout_line(&mut self, text: &str, font_size: Pixels, font_runs: &[FontRun]) -> LineLayout {
+        self.layout_line_impl(text, font_size, font_runs, None).0
+    }
+
+    fn layout_line_impl(
+        &mut self,
+        text: &str,
+        font_size: Pixels,
+        font_runs: &[FontRun],
+        geometry_ranges: Option<&[Range<usize>]>,
+    ) -> (LineLayout, Option<LineTextGeometry>) {
         const ZWNJ: char = '\u{200C}';
         const ZWNJ_STR: &str = "\u{200C}";
         const ZWNJ_SIZE_16: usize = ZWNJ.len_utf16();
@@ -688,6 +725,8 @@ impl MacTextSystemState {
         }
         // Retrieve the glyphs from the shaped line, converting UTF16 offsets to UTF8 offsets.
         let line = CTLine::new_with_attributed_string(string.as_concrete_TypeRef());
+        let geometry = geometry_ranges
+            .and_then(|ranges| core_text_geometry(&line, text, &self.zwnjs_scratch_space, ranges));
         let glyph_runs = line.glyph_runs();
         let mut runs = <Vec<ShapedRun>>::with_capacity(glyph_runs.len() as usize);
         let mut ix_converter = StringIndexConverter::new(text);
@@ -749,22 +788,136 @@ impl MacTextSystemState {
                 ix_converter.advance_to_utf16_ix(glyph_utf16_ix);
                 glyphs.push(ShapedGlyph {
                     id: GlyphId(glyph_id as u32),
-                    position: point(position.x as f32, position.y as f32).map(px),
+                    position: point(position.x as f32, -position.y as f32).map(px),
                     index: ix_converter.utf8_ix,
                     is_emoji: self.is_emoji(font_id),
                 });
             }
         }
         let typographic_bounds = line.get_typographic_bounds();
-        LineLayout {
-            runs,
-            font_size,
-            width: typographic_bounds.width.into(),
-            ascent: max_ascent.into(),
-            descent: max_descent.into(),
-            len: text.len(),
-        }
+        (
+            LineLayout {
+                runs,
+                font_size,
+                width: typographic_bounds.width.into(),
+                ascent: max_ascent.into(),
+                descent: max_descent.into(),
+                len: text.len(),
+            },
+            geometry,
+        )
     }
+}
+
+// core-text's wrapper exposes only the primary offset. Bidi boundaries need
+// the real secondary native offset as well; selecting glyph origins would
+// lose ligature caret information and the two affinities at a boundary.
+unsafe extern "C" {
+    fn CTLineGetOffsetForStringIndex(
+        line: core_text::line::CTLineRef,
+        index: isize,
+        secondary: *mut CGFloat,
+    ) -> CGFloat;
+    fn CTRunGetStatus(run: core_text::run::CTRunRef) -> u32;
+    fn CTRunGetStringRange(run: core_text::run::CTRunRef) -> CFRange;
+}
+
+fn core_text_geometry(
+    line: &CTLine,
+    text: &str,
+    separators: &[(usize, usize)],
+    requested: &[Range<usize>],
+) -> Option<LineTextGeometry> {
+    struct NativeRun {
+        start: usize,
+        end: usize,
+        left: f64,
+        right: f64,
+        rtl: bool,
+    }
+    let mut native_runs = Vec::new();
+    for run in line.glyph_runs().into_iter() {
+        let range = unsafe { CTRunGetStringRange(run.as_concrete_TypeRef()) };
+        let start = usize::try_from(range.location).ok()?;
+        let end = start.checked_add(usize::try_from(range.length).ok()?)?;
+        let positions = run.positions();
+        let left = positions
+            .iter()
+            .map(|position| position.x)
+            .reduce(f64::min)
+            .unwrap_or(0.0);
+        let right = left + run.get_typographic_bounds().width;
+        native_runs.push(NativeRun {
+            start,
+            end,
+            left,
+            right,
+            rtl: unsafe { CTRunGetStatus(run.as_concrete_TypeRef()) } & 1 != 0,
+        });
+    }
+    native_runs.sort_unstable_by_key(|run| run.start);
+    let adjusted = |offset: usize| {
+        offset + separators.partition_point(|&(index, position)| position - index <= offset)
+    };
+    let native_offset = |index: usize, run: &NativeRun| -> Option<Pixels> {
+        let mut secondary = 0.0;
+        let primary = unsafe {
+            CTLineGetOffsetForStringIndex(
+                line.as_concrete_TypeRef(),
+                index.try_into().ok()?,
+                &mut secondary,
+            )
+        };
+        let expected = if index == run.start {
+            if run.rtl { run.right } else { run.left }
+        } else if index == run.end {
+            if run.rtl { run.left } else { run.right }
+        } else {
+            primary.clamp(run.left, run.right)
+        };
+        Some(px(
+            if (primary - expected).abs() <= (secondary - expected).abs() {
+                primary as f32
+            } else {
+                secondary as f32
+            },
+        ))
+    };
+    let mut clusters = Vec::new();
+    let mut utf16 = 0;
+    for (byte, grapheme) in text.grapheme_indices(true) {
+        let end = byte + grapheme.len();
+        let native_start = adjusted(utf16);
+        utf16 += grapheme.encode_utf16().count();
+        if !requested
+            .iter()
+            .any(|range| range.start < end && byte < range.end)
+        {
+            continue;
+        }
+        let index = native_runs
+            .partition_point(|run| run.start <= native_start)
+            .saturating_sub(1);
+        let run = native_runs
+            .get(index)
+            .filter(|run| native_start < run.end)?;
+        let native_end = adjusted(utf16);
+        let end_index = native_runs
+            .partition_point(|run| run.start < native_end)
+            .saturating_sub(1);
+        let end_run = native_runs
+            .get(end_index)
+            .filter(|run| native_end <= run.end)?;
+        clusters.push(ShapedTextCluster {
+            bytes: byte..end,
+            leading: native_offset(native_start, run)?,
+            trailing: native_offset(native_end, end_run)?,
+            right_to_left: run.rtl,
+        });
+    }
+    let end_caret =
+        px(line.get_string_offset_for_string_index(adjusted(utf16).try_into().ok()?) as f32);
+    LineTextGeometry::new(text, clusters, end_caret)
 }
 
 fn system_ui_font_postscript_name(weight: FontWeight) -> &'static str {
@@ -957,7 +1110,11 @@ mod lenient_font_attributes {
 
 #[cfg(test)]
 mod tests {
-    use crate::{FontRun, GlyphId, MacTextSystem, PlatformTextSystem, font, px};
+    use crate::{
+        FontRun, GlyphId, GlyphRasterMode, MacTextSystem, PlatformTextSystem, RenderGlyphParams,
+        font, point, px,
+    };
+    use unicode_segmentation::UnicodeSegmentation;
 
     #[test]
     fn glyph_coverage_is_display_independent() {
@@ -1076,5 +1233,116 @@ mod tests {
         let layout = fonts.layout_line(text, px(16.), font_runs);
         assert_eq!(layout.len, 0);
         assert!(layout.runs.is_empty());
+    }
+
+    #[test]
+    fn native_cluster_geometry_preserves_bidi_carets_unicode_and_requested_spans() {
+        let fonts = MacTextSystem::new();
+        let font_id = fonts.font_id(&font("Helvetica")).unwrap();
+        let text = "Latin 日本語 👩🏽‍💻 café العربية नमस्ते ffi End";
+        let runs = [FontRun {
+            font_id,
+            len: text.len(),
+        }];
+        let geometry = fonts
+            .layout_line_geometry(text, px(16.0), &runs, &[0..text.len()])
+            .unwrap();
+        assert_eq!(geometry.clusters.len(), text.graphemes(true).count());
+        let japanese = text.find('日').unwrap();
+        let cluster = geometry.cluster_for_byte(japanese).unwrap();
+        assert!(cluster.trailing > cluster.leading);
+        let arabic = text.find('ا').unwrap();
+        let rtl = geometry.cluster_for_byte(arabic).unwrap();
+        assert!(rtl.right_to_left);
+        assert!(rtl.leading > rtl.trailing);
+        let supplementary = text.find('👩').unwrap();
+        assert_eq!(
+            &text[geometry
+                .cluster_for_byte(supplementary)
+                .unwrap()
+                .bytes
+                .clone()],
+            "👩🏽‍💻"
+        );
+        assert!(geometry.cluster_for_byte(supplementary + 1).is_some());
+        let restricted = fonts
+            .layout_line_geometry(
+                text,
+                px(16.0),
+                &runs,
+                &[japanese..japanese + '日'.len_utf8()],
+            )
+            .unwrap();
+        assert_eq!(restricted.clusters.len(), 1);
+        assert_eq!(restricted.clusters[0], *cluster);
+        assert_eq!(restricted.end_caret, geometry.end_caret);
+
+        // Font-run separators inserted by the paint path must not shift native
+        // character identities or omit supplementary UTF-16 positions.
+        let split = "日本語".len() + "Latin ".len();
+        let separated = fonts
+            .layout_line_geometry(
+                text,
+                px(16.0),
+                &[
+                    FontRun {
+                        font_id,
+                        len: split,
+                    },
+                    FontRun {
+                        font_id,
+                        len: text.len() - split,
+                    },
+                ],
+                &[0..text.len()],
+            )
+            .unwrap();
+        assert_eq!(separated.clusters.len(), text.graphemes(true).count());
+        assert_eq!(separated.cluster_for_byte(arabic).unwrap().bytes, rtl.bytes);
+    }
+
+    #[test]
+    fn declared_fractional_glyph_bounds_match_actual_bitmap_extents() {
+        let fonts = MacTextSystem::new();
+        let font_id = fonts.font_id(&font("Helvetica")).unwrap();
+        let glyph_id = fonts.glyph_for_char(font_id, 'g').unwrap();
+        for scale_factor in [1.0, 2.0] {
+            let params = RenderGlyphParams {
+                font_id,
+                glyph_id,
+                font_size: px(14.0),
+                subpixel_variant: point(0, 0),
+                scale_factor,
+                is_emoji: false,
+                raster_mode: GlyphRasterMode::Grayscale,
+            };
+            let original = fonts.glyph_raster_bounds(&params).unwrap();
+            for subpixel_variant in [point(0, 0), point(1, 0), point(0, 1), point(1, 1)] {
+                let params = RenderGlyphParams {
+                    subpixel_variant,
+                    ..params.clone()
+                };
+                let bounds = fonts.glyph_raster_bounds(&params).unwrap();
+                assert_eq!(bounds.origin, original.origin);
+                assert_eq!(
+                    bounds.size.width.0,
+                    original.size.width.0 + i32::from(subpixel_variant.x > 0)
+                );
+                assert_eq!(
+                    bounds.size.height.0,
+                    original.size.height.0 + i32::from(subpixel_variant.y > 0)
+                );
+                let (size, bytes) = fonts.rasterize_glyph(&params, bounds).unwrap();
+                assert_eq!(
+                    size, bounds.size,
+                    "strict pre-raster native atlas reservation"
+                );
+                assert_eq!(bytes.len(), size.width.0 as usize * size.height.0 as usize);
+                assert!(
+                    bytes.iter().any(|byte| *byte > 0),
+                    "actual native glyph coverage"
+                );
+            }
+        }
     }
 }

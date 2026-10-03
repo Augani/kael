@@ -420,7 +420,7 @@ unsafe fn build_classes() {
                 let marked_range = marked_range as Method0<NSRange>;
                 let selected_range = selected_range as Method0<NSRange>;
                 let first_rect_for_character_range =
-                    first_rect_for_character_range as Method2<NSRange, id, NSRect>;
+                    first_rect_for_character_range as Method2<NSRange, NSRangePointer, NSRect>;
                 let insert_text = insert_text as Method2<id, NSRange, ()>;
                 let set_marked_text = set_marked_text as Method3<id, NSRange, NSRange, ()>;
                 let unmark_text = unmark_text as Method0<()>;
@@ -2405,6 +2405,7 @@ struct MacWindowState {
     blurred_view: Option<id>,
     display_link: Option<DisplayLink>,
     frame_polling_active: bool,
+    frame_polling_trace: bool,
     renderer: renderer::Renderer,
     request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
     event_callback: Option<Box<dyn FnMut(PlatformInput) -> crate::DispatchEventResult>>,
@@ -3813,6 +3814,7 @@ impl MacWindow {
                 blurred_view: None,
                 display_link: None,
                 frame_polling_active: false,
+                frame_polling_trace: std::env::var_os("KAEL_GPU_FRAME_TIMING_TRACE").is_some(),
                 renderer: renderer::try_new_renderer(
                     renderer_context,
                     native_window as *mut _,
@@ -3859,6 +3861,32 @@ impl MacWindow {
                 webviews: HashMap::default(),
                 pending_webview_commands: HashMap::default(),
             })));
+
+            // Accessibility requests do not produce ordinary input events.
+            // Schedule a forced draw to drain them even after idle frame
+            // polling has stopped, without retaining this window in its adapter.
+            let action_window = Arc::downgrade(&window.0);
+            let action_executor = window.0.lock().executor.clone();
+            window
+                .0
+                .lock()
+                .accessibility_provider
+                .set_action_wake(move || {
+                    let action_window = action_window.clone();
+                    action_executor
+                        .spawn(async move {
+                            if let Some(window_state) = action_window.upgrade() {
+                                request_frame_immediately(
+                                    &window_state,
+                                    RequestFrameOptions {
+                                        require_presentation: true,
+                                        force_render: true,
+                                    },
+                                );
+                            }
+                        })
+                        .detach();
+                });
 
             store_ivar(
                 native_window,
@@ -3909,6 +3937,12 @@ impl MacWindow {
 
             content_view.addSubview_(native_view.autorelease());
             native_window.makeFirstResponder_(native_view);
+
+            // AppKit can adjust the content height while applying titlebar and
+            // layer configuration after initWithContentRect (one point on
+            // macOS 27). Reassert the requested client size after configuration,
+            // using its native sizing API rather than compensating a border.
+            native_window.setContentSize_(window_rect.size);
 
             match kind {
                 WindowKind::Normal | WindowKind::Floating => {
@@ -4521,6 +4555,13 @@ impl PlatformWindow for MacWindow {
         // unrelated false -> true transition to make the window render again.
         if should_start_display_link(active, was_active, this.display_link.is_some()) {
             this.start_display_link();
+            if this.frame_polling_trace {
+                let occlusion = unsafe { this.native_window.occlusionState() };
+                eprintln!(
+                    "KAEL_NATIVE_FRAME_POLLING: active={active} was_active={was_active} link_started={} occlusion={occlusion:?}",
+                    this.display_link.is_some()
+                );
+            }
         } else if !active && was_active {
             this.stop_display_link();
         }
@@ -4799,6 +4840,97 @@ impl PlatformWindow for MacWindow {
         this.renderer.draw(scene);
     }
 
+    #[cfg(feature = "custom-shaders")]
+    fn create_gpu_buffer(
+        &self,
+        descriptor: crate::GpuBufferDescriptor,
+    ) -> Result<crate::GpuBuffer, crate::RenderTargetError> {
+        self.0.lock().renderer.create_gpu_buffer(descriptor)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn validate_gpu_buffer(
+        &self,
+        buffer: &crate::GpuBuffer,
+    ) -> Result<(), crate::RenderTargetError> {
+        self.0.lock().renderer.validate_gpu_buffer(buffer)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn write_gpu_buffer(
+        &self,
+        buffer: &crate::GpuBuffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), crate::RenderTargetError> {
+        self.0
+            .lock()
+            .renderer
+            .write_gpu_buffer(buffer, offset, bytes)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn read_gpu_buffer(
+        &self,
+        buffer: &crate::GpuBuffer,
+    ) -> Result<Vec<u8>, crate::RenderTargetError> {
+        self.0.lock().renderer.read_gpu_buffer(buffer)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn dispatch_compute(
+        &self,
+        shader: &crate::ComputeHandle,
+        bindings: &crate::ComputeBindings,
+        groups: [u32; 3],
+    ) -> Result<(), crate::RenderTargetError> {
+        self.0
+            .lock()
+            .renderer
+            .dispatch_compute(shader, bindings, groups)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn write_render_target(
+        &self,
+        target: &crate::RenderTarget,
+        pixels: &[u8],
+    ) -> Result<(), crate::RenderTargetError> {
+        self.0.lock().renderer.write_render_target(target, pixels)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn create_render_target(
+        &self,
+        descriptor: crate::RenderTargetDescriptor,
+    ) -> Result<crate::RenderTarget, crate::RenderTargetError> {
+        self.0.lock().renderer.create_render_target(descriptor)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn render_shader(
+        &self,
+        target: &crate::RenderTarget,
+        shader: &crate::ShaderHandle,
+        bindings: &crate::ShaderBindings,
+    ) -> Result<(), crate::RenderTargetError> {
+        self.0
+            .lock()
+            .renderer
+            .render_shader(target, shader, bindings)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn read_render_target(
+        &self,
+        target: &crate::RenderTarget,
+    ) -> Result<crate::RenderTargetReadback, crate::RenderTargetError> {
+        self.0.lock().renderer.read_render_target(target)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn validate_render_target(
+        &self,
+        target: &crate::RenderTarget,
+    ) -> Result<(), crate::RenderTargetError> {
+        self.0.lock().renderer.validate_render_target(target)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn set_render_target_byte_budget(&self, bytes: u64) {
+        self.0.lock().renderer.set_render_target_byte_budget(bytes);
+    }
+
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
         self.0.lock().renderer.sprite_atlas().clone()
     }
@@ -4847,6 +4979,24 @@ impl PlatformWindow for MacWindow {
 
     fn set_atlas_byte_budget(&self, budget: Option<u64>) {
         self.0.lock().renderer.set_atlas_byte_budget(budget);
+    }
+
+    fn gpu_allocated_bytes(&self) -> Option<u64> {
+        Some(self.0.lock().renderer.gpu_allocated_bytes())
+    }
+
+    #[cfg(not(feature = "macos-blade"))]
+    fn set_gpu_frame_timing_enabled(&self, enabled: bool) -> bool {
+        self.0.lock().renderer.set_gpu_frame_timing_enabled(enabled)
+    }
+
+    #[cfg(not(feature = "macos-blade"))]
+    fn take_gpu_frame_timings(&self) -> Vec<crate::GpuFrameTiming> {
+        self.0.lock().renderer.take_gpu_frame_timings()
+    }
+
+    fn shed_memory(&self, level: crate::MemoryPressureLevel) {
+        self.0.lock().renderer.shed_memory(level);
     }
 
     fn titlebar_double_click(&self) {
@@ -6246,15 +6396,26 @@ extern "C" fn selected_range(this: id, _: Sel) -> NSRange {
     selected_range_result.map_or(NSRange::invalid(), |selection| selection.range.into())
 }
 
-extern "C" fn first_rect_for_character_range(this: id, _: Sel, range: NSRange, _: id) -> NSRect {
+extern "C" fn first_rect_for_character_range(
+    this: id,
+    _: Sel,
+    range: NSRange,
+    actual_range: NSRangePointer,
+) -> NSRect {
+    if !actual_range.0.is_null() {
+        unsafe { actual_range.0.write(NSRange::invalid()) };
+    }
     let frame = get_frame(this);
     with_input_handler(this, |input_handler| {
-        input_handler.bounds_for_range(range.to_range()?)
+        input_handler.bounds_for_range_with_actual_range(range.to_range()?)
     })
     .flatten()
     .map_or(
         NSRect::new(NSPoint::new(0., 0.), NSSize::new(0., 0.)),
-        |bounds| {
+        |(bounds, adjusted)| {
+            if !actual_range.0.is_null() {
+                unsafe { actual_range.0.write(adjusted.into()) };
+            }
             NSRect::new(
                 NSPoint::new(
                     frame.origin.x + bounds.origin.x.0 as f64,
@@ -6404,7 +6565,7 @@ extern "C" fn character_index_for_point(this: id, _: Sel, position: NSPoint) -> 
     })
     .flatten()
     .map(|index| index as u64)
-    .unwrap_or(NSUInteger::MAX as u64)
+    .unwrap_or(objc2_foundation::NSNotFound as u64)
 }
 
 fn screen_point_to_gpui_point(this: id, position: NSPoint) -> Point<Pixels> {

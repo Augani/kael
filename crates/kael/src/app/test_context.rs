@@ -310,6 +310,14 @@ impl TestAppContext {
         &self.text_system
     }
 
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn use_native_text_system_for_test(&mut self) {
+        self.text_system = Arc::new(TextSystem::new(Arc::new(
+            crate::platform::MacTextSystem::new(),
+        )));
+        self.app.borrow_mut().text_system = self.text_system.clone();
+    }
+
     /// Simulates writing to the platform clipboard
     pub fn write_to_clipboard(&self, item: ClipboardItem) {
         self.test_platform.write_to_clipboard(item)
@@ -679,9 +687,7 @@ impl TestAppContext {
         let mut notifications = self.notifications(entity);
 
         use futures::FutureExt as _;
-        use smol::future::FutureExt as _;
-
-        async {
+        let condition = async {
             loop {
                 if entity.update(self, &mut predicate) {
                     return Ok(());
@@ -691,9 +697,13 @@ impl TestAppContext {
                     bail!("entity dropped")
                 }
             }
+        };
+        let timeout = timer.map(|_| Err(anyhow!("condition timed out")));
+        futures::pin_mut!(condition, timeout);
+        match futures::future::select(condition, timeout).await {
+            futures::future::Either::Left((result, _))
+            | futures::future::Either::Right((result, _)) => result,
         }
-        .race(timer.map(|_| Err(anyhow!("condition timed out"))))
-        .await
         .unwrap();
     }
 
@@ -990,6 +1000,33 @@ impl VisualTestContext {
         self.update(|window, _| window.rendered_frame.debug_bounds.get(selector).copied())
     }
 
+    /// Enable exact StyledText paint tracing. Disabled by default, so native
+    /// apps using test-support do not retain text or allocate trace entries.
+    pub fn enable_styled_text_paint_trace(&mut self) {
+        self.update(|window, _| window.painted_styled_text = Some(Vec::new()));
+    }
+
+    /// Text entering the completed CPU paint pass, with measured bounds and
+    /// the active content clip. NoopTextSystem has no rasterized glyph sprites,
+    /// so this is useful for asserting paint independently of semantics.
+    pub fn painted_styled_text(
+        &mut self,
+    ) -> Vec<(crate::SharedString, Bounds<Pixels>, Bounds<Pixels>)> {
+        self.update(|window, _| window.painted_styled_text.clone().unwrap_or_default())
+    }
+
+    /// Counts text/image sprites in the completed CPU paint scene. This tests
+    /// paint output without claiming GPU submission or compositor presentation.
+    pub fn painted_sprite_counts(&mut self) -> (usize, usize) {
+        self.update(|window, _| {
+            let scene = window.rendered_scene();
+            (
+                scene.monochrome_sprites.len(),
+                scene.polychrome_sprites.len(),
+            )
+        })
+    }
+
     /// Draw an element to the window. Useful for simulating events or actions
     pub fn draw<E>(
         &mut self,
@@ -1021,6 +1058,14 @@ impl VisualTestContext {
     pub fn simulate_event<E: InputEvent>(&mut self, event: E) {
         self.test_window(self.window)
             .simulate_input(event.to_platform_input());
+        self.background_executor.run_until_parked();
+    }
+
+    /// Deliver the normal platform frame callback without forcing a draw or
+    /// invalidating a clean window. Useful for async notification/reuse tests.
+    pub fn simulate_platform_frame(&mut self) {
+        self.test_window(self.window)
+            .run_request_frame(crate::RequestFrameOptions::default());
         self.background_executor.run_until_parked();
     }
 
@@ -1194,6 +1239,8 @@ mod tests {
         });
 
         let handle = window.into();
+        cx.test_window(handle)
+            .run_request_frame(crate::RequestFrameOptions::default());
         assert!(!cx.test_window(handle).0.lock().frame_polling_active);
 
         cx.simulate_system_power_event(SystemPowerEvent::PowerModeChanged);

@@ -26,6 +26,11 @@ use crate::{
     *,
 };
 
+#[cfg(feature = "custom-shaders")]
+mod custom_shaders;
+#[cfg(all(test, feature = "custom-shaders"))]
+mod graph_tests;
+
 pub(crate) const DISABLE_DIRECT_COMPOSITION: &str = "GPUI_DISABLE_DIRECT_COMPOSITION";
 const RENDER_TARGET_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 // This configuration is used for MSAA rendering on paths only, and it's guaranteed to be supported by DirectX 11.
@@ -58,6 +63,8 @@ pub(crate) struct DirectXRenderer {
     font_info: &'static FontInfo,
     last_pipeline: Option<*const ()>,
     atlas_byte_budget: Option<u64>,
+    #[cfg(feature = "custom-shaders")]
+    custom: custom_shaders::DirectXCustomRenderer,
 }
 
 /// Direct3D objects
@@ -76,23 +83,33 @@ struct DirectXResources {
     render_target: Option<ID3D11Texture2D>,
     render_target_view: [Option<ID3D11RenderTargetView>; 1],
 
-    // Path intermediate textures (with MSAA)
-    path_intermediate_texture: ID3D11Texture2D,
-    path_intermediate_srv: [Option<ID3D11ShaderResourceView>; 1],
-    path_intermediate_msaa_texture: ID3D11Texture2D,
-    path_intermediate_msaa_view: [Option<ID3D11RenderTargetView>; 1],
-    cached_surface_texture: ID3D11Texture2D,
-    cached_surface_view: [Option<ID3D11RenderTargetView>; 1],
-    blur_source_texture: ID3D11Texture2D,
-    blur_source_srv: [Option<ID3D11ShaderResourceView>; 1],
-    blur_horizontal_texture: ID3D11Texture2D,
-    blur_horizontal_srv: [Option<ID3D11ShaderResourceView>; 1],
-    blur_horizontal_view: [Option<ID3D11RenderTargetView>; 1],
+    // Optional scratch groups are allocated only by the effects that use them.
+    path: Option<PathScratch>,
+    cached: Option<CachedScratch>,
+    blur: Option<BlurScratch>,
 
     // Cached window size and viewport
     width: u32,
     height: u32,
     viewport: [D3D11_VIEWPORT; 1],
+}
+
+struct PathScratch {
+    path_intermediate_texture: ID3D11Texture2D,
+    path_intermediate_srv: [Option<ID3D11ShaderResourceView>; 1],
+    path_intermediate_msaa_texture: ID3D11Texture2D,
+    path_intermediate_msaa_view: [Option<ID3D11RenderTargetView>; 1],
+}
+struct CachedScratch {
+    cached_surface_texture: ID3D11Texture2D,
+    cached_surface_view: [Option<ID3D11RenderTargetView>; 1],
+}
+struct BlurScratch {
+    blur_source_texture: ID3D11Texture2D,
+    blur_source_srv: [Option<ID3D11ShaderResourceView>; 1],
+    _blur_horizontal_texture: ID3D11Texture2D,
+    blur_horizontal_srv: [Option<ID3D11ShaderResourceView>; 1],
+    blur_horizontal_view: [Option<ID3D11RenderTargetView>; 1],
 }
 
 struct DirectXRenderPipelines {
@@ -192,6 +209,8 @@ impl DirectXRenderer {
             font_info: Self::get_font_info(),
             last_pipeline: None,
             atlas_byte_budget: None,
+            #[cfg(feature = "custom-shaders")]
+            custom: custom_shaders::DirectXCustomRenderer::default(),
         })
     }
 
@@ -314,6 +333,11 @@ impl DirectXRenderer {
         self.globals = globals;
         self.pipelines = pipelines;
         self.direct_composition = direct_composition;
+        #[cfg(feature = "custom-shaders")]
+        {
+            // Dropping the old registry invalidates every live old-device handle.
+            self.custom = custom_shaders::DirectXCustomRenderer::default();
+        }
 
         unsafe {
             self.devices
@@ -324,6 +348,7 @@ impl DirectXRenderer {
     }
 
     fn render_scene(&mut self, scene: &Scene) -> Result<()> {
+        self.atlas.mark_scene_used(scene)?;
         self.pre_draw()?;
         for batch in scene.batches() {
             match batch {
@@ -363,7 +388,7 @@ impl DirectXRenderer {
         self.render_scene(scene)?;
         self.present()?;
         if let Some(budget) = self.atlas_byte_budget {
-            const IN_FLIGHT_FRAMES: u64 = 3;
+            const IN_FLIGHT_FRAMES: u64 = 4;
             self.atlas.evict_to_budget_keeping(budget, IN_FLIGHT_FRAMES);
         }
         self.atlas.advance_frame();
@@ -501,11 +526,167 @@ impl DirectXRenderer {
 
     pub(crate) fn set_atlas_byte_budget(&mut self, budget: Option<u64>) {
         self.atlas_byte_budget = budget;
+        self.atlas.set_admission_limits(budget);
+    }
+
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn create_gpu_buffer(
+        &mut self,
+        descriptor: crate::GpuBufferDescriptor,
+    ) -> std::result::Result<crate::GpuBuffer, crate::RenderTargetError> {
+        self.custom.create_buffer(
+            &self.devices.device,
+            &self.devices.device_context,
+            descriptor,
+        )
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn validate_gpu_buffer(
+        &self,
+        buffer: &crate::GpuBuffer,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.custom.validate_buffer(&self.devices.device, buffer)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn write_gpu_buffer(
+        &mut self,
+        buffer: &crate::GpuBuffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.custom.write_buffer(
+            &self.devices.device,
+            &self.devices.device_context,
+            buffer,
+            offset,
+            bytes,
+        )
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn read_gpu_buffer(
+        &self,
+        buffer: &crate::GpuBuffer,
+    ) -> std::result::Result<Vec<u8>, crate::RenderTargetError> {
+        self.custom
+            .read_buffer(&self.devices.device, &self.devices.device_context, buffer)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn dispatch_compute(
+        &mut self,
+        shader: &crate::ComputeHandle,
+        bindings: &crate::ComputeBindings,
+        groups: [u32; 3],
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        let result = self.custom.dispatch(
+            &self.devices.device,
+            &self.devices.device_context,
+            shader,
+            bindings,
+            groups,
+        );
+        self.last_pipeline = None;
+        result
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn write_render_target(
+        &mut self,
+        target: &crate::RenderTarget,
+        pixels: &[u8],
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.custom.write_target(
+            &self.devices.device,
+            &self.devices.device_context,
+            target,
+            pixels,
+        )
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn create_render_target(
+        &mut self,
+        descriptor: RenderTargetDescriptor,
+    ) -> std::result::Result<RenderTarget, RenderTargetError> {
+        self.custom.create(
+            &self.devices.device,
+            &self.devices.device_context,
+            descriptor,
+        )
+    }
+
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn render_shader(
+        &mut self,
+        target: &RenderTarget,
+        shader: &ShaderHandle,
+        bindings: &ShaderBindings,
+    ) -> std::result::Result<(), RenderTargetError> {
+        let result = self.custom.render(
+            &self.devices.device,
+            &self.devices.device_context,
+            target,
+            shader,
+            bindings,
+        );
+        self.last_pipeline = None;
+        result
+    }
+
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn read_render_target(
+        &self,
+        target: &RenderTarget,
+    ) -> std::result::Result<RenderTargetReadback, RenderTargetError> {
+        self.custom
+            .read(&self.devices.device, &self.devices.device_context, target)
+    }
+
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn validate_render_target(
+        &self,
+        target: &RenderTarget,
+    ) -> std::result::Result<(), RenderTargetError> {
+        self.custom.validate(&self.devices.device, target)
+    }
+
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn set_render_target_byte_budget(&mut self, bytes: u64) {
+        self.custom.set_budget(bytes);
+    }
+
+    pub(crate) fn shed_memory(&mut self, level: crate::MemoryPressureLevel) {
+        if level != crate::MemoryPressureLevel::Normal {
+            // Unbind context-owned references before releasing optional resources.
+            // D3D11 retains submitted GPU references and retires released objects;
+            // Flush submits the retirement work without blocking the UI thread.
+            unsafe { self.devices.device_context.ClearState() };
+            self.last_pipeline = None;
+            self.resources.path = None;
+            self.resources.cached = None;
+            self.resources.blur = None;
+            #[cfg(feature = "custom-shaders")]
+            self.custom.shed();
+            self.pipelines
+                .shrink_buffers(&self.devices.device, &mut self.last_pipeline)
+                .log_err();
+            self.atlas
+                .evict_to_budget_keeping(self.atlas_byte_budget.unwrap_or(0), 3);
+            unsafe { self.devices.device_context.Flush() };
+            set_rasterizer_state(&self.devices.device, &self.devices.device_context).log_err();
+        }
     }
 
     fn draw_cached_surface_snapshots(&mut self, scene: &Scene) -> Result<()> {
+        if scene.cached_surface_snapshots.is_empty() {
+            return Ok(());
+        }
+        self.resources.ensure_cached(&self.devices.device)?;
         for snapshot in &scene.cached_surface_snapshots {
-            let cached_view = self.resources.cached_surface_view.clone();
+            let cached_view = self
+                .resources
+                .cached
+                .as_ref()
+                .expect("cached scratch initialized")
+                .cached_surface_view
+                .clone();
             self.bind_render_target(&cached_view, true)?;
 
             let snapshot_scene = scene.snapshot_subscene(snapshot.paint_operations.clone());
@@ -553,7 +734,12 @@ impl DirectXRenderer {
                     snapshot.target.bounds.origin.x.0 as u32,
                     snapshot.target.bounds.origin.y.0 as u32,
                     0,
-                    &self.resources.cached_surface_texture,
+                    &self
+                        .resources
+                        .cached
+                        .as_ref()
+                        .expect("cached scratch initialized")
+                        .cached_surface_texture,
                     0,
                     Some(&source_box),
                 );
@@ -705,11 +891,18 @@ impl DirectXRenderer {
             return Ok(());
         }
 
+        self.resources.ensure_path(&self.devices.device)?;
+
         // Render target change invalidates pipeline state cache
         self.last_pipeline = None;
 
         // Clear intermediate MSAA texture
-        let intermediate_view = self.resources.path_intermediate_msaa_view[0]
+        let intermediate_view = self
+            .resources
+            .path
+            .as_ref()
+            .expect("path scratch initialized")
+            .path_intermediate_msaa_view[0]
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("DirectX path render-target view is unavailable"))?;
         unsafe {
@@ -717,9 +910,17 @@ impl DirectXRenderer {
                 .device_context
                 .ClearRenderTargetView(intermediate_view, &[0.0; 4]);
             // Set intermediate MSAA texture as render target
-            self.devices
-                .device_context
-                .OMSetRenderTargets(Some(&self.resources.path_intermediate_msaa_view), None);
+            self.devices.device_context.OMSetRenderTargets(
+                Some(
+                    &self
+                        .resources
+                        .path
+                        .as_ref()
+                        .expect("path scratch initialized")
+                        .path_intermediate_msaa_view,
+                ),
+                None,
+            );
         }
 
         // Collect all vertices and sprites for a single draw call
@@ -753,9 +954,19 @@ impl DirectXRenderer {
         // Resolve MSAA to non-MSAA intermediate texture
         unsafe {
             self.devices.device_context.ResolveSubresource(
-                &self.resources.path_intermediate_texture,
+                &self
+                    .resources
+                    .path
+                    .as_ref()
+                    .expect("path scratch initialized")
+                    .path_intermediate_texture,
                 0,
-                &self.resources.path_intermediate_msaa_texture,
+                &self
+                    .resources
+                    .path
+                    .as_ref()
+                    .expect("path scratch initialized")
+                    .path_intermediate_msaa_texture,
                 0,
                 RENDER_TARGET_FORMAT,
             );
@@ -809,7 +1020,12 @@ impl DirectXRenderer {
         // Draw the sprites with the path texture
         self.pipelines.path_sprite_pipeline.draw_with_texture(
             &self.devices.device_context,
-            &self.resources.path_intermediate_srv,
+            &self
+                .resources
+                .path
+                .as_ref()
+                .expect("path scratch initialized")
+                .path_intermediate_srv,
             &self.resources.viewport,
             &self.globals.global_params_buffer,
             &self.globals.sampler,
@@ -908,9 +1124,20 @@ impl DirectXRenderer {
     }
 
     fn draw_blur_rects_to_cached_surface(&mut self, blur_rects: &[BlurRect]) -> Result<()> {
-        let target_texture = self.resources.cached_surface_texture.clone();
+        self.resources.ensure_cached(&self.devices.device)?;
+        let target_texture = self
+            .resources
+            .cached
+            .as_ref()
+            .expect("cached scratch initialized")
+            .cached_surface_texture
+            .clone();
         let target_view = [Some(
-            self.resources.cached_surface_view[0]
+            self.resources
+                .cached
+                .as_ref()
+                .expect("cached scratch initialized")
+                .cached_surface_view[0]
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("DirectX cached-surface view is unavailable"))?
                 .clone(),
@@ -928,6 +1155,7 @@ impl DirectXRenderer {
             return Ok(());
         }
 
+        self.resources.ensure_blur(&self.devices.device)?;
         let viewport_size = Size {
             width: DevicePixels(self.resources.width as i32),
             height: DevicePixels(self.resources.height as i32),
@@ -951,7 +1179,12 @@ impl DirectXRenderer {
             self.unbind_shader_resources();
             unsafe {
                 self.devices.device_context.CopySubresourceRegion(
-                    &self.resources.blur_source_texture,
+                    &self
+                        .resources
+                        .blur
+                        .as_ref()
+                        .expect("blur scratch initialized")
+                        .blur_source_texture,
                     0,
                     capture_bounds.origin.x.0 as u32,
                     capture_bounds.origin.y.0 as u32,
@@ -962,7 +1195,13 @@ impl DirectXRenderer {
                 );
             }
 
-            let blur_h_view = self.resources.blur_horizontal_view.clone();
+            let blur_h_view = self
+                .resources
+                .blur
+                .as_ref()
+                .expect("blur scratch initialized")
+                .blur_horizontal_view
+                .clone();
             self.bind_render_target(&blur_h_view, true)?;
             self.pipelines.blur_horizontal_pipeline.update_buffer(
                 &self.devices.device,
@@ -972,7 +1211,12 @@ impl DirectXRenderer {
             )?;
             self.pipelines.blur_horizontal_pipeline.draw_with_texture(
                 &self.devices.device_context,
-                &self.resources.blur_source_srv,
+                &self
+                    .resources
+                    .blur
+                    .as_ref()
+                    .expect("blur scratch initialized")
+                    .blur_source_srv,
                 &self.resources.viewport,
                 &self.globals.global_params_buffer,
                 &self.globals.sampler,
@@ -989,7 +1233,12 @@ impl DirectXRenderer {
             )?;
             self.pipelines.blur_composite_pipeline.draw_with_texture(
                 &self.devices.device_context,
-                &self.resources.blur_horizontal_srv,
+                &self
+                    .resources
+                    .blur
+                    .as_ref()
+                    .expect("blur scratch initialized")
+                    .blur_horizontal_srv,
                 &self.resources.viewport,
                 &self.globals.global_params_buffer,
                 &self.globals.sampler,
@@ -1004,6 +1253,21 @@ impl DirectXRenderer {
     fn draw_surfaces(&mut self, surfaces: &[PaintSurface]) -> Result<()> {
         if surfaces.is_empty() {
             return Ok(());
+        }
+        #[cfg(feature = "custom-shaders")]
+        for surface in surfaces {
+            let PaintSurfaceSource::RenderTarget { target, .. } = &surface.source;
+            self.custom.draw(
+                &self.devices.device,
+                &self.devices.device_context,
+                surface,
+                target,
+                size(
+                    DevicePixels(self.resources.width as i32),
+                    DevicePixels(self.resources.height as i32),
+                ),
+            )?;
+            self.last_pipeline = None;
         }
         Ok(())
     }
@@ -1132,95 +1396,118 @@ impl DirectXResources {
                 height,
             )?
         };
-
-        let (
-            render_target,
-            render_target_view,
-            path_intermediate_texture,
-            path_intermediate_srv,
-            path_intermediate_msaa_texture,
-            path_intermediate_msaa_view,
-            cached_surface_texture,
-            cached_surface_view,
-            blur_source_texture,
-            blur_source_srv,
-            blur_horizontal_texture,
-            blur_horizontal_srv,
-            blur_horizontal_view,
-            viewport,
-        ) = create_resources(devices, &swap_chain, width, height)?;
+        let (render_target, render_target_view, viewport) =
+            create_resources(devices, &swap_chain, width, height)?;
         set_rasterizer_state(&devices.device, &devices.device_context)?;
-
         Ok(ManuallyDrop::new(Self {
             swap_chain,
             render_target: Some(render_target),
             render_target_view,
-            path_intermediate_texture,
-            path_intermediate_msaa_texture,
-            path_intermediate_msaa_view,
-            path_intermediate_srv,
-            cached_surface_texture,
-            cached_surface_view,
-            blur_source_texture,
-            blur_source_srv,
-            blur_horizontal_texture,
-            blur_horizontal_srv,
-            blur_horizontal_view,
-            viewport,
+            path: None,
+            cached: None,
+            blur: None,
             width,
             height,
+            viewport,
         }))
     }
 
-    #[inline]
     fn recreate_resources(
         &mut self,
         devices: &DirectXRendererDevices,
         width: u32,
         height: u32,
     ) -> Result<()> {
-        let (
-            render_target,
-            render_target_view,
-            path_intermediate_texture,
-            path_intermediate_srv,
-            path_intermediate_msaa_texture,
-            path_intermediate_msaa_view,
-            cached_surface_texture,
-            cached_surface_view,
-            blur_source_texture,
-            blur_source_srv,
-            blur_horizontal_texture,
-            blur_horizontal_srv,
-            blur_horizontal_view,
-            viewport,
-        ) = create_resources(devices, &self.swap_chain, width, height)?;
+        let (render_target, render_target_view, viewport) =
+            create_resources(devices, &self.swap_chain, width, height)?;
         self.render_target = Some(render_target);
         self.render_target_view = render_target_view;
-        self.path_intermediate_texture = path_intermediate_texture;
-        self.path_intermediate_msaa_texture = path_intermediate_msaa_texture;
-        self.path_intermediate_msaa_view = path_intermediate_msaa_view;
-        self.path_intermediate_srv = path_intermediate_srv;
-        self.cached_surface_texture = cached_surface_texture;
-        self.cached_surface_view = cached_surface_view;
-        self.blur_source_texture = blur_source_texture;
-        self.blur_source_srv = blur_source_srv;
-        self.blur_horizontal_texture = blur_horizontal_texture;
-        self.blur_horizontal_srv = blur_horizontal_srv;
-        self.blur_horizontal_view = blur_horizontal_view;
         self.viewport = viewport;
+        self.path = None;
+        self.cached = None;
+        self.blur = None;
+        Ok(())
+    }
+
+    fn ensure_path(&mut self, device: &ID3D11Device) -> Result<()> {
+        if self.path.is_none() {
+            let (path_intermediate_texture, path_intermediate_srv) =
+                create_path_intermediate_texture(device, self.width, self.height)?;
+            let (path_intermediate_msaa_texture, path_intermediate_msaa_view) =
+                create_path_intermediate_msaa_texture_and_view(device, self.width, self.height)?;
+            self.path = Some(PathScratch {
+                path_intermediate_texture,
+                path_intermediate_srv,
+                path_intermediate_msaa_texture,
+                path_intermediate_msaa_view,
+            });
+        }
+        Ok(())
+    }
+
+    fn ensure_cached(&mut self, device: &ID3D11Device) -> Result<()> {
+        if self.cached.is_none() {
+            let (cached_surface_texture, cached_surface_view) =
+                create_cached_surface_texture_and_view(device, self.width, self.height)?;
+            self.cached = Some(CachedScratch {
+                cached_surface_texture,
+                cached_surface_view,
+            });
+        }
+        Ok(())
+    }
+
+    fn ensure_blur(&mut self, device: &ID3D11Device) -> Result<()> {
+        if self.blur.is_none() {
+            let (blur_source_texture, blur_source_srv, _) =
+                create_blur_intermediate_texture_and_views(device, self.width, self.height)?;
+            let (blur_horizontal_texture, blur_horizontal_srv, blur_horizontal_view) =
+                create_blur_intermediate_texture_and_views(device, self.width, self.height)?;
+            self.blur = Some(BlurScratch {
+                blur_source_texture,
+                blur_source_srv,
+                _blur_horizontal_texture: blur_horizontal_texture,
+                blur_horizontal_srv,
+                blur_horizontal_view,
+            });
+        }
         Ok(())
     }
 }
 
 impl DirectXRenderPipelines {
+    fn shrink_buffers(
+        &mut self,
+        device: &ID3D11Device,
+        last_pipeline: &mut Option<*const ()>,
+    ) -> Result<()> {
+        self.blur_horizontal_pipeline
+            .shrink_buffer(device, 1, last_pipeline)?;
+        self.blur_composite_pipeline
+            .shrink_buffer(device, 1, last_pipeline)?;
+        self.shadow_pipeline
+            .shrink_buffer(device, 4, last_pipeline)?;
+        self.quad_pipeline
+            .shrink_buffer(device, 64, last_pipeline)?;
+        self.path_rasterization_pipeline
+            .shrink_buffer(device, 32, last_pipeline)?;
+        self.path_sprite_pipeline
+            .shrink_buffer(device, 4, last_pipeline)?;
+        self.underline_pipeline
+            .shrink_buffer(device, 4, last_pipeline)?;
+        self.mono_sprites
+            .shrink_buffer(device, 512, last_pipeline)?;
+        self.poly_sprites.shrink_buffer(device, 16, last_pipeline)?;
+        Ok(())
+    }
+
     pub fn new(device: &ID3D11Device) -> Result<Self> {
         let blur_horizontal_pipeline = PipelineState::new(
             device,
             "blur_horizontal_pipeline",
             ShaderModule::BlurHorizontal,
             1,
-            create_blend_state(device)?,
+            create_premultiplied_blend_state(device)?,
         )?;
         let blur_composite_pipeline = PipelineState::new(
             device,
@@ -1248,14 +1535,14 @@ impl DirectXRenderPipelines {
             "path_rasterization_pipeline",
             ShaderModule::PathRasterization,
             32,
-            create_blend_state_for_path_rasterization(device)?,
+            create_premultiplied_blend_state(device)?,
         )?;
         let path_sprite_pipeline = PipelineState::new(
             device,
             "path_sprite_pipeline",
             ShaderModule::PathSprite,
             4,
-            create_blend_state_for_path_sprite(device)?,
+            create_premultiplied_blend_state(device)?,
         )?;
         let underline_pipeline = PipelineState::new(
             device,
@@ -1377,6 +1664,24 @@ struct PipelineState<T> {
 }
 
 impl<T> PipelineState<T> {
+    fn shrink_buffer(
+        &mut self,
+        device: &ID3D11Device,
+        capacity: usize,
+        last_pipeline: &mut Option<*const ()>,
+    ) -> Result<()> {
+        if self.buffer_size <= capacity {
+            return Ok(());
+        }
+        let buffer = create_buffer(device, std::mem::size_of::<T>(), capacity)?;
+        let view = create_buffer_view(device, &buffer)?;
+        self.buffer = buffer;
+        self.view = view;
+        self.buffer_size = capacity;
+        *last_pipeline = None;
+        Ok(())
+    }
+
     fn new(
         device: &ID3D11Device,
         label: &'static str,
@@ -1524,6 +1829,8 @@ struct BlurPass {
     tint: Hsla,
     blur_radius: ScaledPixels,
     saturation: f32,
+    rounded_clip_bounds: Bounds<ScaledPixels>,
+    rounded_clip_radii: Corners<ScaledPixels>,
 }
 
 impl BlurPass {
@@ -1536,6 +1843,8 @@ impl BlurPass {
             tint: Hsla::transparent_black(),
             blur_radius: blur_rect.blur_radius,
             saturation: 1.0,
+            rounded_clip_bounds: Bounds::default(),
+            rounded_clip_radii: Corners::default(),
         }
     }
 
@@ -1548,6 +1857,8 @@ impl BlurPass {
             tint: blur_rect.tint,
             blur_radius: blur_rect.blur_radius,
             saturation: blur_rect.saturation,
+            rounded_clip_bounds: blur_rect.rounded_clip_bounds,
+            rounded_clip_radii: blur_rect.rounded_clip_radii,
         }
     }
 }
@@ -1634,48 +1945,12 @@ fn create_resources(
 ) -> Result<(
     ID3D11Texture2D,
     [Option<ID3D11RenderTargetView>; 1],
-    ID3D11Texture2D,
-    [Option<ID3D11ShaderResourceView>; 1],
-    ID3D11Texture2D,
-    [Option<ID3D11RenderTargetView>; 1],
-    ID3D11Texture2D,
-    [Option<ID3D11RenderTargetView>; 1],
-    ID3D11Texture2D,
-    [Option<ID3D11ShaderResourceView>; 1],
-    ID3D11Texture2D,
-    [Option<ID3D11ShaderResourceView>; 1],
-    [Option<ID3D11RenderTargetView>; 1],
     [D3D11_VIEWPORT; 1],
 )> {
     let (render_target, render_target_view) =
         create_render_target_and_its_view(swap_chain, &devices.device)?;
-    let (path_intermediate_texture, path_intermediate_srv) =
-        create_path_intermediate_texture(&devices.device, width, height)?;
-    let (path_intermediate_msaa_texture, path_intermediate_msaa_view) =
-        create_path_intermediate_msaa_texture_and_view(&devices.device, width, height)?;
-    let (cached_surface_texture, cached_surface_view) =
-        create_cached_surface_texture_and_view(&devices.device, width, height)?;
-    let (blur_source_texture, blur_source_srv, _) =
-        create_blur_intermediate_texture_and_views(&devices.device, width, height)?;
-    let (blur_horizontal_texture, blur_horizontal_srv, blur_horizontal_view) =
-        create_blur_intermediate_texture_and_views(&devices.device, width, height)?;
     let viewport = set_viewport(&devices.device_context, width as f32, height as f32);
-    Ok((
-        render_target,
-        render_target_view,
-        path_intermediate_texture,
-        path_intermediate_srv,
-        path_intermediate_msaa_texture,
-        path_intermediate_msaa_view,
-        cached_surface_texture,
-        cached_surface_view,
-        blur_source_texture,
-        blur_source_srv,
-        blur_horizontal_texture,
-        blur_horizontal_srv,
-        blur_horizontal_view,
-        viewport,
-    ))
+    Ok((render_target, render_target_view, viewport))
 }
 
 #[inline]
@@ -1913,7 +2188,7 @@ fn create_blend_state(device: &ID3D11Device) -> Result<ID3D11BlendState> {
     desc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
     desc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
     desc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
-    desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
+    desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
     desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8;
     unsafe {
         let mut state = None;
@@ -1923,7 +2198,7 @@ fn create_blend_state(device: &ID3D11Device) -> Result<ID3D11BlendState> {
 }
 
 #[inline]
-fn create_blend_state_for_path_rasterization(device: &ID3D11Device) -> Result<ID3D11BlendState> {
+fn create_premultiplied_blend_state(device: &ID3D11Device) -> Result<ID3D11BlendState> {
     // If the feature level is set to greater than D3D_FEATURE_LEVEL_9_3, the display
     // device performs the blend in linear space, which is ideal.
     let mut desc = D3D11_BLEND_DESC::default();
@@ -1938,27 +2213,7 @@ fn create_blend_state_for_path_rasterization(device: &ID3D11Device) -> Result<ID
     unsafe {
         let mut state = None;
         device.CreateBlendState(&desc, Some(&mut state))?;
-        require_com_output(state, "CreateBlendState for path rasterization")
-    }
-}
-
-#[inline]
-fn create_blend_state_for_path_sprite(device: &ID3D11Device) -> Result<ID3D11BlendState> {
-    // If the feature level is set to greater than D3D_FEATURE_LEVEL_9_3, the display
-    // device performs the blend in linear space, which is ideal.
-    let mut desc = D3D11_BLEND_DESC::default();
-    desc.RenderTarget[0].BlendEnable = true.into();
-    desc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
-    desc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
-    desc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
-    desc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
-    desc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
-    desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
-    desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8;
-    unsafe {
-        let mut state = None;
-        device.CreateBlendState(&desc, Some(&mut state))?;
-        require_com_output(state, "CreateBlendState for path sprite")
+        require_com_output(state, "CreateBlendState for premultiplied shader")
     }
 }
 

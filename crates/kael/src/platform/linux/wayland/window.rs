@@ -454,6 +454,32 @@ impl WaylandWindow {
             callbacks: Rc::new(RefCell::new(Callbacks::default())),
         });
 
+        let weak_callbacks = Rc::downgrade(&this.0.callbacks);
+        {
+            let state = this.0.state.borrow();
+            state
+                .accessibility_root
+                .set_action_wake(&state.globals.executor, move || {
+                    let Some(callbacks) = weak_callbacks.upgrade() else {
+                        return;
+                    };
+                    let mut callback = callbacks.borrow_mut().request_frame.take();
+                    if let Some(callback) = callback.as_mut() {
+                        super::super::catch_platform_callback(
+                            "accessibility frame request",
+                            (),
+                            || {
+                                callback(RequestFrameOptions {
+                                    require_presentation: true,
+                                    force_render: true,
+                                });
+                            },
+                        );
+                    }
+                    callbacks.borrow_mut().request_frame = callback;
+                });
+        }
+
         if mouse_passthrough {
             this.set_mouse_passthrough(true);
         }
@@ -1051,6 +1077,10 @@ impl WaylandWindowStatePtr {
 
     pub fn set_focused(&self, focus: bool) {
         self.state.borrow_mut().active = focus;
+        self.state
+            .borrow()
+            .accessibility_root
+            .update_window_focus_state(focus);
         if !focus {
             self.release_native_pointer_lock().ok();
         }
@@ -1571,6 +1601,105 @@ impl PlatformWindow for WaylandWindow {
         self.borrow().renderer.gpu_specs().into()
     }
 
+    fn set_atlas_byte_budget(&self, budget: Option<u64>) {
+        self.borrow_mut().renderer.set_atlas_byte_budget(budget);
+    }
+
+    #[cfg(feature = "custom-shaders")]
+    fn create_gpu_buffer(
+        &self,
+        descriptor: crate::GpuBufferDescriptor,
+    ) -> Result<crate::GpuBuffer, crate::RenderTargetError> {
+        self.borrow_mut().renderer.create_gpu_buffer(descriptor)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn validate_gpu_buffer(
+        &self,
+        buffer: &crate::GpuBuffer,
+    ) -> Result<(), crate::RenderTargetError> {
+        self.borrow_mut().renderer.validate_gpu_buffer(buffer)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn write_gpu_buffer(
+        &self,
+        buffer: &crate::GpuBuffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), crate::RenderTargetError> {
+        self.borrow_mut()
+            .renderer
+            .write_gpu_buffer(buffer, offset, bytes)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn read_gpu_buffer(
+        &self,
+        buffer: &crate::GpuBuffer,
+    ) -> Result<Vec<u8>, crate::RenderTargetError> {
+        self.borrow_mut().renderer.read_gpu_buffer(buffer)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn dispatch_compute(
+        &self,
+        shader: &crate::ComputeHandle,
+        bindings: &crate::ComputeBindings,
+        groups: [u32; 3],
+    ) -> Result<(), crate::RenderTargetError> {
+        self.borrow_mut()
+            .renderer
+            .dispatch_compute(shader, bindings, groups)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn write_render_target(
+        &self,
+        target: &crate::RenderTarget,
+        pixels: &[u8],
+    ) -> Result<(), crate::RenderTargetError> {
+        self.borrow_mut()
+            .renderer
+            .write_render_target(target, pixels)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn create_render_target(
+        &self,
+        descriptor: crate::RenderTargetDescriptor,
+    ) -> std::result::Result<crate::RenderTarget, crate::RenderTargetError> {
+        self.borrow_mut().renderer.create_render_target(descriptor)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn render_shader(
+        &self,
+        target: &crate::RenderTarget,
+        shader: &crate::ShaderHandle,
+        bindings: &crate::ShaderBindings,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.borrow_mut()
+            .renderer
+            .render_shader(target, shader, bindings)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn read_render_target(
+        &self,
+        target: &crate::RenderTarget,
+    ) -> std::result::Result<crate::RenderTargetReadback, crate::RenderTargetError> {
+        self.borrow_mut().renderer.read_render_target(target)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn validate_render_target(
+        &self,
+        target: &crate::RenderTarget,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.borrow_mut().renderer.validate_render_target(target)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn set_render_target_byte_budget(&self, bytes: u64) {
+        self.borrow_mut()
+            .renderer
+            .set_render_target_byte_budget(bytes);
+    }
+    fn shed_memory(&self, level: crate::MemoryPressureLevel) {
+        self.borrow_mut().renderer.shed_memory(level);
+    }
+
     fn show(&self) {
         let mut state = self.borrow_mut();
         state.visible = true;
@@ -1633,6 +1762,9 @@ impl PlatformWindow for WaylandWindow {
         tree: &crate::AccessibilityTree,
     ) -> Vec<crate::AccessibilityActionRequest> {
         let state = self.borrow();
+        state
+            .accessibility_root
+            .update_window_focus_state(state.active);
         state.accessibility_root.update_tree(tree);
         state.accessibility_root.drain_actions(tree)
     }

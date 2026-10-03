@@ -5,8 +5,9 @@ use crate::{
     RenderImage, Resource, SMOOTH_SVG_SCALE_FACTOR, SharedString, SharedUri, StyleRefinement,
     Styled, SvgSize, Task, Window,
     assets::{
-        MAX_IMAGE_SOURCE_BYTES, checked_image_frame_len, collect_animation_frames,
-        decode_static_image, image_decode_limits, validate_image_source_bytes,
+        MAX_DECODED_IMAGE_BYTES, MAX_IMAGE_SOURCE_BYTES, checked_image_frame_len,
+        collect_animation_frames_with_budget, decode_static_image_with_budget, image_decode_limits,
+        validate_image_source_bytes,
     },
     px, swap_rgba_pa_to_bgra,
     util::is_uri,
@@ -853,12 +854,29 @@ impl Asset for ImageDecoder {
     type Source = Arc<Image>;
     type Output = Result<Arc<RenderImage>, ImageCacheError>;
 
+    fn cache_bytes(output: &Self::Output) -> u64 {
+        output.as_ref().map_or(0, |image| image.decoded_bytes())
+    }
+
+    fn on_cache_evict(output: &Self::Output, cx: &mut App) {
+        if let Ok(image) = output {
+            cx.drop_image(image.clone(), None);
+        }
+    }
+
     fn load(
         source: Self::Source,
         cx: &mut App,
     ) -> impl Future<Output = Self::Output> + Send + 'static {
         let renderer = cx.svg_renderer();
-        async move { source.to_image_data(renderer).map_err(Into::into) }
+        let max_bytes = cx.asset_image_decode_limit();
+        let slots = cx.image_load_slots.clone();
+        async move {
+            let _permit = slots.acquire().await;
+            source
+                .to_image_data_with_budget(renderer, max_bytes)
+                .map_err(Into::into)
+        }
     }
 }
 
@@ -870,16 +888,40 @@ impl Asset for ImageAssetLoader {
     type Source = Resource;
     type Output = Result<Arc<RenderImage>, ImageCacheError>;
 
+    fn cache_bytes(output: &Self::Output) -> u64 {
+        output.as_ref().map_or(0, |image| image.decoded_bytes())
+    }
+
+    fn on_cache_evict(output: &Self::Output, cx: &mut App) {
+        if let Ok(image) = output {
+            cx.drop_image(image.clone(), None);
+        }
+    }
+
     fn load(
         source: Self::Source,
         cx: &mut App,
     ) -> impl Future<Output = Self::Output> + Send + 'static {
+        let max_bytes = cx.asset_image_decode_limit();
+        Self::load_with_decoded_budget(source, cx, max_bytes)
+    }
+}
+
+impl ImageAssetLoader {
+    pub(crate) fn load_with_decoded_budget(
+        source: Resource,
+        cx: &mut App,
+        max_bytes: u64,
+    ) -> impl Future<Output = Result<Arc<RenderImage>, ImageCacheError>> + Send + 'static {
+        let max_bytes = max_bytes.min(MAX_DECODED_IMAGE_BYTES as u64);
+        let slots = cx.image_load_slots.clone();
         let client = cx.http_client();
         // TODO: Can we make SVGs always rescale?
         // let scale_factor = cx.scale_factor();
         let svg_renderer = cx.svg_renderer();
         let asset_source = cx.asset_source().clone();
         async move {
+            let _permit = slots.acquire().await;
             let bytes = match source.clone() {
                 Resource::Path(path) => read_image_file(path.as_ref())?,
                 Resource::Uri(uri) => {
@@ -920,32 +962,46 @@ impl Asset for ImageAssetLoader {
                 let data = match format {
                     ImageFormat::Gif => {
                         let mut decoder = GifDecoder::new(Cursor::new(&bytes))?;
-                        decoder.set_limits(image_decode_limits())?;
+                        let mut limits = image_decode_limits();
+                        limits.max_alloc = Some(max_bytes);
+                        decoder.set_limits(limits)?;
                         let (width, height) = decoder.dimensions();
-                        checked_image_frame_len(width, height)?;
-                        collect_animation_frames(decoder.into_frames())?
+                        if checked_image_frame_len(width, height)? as u64 > max_bytes {
+                            return Err(anyhow::anyhow!(
+                                "declared decoded image dimensions exceed the cache byte budget"
+                            )
+                            .into());
+                        }
+                        collect_animation_frames_with_budget(decoder.into_frames(), max_bytes)?
                     }
                     ImageFormat::WebP => {
                         let mut decoder = WebPDecoder::new(Cursor::new(&bytes))?;
-                        decoder.set_limits(image_decode_limits())?;
+                        let mut limits = image_decode_limits();
+                        limits.max_alloc = Some(max_bytes);
+                        decoder.set_limits(limits)?;
                         let (width, height) = decoder.dimensions();
-                        checked_image_frame_len(width, height)?;
+                        if checked_image_frame_len(width, height)? as u64 > max_bytes {
+                            return Err(anyhow::anyhow!(
+                                "declared decoded image dimensions exceed the cache byte budget"
+                            )
+                            .into());
+                        }
 
                         if decoder.has_animation() {
                             let _ = decoder.set_background_color(Rgba([0, 0, 0, 0]));
-                            collect_animation_frames(decoder.into_frames())?
+                            collect_animation_frames_with_budget(decoder.into_frames(), max_bytes)?
                         } else {
-                            decode_static_image(&bytes, format)?
+                            decode_static_image_with_budget(&bytes, format, max_bytes)?
                         }
                     }
-                    _ => decode_static_image(&bytes, format)?,
+                    _ => decode_static_image_with_budget(&bytes, format, max_bytes)?,
                 };
 
                 RenderImage::new(data)
             } else {
                 let pixmap =
                     // TODO: Can we make svgs always rescale?
-                    svg_renderer.render_pixmap(&bytes, SvgSize::ScaleFactor(SMOOTH_SVG_SCALE_FACTOR))?;
+                    svg_renderer.render_pixmap_with_budget(&bytes, SvgSize::ScaleFactor(SMOOTH_SVG_SCALE_FACTOR), max_bytes)?;
 
                 let mut buffer =
                     ImageBuffer::from_raw(pixmap.width(), pixmap.height(), pixmap.take())

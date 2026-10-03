@@ -378,6 +378,21 @@ impl TestAtlas {
 }
 
 impl PlatformAtlas for TestAtlas {
+    fn get_or_insert_with_size<'a>(
+        &self,
+        key: &AtlasKey,
+        size: Size<crate::DevicePixels>,
+        build: &mut dyn FnMut() -> anyhow::Result<
+            Option<(Size<crate::DevicePixels>, std::borrow::Cow<'a, [u8]>)>,
+        >,
+    ) -> anyhow::Result<Option<AtlasTile>> {
+        crate::atlas_payload_len(size, key.texture_kind())?;
+        self.get_or_insert_with(key, build)
+    }
+
+    // This headless test backend owns no raster storage or GPU resources.
+    fn set_hard_admission_limits(&self, _: crate::AtlasAdmissionLimits) {}
+
     fn get_or_insert_with<'a>(
         &self,
         key: &crate::AtlasKey,
@@ -439,6 +454,34 @@ mod tests {
         requested: Rc<Cell<bool>>,
     }
 
+    struct AsyncModelView;
+
+    impl Render for AsyncModelView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            Empty
+        }
+    }
+
+    #[kael::test]
+    fn model_notifications_restart_idle_frame_polling(cx: &mut TestAppContext) {
+        let (view, window) = cx.add_window_view(|_, _| AsyncModelView);
+        let test_window = window.test_window(window.window_handle());
+        test_window.run_request_frame(RequestFrameOptions::default());
+        assert!(!test_window.0.lock().frame_polling_active);
+
+        // A worker completion updates a model without going through a window
+        // input event. Multiple notifications should require only one wakeup.
+        cx.update(|cx| {
+            view.update(cx, |_, cx| {
+                cx.notify();
+                cx.notify();
+            });
+        });
+        assert!(test_window.0.lock().frame_polling_active);
+        test_window.run_request_frame(RequestFrameOptions::default());
+        assert!(!test_window.0.lock().frame_polling_active);
+    }
+
     impl Render for AnimationFrameRequester {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             let requested = self.requested.clone();
@@ -461,6 +504,7 @@ mod tests {
         let handle = cx.window_handle();
         let test_window = cx.test_window(handle);
 
+        test_window.run_request_frame(RequestFrameOptions::default());
         assert!(!test_window.0.lock().frame_polling_active);
 
         cx.update(|window, _| {

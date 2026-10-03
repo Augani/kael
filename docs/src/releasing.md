@@ -48,10 +48,31 @@ assets, and guides that stop including the compiled quick-start source. The
 quick-start example is compiled on native and Wasm targets in Platform
 Readiness.
 
-The publication preflight selects all 34 crates in dependency order, checks
+The publication preflight selects all 38 crates in dependency order, checks
 their license and package contents, builds the actual `.crate` archives as one
 unpublished workspace set, compiles every extracted archive, and enforces the
 crates.io 10 MiB compressed archive limit. It does not upload anything.
+
+`kael_accesskit_macos` is the licensed Kael-maintained fork of AccessKit 0.26.3.
+The release script publishes it before `kael`; the macOS target dependency has
+both a path and version so Git/path consumers receive the adapter directly and
+registry consumers resolve the separately published crate. Its upstream hashes,
+licenses, and patch record are in `vendor/accesskit_macos/PATCHES.md`. Run its
+actual AppKit protocol regression on macOS before a release:
+
+```sh
+cargo test --locked -p kael_accesskit_macos --lib
+cargo test --locked -p kael_accesskit_macos --test native_outline --test native_text_selection
+```
+
+The named `kael_accesskit_atspi_common`, `kael_accesskit_unix` and
+`kael_accesskit_windows` forks also ship through direct path/version/package
+aliases. Publish the AT-SPI common package before the Unix adapter, and publish
+all platform adapters before `kael`; `publish-all.sh` records that order.
+Original sources, hashes, licenses and patch records are retained in the
+respective vendor directories. Run the actual Linux AT-SPI and Windows UIA
+clients against the shared Unicode Editor fixture before treating text-provider
+support as release evidence. Portable translation tests are additional checks.
 
 `verify-cross-targets.sh` uses Zig to link the portable Linux test graphs from
 the development machine and separately checks the public Wasm graphs. It is a

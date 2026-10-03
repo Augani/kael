@@ -34346,6 +34346,16 @@ impl LayoutStylingHandoffBuilder {
     }
 }
 
+pub(crate) struct CachedAssetTask {
+    task: Box<dyn Any>,
+    generation: Arc<()>,
+    last_used: u64,
+    completed_bytes: Option<u64>,
+    on_evict: fn(&dyn Any, &mut App),
+    // Keeping the observer here makes remove/clear cancel cache-owned work.
+    _observer: Task<()>,
+}
+
 /// Contains the state of the full application, and passed as a reference to a variety of callbacks.
 /// Other [Context] derefs to this type.
 /// You need a reference to an `App` to access the state of a [Entity].
@@ -34360,7 +34370,13 @@ pub struct App {
     pub(crate) background_executor: BackgroundExecutor,
     pub(crate) foreground_executor: ForegroundExecutor,
     started_at: Instant,
-    pub(crate) loading_assets: FxHashMap<(TypeId, u64), Box<dyn Any>>,
+    pub(crate) loading_assets: FxHashMap<(TypeId, u64), CachedAssetTask>,
+    asset_cache_tick: u64,
+    asset_cache_max_entries: usize,
+    asset_cache_max_bytes: u64,
+    asset_cache_max_pending: usize,
+    asset_cache_waiters: FxHashSet<EntityId>,
+    pub(crate) image_load_slots: Arc<async_lock::Semaphore>,
     asset_source: Arc<dyn AssetSource>,
     pub(crate) svg_renderer: SvgRenderer,
     http_client: Arc<dyn HttpClient>,
@@ -34379,6 +34395,7 @@ pub struct App {
         FxHashMap<TypeId, Vec<Rc<dyn Fn(&dyn Any, DispatchPhase, &mut Self)>>>,
     pending_effects: VecDeque<Effect>,
     pub(crate) pending_notifications: FxHashSet<EntityId>,
+    pending_frame_polling: FxHashSet<WindowId>,
     pub(crate) pending_global_notifications: FxHashSet<TypeId>,
     pub(crate) observers: SubscriberSet<EntityId, Handler>,
     // TypeId is the type of the event that the listener callback expects
@@ -34460,6 +34477,12 @@ impl App {
                 started_at: Instant::now(),
                 svg_renderer: SvgRenderer::new(asset_source.clone()),
                 loading_assets: Default::default(),
+                asset_cache_tick: 0,
+                asset_cache_max_entries: 256,
+                asset_cache_max_bytes: 64 * 1024 * 1024,
+                asset_cache_max_pending: 64,
+                asset_cache_waiters: FxHashSet::default(),
+                image_load_slots: Arc::new(async_lock::Semaphore::new(4)),
                 asset_source,
                 http_client,
                 globals_by_type: FxHashMap::default(),
@@ -34476,6 +34499,7 @@ impl App {
                 global_action_listeners: FxHashMap::default(),
                 pending_effects: VecDeque::new(),
                 pending_notifications: FxHashSet::default(),
+                pending_frame_polling: FxHashSet::default(),
                 pending_global_notifications: FxHashSet::default(),
                 observers: SubscriberSet::new(),
                 tracked_entities: FxHashMap::default(),
@@ -37960,6 +37984,27 @@ impl App {
                 }
             }
         }
+
+        // Model notifications can arrive after the platform stopped its idle
+        // frame clock. Resume only affected windows after all observer effects
+        // have settled, including the test-support draw that prepares a scene
+        // without presenting it. Coalesce repeated notifications per window.
+        let mut pending = mem::take(&mut self.pending_frame_polling);
+        for id in pending.drain() {
+            match self.windows.get(id) {
+                Some(Some(window)) => window.update_frame_polling(),
+                Some(None) => {
+                    // A reentrant update still owns the window. Its outer
+                    // effect flush will run after the lease is returned.
+                    self.pending_frame_polling.insert(id);
+                }
+                None => {}
+            }
+        }
+        // Retain the bounded window-set allocation across update cycles.
+        if self.pending_frame_polling.is_empty() {
+            self.pending_frame_polling = pending;
+        }
     }
 
     /// Repeatedly called during `flush_effects` to release any entities whose
@@ -37973,6 +38018,7 @@ impl App {
             }
 
             for (entity_id, mut entity) in dropped {
+                self.asset_cache_waiters.remove(&entity_id);
                 self.observers.remove(&entity_id);
                 self.event_listeners.remove(&entity_id);
                 for release_callback in self.release_listeners.remove(&entity_id) {
@@ -38029,10 +38075,11 @@ impl App {
     }
 
     fn apply_refresh_effect(&mut self) {
-        for window in self.windows.values_mut() {
+        for (id, window) in self.windows.iter_mut() {
             if let Some(window) = window.as_mut() {
                 window.refreshing = true;
                 window.invalidator.set_dirty(true);
+                self.pending_frame_polling.insert(id);
             }
         }
     }
@@ -39101,35 +39148,295 @@ impl App {
     /// Remove an asset from GPUI's cache
     pub fn remove_asset<A: Asset>(&mut self, source: &A::Source) {
         let asset_id = (TypeId::of::<A>(), hash(source));
-        self.loading_assets.remove(&asset_id);
+        if let Some(entry) = self.loading_assets.remove(&asset_id) {
+            self.release_cached_asset(entry);
+            self.resume_deferred_asset_requests();
+        }
+        if self.loading_assets.is_empty() {
+            self.loading_assets = FxHashMap::default();
+        }
+    }
+
+    /// Bound completed asset retention by entry count and reported output bytes.
+    /// Defaults to 256 entries and 64 MiB. Pending single-flight tasks are not
+    /// evicted by this policy; dropping their final shared owner cancels them.
+    /// A zero limit disables completed retention. Heap-backed custom assets
+    /// should implement [`Asset::cache_bytes`].
+    pub fn set_completed_asset_cache_limits(&mut self, max_entries: usize, max_bytes: u64) {
+        self.asset_cache_max_entries = max_entries;
+        self.asset_cache_max_bytes = max_bytes;
+        self.trim_completed_assets();
+    }
+
+    /// Set the pending-work cap used by [`Self::fetch_asset_checked`] and window
+    /// asset helpers (default 64, normalized to 1..=4096). Existing shared loads
+    /// remain valid. Legacy [`Self::fetch_asset`] permits explicit unbounded admission.
+    pub fn set_pending_asset_limit(&mut self, max_pending: usize) {
+        self.asset_cache_max_pending = max_pending.clamp(1, 4096);
+    }
+
+    /// Number of unfinished tasks owned by the app's shared asset cache.
+    pub fn pending_asset_count(&self) -> usize {
+        self.loading_assets
+            .values()
+            .filter(|entry| entry.completed_bytes.is_none())
+            .count()
+    }
+
+    /// Fetch an asset with pending admission checked before invoking its loader.
+    /// Existing requests always share their task. A full cache returns an error;
+    /// retry after another request completes. Other owners' shared handles remain
+    /// valid if an entry is removed or evicted.
+    pub fn fetch_asset_checked<A: Asset>(
+        &mut self,
+        source: &A::Source,
+    ) -> Result<(Shared<Task<A::Output>>, bool)> {
+        let key = (TypeId::of::<A>(), hash(source));
+        anyhow::ensure!(
+            self.loading_assets.contains_key(&key)
+                || self.pending_asset_count() < self.asset_cache_max_pending,
+            "asset cache pending-load limit reached; retry after a load completes"
+        );
+        Ok(self.fetch_asset::<A>(source))
+    }
+
+    pub(crate) fn defer_asset_retry(&mut self, entity: EntityId) {
+        self.asset_cache_waiters.insert(entity);
+    }
+
+    /// Number of completed outputs retained by the app-wide asset cache.
+    pub fn completed_asset_count(&self) -> usize {
+        self.loading_assets
+            .values()
+            .filter(|entry| entry.completed_bytes.is_some())
+            .count()
+    }
+
+    /// Reported bytes of completed outputs retained by the app-wide asset cache.
+    pub fn completed_asset_bytes(&self) -> u64 {
+        self.loading_assets
+            .values()
+            .filter_map(|entry| entry.completed_bytes)
+            .fold(0, u64::saturating_add)
+    }
+
+    pub(crate) fn asset_image_decode_limit(&self) -> u64 {
+        if self.asset_cache_max_bytes == 0 {
+            crate::assets::MAX_DECODED_IMAGE_BYTES as u64
+        } else {
+            self.asset_cache_max_bytes
+                .min(crate::assets::MAX_DECODED_IMAGE_BYTES as u64)
+        }
+    }
+
+    pub(crate) fn resume_deferred_asset_requests(&mut self) {
+        for entity in std::mem::take(&mut self.asset_cache_waiters) {
+            self.notify(entity);
+        }
+    }
+
+    /// Release completed cached outputs without interrupting shared pending loads.
+    pub fn clear_completed_asset_cache(&mut self) {
+        let _ = self.clear_completed_asset_cache_checked();
+    }
+
+    /// Clear completed outputs while reporting and containing eviction-hook panics.
+    /// Every completed output is removed even if another owner's hook panics.
+    pub fn clear_completed_asset_cache_checked(&mut self) -> Result<usize> {
+        let mut evicted = 0;
+        let mut hook_panicked = false;
+        let mut keys: Vec<_> = self
+            .loading_assets
+            .iter()
+            .filter_map(|(key, entry)| {
+                entry
+                    .completed_bytes
+                    .is_some()
+                    .then_some((*key, entry.generation.clone()))
+            })
+            .collect();
+        keys.sort_by_key(|(key, _)| *key);
+        for (key, generation) in keys {
+            if self.loading_assets.get(&key).is_some_and(|entry| {
+                entry.completed_bytes.is_some() && Arc::ptr_eq(&entry.generation, &generation)
+            }) && let Some(entry) = self.loading_assets.remove(&key)
+            {
+                hook_panicked |= self.release_cached_asset(entry);
+                evicted += 1;
+            }
+        }
+        self.loading_assets.shrink_to_fit();
+        anyhow::ensure!(!hook_panicked, "asset cache eviction hook panicked");
+        Ok(evicted)
+    }
+
+    /// Release cache ownership of unfinished asset loads. Work cancels when no
+    /// external shared owner remains; external callers can still await their
+    /// handles. Critical memory pressure invokes this after completed eviction.
+    pub fn clear_pending_asset_cache_checked(&mut self) -> Result<usize> {
+        let mut keys: Vec<_> = self
+            .loading_assets
+            .iter()
+            .filter_map(|(key, entry)| {
+                entry
+                    .completed_bytes
+                    .is_none()
+                    .then_some((*key, entry.generation.clone()))
+            })
+            .collect();
+        keys.sort_by_key(|(key, _)| *key);
+        let mut removed = 0;
+        let mut hook_panicked = false;
+        for (key, generation) in keys {
+            if self.loading_assets.get(&key).is_some_and(|entry| {
+                entry.completed_bytes.is_none() && Arc::ptr_eq(&entry.generation, &generation)
+            }) && let Some(entry) = self.loading_assets.remove(&key)
+            {
+                hook_panicked |= self.release_cached_asset(entry);
+                removed += 1;
+            }
+        }
+        self.loading_assets.shrink_to_fit();
+        self.resume_deferred_asset_requests();
+        anyhow::ensure!(!hook_panicked, "asset cache eviction hook panicked");
+        Ok(removed)
+    }
+
+    fn release_cached_asset(&mut self, entry: CachedAssetTask) -> bool {
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            (entry.on_evict)(entry.task.as_ref(), self);
+        }))
+        .is_err();
+        if panicked {
+            log::error!("asset cache eviction hook panicked");
+        }
+        panicked
+    }
+
+    fn trim_completed_assets(&mut self) {
+        let mut count = self.completed_asset_count();
+        let mut bytes: u128 = self
+            .loading_assets
+            .values()
+            .filter_map(|entry| entry.completed_bytes)
+            .map(u128::from)
+            .sum();
+        if count <= self.asset_cache_max_entries && bytes <= u128::from(self.asset_cache_max_bytes)
+        {
+            return;
+        }
+        let mut candidates: Vec<_> = self
+            .loading_assets
+            .iter()
+            .filter_map(|(key, entry)| {
+                entry
+                    .completed_bytes
+                    .map(|_| (*key, entry.last_used, entry.generation.clone()))
+            })
+            .collect();
+        candidates.sort_by_key(|(key, used, _)| (*used, *key));
+        for (key, _, generation) in candidates {
+            if count <= self.asset_cache_max_entries
+                && bytes <= u128::from(self.asset_cache_max_bytes)
+            {
+                break;
+            }
+            if self.loading_assets.get(&key).is_some_and(|entry| {
+                entry.completed_bytes.is_some() && Arc::ptr_eq(&entry.generation, &generation)
+            }) && let Some(entry) = self.loading_assets.remove(&key)
+            {
+                self.release_cached_asset(entry);
+                // Eviction hooks may release other outputs or change limits.
+                count = self.completed_asset_count();
+                bytes = self
+                    .loading_assets
+                    .values()
+                    .filter_map(|entry| entry.completed_bytes)
+                    .map(u128::from)
+                    .sum();
+            }
+        }
+    }
+
+    fn next_asset_cache_tick(&mut self) -> u64 {
+        if self.asset_cache_tick == u64::MAX {
+            let mut order: Vec<_> = self
+                .loading_assets
+                .iter()
+                .map(|(key, entry)| (*key, entry.last_used))
+                .collect();
+            order.sort_by_key(|(key, used)| (*used, *key));
+            for (rank, (key, _)) in order.into_iter().enumerate() {
+                self.loading_assets.get_mut(&key).unwrap().last_used = rank as u64;
+            }
+            self.asset_cache_tick = self.loading_assets.len() as u64;
+        }
+        self.asset_cache_tick += 1;
+        self.asset_cache_tick
     }
 
     /// Asynchronously load an asset, if the asset hasn't finished loading this will return None.
     ///
     /// Note that the multiple calls to this method will only result in one `Asset::load` call at a
-    /// time, and the results of this call will be cached
+    /// time. Completed results use the app's bounded LRU retention policy. This legacy
+    /// API admits pending loads without a cap; framework-owned requests use
+    /// [`Self::fetch_asset_checked`] to bound admission before invoking the loader.
     pub fn fetch_asset<A: Asset>(&mut self, source: &A::Source) -> (Shared<Task<A::Output>>, bool) {
         let asset_id = (TypeId::of::<A>(), hash(source));
-        let mut is_first = false;
-        let task = self
-            .loading_assets
-            .remove(&asset_id)
-            .map(
-                |boxed_task| match boxed_task.downcast::<Shared<Task<A::Output>>>() {
-                    Ok(task) => *task,
-                    Err(_) => panic!("stored asset task type did not match {}", type_name::<A>()),
+        let tick = self.next_asset_cache_tick();
+        if let Some(entry) = self.loading_assets.get_mut(&asset_id) {
+            entry.last_used = tick;
+            let task = entry
+                .task
+                .downcast_ref::<Shared<Task<A::Output>>>()
+                .unwrap_or_else(|| {
+                    panic!("stored asset task type did not match {}", type_name::<A>())
+                })
+                .clone();
+            return (task, false);
+        }
+        let future = A::load(source.clone(), self);
+        let task = self.background_executor().spawn(future).shared();
+        let generation = Arc::new(());
+        let observer = self.spawn({
+            let task = task.clone();
+            let generation = generation.clone();
+            async move |cx| {
+                let output = task.await;
+                let _ = cx.update(|cx| {
+                    if let Some(entry) = cx.loading_assets.get_mut(&asset_id)
+                        && Arc::ptr_eq(&entry.generation, &generation)
+                    {
+                        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| A::cache_bytes(&output))) {
+                            Ok(bytes) => { entry.completed_bytes = Some(bytes); cx.trim_completed_assets(); }
+                            Err(_) => {
+                                log::error!("asset cache byte-accounting hook panicked; output is not retained");
+                                if let Some(entry) = cx.loading_assets.remove(&asset_id) { cx.release_cached_asset(entry); }
+                            }
+                        }
+                        cx.resume_deferred_asset_requests();
+                    }
+                });
+            }
+        });
+        self.loading_assets.insert(
+            asset_id,
+            CachedAssetTask {
+                task: Box::new(task.clone()),
+                generation,
+                last_used: tick,
+                completed_bytes: None,
+                on_evict: |task, cx| {
+                    if let Some(task) = task.downcast_ref::<Shared<Task<A::Output>>>()
+                        && let Some(output) = task.peek()
+                    {
+                        A::on_cache_evict(output, cx);
+                    }
                 },
-            )
-            .unwrap_or_else(|| {
-                is_first = true;
-                let future = A::load(source.clone(), self);
-
-                self.background_executor().spawn(future).shared()
-            });
-
-        self.loading_assets.insert(asset_id, Box::new(task.clone()));
-
-        (task, is_first)
+                _observer: observer,
+            },
+        );
+        (task, true)
     }
 
     /// Obtain a new [`FocusHandle`], which allows you to track and manipulate the keyboard focus
@@ -39155,8 +39462,10 @@ impl App {
                     .push_back(Effect::Notify { emitter: entity_id });
             }
         } else {
-            for invalidator in window_invalidators.values() {
-                invalidator.invalidate_view(entity_id, self);
+            for (id, invalidator) in &window_invalidators {
+                if invalidator.invalidate_view(entity_id, self) {
+                    self.pending_frame_polling.insert(*id);
+                }
             }
         }
 

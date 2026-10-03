@@ -2851,30 +2851,34 @@ impl Element for Div {
             .interactivity
             .accessibility_attributes
             .as_ref()
-            .filter(|_| global_id.is_none())
+            .filter(|attributes| global_id.is_none() && attributes.id.is_none())
             .map(|_| window.next_anonymous_accessibility_id());
-        let accessibility_id = self
-            .interactivity
-            .accessibility_attributes
-            .as_ref()
-            .map(|_| {
-                window.with_optional_element_state::<InteractiveElementState, _>(
-                    global_id,
-                    |element_state, _window| {
-                        let mut element_state =
-                            element_state.map(|state| state.unwrap_or_default());
-                        let id = element_state
-                            .as_mut()
-                            .and_then(|state| state.accessibility_id)
-                            .or(anonymous_accessibility_id)
-                            .unwrap_or_else(crate::AccessibilityId::new);
-                        if let Some(state) = element_state.as_mut() {
-                            state.accessibility_id = Some(id);
-                        }
-                        (id, element_state)
-                    },
-                )
-            });
+        let accessibility_id =
+            self.interactivity
+                .accessibility_attributes
+                .as_ref()
+                .map(|attributes| {
+                    window.with_optional_element_state::<InteractiveElementState, _>(
+                        global_id,
+                        |element_state, _window| {
+                            let mut element_state =
+                                element_state.map(|state| state.unwrap_or_default());
+                            let id = attributes
+                                .id
+                                .or_else(|| {
+                                    element_state
+                                        .as_mut()
+                                        .and_then(|state| state.accessibility_id)
+                                        .or(anonymous_accessibility_id)
+                                })
+                                .unwrap_or_else(crate::AccessibilityId::new);
+                            if let Some(state) = element_state.as_mut() {
+                                state.accessibility_id = Some(id);
+                            }
+                            (id, element_state)
+                        },
+                    )
+                });
 
         window.with_image_cache(image_cache, |window| {
             let accessibility_node =
@@ -3058,18 +3062,29 @@ impl Interactivity {
             let window_handle = window.window_handle();
             let async_cx = cx.to_async();
             let executor = cx.foreground_executor().clone();
-            window.on_accessibility_action(node.id, crate::AccessibilityAction::Focus, move |_| {
-                let focus_handle = focus_handle.clone();
-                let mut async_cx = async_cx.clone();
-                executor
-                    .spawn(async move {
-                        _ = window_handle.update(&mut async_cx, |_, window, _| {
-                            window.focus(&focus_handle);
-                            window.refresh();
-                        });
-                    })
-                    .detach();
-            });
+            window.on_frame_accessibility_action(
+                node.id,
+                crate::AccessibilityAction::Focus,
+                move |request| {
+                    let focus_handle = focus_handle.clone();
+                    let mut async_cx = async_cx.clone();
+                    executor
+                        .spawn(async move {
+                            _ = window_handle.update(&mut async_cx, |_, window, _| {
+                                if window
+                                    .accessibility_tree()
+                                    .validate_action_request(request)
+                                    .is_none()
+                                {
+                                    return;
+                                }
+                                window.focus(&focus_handle);
+                                window.refresh();
+                            });
+                        })
+                        .detach();
+                },
+            );
         }
 
         for (action, listener) in &self.accessibility_action_listeners {
@@ -3082,12 +3097,17 @@ impl Interactivity {
             let window_handle = window.window_handle();
             let async_cx = cx.to_async();
             let executor = cx.foreground_executor().clone();
-            window.on_accessibility_action(node.id, action, move |request| {
+            window.on_frame_accessibility_action(node.id, action, move |request| {
                 let listener = listener.clone();
                 let mut async_cx = async_cx.clone();
                 executor
                     .spawn(async move {
                         _ = window_handle.update(&mut async_cx, |_, window, cx| {
+                            let Some(request) =
+                                window.accessibility_tree().validate_action_request(request)
+                            else {
+                                return;
+                            };
                             listener(&request, window, cx);
                             window.refresh();
                         });
@@ -3113,12 +3133,19 @@ impl Interactivity {
             let window_handle = window.window_handle();
             let async_cx = cx.to_async();
             let executor = cx.foreground_executor().clone();
-            window.on_accessibility_action(node.id, action, move |_| {
+            window.on_frame_accessibility_action(node.id, action, move |request| {
                 let listeners = listeners.clone();
                 let mut async_cx = async_cx.clone();
                 executor
                     .spawn(async move {
                         _ = window_handle.update(&mut async_cx, |_, window, cx| {
+                            if window
+                                .accessibility_tree()
+                                .validate_action_request(request)
+                                .is_none()
+                            {
+                                return;
+                            }
                             let event = ClickEvent::Keyboard(KeyboardClickEvent {
                                 button: KeyboardButton::Enter,
                                 bounds,
@@ -6564,6 +6591,7 @@ mod test {
         ImplicitStyleAnimationState, ImplicitVisualStyle, TOOLTIP_SHOW_DELAY, TooltipFocusBehavior,
         TransitionConfig, auto_scrollbar_should_poll_for_fade,
     };
+    use crate::prelude::FluentBuilder as _;
     use crate::scroll_elasticity::{
         add_scroll_elasticity, advance_scroll_elasticity, apply_scroll_delta_axis,
     };
@@ -6579,10 +6607,113 @@ mod test {
     use std::{
         cell::{Cell, RefCell},
         rc::Rc,
-        time::{Duration, Instant},
+        time::Duration,
     };
+    use web_time::Instant;
 
     crate::actions!(context_menu_test, [PrimaryMenuAction, ShareViaLinkAction]);
+
+    struct DeferredNativeHost {
+        mode: Rc<Cell<u8>>,
+        calls: Rc<Cell<usize>>,
+        focus: FocusHandle,
+    }
+    impl Render for DeferredNativeHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+            let disabled = self.mode.get() == 1;
+            div().when(self.mode.get() != 2, |root| {
+                let attributes = || {
+                    AccessibilityAttributes::button("Deferred native control").states(if disabled {
+                        AccessibilityState::DISABLED
+                    } else {
+                        AccessibilityState::NONE
+                    })
+                };
+                root.child(
+                    div()
+                        .id("deferred-native-pointer")
+                        .accessibility(attributes())
+                        .track_focus(&self.focus)
+                        .on_click({
+                            let calls = self.calls.clone();
+                            move |_, _, _| calls.set(calls.get() + 1)
+                        }),
+                )
+                .child(
+                    div()
+                        .id("deferred-native-listener")
+                        .accessibility(attributes())
+                        .on_accessibility_action(crate::AccessibilityAction::Click, {
+                            let calls = self.calls.clone();
+                            move |_, _, _| calls.set(calls.get() + 1)
+                        }),
+                )
+            })
+        }
+    }
+
+    #[crate::test]
+    fn deferred_native_callbacks_recheck_disabled_and_removed_nodes(cx: &mut TestAppContext) {
+        let mode = Rc::new(Cell::new(0));
+        let calls = Rc::new(Cell::new(0));
+        let (host, window) = cx.add_window_view({
+            let mode = mode.clone();
+            let calls = calls.clone();
+            move |_, cx| DeferredNativeHost {
+                mode,
+                calls,
+                focus: cx.focus_handle(),
+            }
+        });
+        for mode_after_queue in [1, 2, 0] {
+            mode.set(0);
+            window.update(|window, cx| {
+                window.draw(cx).clear();
+                let focus = &host.read(cx).focus;
+                window.blur();
+                assert!(!focus.is_focused(window));
+                let nodes = window
+                    .accessibility_tree()
+                    .nodes
+                    .values()
+                    .filter(|node| node.label.as_deref() == Some("Deferred native control"))
+                    .map(|node| node.id)
+                    .collect::<Vec<_>>();
+                assert_eq!(nodes.len(), 2);
+                for id in &nodes {
+                    window.dispatch_accessibility_action_for_test(
+                        crate::AccessibilityActionRequest::new(
+                            *id,
+                            crate::AccessibilityAction::Click,
+                        ),
+                    );
+                }
+                // Only the pointer-backed control tracks focus.
+                for id in nodes {
+                    if window
+                        .has_accessibility_action_handler(id, crate::AccessibilityAction::Focus)
+                    {
+                        window.dispatch_accessibility_action_for_test(
+                            crate::AccessibilityActionRequest::new(
+                                id,
+                                crate::AccessibilityAction::Focus,
+                            ),
+                        );
+                    }
+                }
+                mode.set(mode_after_queue);
+                window.draw(cx).clear();
+            });
+            window.run_until_parked();
+            window.update(|window, cx| {
+                assert_eq!(calls.get(), if mode_after_queue == 0 { 2 } else { 0 });
+                assert_eq!(
+                    host.read(cx).focus.is_focused(window),
+                    mode_after_queue == 0
+                );
+            });
+        }
+    }
 
     struct CountingProbe {
         height: crate::Pixels,
@@ -6673,7 +6804,8 @@ mod test {
 
     #[test]
     fn scroll_elasticity_animates_back_to_zero() {
-        use std::time::{Duration, Instant};
+        use std::time::Duration;
+        use web_time::Instant;
 
         let mut overscroll = px(40.0);
         let mut last_advance = None;

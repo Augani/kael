@@ -2,6 +2,10 @@
 resolver = "2"
 members = [
     "crates/kael",
+    "vendor/accesskit_macos",
+    "vendor/accesskit_atspi_common",
+    "vendor/accesskit_unix",
+    "vendor/accesskit_windows",
     "crates/kael-cli",
     "crates/kael-media",
     "crates/kael-macros",

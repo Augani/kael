@@ -451,6 +451,7 @@ impl WebWindow {
             // restore the context rather than accepting permanent loss.
             event.prevent_default();
             inner.context_lost.set(true);
+            inner.renderer.borrow_mut().invalidate_context_resources();
             cancel_scheduled_frame(&inner);
             let _ = inner
                 .canvas
@@ -1135,6 +1136,72 @@ impl HasDisplayHandle for WebWindow {
 }
 
 impl PlatformWindow for WebWindow {
+    #[cfg(feature = "custom-shaders")]
+    fn write_render_target(
+        &self,
+        target: &crate::RenderTarget,
+        pixels: &[u8],
+    ) -> Result<(), crate::RenderTargetError> {
+        self.0
+            .renderer
+            .borrow_mut()
+            .write_render_target(target, pixels)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn create_render_target(
+        &self,
+        descriptor: crate::RenderTargetDescriptor,
+    ) -> Result<crate::RenderTarget, crate::RenderTargetError> {
+        self.0
+            .renderer
+            .borrow_mut()
+            .create_render_target(descriptor)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn render_shader(
+        &self,
+        target: &crate::RenderTarget,
+        shader: &crate::ShaderHandle,
+        bindings: &crate::ShaderBindings,
+    ) -> Result<(), crate::RenderTargetError> {
+        self.0
+            .renderer
+            .borrow_mut()
+            .render_shader(target, shader, bindings)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn read_render_target(
+        &self,
+        target: &crate::RenderTarget,
+    ) -> Result<crate::RenderTargetReadback, crate::RenderTargetError> {
+        self.0.renderer.borrow_mut().read_render_target(target)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn validate_render_target(
+        &self,
+        target: &crate::RenderTarget,
+    ) -> Result<(), crate::RenderTargetError> {
+        self.0.renderer.borrow().validate_render_target(target)
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn set_render_target_byte_budget(&self, bytes: u64) {
+        self.0
+            .renderer
+            .borrow_mut()
+            .set_render_target_byte_budget(bytes);
+    }
+    fn set_atlas_byte_budget(&self, bytes: Option<u64>) {
+        self.0.renderer.borrow().set_atlas_byte_budget(bytes);
+    }
+    fn shed_memory(&self, level: crate::MemoryPressureLevel) {
+        if level != crate::MemoryPressureLevel::Normal {
+            let mut renderer = self.0.renderer.borrow_mut();
+            renderer.shed_scene_scratch();
+            renderer.shed_atlas_memory();
+            #[cfg(feature = "custom-shaders")]
+            renderer.shed_shader_memory();
+        }
+    }
     fn bounds(&self) -> Bounds<Pixels> {
         self.0.bounds.get()
     }

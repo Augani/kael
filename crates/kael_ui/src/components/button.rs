@@ -641,4 +641,37 @@ mod tests {
         });
         assert_eq!(activations.get(), 1, "Space must activate once");
     }
+
+    #[kael::test]
+    fn accessibility_press_routes_to_button_handler_without_pointer_input(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral()));
+        let activations = Rc::new(Cell::new(0));
+        let (_view, window) = cx.add_window_view({
+            let activations = activations.clone();
+            move |_, _| ButtonActivationHost { activations }
+        });
+        let button_id = window.update(|window, cx| {
+            window.draw(cx).clear();
+            let button = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some("Activate"))
+                .expect("accessible button");
+            assert!(button.actions.contains(&kael::AccessibilityAction::Click));
+            assert!(
+                window
+                    .has_accessibility_action_handler(button.id, kael::AccessibilityAction::Click)
+            );
+            button.id
+        });
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(kael::AccessibilityActionRequest::new(
+                button_id,
+                kael::AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        assert_eq!(activations.get(), 1);
+    }
 }

@@ -3,6 +3,7 @@ mod font_features;
 mod line;
 mod line_layout;
 mod line_wrapper;
+mod text_geometry;
 
 pub use font_fallbacks::*;
 pub use font_features::*;
@@ -11,6 +12,7 @@ pub use line_layout::*;
 pub use line_wrapper::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+pub use text_geometry::*;
 
 use crate::{
     Bounds, DevicePixels, Hsla, Pixels, PlatformTextSystem, Point, Result, SharedString, Size,
@@ -103,6 +105,15 @@ impl TextSystem {
     /// Add a font's data to the text system.
     pub fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
         self.platform_text_system.add_fonts(fonts)
+    }
+
+    /// Release the shared shaped-text cache and its bookkeeping storage.
+    /// Currently displayed or caller-owned layouts remain valid through their
+    /// shared handles. The two cache pools retain at most 4,096 entries and
+    /// 8 MiB of charged text, glyph, run and wrapping allocations in total;
+    /// hash-table metadata is bounded separately by the entry count.
+    pub fn clear_shaped_text_cache(&self) {
+        self.global_line_layout_cache.clear();
     }
 
     /// Get the FontId for the configure font family and style.
@@ -384,6 +395,31 @@ impl WindowTextSystem {
         force_width: Option<Pixels>,
     ) -> ShapedLine {
         self.shape_line_with_spacing(text, font_size, runs, force_width, None)
+    }
+
+    /// Request actual native caret/cluster geometry for mounted text spans.
+    /// This opt-in path bypasses the global glyph cache; callers should retain
+    /// the result until their text, fonts or requested spans change.
+    pub fn line_text_geometry(
+        &self,
+        text: &str,
+        font_size: Pixels,
+        runs: &[TextRun],
+        byte_ranges: &[Range<usize>],
+    ) -> Option<LineTextGeometry> {
+        if !LineTextGeometry::requested_ranges_valid(text, byte_ranges) {
+            return None;
+        }
+        let mut font_runs = self.font_runs_pool.lock().pop().unwrap_or_default();
+        self.populate_font_runs(runs, &mut font_runs);
+        let geometry = self.platform_text_system.layout_line_geometry(
+            text,
+            font_size,
+            &font_runs,
+            byte_ranges,
+        );
+        self.font_runs_pool.lock().push(font_runs);
+        geometry
     }
 
     /// Shape a line of text with optional letter spacing applied to glyph positions.

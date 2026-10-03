@@ -37,6 +37,7 @@ struct Gtk4AtlasEntry {
     size: Size<DevicePixels>,
     kind: AtlasTextureKind,
     bytes: Arc<[u8]>,
+    resident_bytes: u64,
 }
 
 #[derive(Default)]
@@ -45,8 +46,8 @@ struct Gtk4AtlasState {
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
     keys_by_texture: FxHashMap<AtlasTextureId, AtlasKey>,
     entries: FxHashMap<AtlasTextureId, Gtk4AtlasEntry>,
-    last_used: FxHashMap<AtlasTextureId, u64>,
-    access_clock: u64,
+    policy: crate::AtlasPolicy,
+    variants: FxHashMap<TextureCacheKey, u64>,
     total_bytes: u64,
     byte_budget: Option<u64>,
 }
@@ -86,33 +87,56 @@ impl Gtk4Atlas {
                 size: tile_size,
             },
         };
-        let byte_len = bytes.len() as u64;
+        let resident_bytes = Self::entry_bytes(tile_size, kind)?;
         state.entries.insert(
             texture_id,
             Gtk4AtlasEntry {
                 size: tile_size,
                 kind,
                 bytes,
+                resident_bytes,
             },
         );
-        state.total_bytes = state.total_bytes.saturating_add(byte_len);
-        Self::touch(state, texture_id);
+        state.total_bytes = state.total_bytes.saturating_add(resident_bytes);
+        state.policy.touch(&tile);
         Ok(tile)
     }
 
-    fn touch(state: &mut Gtk4AtlasState, texture_id: AtlasTextureId) {
-        state.access_clock = state.access_clock.saturating_add(1);
-        state.last_used.insert(texture_id, state.access_clock);
+    fn entry_bytes(size: Size<DevicePixels>, kind: AtlasTextureKind) -> Result<u64> {
+        let source = crate::atlas_payload_len(size, kind)? as u64;
+        let rgba = crate::atlas_payload_len(size, AtlasTextureKind::Polychrome)? as u64;
+        source
+            .checked_add(
+                rgba.checked_mul(2)
+                    .context("GTK texture mirror byte overflow")?,
+            )
+            .context("GTK atlas byte overflow")
     }
 
     fn remove_texture(state: &mut Gtk4AtlasState, texture_id: AtlasTextureId) {
         if let Some(entry) = state.entries.remove(&texture_id) {
-            state.total_bytes = state.total_bytes.saturating_sub(entry.bytes.len() as u64);
+            state.total_bytes = state.total_bytes.saturating_sub(entry.resident_bytes);
         }
         if let Some(key) = state.keys_by_texture.remove(&texture_id) {
-            state.tiles_by_key.remove(&key);
+            if state
+                .tiles_by_key
+                .get(&key)
+                .is_some_and(|tile| tile.texture_id == texture_id)
+                && let Some(tile) = state.tiles_by_key.remove(&key)
+            {
+                state.policy.forget(&tile);
+            }
         }
-        state.last_used.remove(&texture_id);
+        let variants = state
+            .variants
+            .iter()
+            .filter(|(key, _)| key.id == texture_id)
+            .map(|(key, bytes)| (*key, *bytes))
+            .collect::<Vec<_>>();
+        for (key, bytes) in variants {
+            state.variants.remove(&key);
+            state.total_bytes = state.total_bytes.saturating_sub(bytes);
+        }
     }
 
     fn entry(&self, id: AtlasTextureId) -> Option<Gtk4AtlasEntry> {
@@ -124,14 +148,20 @@ impl Gtk4Atlas {
     }
 
     pub(crate) fn set_byte_budget(&self, budget: Option<u64>) {
-        self.0.lock().byte_budget = budget;
+        let mut state = self.0.lock();
+        state.byte_budget = budget;
+        state.policy.set_soft_budget(budget);
     }
 
     fn evict_to_budget_keeping(&self, keep: &FxHashSet<AtlasTextureId>) -> usize {
-        let mut state = self.0.lock();
-        let Some(budget) = state.byte_budget else {
+        let Some(budget) = self.0.lock().byte_budget else {
             return 0;
         };
+        self.evict_keeping(keep, budget)
+    }
+
+    fn evict_keeping(&self, keep: &FxHashSet<AtlasTextureId>, budget: u64) -> usize {
+        let mut state = self.0.lock();
         if state.total_bytes <= budget {
             return 0;
         }
@@ -144,11 +174,16 @@ impl Gtk4Atlas {
             .map(|texture_id| {
                 (
                     texture_id,
-                    state.last_used.get(&texture_id).copied().unwrap_or(0),
+                    state
+                        .keys_by_texture
+                        .get(&texture_id)
+                        .and_then(|key| state.tiles_by_key.get(key))
+                        .map(|tile| state.policy.last_used(tile))
+                        .unwrap_or(0),
                 )
             })
             .collect();
-        candidates.sort_by_key(|(_, last_used)| *last_used);
+        candidates.sort_by_key(|(id, last_used)| (*last_used, id.kind as u32, id.index));
 
         let mut evicted = 0;
         for (texture_id, _) in candidates {
@@ -173,18 +208,113 @@ impl PlatformAtlas for Gtk4Atlas {
         key: &AtlasKey,
         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
     ) -> Result<Option<AtlasTile>> {
+        self.insert(key, None, build)
+    }
+
+    fn get_or_insert_with_size<'a>(
+        &self,
+        key: &AtlasKey,
+        size: Size<DevicePixels>,
+        build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
+    ) -> Result<Option<AtlasTile>> {
+        self.insert(key, Some(size), build)
+    }
+
+    fn set_hard_admission_limits(&self, limits: crate::AtlasAdmissionLimits) {
+        self.0.lock().policy.set_hard_limits(limits);
+    }
+    fn needs_retirement_frames(&self) -> bool {
+        self.0.lock().policy.needs_retirement_frames()
+    }
+
+    fn remove(&self, key: &AtlasKey) {
+        let mut state = self.0.lock();
+        if let Some(tile) = state.tiles_by_key.remove(key) {
+            state.policy.retire(tile);
+        }
+    }
+}
+
+impl Gtk4Atlas {
+    fn candidates(state: &Gtk4AtlasState) -> Vec<AtlasTextureId> {
+        let guard = state.policy.guard(4);
+        let mut candidates = state
+            .tiles_by_key
+            .iter()
+            .filter(|(key, tile)| {
+                !matches!(key, AtlasKey::CachedSurface(_)) && state.policy.last_used(tile) < guard
+            })
+            .map(|(_, tile)| (tile.texture_id, state.policy.last_used(tile)))
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|(id, age)| (*age, id.kind as u32, id.index));
+        candidates.into_iter().map(|(id, _)| id).collect()
+    }
+
+    fn admit_entry(
+        state: &mut Gtk4AtlasState,
+        size: Size<DevicePixels>,
+        kind: AtlasTextureKind,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            state.next_texture_index < u32::MAX,
+            "GTK atlas texture identity space exhausted"
+        );
+        let raster = crate::atlas_payload_len(size, kind)?;
+        let bytes = Self::entry_bytes(size, kind)?;
+        anyhow::ensure!(
+            bytes <= state.policy.limits.max_bytes,
+            "GTK atlas entry exceeds byte admission limit"
+        );
+        let check = |state: &Gtk4AtlasState| -> Result<()> {
+            state.policy.check_tile(raster)?;
+            state.policy.check_page(
+                state.total_bytes,
+                state.entries.len() + state.variants.values().filter(|bytes| **bytes > 0).count(),
+                bytes,
+            )
+        };
+        if check(state).is_err() {
+            for id in Self::candidates(state) {
+                if check(state).is_ok() {
+                    break;
+                }
+                Self::remove_texture(state, id);
+            }
+        }
+        check(state)
+    }
+
+    fn insert<'a>(
+        &self,
+        key: &AtlasKey,
+        declared: Option<Size<DevicePixels>>,
+        build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
+    ) -> Result<Option<AtlasTile>> {
         let mut state = self.0.lock();
         if let Some(tile) = state.tiles_by_key.get(key).cloned() {
-            Self::touch(&mut state, tile.texture_id);
+            state.policy.touch(&tile);
             return Ok(Some(tile));
         }
-        let Some((tile_size, bytes)) = build()? else {
+        if let Some(size) = declared {
+            Self::admit_entry(&mut state, size, key.texture_kind())?;
+        } else {
+            state.policy.check_tile(0)?;
+        }
+        let Some((size, bytes)) = build()? else {
             return Ok(None);
         };
+        validate_atlas_payload(size, key.texture_kind(), bytes.len())?;
+        anyhow::ensure!(
+            declared.is_none_or(|expected| expected == size),
+            "GTK raster dimensions differ from admission"
+        );
+        if declared.is_none() {
+            Self::admit_entry(&mut state, size, key.texture_kind())?;
+        }
         let tile = Self::insert_entry(
             &mut state,
             key.texture_kind(),
-            tile_size,
+            size,
             Arc::from(bytes.into_owned()),
         )?;
         state.tiles_by_key.insert(key.clone(), tile.clone());
@@ -192,11 +322,61 @@ impl PlatformAtlas for Gtk4Atlas {
         Ok(Some(tile))
     }
 
-    fn remove(&self, key: &AtlasKey) {
+    fn begin_scene(&self, scene: &Scene) {
+        self.0.lock().policy.mark_scene_used(scene);
+    }
+    fn after_scene(&self) {
         let mut state = self.0.lock();
-        if let Some(tile) = state.tiles_by_key.remove(key) {
+        for tile in state.policy.advance() {
             Self::remove_texture(&mut state, tile.texture_id);
         }
+    }
+
+    fn retain_variants(&self, keep: &FxHashSet<TextureCacheKey>) {
+        let mut state = self.0.lock();
+        let removed = state
+            .variants
+            .iter()
+            .filter(|(key, _)| !keep.contains(key))
+            .map(|(key, bytes)| (*key, *bytes))
+            .collect::<Vec<_>>();
+        for (key, bytes) in removed {
+            state.variants.remove(&key);
+            state.total_bytes = state.total_bytes.saturating_sub(bytes);
+        }
+    }
+
+    fn admit_variant(&self, key: TextureCacheKey) -> Result<()> {
+        let mut state = self.0.lock();
+        if state.variants.contains_key(&key) {
+            return Ok(());
+        }
+        let entry = state
+            .entries
+            .get(&key.id)
+            .context("GTK texture entry unavailable")?;
+        let additional = if state.variants.keys().any(|existing| existing.id == key.id) {
+            crate::atlas_payload_len(entry.size, AtlasTextureKind::Polychrome)? as u64 * 2
+        } else {
+            0
+        };
+        if additional > 0 {
+            state.policy.check_page(
+                state.total_bytes,
+                state.entries.len() + state.variants.values().filter(|bytes| **bytes > 0).count(),
+                additional,
+            )?;
+        }
+        anyhow::ensure!(
+            state.variants.len() < state.policy.limits.max_tiles as usize,
+            "GTK texture variant count admission limit reached"
+        );
+        state.total_bytes = state
+            .total_bytes
+            .checked_add(additional)
+            .context("GTK atlas variant byte overflow")?;
+        state.variants.insert(key, additional);
+        Ok(())
     }
 }
 
@@ -245,6 +425,19 @@ impl Gtk4SceneRenderer {
         self.atlas.set_byte_budget(budget);
     }
 
+    pub(crate) fn shed_memory(&mut self, level: crate::MemoryPressureLevel) {
+        if level == crate::MemoryPressureLevel::Normal {
+            return;
+        }
+        let keep = self.used_textures.iter().map(|key| key.id).collect();
+        let budget = self.atlas.0.lock().byte_budget.unwrap_or(0);
+        self.atlas.evict_keeping(&keep, budget);
+        self.atlas.retain_variants(&self.used_textures);
+        let live = self.atlas.live_texture_ids();
+        self.textures
+            .retain(|key, _| live.contains(&key.id) && self.used_textures.contains(key));
+    }
+
     pub(crate) fn paintable(
         &mut self,
         scene: &Scene,
@@ -266,6 +459,7 @@ impl Gtk4SceneRenderer {
         viewport: Size<ScaledPixels>,
         scale_factor: f32,
     ) -> Result<Paintable> {
+        self.atlas.begin_scene(scene);
         self.used_textures.clear();
         let scene_snapshot = self.scene_snapshot(scene)?;
         let snapshot = Snapshot::new();
@@ -284,6 +478,8 @@ impl Gtk4SceneRenderer {
             .map(|key| key.id)
             .collect::<FxHashSet<_>>();
         self.atlas.evict_to_budget_keeping(&used_ids);
+        self.atlas.after_scene();
+        self.atlas.retain_variants(&self.used_textures);
         let live_ids = self.atlas.live_texture_ids();
         self.textures
             .retain(|key, _| live_ids.contains(&key.id) && self.used_textures.contains(key));
@@ -306,6 +502,7 @@ impl Gtk4SceneRenderer {
         scale_factor: f32,
         surface: &gdk::Surface,
     ) -> Result<crate::Image> {
+        self.atlas.begin_scene(scene);
         self.used_textures.clear();
         let scene_snapshot = self.scene_snapshot(scene)?;
         let scale_factor = if scale_factor.is_finite() && scale_factor > 0.0 {
@@ -342,6 +539,8 @@ impl Gtk4SceneRenderer {
             .map(|key| key.id)
             .collect::<FxHashSet<_>>();
         self.atlas.evict_to_budget_keeping(&used_ids);
+        self.atlas.after_scene();
+        self.atlas.retain_variants(&self.used_textures);
         let live_ids = self.atlas.live_texture_ids();
         self.textures
             .retain(|key, _| live_ids.contains(&key.id) && self.used_textures.contains(key));
@@ -1009,6 +1208,9 @@ impl Gtk4SceneRenderer {
             .atlas
             .entry(id)
             .with_context(|| format!("GTK4 atlas texture {id:?} is unavailable"))?;
+        let live = self.atlas.live_texture_ids();
+        self.textures.retain(|key, _| live.contains(&key.id));
+        self.atlas.admit_variant(key)?;
         let (format, bytes) = texture_bytes(&entry, variant)?;
         let width = entry.size.width.0;
         let height = entry.size.height.0;
@@ -1378,6 +1580,98 @@ mod tests {
     use std::cell::Cell;
 
     #[test]
+    fn gtk4_retired_entry_does_not_unlink_same_key_replacement() {
+        let atlas = Gtk4Atlas::default();
+        let key = AtlasKey::IconAtlas(crate::RenderIconAtlasParams {
+            edge: DevicePixels(2),
+        });
+        let tile_size = size(DevicePixels(2), DevicePixels(2));
+        let mut build = || Ok(Some((tile_size, Cow::Owned(vec![255; 4]))));
+        let old = atlas
+            .get_or_insert_with_size(&key, tile_size, &mut build)
+            .unwrap()
+            .unwrap();
+        atlas.remove(&key);
+        let new = atlas
+            .get_or_insert_with_size(&key, tile_size, &mut build)
+            .unwrap()
+            .unwrap();
+        assert_ne!(old.texture_id, new.texture_id);
+        for _ in 0..4 {
+            atlas.after_scene();
+        }
+        assert!(atlas.entry(old.texture_id).is_none());
+        assert!(atlas.entry(new.texture_id).is_some());
+        assert_eq!(
+            atlas
+                .get_or_insert_with_size(&key, tile_size, &mut || panic!(
+                    "retirement must not remove the replacement key"
+                ))
+                .unwrap()
+                .unwrap(),
+            new
+        );
+    }
+
+    #[test]
+    fn gtk4_checked_admission_bounds_mirrors_variants_and_deferred_entries() {
+        let atlas = Gtk4Atlas::default();
+        let key = AtlasKey::IconAtlas(crate::RenderIconAtlasParams {
+            edge: DevicePixels(2),
+        });
+        let tile_size = size(DevicePixels(2), DevicePixels(2));
+        atlas.set_hard_admission_limits(crate::AtlasAdmissionLimits {
+            max_bytes: 35,
+            max_tiles: 2,
+            max_pages: 2,
+        });
+        assert!(
+            atlas
+                .get_or_insert_with_size(&key, tile_size, &mut || panic!(
+                    "CPU/mirror admission precedes raster"
+                ))
+                .is_err()
+        );
+        assert_eq!(atlas.entry_count(), 0);
+        atlas.set_hard_admission_limits(crate::AtlasAdmissionLimits {
+            max_bytes: 36,
+            max_tiles: 2,
+            max_pages: 2,
+        });
+        let tile = atlas
+            .get_or_insert_with_size(&key, tile_size, &mut || {
+                Ok(Some((tile_size, Cow::Owned(vec![255; 4]))))
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(atlas.0.lock().total_bytes, 36);
+        atlas
+            .admit_variant(TextureCacheKey {
+                id: tile.texture_id,
+                variant: TextureVariant::MonochromeMask,
+            })
+            .unwrap();
+        assert!(
+            atlas
+                .admit_variant(TextureCacheKey {
+                    id: tile.texture_id,
+                    variant: TextureVariant::SubpixelText(0xff0000ff)
+                })
+                .is_err()
+        );
+        assert_eq!(atlas.0.lock().variants.len(), 1);
+        atlas.remove(&key);
+        for _ in 0..3 {
+            atlas.after_scene();
+            assert_eq!(atlas.entry_count(), 1);
+        }
+        atlas.after_scene();
+        assert_eq!(atlas.entry_count(), 0);
+        assert_eq!(atlas.0.lock().total_bytes, 0);
+        assert!(atlas.0.lock().variants.is_empty());
+    }
+
+    #[test]
     fn proof_scene_uses_ordered_kael_primitives() {
         let atlas = Gtk4Atlas::default();
         let scene = proof_scene(&atlas).unwrap();
@@ -1411,6 +1705,10 @@ mod tests {
         assert_eq!(atlas.entry_count(), 1);
 
         atlas.remove(&key);
+        assert_eq!(atlas.entry_count(), 1, "deferred entry retains its storage");
+        for _ in 0..4 {
+            atlas.after_scene();
+        }
         assert_eq!(atlas.entry_count(), 0);
 
         let mut invalid = || {
@@ -1462,11 +1760,58 @@ mod tests {
     }
 
     #[test]
+    fn gtk4_pressure_preserves_presented_texture_and_releases_unused_residency() {
+        let mut renderer = Gtk4SceneRenderer::default();
+        let current_key = AtlasKey::IconAtlas(crate::RenderIconAtlasParams {
+            edge: DevicePixels(2),
+        });
+        let unused_key = AtlasKey::IconAtlas(crate::RenderIconAtlasParams {
+            edge: DevicePixels(3),
+        });
+        let mut build = || {
+            Ok(Some((
+                size(DevicePixels(2), DevicePixels(2)),
+                Cow::Owned(vec![255; 4]),
+            )))
+        };
+        let current = renderer
+            .atlas
+            .get_or_insert_with(&current_key, &mut build)
+            .unwrap()
+            .unwrap();
+        let unused = renderer
+            .atlas
+            .get_or_insert_with(&unused_key, &mut build)
+            .unwrap()
+            .unwrap();
+        renderer.used_textures.insert(TextureCacheKey {
+            id: current.texture_id,
+            variant: TextureVariant::MonochromeMask,
+        });
+        renderer.shed_memory(crate::MemoryPressureLevel::Normal);
+        assert_eq!(renderer.atlas.entry_count(), 2);
+        renderer.shed_memory(crate::MemoryPressureLevel::Critical);
+        assert!(renderer.atlas.entry(current.texture_id).is_some());
+        assert!(renderer.atlas.entry(unused.texture_id).is_none());
+        renderer.used_textures.clear();
+        renderer.shed_memory(crate::MemoryPressureLevel::Critical);
+        assert_eq!(renderer.atlas.entry_count(), 0);
+        assert!(
+            renderer
+                .atlas
+                .get_or_insert_with(&current_key, &mut build)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
     fn texture_conversion_preserves_masks_and_subpixel_channels() {
         let mono = Gtk4AtlasEntry {
             size: size(DevicePixels(2), DevicePixels(1)),
             kind: AtlasTextureKind::Monochrome,
             bytes: Arc::from(vec![0_u8, 255]),
+            resident_bytes: 18,
         };
         let (_, mask) = texture_bytes(&mono, TextureVariant::MonochromeMask).unwrap();
         assert_eq!(&*mask, &[0, 0, 0, 0, 255, 255, 255, 255]);
@@ -1475,6 +1820,7 @@ mod tests {
             size: size(DevicePixels(1), DevicePixels(1)),
             kind: AtlasTextureKind::Polychrome,
             bytes: Arc::from(vec![64_u8, 128, 255, 0]),
+            resident_bytes: 12,
         };
         let (_, tinted) =
             texture_bytes(&subpixel, TextureVariant::SubpixelText(0xff0000ff)).unwrap();

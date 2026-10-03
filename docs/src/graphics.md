@@ -18,14 +18,15 @@ choose the lowest rung that solves the problem:
 | Run a Kael canvas in a browser | `kael` / `kael_ui` feature `browser` | Same retained Scene through the WebGL2 renderer |
 | External or hosted browser content | `webview(id, url)` | Native composition island on desktop; sandboxed iframe island in the wasm backend, with documented cross-origin limits |
 | Golden-image or benchmark evidence | `HeadlessRenderer` / `golden` | Off-screen rendering is for tests and measurements |
-| Public custom render target or custom shader | roadmap | The backend renderer is not yet a public arbitrary-shader API |
+| Procedural graphics and custom fragment effects | feature `custom-shaders`, `ShaderHandle`, `RenderTarget`, `render_target(...)` | GPU execution on Metal, DX11, Blade, and WebGL2; checked interfaces, formats, ownership, and budgets |
+| GPU image/data kernels and multi-pass effects | `ComputeHandle`, `GpuBuffer`, `GpuRenderGraph` | Native compute/storage on Metal, DX11 feature level 11 and Blade; fragment graphs also execute on WebGL2 |
 
 The public `graphics_capability_report()` API exposes this same truth for
 readiness checks and agent planning. It reports full cross-backend coverage for
 styled elements, canvas, the portable retained 2D surface, paths, gradients,
 SVG, and Lottie; partial coverage for clip
 shapes, effect layers, and headless rendering; WebView coverage for browser
-graphics fallback; and roadmap status for public render targets/custom shaders.
+graphics fallback. With `custom-shaders` enabled, public targets, fragment shaders, native compute and GPU graph execution report partial coverage. Host capabilities and browser HDR extensions are checked at runtime; WebGL2 has no compute stage. Without that feature these public GPU APIs report roadmap status.
 
 ## Display density and text
 
@@ -37,6 +38,50 @@ panel-specific ClearType RGB stripes. This avoids stale-resolution text and
 RGB/BGR subpixel color fringing on scaled, rotated, or differently ordered
 external panels, while reducing glyph-atlas storage relative to four-channel
 subpixel masks.
+
+Native atlas sprites clamp filtered samples to the owned tile's texel centers,
+preserving interior interpolation while excluding adjacent packed glyphs or
+images. Metal uploads atlas pixels through bounded, queue-ordered staging
+buffers. Destination pages, staging and transient rasters share atlas admission, and unfinished
+uploads retain their resources until completion. Upload timeout stops admission
+and progress wakes; drawable acquisition also has a finite timeout.
+
+The Metal renderer allocates path/MSAA and cached-subtree scratch textures only
+when those features are drawn. Resizing a window that only draws quads, text,
+and images does not allocate these full-window targets. Once used, each target
+reuses its own largest required dimensions across frames and resizes; a zero
+drawable size releases the scratch textures. Backdrop-blur targets are also
+allocated on use. Actual driver allocation depends on the GPU; the nominal
+BGRA8 path target, 4x MSAA target, and cache target together would otherwise
+require 24 bytes per device pixel (about 190 MiB at 3840 × 2160).
+
+DirectX also allocates its path/MSAA, backdrop-blur and cached-subtree scratch
+groups only when drawn. Resize releases those groups, and plain scenes leave them
+unallocated. Memory pressure releases optional scratch, sheds dead custom targets
+and pipeline caches, and shrinks grown instance buffers; later draws rebuild the
+needed resources. Live public GPU target handles retain their storage.
+
+Native Metal and DirectX source-over blending preserves coverage alpha for
+translucent layers, including paths and cached subtree targets: two layers
+with 50% opacity produce 75% coverage. Metal capture validates staging and
+decoded-pixel byte limits before allocating or rendering offscreen targets, so
+rejected captures do not allocate large scratch textures.
+
+Backdrop blur retains premultiplied RGB between filtering passes and
+applies tint and saturation without multiplying coverage alpha twice. Its
+samples preserve the backdrop's viewport coordinates and clamp to captured
+texel centers at the viewport boundary. Capture bounds round their absolute
+endpoints outward, preserving texels covered by fractional element bounds.
+The final pass applies the element's own rounded corners, its rectangular
+content mask, and the innermost screen-space rounded ancestor clip before
+source-over composition over the target.
+
+Browser WebGL2 uses two GPU Gaussian passes and compact capture textures.
+The RGBA8 scratch pair allocates on first use, reuses capacity, and has a
+separate 64 MiB payload ceiling checked before allocation. Resize and memory
+pressure release optional scratch; context loss discards its generation.
+Changed scenes containing blur redraw their dependent backdrop, while an
+unchanged scene can retain the existing frame.
 
 Embed application fonts when typography is part of the product identity.
 `kael_ui::init` already registers its bundled Inter and JetBrains Mono faces.
@@ -127,9 +172,10 @@ let surface = portable_scene(size(px(1_500.0), px(600.0)), Arc::new(scene));
 # Ok::<_, kael::PortableSceneError>(surface)
 ```
 
-This is the portable game/creative-app escape hatch, not raw GPU access.
-Custom blend modes, user shaders, compute, depth-tested 3D, and public renderer
-handles return or report `Unsupported` and remain explicit roadmap work.
+This is the retained 2D game/creative-app API. Enable `custom-shaders` for typed
+GPU targets, custom fragment programs, native compute and multi-pass graphs as
+described below. Custom blend modes and depth-tested 3D remain separate roadmap
+work.
 
 `canvas` also supports the lower-level two-closure form — a prepaint pass
 (compute layout/state, returns a value) and a paint pass (draw into the bounds).
@@ -370,7 +416,44 @@ image_cache(cache).child(gallery)
 ```
 
 Use `retain_all(id)` for bounded asset sets and `lru(id, max_images)` for
-feeds, galleries, maps, and other churning image sets. Inspect
+feeds, galleries, maps, and other churning image sets. The LRU default also limits
+decoded frames to 64 MiB and unfinished loads to eight; completed errors count
+toward the entry limit. Use `lru_with_limits` for an explicit policy:
+
+```rust
+use kael::{image_cache, lru_with_limits, ImageCacheLimits};
+
+image_cache(lru_with_limits("gallery-cache", ImageCacheLimits {
+    max_images: 64,
+    max_decoded_bytes: 32 * 1024 * 1024,
+    max_pending_loads: 4,
+})).child(gallery)
+```
+
+Declared raster/SVG dimensions are checked against the byte limit before pixel
+allocation; animated images additionally count every decoded frame. Four built-in
+image jobs may perform I/O or decoding concurrently across all image caches.
+Pending admission errors can be retried when a load completes; rendering helpers
+wake waiting views automatically. Clearing, removing, dropping a cache entity,
+or critical memory pressure cancels its owned image loads and releases residency.
+`retain_all` keeps its explicit unbounded completed-retention policy between
+clears/pressure events, with eight pending loads.
+
+The default shared asset cache retains at most 256 completed entries and 64 MiB
+of reported output bytes. Configure it through
+`App::set_completed_asset_cache_limits`; custom heap-backed assets should override
+`Asset::cache_bytes`. Framework asset helpers use `App::fetch_asset_checked`, which
+checks a separate pending limit before calling the loader (64 by default).
+`App::set_pending_asset_limit` configures that limit. The legacy `App::fetch_asset`
+allows explicit unbounded admission. Removing the cache's ownership does not
+cancel a shared load still owned by another caller; it cancels when the final
+owner releases it. Critical pressure releases both completed outputs and cache
+ownership of unfinished shared assets. Window rendering helpers keep lightweight
+wake tokens rather than independent owners of those tasks. These are retention
+and concurrency budgets, not a hard cap
+on the process's total memory or codec temporary allocations.
+
+Inspect
 `RetainAllImageCacheProvider::to_text()`, `LruImageCacheProvider::to_text()`,
 `ImageCacheElement::to_text()`, `RetainAllImageCache::to_text()`,
 `LruImageCache::to_text()`, and `ImageCacheItem::to_text()` when generated UI or
@@ -406,3 +489,201 @@ Builders: `.autoplay()`, `.loop_forever()`, `.loop_mode(LoopMode)`, `.ping_pong(
 
 See the Astryx showcase's media and visual-effects sections for complete,
 runnable compositions.
+
+## Custom GPU targets, fragment and compute shaders
+
+Enable `kael`'s `custom-shaders` feature. Register WGSL once through
+`App::register_fragment_shader(ShaderDescriptor::fragment(label, source, entry))`,
+create a physical-pixel target with `Window::create_render_target`, and execute
+with `Window::render_shader`. `render_target(target.clone())` is a styled surface
+element that samples the GPU texture directly; display performs no CPU readback
+or image re-upload. The non-media `custom_shader` example shows a complete window:
+
+```sh
+cargo run -p kael --example custom_shader --features custom-shaders
+```
+
+The fragment entry returns `@location(0) vec4<f32>` with straight linear RGB and
+coverage alpha. Optional inputs are `@location(0) vec2<f32>` UV and
+`@builtin(position) vec4<f32>` physical target coordinates, both with a top-left
+origin. Kael supplies a full-target triangle and stores associated RGB by applying
+coverage alpha once into a cleared target. Linear filtering therefore preserves
+translucent edges. Sampling another target returns associated linear RGB: a
+copy pass must unassociate its nonzero-alpha sample before returning the straight
+fragment output. Compute/storage operations use stored data directly.
+
+Group zero supports sparse authored bindings for uniform blocks, sampled 2D
+float textures, and samplers. Supply values with `ShaderBindings::new().with(...)`;
+all declared resources must be present with the reflected type and uniform byte
+count. `ShaderHandle::resources()` exposes recursive member offsets, sizes,
+alignment and strides. The portable uniform contract accepts only layouts whose
+WGSL and std140 bytes match; a Rust `repr(C)` struct alone does not prove this.
+Texture inputs are reusable `RenderTarget` handles; `ShaderSampler` selects linear
+or nearest edge-clamped filtering. Framework-generated `kael_` identifiers and
+`Kael` type names are reserved.
+
+Targets support linear `Rgba8Unorm`, sRGB RGBA/BGRA, linear `Rgba16Float`, and
+`R8Unorm` scalar fields. sRGB attachments encode on storage and decode on sampling.
+WebGL2 implements BGRA requests with equivalent RGBA sRGB storage and requires
+`EXT_color_buffer_float` for HDR rendering. R8 displays as opaque grayscale.
+`read_render_target` is an explicit tightly packed CPU export with native target
+encoding: RGBA channel order, encoded sRGB bytes, little-endian binary16 HDR, or
+one R8 byte per pixel. UI composition respects masks, rounded corners, opacity,
+transforms, and color filters; nested ancestor rounded clipping follows the
+existing innermost screen-space clip contract.
+
+A renderer retains at most 64 live target and buffer allocations combined, 64
+fragment/format pipelines and 64 native compute pipelines. User-owned GPU data
+defaults to one shared 256 MiB per-window budget, adjustable with
+`set_render_target_byte_budget`; one target is capped at 256 MiB, one storage
+buffer at 128 MiB, and targets at 1..=16384 pixels per dimension.
+Driver alignment is accounted by Metal; other
+backends account payload bytes. In-flight driver resources, uniforms, pipeline
+objects, and explicit readback staging are additional bounded allocations.
+A clone pins its target or buffer through memory pressure. Dropping the last clone permits
+reclamation, and a dropped/lost renderer invalidates its handles. Targets cannot
+cross windows or devices, even when two windows use the same physical GPU;
+replace targets when dimensions change. Rejected binding, ownership, feedback,
+and admission requests do not submit GPU work.
+
+Metal and Blade cap custom submissions, retain pending resources until GPU
+completion, and use a ten-second deadline for explicit readback/reuse waits.
+DX11 explicit target/buffer readback polls without blocking Map beyond the same
+deadline. Metal retains at most eight completed uniform buffers of 64 KiB each;
+large upload/readback staging is released after completion.
+Blade scene waits also make one bounded attempt. Failed waits invalidate owned
+handles and stop new scene work; resize/pressure retain pending allocations until
+completion, and a timed-out teardown preserves the device/raw allocations.
+WebGL2 readback is a browser-synchronous operation. Shader validation establishes
+language and interface correctness; it is not an execution-time guarantee for
+arbitrary authored GPU code. Native GTK4/GSK and mock/headless platform windows
+currently return a typed unsupported error for this public execution API; the
+native X11/Wayland Blade hosts support it. Metal, DX11, and Blade's internal GPU
+regression adapters also exercise the same target contract offscreen.
+
+`Window::write_render_target` uploads exactly the packed encoding returned by
+`read_render_target`, with top-left pixels first. This enables decoded images,
+HDR data and scalar fields without a fragment readback loop. The caller supplies
+associated RGB and the selected format's storage encoding; uploads perform no
+implicit color conversion. Wrong byte lengths are rejected before submission.
+
+Register native WGSL kernels with
+`App::register_compute_shader(ComputeDescriptor::new(label, source, entry))`.
+Use `Window::create_gpu_buffer`, `write_gpu_buffer` and `read_gpu_buffer` for
+zero-initialized storage buffers. Buffer sizes and write ranges must be nonzero
+multiples of four (empty writes are allowed), with checked offsets and the same
+window ownership/budget as textures. Reflected storage layouts check minimum
+bytes and final runtime-array offset/stride; writable/read aliases and sampled
+input/output aliases are rejected. `ComputeBindings` accepts uniforms, sampled
+textures, samplers, storage buffers and write-only `Rgba8Unorm`/`Rgba16Float`
+storage images. Compute stores already-associated linear colors directly.
+
+```rust
+use kael::{App, ComputeBinding, ComputeBindings, ComputeDescriptor,
+           RenderTarget, RenderTargetDescriptor, Window};
+
+fn gpu_tile(window: &mut Window, cx: &mut App)
+    -> Result<RenderTarget, Box<dyn std::error::Error>>
+{
+    let shader = cx.register_compute_shader(ComputeDescriptor::new("UV tile", r#"
+        @group(0) @binding(1) var output: texture_storage_2d<rgba8unorm, write>;
+        @compute @workgroup_size(8, 8)
+        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+            let dimensions = textureDimensions(output);
+            if any(id.xy >= dimensions) { return; }
+            let uv = vec2<f32>(id.xy) / vec2<f32>(dimensions);
+            textureStore(output, vec2<i32>(id.xy), vec4<f32>(uv.x, 0.25, uv.y, 1.0));
+        }
+    "#, "main"))?;
+    let target = window.create_render_target(RenderTargetDescriptor::rgba8(640, 480))?;
+    let bindings = ComputeBindings::new()
+        .with(1, ComputeBinding::StorageTexture(target.clone()));
+    window.dispatch_compute(&shader, &bindings, [80, 60, 1])?;
+    Ok(target)
+}
+```
+
+Native workgroups use the portable guaranteed floor: at most 128 invocations,
+x/y dimensions at most 128, z at most 64, and 16 KiB shared workgroup memory.
+Dispatches accept 1..=65535 groups per axis and at most 16,777,216 total groups.
+Metal also checks the compiled pipeline's actual thread limit; DirectX compute
+requires feature level 11.0. WebGL2 returns a typed unsupported error for compute
+and storage buffers; fragment execution and texture uploads remain available.
+
+Fragment programs and compute kernels without synchronized loops share a
+65,536 loop-body execution counter per invocation, across nested loops and
+helper functions. Exhaustion exits remaining loops and continues ordinary
+control flow, so larger algorithms must be split across passes. Compute programs
+containing both loops and workgroup/storage barriers preserve authored loop and
+synchronization semantics: `ComputeHandle::loop_body_limit()` returns `None`.
+Use `ComputeDescriptor::require_loop_bound()` to reject those kernels explicitly.
+A private counter must not remove only some workitems from a workgroup barrier.
+Neither mode provides a GPU wall-clock deadline. CPU registration limits apply
+across fragment and compute together: 128 live programs, 16 MiB retained source
+and translations, and 2 MiB per program.
+
+The current evidence and platform runtime limits are recorded in
+[the shader completion review](https://github.com/Augani/kael/blob/main/docs/reviews/2026-10-02-shader-completion.md).
+
+## GPU graphs with native compute
+
+With `custom-shaders`, `kael::gpu_graph` exposes resource/pass declarations and
+the lifetime planner. `GpuRenderGraph::new` describes a fragment graph;
+`new_with_resources` accepts typed texture and storage-buffer descriptors for
+mixed graphs. Use `GpuGraphPass::Fragment(GpuFragmentPass)` or
+`GpuGraphPass::Compute(GpuComputePass)` with `Window::execute_gpu_graph`.
+The native `compute_graph` example creates an HDR image in compute, tone maps it
+in a fragment pass and displays the resulting GPU target:
+
+```sh
+cargo run --locked -p kael --example compute_graph --features custom-shaders
+```
+
+Declare every sampled/read-only resource as a pass read and every output as a
+write. Storage textures bind through `GpuGraphBinding::Texture`, storage
+buffers through `GpuGraphBinding::Buffer`. Reflection must exactly match the
+declared accesses, uniform sizes, storage formats and buffer minimum/stride.
+All imports are validated against the executing window before allocation.
+Duplicate physical imports and resource feedback are rejected.
+
+Exports remain live through the execution tail. Compatible transient resources
+reuse slots only after their inclusive lifetimes end; allocation classes must
+agree on exact dimensions, format or buffer size. Cache hits compare program,
+workgroup count, uniform bytes, sampler settings and actual input/output
+identities and revisions. Aliased storage also requires the intended logical
+resource to remain resident. Kernels with writable storage buffers always run,
+since read/write kernels can depend on previous buffer contents. Kernels must
+initialize transient outputs before reading them, including reused slots.
+
+Graphs are limited to 256 resources/passes, eight outputs per pass, 64 physical
+slots and 16 MiB of uniform signatures per execution. The graph's 256 MiB
+default payload limit and the window's shared live texture/buffer budget both
+apply. `set_byte_budget`, `clear_cache` and `handle_memory_pressure` let an app
+release retained graph work; caller-owned exports remain pinned. A backend
+submission failure can leave an executed prefix and invalidates pass caches.
+Submission uses ordered native renderer commands; the compiler's barriers and
+lifetimes remain available through `compiled()`.
+
+WebGL2 supports fragment graphs and returns a typed unsupported error for
+compute before graph allocation. Native backend capabilities still apply.
+Actual Metal and Blade graph regressions cover buffer → image → fragment pixels, cache
+invalidation, exported lifetimes, alias residency, foreign imports, invalid
+workgroup admission and invalidated output recovery. The completion review
+tracks other platform runtime evidence independently. DirectX uses the same six
+graph contracts; its native Windows runtime result is separate from compilation.
+
+## Native GPU timing
+
+`Window::set_gpu_frame_timing_enabled(true)` enables bounded native timing when
+supported and returns `false` on other backends. Metal reports command-buffer
+GPU start/end timestamps and drawable presentation callbacks. Drain ready
+records with `take_gpu_frame_timings`; onscreen records wait for both callbacks.
+The collector retains at most 64 pending or ready records, drops the oldest under
+pressure, and discards the session when disabled. Callbacks use weak ownership
+and introduce no polling timer or target readback.
+
+Timestamps use the native monotonic host clock in seconds. An absent presentation
+timestamp means no display time was reported, including an offscreen or dropped
+frame. Rust `Instant`, CPU submission duration, GPU execution duration and actual
+drawable presentation are distinct measurements. Other backends currently report
+unsupported timing rather than supplying estimated GPU times.

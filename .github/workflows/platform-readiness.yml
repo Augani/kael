@@ -7,6 +7,14 @@ on:
       - main
       - master
   workflow_dispatch:
+    inputs:
+      scope:
+        description: Validation scope (pull requests always run the complete matrix)
+        type: choice
+        default: full
+        options:
+          - full
+          - linux-accessibility
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -73,7 +81,7 @@ jobs:
   verify:
     name: Quality / Native (${{ matrix.label }})
     needs: changes
-    if: needs.changes.outputs.code_changed == 'true'
+    if: needs.changes.outputs.code_changed == 'true' && (github.event_name != 'workflow_dispatch' || inputs.scope != 'linux-accessibility')
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -98,7 +106,20 @@ jobs:
       - name: Install macOS media dependencies
         if: runner.os == 'macOS'
         shell: bash
-        run: brew install dav1d ffmpeg pkg-config
+        run: |
+          # ffmpeg-next 8.1 in Cargo.lock supports the FFmpeg 8 ABI.
+          # Select the keg explicitly; an installed FFmpeg 9 must not supply headers.
+          brew install dav1d ffmpeg@8 pkg-config
+          kael_ci_ffmpeg_prefix="$(brew --prefix ffmpeg@8)"
+          kael_ci_pkg_config_path="${kael_ci_ffmpeg_prefix}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+          echo "PKG_CONFIG_PATH=${kael_ci_pkg_config_path}" >> "$GITHUB_ENV"
+          echo "${kael_ci_ffmpeg_prefix}/bin" >> "$GITHUB_PATH"
+          kael_ci_avcodec_version="$(PKG_CONFIG_PATH="${kael_ci_pkg_config_path}" pkg-config --modversion libavcodec)"
+          if [[ "${kael_ci_avcodec_version%%.*}" != 62 ]]; then
+            echo "Expected FFmpeg 8 / libavcodec 62, found ${kael_ci_avcodec_version}" >&2
+            exit 1
+          fi
+          echo "FFmpeg ABI: libavcodec ${kael_ci_avcodec_version}"
 
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
@@ -108,6 +129,8 @@ jobs:
           targets: wasm32-unknown-unknown,aarch64-apple-darwin
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       - name: Verify native workspace
         shell: bash
@@ -161,11 +184,13 @@ jobs:
           DOCS_RS=1 RUSTDOCFLAGS='--cfg docsrs -D warnings' \
             cargo doc -p kael_media_sys --target aarch64-apple-darwin --no-deps
           cargo doc --workspace --all-features --no-deps \
+            --exclude kael_accesskit_unix \
             --exclude kael-cli \
             --exclude xtask \
             --exclude dashboard-app \
             --exclude messaging-app \
             --exclude workspace-app
+          RUSTDOCFLAGS='-D warnings' cargo doc -p kael_accesskit_unix --no-deps
 
       - name: Audit locked dependencies
         if: runner.os == 'Linux'
@@ -175,13 +200,25 @@ jobs:
           bash scripts/ci/audit-dependencies.sh
 
       - name: Execute Metal retained-scene runtime proof
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         shell: bash
         timeout-minutes: 30
         run: bash scripts/ci/verify-macos-native-renderer.sh
 
+      - name: Execute native macOS outline accessibility protocol
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        shell: bash
+        timeout-minutes: 10
+        run: bash scripts/ci/verify-macos-native-accessibility.sh
+
+      - name: Execute real macOS Editor native text protocol
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        shell: bash
+        timeout-minutes: 20
+        run: bash scripts/ci/verify-macos-native-text-accessibility.sh
+
       - name: Install pinned Python for macOS browser performance
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.12'
@@ -189,14 +226,14 @@ jobs:
           cache-dependency-path: scripts/browser-matrix-requirements.txt
 
       - name: Restore pinned Playwright Chromium
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/Library/Caches/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/browser-matrix-requirements.txt') }}
 
       - name: Install macOS browser performance runner
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         shell: bash
         run: |
           cargo install wasm-bindgen-cli --version 0.2.122 --locked
@@ -205,7 +242,7 @@ jobs:
           python3 -m playwright install chromium
 
       - name: Enforce real Metal-backed browser performance
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
         shell: bash
         env:
           KAEL_BROWSER_MATRIX_ARTIFACT_DIR: target/browser-hardware-macos
@@ -225,13 +262,15 @@ jobs:
           name: macos-runtime-evidence
           path: |
             target/native-renderer-smoke/macos
+            target/native-accessibility-smoke/macos
+            target/native-accessibility-smoke/macos-text
             target/browser-hardware-macos
           if-no-files-found: warn
 
   linux-runtime:
     name: Linux Renderer / WebView Runtime
     needs: changes
-    if: needs.changes.outputs.code_changed == 'true'
+    if: needs.changes.outputs.code_changed == 'true' && (github.event_name != 'workflow_dispatch' || inputs.scope != 'linux-accessibility')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -242,8 +281,8 @@ jobs:
         run: |
           bash scripts/ci/install-linux-deps.sh
           sudo apt-get install --yes --no-install-recommends \
-            at-spi2-core mesa-vulkan-drivers vulkan-tools \
-            weston xwayland xvfb xdotool x11-apps x11-utils
+            at-spi2-core dbus-x11 python3-gi gir1.2-atspi-2.0 mesa-vulkan-drivers vulkan-tools \
+            weston xwayland xvfb xdotool xclip x11-apps x11-utils
 
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
@@ -251,6 +290,8 @@ jobs:
           toolchain: 1.97.1
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       - name: Execute Blade retained-scene and generated-project runtime proofs
         shell: bash
@@ -263,16 +304,65 @@ jobs:
         shell: bash
         run: cargo clippy --locked -p kael --lib --no-default-features --features webview -- -D warnings
 
-      - name: Execute embedded WebView under Wayland and XWayland
+      - name: Execute idle native Linux accessibility actions
+        shell: bash
+        timeout-minutes: 20
+        env:
+          KAEL_NATIVE_RENDERER_USE_SOFTWARE: 1
+        run: bash scripts/ci/verify-linux-native-accessibility.sh
+
+      - name: Execute native Linux Unicode editor protocols
+        if: ${{ !cancelled() }}
+        shell: bash
+        timeout-minutes: 20
+        env:
+          KAEL_NATIVE_RENDERER_USE_SOFTWARE: 1
+        run: bash scripts/ci/verify-linux-native-accessibility.sh --text
+
+      - name: Execute GTK4 atlas admission and retirement contracts
+        if: ${{ !cancelled() }}
+        shell: bash
+        timeout-minutes: 20
+        run: |
+          set -o pipefail
+          mkdir -p target/native-renderer-smoke/linux/gtk4-atlas
+          cargo test --locked -p kael --no-default-features \
+            --features webview-wayland-gtk4 --lib gtk4_scene::tests -- --nocapture \
+            2>&1 | tee target/native-renderer-smoke/linux/gtk4-atlas/native-tests.log
+          grep -Fq 'gtk4_checked_admission_bounds_mirrors_variants_and_deferred_entries ... ok' \
+            target/native-renderer-smoke/linux/gtk4-atlas/native-tests.log
+          grep -Fq 'gtk4_retired_entry_does_not_unlink_same_key_replacement ... ok' \
+            target/native-renderer-smoke/linux/gtk4-atlas/native-tests.log
+
+      - name: Execute idle native GTK4 accessibility actions
+        if: ${{ !cancelled() }}
+        shell: bash
+        timeout-minutes: 20
+        run: bash scripts/ci/verify-linux-native-accessibility.sh --gtk4
+
+      - name: Execute native GTK4 Unicode editor protocols
+        if: ${{ !cancelled() }}
+        shell: bash
+        timeout-minutes: 20
+        run: bash scripts/ci/verify-linux-native-accessibility.sh --gtk4 --text
+
+      - name: Execute embedded GTK4 WebView under Wayland
+        if: ${{ !cancelled() }}
         shell: bash
         timeout-minutes: 20
         # GitHub-hosted Ubuntu blocks the user namespaces required by
         # bubblewrap. Kael keeps WebKitGTK's sandbox enabled for applications.
         env:
           WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1'
-        run: |
-          bash scripts/ci/run-linux-webview-wayland-gtk4.sh
-          bash scripts/ci/run-linux-webview-xwayland.sh
+        run: bash scripts/ci/run-linux-webview-wayland-gtk4.sh
+
+      - name: Execute embedded WebView under XWayland
+        if: ${{ !cancelled() }}
+        shell: bash
+        timeout-minutes: 20
+        env:
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1'
+        run: bash scripts/ci/run-linux-webview-xwayland.sh
 
       - name: Upload Linux runtime evidence
         if: always()
@@ -281,14 +371,83 @@ jobs:
           name: linux-runtime-evidence
           path: |
             target/native-renderer-smoke/linux
+            target/native-accessibility-smoke/linux
+            target/native-accessibility-smoke/linux-gtk4
+            target/native-accessibility-smoke/linux-text
+            target/native-accessibility-smoke/linux-gtk4-text
             ${{ runner.temp }}/kael-webview-wayland-gtk4/*.log
             ${{ runner.temp }}/kael-webview-xwayland/*.log
           if-no-files-found: warn
 
+  linux-accessibility:
+    name: Focused Linux / GTK4 native accessibility
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' && inputs.scope == 'linux-accessibility'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      KAEL_NATIVE_RENDERER_USE_SOFTWARE: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install owned virtual-desktop and native protocol dependencies
+        shell: bash
+        run: |
+          bash scripts/ci/install-linux-deps.sh
+          sudo apt-get install --yes --no-install-recommends \
+            at-spi2-core dbus-x11 python3-gi gir1.2-atspi-2.0 mesa-vulkan-drivers \
+            xvfb xdotool xclip x11-utils
+
+      - name: Install matched toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
+        with:
+          toolchain: 1.97.1
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+          shared-key: linux-accessibility
+
+      - name: Check GTK clipboard bounds and strict native lints
+        run: |
+          cargo test --locked -p kael --no-default-features \
+            --features font-kit,webview-wayland-gtk4 --lib gtk4_backend::tests::clipboard_stream
+          # Check the selected GTK host without pulling in UI/native's
+          # mutually exclusive legacy X11/Wayland backend flags.
+          cargo clippy --locked -p kael --no-default-features \
+            --features font-kit,webview-wayland-gtk4 \
+            --lib -- -D warnings
+          cargo clippy --locked -p kael_ui --features editor \
+            --lib -- -D warnings
+
+      - name: Verify native X11 outline actions
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/verify-linux-native-accessibility.sh
+
+      - name: Verify native X11 Unicode editor
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/verify-linux-native-accessibility.sh --text
+
+      - name: Verify native GTK4 outline actions
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/verify-linux-native-accessibility.sh --gtk4
+
+      - name: Verify native GTK4 Unicode editor
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/verify-linux-native-accessibility.sh --gtk4 --text
+
+      - name: Preserve every native protocol result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: focused-linux-accessibility-evidence
+          path: target/native-accessibility-smoke
+          if-no-files-found: error
+
   browser:
     name: WebAssembly / WebGL2 Browser
     needs: changes
-    if: needs.changes.outputs.code_changed == 'true'
+    if: needs.changes.outputs.code_changed == 'true' && (github.event_name != 'workflow_dispatch' || inputs.scope != 'linux-accessibility')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -317,6 +476,8 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       - name: Install version-matched WebAssembly packager
         run: cargo install wasm-bindgen-cli --version 0.2.122 --locked
@@ -326,6 +487,20 @@ jobs:
 
       - name: Install matching ChromeDriver
         uses: nanasess/setup-chromedriver@e913548694400f275b4070efcd90f47dbbc8914c # v3.0.0
+
+      - name: Execute mandatory WebGL2 shader and context-loss pixels
+        timeout-minutes: 25
+        run: |
+          python scripts/ci/verify-programmable-renderer.py \
+            --backend webgl2 --evidence target/native-renderer-smoke/webgl2
+
+      - name: Preserve WebGL2 programmable rendering evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: webgl2-programmable-runtime-evidence
+          path: target/native-renderer-smoke/webgl2
+          if-no-files-found: error
 
       - name: Install three-engine browser runner
         run: |
@@ -436,7 +611,7 @@ jobs:
   windows-runtime-and-msi:
     name: Windows Native / WebView / MSI (${{ matrix.os }})
     needs: changes
-    if: needs.changes.outputs.code_changed == 'true'
+    if: needs.changes.outputs.code_changed == 'true' && (github.event_name != 'workflow_dispatch' || inputs.scope != 'linux-accessibility')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 100
     strategy:
@@ -455,6 +630,8 @@ jobs:
           components: clippy
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       - name: Locate Windows vcpkg for the canonical compile runner
         if: matrix.os == 'windows-2025-vs2026'
@@ -507,6 +684,11 @@ jobs:
         timeout-minutes: 15
         run: pwsh -NoProfile -File scripts/ci/verify-windows-webview.ps1
 
+      - name: Execute idle native Windows UIA hierarchy and actions
+        shell: pwsh
+        timeout-minutes: 20
+        run: pwsh -NoProfile -File scripts/ci/verify-windows-native-accessibility.ps1
+
       - name: Install pinned WiX v4 CLI
         shell: pwsh
         run: |
@@ -537,13 +719,14 @@ jobs:
           path: |
             target/release-artifacts/Kael.msi
             target/native-renderer-smoke/windows
+            target/native-accessibility-smoke/windows
             target/windows-msi-verification
             target/windows-webview-smoke
           if-no-files-found: error
 
   readiness:
     name: Platform readiness
-    if: always()
+    if: always() && (github.event_name != 'workflow_dispatch' || inputs.scope != 'linux-accessibility')
     needs:
       - changes
       - verify

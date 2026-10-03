@@ -118,8 +118,12 @@ export KAEL_NATIVE_RENDERER_SMOKE_PNG="${evidence_dir}/native-renderer.png"
 grep -Fq "NATIVE_RENDERER_SMOKE_GPU: backend=blade-vulkan" \
   "${evidence_dir}/native-renderer.log"
 grep -Fq "NATIVE_RENDERER_SMOKE_OK:" "${evidence_dir}/native-renderer.log"
+grep -Fq "NATIVE_IDLE_MODEL_FRAME_OK:" "${evidence_dir}/native-renderer.log"
 grep -Fq "text_probe_pixels=" "${evidence_dir}/native-renderer.log"
 test -s "${evidence_dir}/native-renderer.png"
+
+python3 "${workspace_dir}/scripts/ci/verify-programmable-renderer.py" \
+  --backend blade --evidence "${evidence_dir}/programmable"
 
 if [[ "${KAEL_SKIP_GENERATED_NATIVE_RUNTIME:-0}" == "1" ]]; then
   echo "GENERATED_NATIVE_RUNTIME_SKIPPED: explicitly disabled" \

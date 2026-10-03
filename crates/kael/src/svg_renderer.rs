@@ -99,6 +99,15 @@ impl SvgRenderer {
     }
 
     pub fn render_pixmap(&self, bytes: &[u8], size: SvgSize) -> Result<Pixmap, usvg::Error> {
+        self.render_pixmap_with_budget(bytes, size, MAX_DECODED_IMAGE_BYTES as u64)
+    }
+
+    pub(crate) fn render_pixmap_with_budget(
+        &self,
+        bytes: &[u8],
+        size: SvgSize,
+        max_bytes: u64,
+    ) -> Result<Pixmap, usvg::Error> {
         if bytes.is_empty() || bytes.len() > MAX_IMAGE_SOURCE_BYTES {
             return Err(usvg::Error::InvalidSize);
         }
@@ -130,7 +139,10 @@ impl SvgRenderer {
             .checked_mul(u64::from(height))
             .and_then(|pixels| pixels.checked_mul(4))
             .ok_or(usvg::Error::InvalidSize)?;
-        if decoded_bytes == 0 || decoded_bytes > MAX_DECODED_IMAGE_BYTES as u64 {
+        if decoded_bytes == 0
+            || decoded_bytes > MAX_DECODED_IMAGE_BYTES as u64
+            || decoded_bytes > max_bytes
+        {
             return Err(usvg::Error::InvalidSize);
         }
 
@@ -149,6 +161,22 @@ impl SvgRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn svg_declared_pixels_respect_cache_budget_before_pixmap_allocation() {
+        let renderer = SvgRenderer::new(Arc::new(()));
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>"#;
+        assert!(
+            renderer
+                .render_pixmap_with_budget(svg, SvgSize::ScaleFactor(1.0), 255)
+                .is_err()
+        );
+        assert!(
+            renderer
+                .render_pixmap_with_budget(svg, SvgSize::ScaleFactor(1.0), 256)
+                .is_ok()
+        );
+    }
 
     struct OverrideAssets;
 

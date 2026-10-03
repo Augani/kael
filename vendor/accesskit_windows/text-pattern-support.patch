@@ -1,0 +1,1792 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -10,10 +10,11 @@
+ # See Cargo.toml.orig for the original contents.
+ 
+ [package]
++exclude = ["Cargo.toml.orig", ".cargo_vcs_info.json", "examples/"]
+ edition = "2024"
+ rust-version = "1.85"
+-name = "accesskit_windows"
+-version = "0.34.0"
++name = "kael_accesskit_windows"
++version = "0.4.1"
+ authors = ["The AccessKit contributors"]
+ build = false
+ autolib = false
+@@ -21,7 +22,7 @@
+ autoexamples = false
+ autotests = false
+ autobenches = false
+-description = "AccessKit UI accessibility infrastructure: Windows adapter"
++description = "Kael-maintained AccessKit Windows adapter with native text range support"
+ readme = "README.md"
+ keywords = [
+     "gui",
+@@ -30,7 +31,7 @@
+ ]
+ categories = ["gui"]
+ license = "MIT OR Apache-2.0"
+-repository = "https://github.com/AccessKit/accesskit"
++repository = "https://github.com/Augani/kael"
+ resolver = "2"
+ 
+ [package.metadata.docs.rs]
+@@ -51,15 +52,15 @@
+ [dependencies.accesskit_consumer]
+ version = "0.38.0"
+ 
+-[dependencies.hashbrown]
++[target.'cfg(target_os = "windows")'.dependencies.hashbrown]
+ version = "0.16"
+ features = ["default-hasher"]
+ default-features = false
+ 
+-[dependencies.static_assertions]
++[target.'cfg(target_os = "windows")'.dependencies.static_assertions]
+ version = "1.1.0"
+ 
+-[dependencies.windows]
++[target.'cfg(target_os = "windows")'.dependencies.windows]
+ version = "0.62.0"
+ features = [
+     "Win32_Foundation",
+@@ -74,17 +75,17 @@
+     "Win32_UI_WindowsAndMessaging",
+ ]
+ 
+-[dependencies.windows-core]
++[target.'cfg(target_os = "windows")'.dependencies.windows-core]
+ version = "0.62.0"
+ 
+-[dev-dependencies.once_cell]
++[target.'cfg(target_os = "windows")'.dev-dependencies.once_cell]
+ version = "1.13.0"
+ 
+-[dev-dependencies.parking_lot]
++[target.'cfg(target_os = "windows")'.dev-dependencies.parking_lot]
+ version = "0.12.4"
+ 
+-[dev-dependencies.scopeguard]
++[target.'cfg(target_os = "windows")'.dev-dependencies.scopeguard]
+ version = "1.1.0"
+ 
+-[dev-dependencies.winit]
++[target.'cfg(target_os = "windows")'.dev-dependencies.winit]
+ version = "0.30"
+--- a/examples/hello_world.rs
++++ b/examples/hello_world.rs
+@@ -1,373 +1,389 @@
+-// Based on the create_window sample in windows-samples-rs.
+-
+-use accesskit::{
+-    Action, ActionHandler, ActionRequest, ActivationHandler, Live, Node, NodeId, Rect, Role, Tree,
+-    TreeId, TreeUpdate,
+-};
+-use accesskit_windows::Adapter;
+-use once_cell::sync::Lazy;
+-use std::cell::RefCell;
+-use windows::{
+-    Win32::{
+-        Foundation::*,
+-        Graphics::Gdi::ValidateRect,
+-        System::LibraryLoader::GetModuleHandleW,
+-        UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
+-    },
+-    core::*,
+-};
+-
+-static WINDOW_CLASS_ATOM: Lazy<u16> = Lazy::new(|| {
+-    let class_name = w!("AccessKitTest");
+-
+-    let wc = WNDCLASSW {
+-        hCursor: unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap(),
+-        hInstance: unsafe { GetModuleHandleW(None) }.unwrap().into(),
+-        lpszClassName: class_name,
+-        style: CS_HREDRAW | CS_VREDRAW,
+-        lpfnWndProc: Some(wndproc),
+-        ..Default::default()
++#[cfg(target_os = "windows")]
++mod native {
++    // Based on the create_window sample in windows-samples-rs.
++
++    use accesskit::{
++        Action, ActionHandler, ActionRequest, ActivationHandler, Live, Node, NodeId, Rect, Role,
++        Tree, TreeId, TreeUpdate,
+     };
+-
+-    let atom = unsafe { RegisterClassW(&wc) };
+-    if atom == 0 {
+-        panic!("{}", Error::from_thread());
+-    }
+-    atom
+-});
+-
+-const WINDOW_TITLE: &str = "Hello world";
+-
+-const WINDOW_ID: NodeId = NodeId(0);
+-const BUTTON_1_ID: NodeId = NodeId(1);
+-const BUTTON_2_ID: NodeId = NodeId(2);
+-const ANNOUNCEMENT_ID: NodeId = NodeId(3);
+-const INITIAL_FOCUS: NodeId = BUTTON_1_ID;
+-
+-const BUTTON_1_RECT: Rect = Rect {
+-    x0: 20.0,
+-    y0: 20.0,
+-    x1: 100.0,
+-    y1: 60.0,
+-};
+-
+-const BUTTON_2_RECT: Rect = Rect {
+-    x0: 20.0,
+-    y0: 60.0,
+-    x1: 100.0,
+-    y1: 100.0,
+-};
+-
+-const SET_FOCUS_MSG: u32 = WM_USER;
+-const CLICK_MSG: u32 = WM_USER + 1;
+-
+-fn build_button(id: NodeId, label: &str) -> Node {
+-    let rect = match id {
+-        BUTTON_1_ID => BUTTON_1_RECT,
+-        BUTTON_2_ID => BUTTON_2_RECT,
+-        _ => unreachable!(),
++    use accesskit_windows::Adapter;
++    use once_cell::sync::Lazy;
++    use std::cell::RefCell;
++    use windows::{
++        Win32::{
++            Foundation::*,
++            Graphics::Gdi::ValidateRect,
++            System::LibraryLoader::GetModuleHandleW,
++            UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
++        },
++        core::*,
+     };
+ 
+-    let mut node = Node::new(Role::Button);
+-    node.set_bounds(rect);
+-    node.set_label(label);
+-    node.add_action(Action::Focus);
+-    node.add_action(Action::Click);
+-    node
+-}
+-
+-fn build_announcement(text: &str) -> Node {
+-    let mut node = Node::new(Role::Label);
+-    node.set_value(text);
+-    node.set_live(Live::Polite);
+-    node
+-}
+-
+-struct InnerWindowState {
+-    focus: NodeId,
+-    announcement: Option<String>,
+-}
+-
+-impl InnerWindowState {
+-    fn build_root(&mut self) -> Node {
+-        let mut node = Node::new(Role::Window);
+-        node.set_children(vec![BUTTON_1_ID, BUTTON_2_ID]);
+-        if self.announcement.is_some() {
+-            node.push_child(ANNOUNCEMENT_ID);
+-        }
+-        node.set_language("en");
++    static WINDOW_CLASS_ATOM: Lazy<u16> = Lazy::new(|| {
++        let class_name = w!("AccessKitTest");
++
++        let wc = WNDCLASSW {
++            hCursor: unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap(),
++            hInstance: unsafe { GetModuleHandleW(None) }.unwrap().into(),
++            lpszClassName: class_name,
++            style: CS_HREDRAW | CS_VREDRAW,
++            lpfnWndProc: Some(wndproc),
++            ..Default::default()
++        };
++
++        let atom = unsafe { RegisterClassW(&wc) };
++        if atom == 0 {
++            panic!("{}", Error::from_thread());
++        }
++        atom
++    });
++
++    const WINDOW_TITLE: &str = "Hello world";
++
++    const WINDOW_ID: NodeId = NodeId(0);
++    const BUTTON_1_ID: NodeId = NodeId(1);
++    const BUTTON_2_ID: NodeId = NodeId(2);
++    const ANNOUNCEMENT_ID: NodeId = NodeId(3);
++    const INITIAL_FOCUS: NodeId = BUTTON_1_ID;
++
++    const BUTTON_1_RECT: Rect = Rect {
++        x0: 20.0,
++        y0: 20.0,
++        x1: 100.0,
++        y1: 60.0,
++    };
++
++    const BUTTON_2_RECT: Rect = Rect {
++        x0: 20.0,
++        y0: 60.0,
++        x1: 100.0,
++        y1: 100.0,
++    };
++
++    const SET_FOCUS_MSG: u32 = WM_USER;
++    const CLICK_MSG: u32 = WM_USER + 1;
++
++    fn build_button(id: NodeId, label: &str) -> Node {
++        let rect = match id {
++            BUTTON_1_ID => BUTTON_1_RECT,
++            BUTTON_2_ID => BUTTON_2_RECT,
++            _ => unreachable!(),
++        };
++
++        let mut node = Node::new(Role::Button);
++        node.set_bounds(rect);
++        node.set_label(label);
++        node.add_action(Action::Focus);
++        node.add_action(Action::Click);
+         node
+     }
+-}
+-
+-impl ActivationHandler for InnerWindowState {
+-    fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
+-        println!("Initial tree requested");
+-        let root = self.build_root();
+-        let button_1 = build_button(BUTTON_1_ID, "Button 1");
+-        let button_2 = build_button(BUTTON_2_ID, "Button 2");
+-        let tree = Tree::new(WINDOW_ID);
+-
+-        let mut result = TreeUpdate {
+-            nodes: vec![
+-                (WINDOW_ID, root),
+-                (BUTTON_1_ID, button_1),
+-                (BUTTON_2_ID, button_2),
+-            ],
+-            tree: Some(tree),
+-            tree_id: TreeId::ROOT,
+-            focus: self.focus,
+-        };
+-        if let Some(announcement) = &self.announcement {
+-            result
+-                .nodes
+-                .push((ANNOUNCEMENT_ID, build_announcement(announcement)));
+-        }
+-        Some(result)
+-    }
+-}
+-
+-struct WindowState {
+-    adapter: RefCell<Adapter>,
+-    inner_state: RefCell<InnerWindowState>,
+-}
+-
+-impl WindowState {
+-    fn set_focus(&self, focus: NodeId) {
+-        self.inner_state.borrow_mut().focus = focus;
+-        let mut adapter = self.adapter.borrow_mut();
+-        if let Some(events) = adapter.update_if_active(|| TreeUpdate {
+-            nodes: vec![],
+-            tree: None,
+-            tree_id: TreeId::ROOT,
+-            focus,
+-        }) {
++
++    fn build_announcement(text: &str) -> Node {
++        let mut node = Node::new(Role::Label);
++        node.set_value(text);
++        node.set_live(Live::Polite);
++        node
++    }
++
++    struct InnerWindowState {
++        focus: NodeId,
++        announcement: Option<String>,
++    }
++
++    impl InnerWindowState {
++        fn build_root(&mut self) -> Node {
++            let mut node = Node::new(Role::Window);
++            node.set_children(vec![BUTTON_1_ID, BUTTON_2_ID]);
++            if self.announcement.is_some() {
++                node.push_child(ANNOUNCEMENT_ID);
++            }
++            node.set_language("en");
++            node
++        }
++    }
++
++    impl ActivationHandler for InnerWindowState {
++        fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
++            println!("Initial tree requested");
++            let root = self.build_root();
++            let button_1 = build_button(BUTTON_1_ID, "Button 1");
++            let button_2 = build_button(BUTTON_2_ID, "Button 2");
++            let tree = Tree::new(WINDOW_ID);
++
++            let mut result = TreeUpdate {
++                nodes: vec![
++                    (WINDOW_ID, root),
++                    (BUTTON_1_ID, button_1),
++                    (BUTTON_2_ID, button_2),
++                ],
++                tree: Some(tree),
++                tree_id: TreeId::ROOT,
++                focus: self.focus,
++            };
++            if let Some(announcement) = &self.announcement {
++                result
++                    .nodes
++                    .push((ANNOUNCEMENT_ID, build_announcement(announcement)));
++            }
++            Some(result)
++        }
++    }
++
++    struct WindowState {
++        adapter: RefCell<Adapter>,
++        inner_state: RefCell<InnerWindowState>,
++    }
++
++    impl WindowState {
++        fn set_focus(&self, focus: NodeId) {
++            self.inner_state.borrow_mut().focus = focus;
++            let mut adapter = self.adapter.borrow_mut();
++            if let Some(events) = adapter.update_if_active(|| TreeUpdate {
++                nodes: vec![],
++                tree: None,
++                tree_id: TreeId::ROOT,
++                focus,
++            }) {
++                drop(adapter);
++                events.raise();
++            }
++        }
++
++        fn press_button(&self, id: NodeId) {
++            let mut inner_state = self.inner_state.borrow_mut();
++            let text = if id == BUTTON_1_ID {
++                "You pressed button 1"
++            } else {
++                "You pressed button 2"
++            };
++            inner_state.announcement = Some(text.into());
++            let mut adapter = self.adapter.borrow_mut();
++            if let Some(events) = adapter.update_if_active(|| {
++                let announcement = build_announcement(text);
++                let root = inner_state.build_root();
++                TreeUpdate {
++                    nodes: vec![(ANNOUNCEMENT_ID, announcement), (WINDOW_ID, root)],
++                    tree: None,
++                    tree_id: TreeId::ROOT,
++                    focus: inner_state.focus,
++                }
++            }) {
++                drop(adapter);
++                drop(inner_state);
++                events.raise();
++            }
++        }
++    }
++
++    unsafe fn get_window_state(window: HWND) -> *const WindowState {
++        unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) as _ }
++    }
++
++    fn update_window_focus_state(window: HWND, is_focused: bool) {
++        let state = unsafe { &*get_window_state(window) };
++        let mut adapter = state.adapter.borrow_mut();
++        if let Some(events) = adapter.update_window_focus_state(is_focused) {
+             drop(adapter);
+             events.raise();
+         }
+     }
+ 
+-    fn press_button(&self, id: NodeId) {
+-        let mut inner_state = self.inner_state.borrow_mut();
+-        let text = if id == BUTTON_1_ID {
+-            "You pressed button 1"
+-        } else {
+-            "You pressed button 2"
++    struct WindowCreateParams(NodeId);
++
++    struct SimpleActionHandler {
++        window: HWND,
++    }
++
++    unsafe impl Send for SimpleActionHandler {}
++    unsafe impl Sync for SimpleActionHandler {}
++
++    impl ActionHandler for SimpleActionHandler {
++        fn do_action(&mut self, request: ActionRequest) {
++            match request.action {
++                Action::Focus => {
++                    unsafe {
++                        PostMessageW(
++                            Some(self.window),
++                            SET_FOCUS_MSG,
++                            WPARAM(0),
++                            LPARAM(request.target_node.0 as _),
++                        )
++                    }
++                    .unwrap();
++                }
++                Action::Click => {
++                    unsafe {
++                        PostMessageW(
++                            Some(self.window),
++                            CLICK_MSG,
++                            WPARAM(0),
++                            LPARAM(request.target_node.0 as _),
++                        )
++                    }
++                    .unwrap();
++                }
++                _ => (),
++            }
++        }
++    }
++
++    extern "system" fn wndproc(
++        window: HWND,
++        message: u32,
++        wparam: WPARAM,
++        lparam: LPARAM,
++    ) -> LRESULT {
++        match message {
++            WM_NCCREATE => {
++                let create_struct: &CREATESTRUCTW = unsafe { &mut *(lparam.0 as *mut _) };
++                let create_params: Box<WindowCreateParams> =
++                    unsafe { Box::from_raw(create_struct.lpCreateParams as _) };
++                let WindowCreateParams(initial_focus) = *create_params;
++                let inner_state = RefCell::new(InnerWindowState {
++                    focus: initial_focus,
++                    announcement: None,
++                });
++                let adapter = Adapter::new(window, false, SimpleActionHandler { window });
++                let state = Box::new(WindowState {
++                    adapter: RefCell::new(adapter),
++                    inner_state,
++                });
++                unsafe { SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as _) };
++                unsafe { DefWindowProcW(window, message, wparam, lparam) }
++            }
++            WM_PAINT => {
++                unsafe { ValidateRect(Some(window), None) }.unwrap();
++                LRESULT(0)
++            }
++            WM_DESTROY => {
++                let ptr = unsafe { SetWindowLongPtrW(window, GWLP_USERDATA, 0) };
++                if ptr != 0 {
++                    drop(unsafe { Box::<WindowState>::from_raw(ptr as _) });
++                }
++                unsafe { PostQuitMessage(0) };
++                LRESULT(0)
++            }
++            WM_GETOBJECT => {
++                let state_ptr = unsafe { get_window_state(window) };
++                if state_ptr.is_null() {
++                    // We need to be prepared to gracefully handle WM_GETOBJECT
++                    // while the window is being destroyed; this can happen if
++                    // the thread is using a COM STA.
++                    return unsafe { DefWindowProcW(window, message, wparam, lparam) };
++                }
++                let state = unsafe { &*state_ptr };
++                let mut adapter = state.adapter.borrow_mut();
++                let mut inner_state = state.inner_state.borrow_mut();
++                let result = adapter.handle_wm_getobject(wparam, lparam, &mut *inner_state);
++                drop(inner_state);
++                drop(adapter);
++                result.map_or_else(
++                    || unsafe { DefWindowProcW(window, message, wparam, lparam) },
++                    |result| result.into(),
++                )
++            }
++            WM_SETFOCUS | WM_EXITMENULOOP | WM_EXITSIZEMOVE => {
++                update_window_focus_state(window, true);
++                LRESULT(0)
++            }
++            WM_KILLFOCUS | WM_ENTERMENULOOP | WM_ENTERSIZEMOVE => {
++                update_window_focus_state(window, false);
++                LRESULT(0)
++            }
++            WM_KEYDOWN => match VIRTUAL_KEY(wparam.0 as u16) {
++                VK_TAB => {
++                    let state = unsafe { &*get_window_state(window) };
++                    let old_focus = state.inner_state.borrow().focus;
++                    let new_focus = if old_focus == BUTTON_1_ID {
++                        BUTTON_2_ID
++                    } else {
++                        BUTTON_1_ID
++                    };
++                    state.set_focus(new_focus);
++                    LRESULT(0)
++                }
++                VK_SPACE => {
++                    let state = unsafe { &*get_window_state(window) };
++                    let id = state.inner_state.borrow().focus;
++                    state.press_button(id);
++                    LRESULT(0)
++                }
++                _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
++            },
++            SET_FOCUS_MSG => {
++                let id = NodeId(lparam.0 as _);
++                if id == BUTTON_1_ID || id == BUTTON_2_ID {
++                    let state = unsafe { &*get_window_state(window) };
++                    state.set_focus(id);
++                }
++                LRESULT(0)
++            }
++            CLICK_MSG => {
++                let id = NodeId(lparam.0 as _);
++                if id == BUTTON_1_ID || id == BUTTON_2_ID {
++                    let state = unsafe { &*get_window_state(window) };
++                    state.press_button(id);
++                }
++                LRESULT(0)
++            }
++            _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
++        }
++    }
++
++    fn create_window(title: &str, initial_focus: NodeId) -> Result<HWND> {
++        let create_params = Box::new(WindowCreateParams(initial_focus));
++        let module = HINSTANCE::from(unsafe { GetModuleHandleW(None)? });
++
++        let window = unsafe {
++            CreateWindowExW(
++                Default::default(),
++                PCWSTR(*WINDOW_CLASS_ATOM as usize as _),
++                &HSTRING::from(title),
++                WS_OVERLAPPEDWINDOW,
++                CW_USEDEFAULT,
++                CW_USEDEFAULT,
++                CW_USEDEFAULT,
++                CW_USEDEFAULT,
++                None,
++                None,
++                Some(module),
++                Some(Box::into_raw(create_params) as _),
++            )?
+         };
+-        inner_state.announcement = Some(text.into());
+-        let mut adapter = self.adapter.borrow_mut();
+-        if let Some(events) = adapter.update_if_active(|| {
+-            let announcement = build_announcement(text);
+-            let root = inner_state.build_root();
+-            TreeUpdate {
+-                nodes: vec![(ANNOUNCEMENT_ID, announcement), (WINDOW_ID, root)],
+-                tree: None,
+-                tree_id: TreeId::ROOT,
+-                focus: inner_state.focus,
+-            }
+-        }) {
+-            drop(adapter);
+-            drop(inner_state);
+-            events.raise();
+-        }
++        if window.is_invalid() {
++            return Err(Error::from_thread());
++        }
++
++        Ok(window)
++    }
++
++    pub fn main() -> Result<()> {
++        println!("This example has no visible GUI, and a keyboard interface:");
++        println!("- [Tab] switches focus between two logical buttons.");
++        println!(
++            "- [Space] 'presses' the button, adding static text in a live region announcing that it was pressed."
++        );
++        println!(
++            "Enable Narrator with [Win]+[Ctrl]+[Enter] (or [Win]+[Enter] on older versions of Windows)."
++        );
++
++        let window = create_window(WINDOW_TITLE, INITIAL_FOCUS)?;
++        let _ = unsafe { ShowWindow(window, SW_SHOW) };
++
++        let mut message = MSG::default();
++        while unsafe { GetMessageW(&mut message, None, 0, 0) }.into() {
++            let _ = unsafe { TranslateMessage(&message) };
++            unsafe { DispatchMessageW(&message) };
++        }
++
++        Ok(())
+     }
+ }
+ 
+-unsafe fn get_window_state(window: HWND) -> *const WindowState {
+-    unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) as _ }
++#[cfg(target_os = "windows")]
++fn main() {
++    native::main().expect("AccessKit example failed");
+ }
+ 
+-fn update_window_focus_state(window: HWND, is_focused: bool) {
+-    let state = unsafe { &*get_window_state(window) };
+-    let mut adapter = state.adapter.borrow_mut();
+-    if let Some(events) = adapter.update_window_focus_state(is_focused) {
+-        drop(adapter);
+-        events.raise();
+-    }
+-}
+-
+-struct WindowCreateParams(NodeId);
+-
+-struct SimpleActionHandler {
+-    window: HWND,
+-}
+-
+-unsafe impl Send for SimpleActionHandler {}
+-unsafe impl Sync for SimpleActionHandler {}
+-
+-impl ActionHandler for SimpleActionHandler {
+-    fn do_action(&mut self, request: ActionRequest) {
+-        match request.action {
+-            Action::Focus => {
+-                unsafe {
+-                    PostMessageW(
+-                        Some(self.window),
+-                        SET_FOCUS_MSG,
+-                        WPARAM(0),
+-                        LPARAM(request.target_node.0 as _),
+-                    )
+-                }
+-                .unwrap();
+-            }
+-            Action::Click => {
+-                unsafe {
+-                    PostMessageW(
+-                        Some(self.window),
+-                        CLICK_MSG,
+-                        WPARAM(0),
+-                        LPARAM(request.target_node.0 as _),
+-                    )
+-                }
+-                .unwrap();
+-            }
+-            _ => (),
+-        }
+-    }
+-}
+-
+-extern "system" fn wndproc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+-    match message {
+-        WM_NCCREATE => {
+-            let create_struct: &CREATESTRUCTW = unsafe { &mut *(lparam.0 as *mut _) };
+-            let create_params: Box<WindowCreateParams> =
+-                unsafe { Box::from_raw(create_struct.lpCreateParams as _) };
+-            let WindowCreateParams(initial_focus) = *create_params;
+-            let inner_state = RefCell::new(InnerWindowState {
+-                focus: initial_focus,
+-                announcement: None,
+-            });
+-            let adapter = Adapter::new(window, false, SimpleActionHandler { window });
+-            let state = Box::new(WindowState {
+-                adapter: RefCell::new(adapter),
+-                inner_state,
+-            });
+-            unsafe { SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as _) };
+-            unsafe { DefWindowProcW(window, message, wparam, lparam) }
+-        }
+-        WM_PAINT => {
+-            unsafe { ValidateRect(Some(window), None) }.unwrap();
+-            LRESULT(0)
+-        }
+-        WM_DESTROY => {
+-            let ptr = unsafe { SetWindowLongPtrW(window, GWLP_USERDATA, 0) };
+-            if ptr != 0 {
+-                drop(unsafe { Box::<WindowState>::from_raw(ptr as _) });
+-            }
+-            unsafe { PostQuitMessage(0) };
+-            LRESULT(0)
+-        }
+-        WM_GETOBJECT => {
+-            let state_ptr = unsafe { get_window_state(window) };
+-            if state_ptr.is_null() {
+-                // We need to be prepared to gracefully handle WM_GETOBJECT
+-                // while the window is being destroyed; this can happen if
+-                // the thread is using a COM STA.
+-                return unsafe { DefWindowProcW(window, message, wparam, lparam) };
+-            }
+-            let state = unsafe { &*state_ptr };
+-            let mut adapter = state.adapter.borrow_mut();
+-            let mut inner_state = state.inner_state.borrow_mut();
+-            let result = adapter.handle_wm_getobject(wparam, lparam, &mut *inner_state);
+-            drop(inner_state);
+-            drop(adapter);
+-            result.map_or_else(
+-                || unsafe { DefWindowProcW(window, message, wparam, lparam) },
+-                |result| result.into(),
+-            )
+-        }
+-        WM_SETFOCUS | WM_EXITMENULOOP | WM_EXITSIZEMOVE => {
+-            update_window_focus_state(window, true);
+-            LRESULT(0)
+-        }
+-        WM_KILLFOCUS | WM_ENTERMENULOOP | WM_ENTERSIZEMOVE => {
+-            update_window_focus_state(window, false);
+-            LRESULT(0)
+-        }
+-        WM_KEYDOWN => match VIRTUAL_KEY(wparam.0 as u16) {
+-            VK_TAB => {
+-                let state = unsafe { &*get_window_state(window) };
+-                let old_focus = state.inner_state.borrow().focus;
+-                let new_focus = if old_focus == BUTTON_1_ID {
+-                    BUTTON_2_ID
+-                } else {
+-                    BUTTON_1_ID
+-                };
+-                state.set_focus(new_focus);
+-                LRESULT(0)
+-            }
+-            VK_SPACE => {
+-                let state = unsafe { &*get_window_state(window) };
+-                let id = state.inner_state.borrow().focus;
+-                state.press_button(id);
+-                LRESULT(0)
+-            }
+-            _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
+-        },
+-        SET_FOCUS_MSG => {
+-            let id = NodeId(lparam.0 as _);
+-            if id == BUTTON_1_ID || id == BUTTON_2_ID {
+-                let state = unsafe { &*get_window_state(window) };
+-                state.set_focus(id);
+-            }
+-            LRESULT(0)
+-        }
+-        CLICK_MSG => {
+-            let id = NodeId(lparam.0 as _);
+-            if id == BUTTON_1_ID || id == BUTTON_2_ID {
+-                let state = unsafe { &*get_window_state(window) };
+-                state.press_button(id);
+-            }
+-            LRESULT(0)
+-        }
+-        _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
+-    }
+-}
+-
+-fn create_window(title: &str, initial_focus: NodeId) -> Result<HWND> {
+-    let create_params = Box::new(WindowCreateParams(initial_focus));
+-    let module = HINSTANCE::from(unsafe { GetModuleHandleW(None)? });
+-
+-    let window = unsafe {
+-        CreateWindowExW(
+-            Default::default(),
+-            PCWSTR(*WINDOW_CLASS_ATOM as usize as _),
+-            &HSTRING::from(title),
+-            WS_OVERLAPPEDWINDOW,
+-            CW_USEDEFAULT,
+-            CW_USEDEFAULT,
+-            CW_USEDEFAULT,
+-            CW_USEDEFAULT,
+-            None,
+-            None,
+-            Some(module),
+-            Some(Box::into_raw(create_params) as _),
+-        )?
+-    };
+-    if window.is_invalid() {
+-        return Err(Error::from_thread());
+-    }
+-
+-    Ok(window)
+-}
+-
+-fn main() -> Result<()> {
+-    println!("This example has no visible GUI, and a keyboard interface:");
+-    println!("- [Tab] switches focus between two logical buttons.");
+-    println!(
+-        "- [Space] 'presses' the button, adding static text in a live region announcing that it was pressed."
+-    );
+-    println!(
+-        "Enable Narrator with [Win]+[Ctrl]+[Enter] (or [Win]+[Enter] on older versions of Windows)."
+-    );
+-
+-    let window = create_window(WINDOW_TITLE, INITIAL_FOCUS)?;
+-    let _ = unsafe { ShowWindow(window, SW_SHOW) };
+-
+-    let mut message = MSG::default();
+-    while unsafe { GetMessageW(&mut message, None, 0, 0) }.into() {
+-        let _ = unsafe { TranslateMessage(&message) };
+-        unsafe { DispatchMessageW(&message) };
+-    }
+-
+-    Ok(())
+-}
++#[cfg(not(target_os = "windows"))]
++fn main() {}
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -3,20 +3,36 @@
+ // the LICENSE-APACHE file) or the MIT license (found in
+ // the LICENSE-MIT file), at your option.
+ 
++#[cfg(target_os = "windows")]
+ mod context;
++#[cfg(target_os = "windows")]
+ mod filters;
++#[cfg(target_os = "windows")]
+ mod node;
++#[cfg(target_os = "windows")]
++mod nullable_text_range;
++#[cfg(target_os = "windows")]
+ mod text;
++#[cfg(target_os = "windows")]
+ mod util;
++#[cfg(target_os = "windows")]
+ mod window_handle;
+ 
++#[cfg(target_os = "windows")]
+ mod adapter;
++#[cfg(target_os = "windows")]
+ pub use adapter::{Adapter, QueuedEvents};
+ 
++#[cfg(target_os = "windows")]
+ mod subclass;
++#[cfg(target_os = "windows")]
+ pub use subclass::SubclassingAdapter;
+ 
++#[cfg(target_os = "windows")]
+ pub use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+ 
+-#[cfg(test)]
++#[cfg(all(test, target_os = "windows"))]
+ mod tests;
++
++#[cfg(any(test, target_os = "windows"))]
++mod text_queries;
+--- a/src/node.rs
++++ b/src/node.rs
+@@ -592,7 +592,8 @@
+         if self.node.supports_url() {
+             return true;
+         }
+-        self.node.has_value() && !self.node.label_comes_from_value()
++        (self.node.has_value() || (self.node.is_text_input() && self.node.supports_text_ranges()))
++            && !self.node.label_comes_from_value()
+     }
+ 
+     fn is_range_value_pattern_supported(&self) -> bool {
+@@ -606,7 +607,17 @@
+             return result;
+         }
+         let mut result = WideString::new(self.string_buffer);
+-        self.node.write_value(&mut result).unwrap();
++        if self.node.is_text_input()
++            && self.node.supports_text_ranges()
++            && self.node.data().value().is_none()
++        {
++            // Retained multiline editors omit a duplicate root value. Produce
++            // it only for this native request, using the same text runs as UIA
++            // TextPattern; read-only/disabled mutation guards remain unchanged.
++            self.node.document_range().write_text(&mut result).unwrap();
++        } else {
++            self.node.write_value(&mut result).unwrap();
++        }
+         result
+     }
+ 
+@@ -1346,9 +1357,13 @@
+         (UIA_ValueIsReadOnlyPropertyId, IsReadOnly, is_read_only, BOOL)
+     ), (
+         fn SetValue(&self, value: &PCWSTR) -> Result<()> {
+-            self.do_action(|| {
+-                let value = unsafe { value.to_string() }.unwrap();
+-                (Action::SetValue, Some(ActionData::Value(value.into())))
++            self.do_complex_action(|node, target_node, target_tree| {
++                if node.is_disabled() { return Err(element_not_enabled()); }
++                if node.is_read_only() { return Err(invalid_operation()); }
++                if value.is_null() { return Err(invalid_arg()); }
++                let value = unsafe { value.to_string() }.map_err(|_| invalid_arg())?;
++                Ok(Some(ActionRequest { action: Action::SetValue, target_node, target_tree,
++                    data: Some(ActionData::Value(value.into())) }))
+             })
+         }
+     )),
+@@ -1432,7 +1447,7 @@
+         fn GetSelection(&self) -> Result<*mut SAFEARRAY> {
+             self.resolve_for_text_pattern(|node| {
+                 if let Some(range) = node.text_selection() {
+-                    let platform_range: ITextRangeProvider = PlatformTextRange::new(&self.context, range).into();
++                    let platform_range: ITextRangeProvider = PlatformTextRange::new(&self.context, range).into_provider();
+                     let iunknown: IUnknown = platform_range.cast()?;
+                     Ok(safe_array_from_com_slice(&[iunknown]))
+                 } else {
+@@ -1442,10 +1457,12 @@
+         },
+ 
+         fn GetVisibleRanges(&self) -> Result<*mut SAFEARRAY> {
+-            // TBD: Do we need this? The Quorum GUI toolkit, which is our
+-            // current point of comparison for text functionality,
+-            // doesn't implement it.
+-            Ok(std::ptr::null_mut())
++            self.resolve_for_text_pattern(|node| {
++                let ranges: Vec<IUnknown> = crate::text_queries::visible_ranges(&node).into_iter()
++                    .map(|range| PlatformTextRange::new(&self.context, range).into_provider().cast())
++                    .collect::<Result<_>>()?;
++                Ok(safe_array_from_com_slice(&ranges))
++            })
+         },
+ 
+         fn RangeFromChild(&self, _child: Ref<IRawElementProviderSimple>) -> Result<ITextRangeProvider> {
+@@ -1460,14 +1477,14 @@
+                 let point = node.transform().inverse() * point;
+                 let pos = node.text_position_at_point(point);
+                 let range = pos.to_degenerate_range();
+-                Ok(PlatformTextRange::new(&self.context, range).into())
++                Ok(PlatformTextRange::new(&self.context, range).into_provider())
+             })
+         },
+ 
+         fn DocumentRange(&self) -> Result<ITextRangeProvider> {
+             self.resolve_for_text_pattern(|node| {
+                 let range = node.document_range();
+-                Ok(PlatformTextRange::new(&self.context, range).into())
++                Ok(PlatformTextRange::new(&self.context, range).into_provider())
+             })
+         },
+ 
+--- /dev/null
++++ b/src/nullable_text_range.rs
+@@ -0,0 +1,65 @@
++// Copyright 2026 The Kael contributors. All rights reserved.
++// Licensed under Apache-2.0 OR MIT. See PATCHES.md for upstream provenance.
++//! Identical UIA ABI with an explicitly nullable FindText success result.
++//! windows-rs's generated Result<ITextRangeProvider> cannot express S_OK + NULL.
++use windows::{Win32::UI::Accessibility::*, core::*};
++windows_core::imp::define_interface!(
++    NullableTextRange,
++    NullableTextRange_Vtbl,
++    0x5347ad7b_c355_46f8_aff5_909033582f63
++);
++windows_core::imp::interface_hierarchy!(NullableTextRange, IUnknown);
++#[repr(C)]
++pub struct NullableTextRange_Vtbl(pub ITextRangeProvider_Vtbl);
++#[allow(non_camel_case_types)]
++pub trait NullableTextRange_Impl: ITextRangeProvider_Impl {
++    fn find_text_nullable(
++        &self,
++        text: &BSTR,
++        backward: BOOL,
++        ignore_case: BOOL,
++    ) -> Result<Option<ITextRangeProvider>>;
++}
++impl NullableTextRange_Vtbl {
++    pub const fn new<Identity: NullableTextRange_Impl, const OFFSET: isize>() -> Self {
++        unsafe extern "system" fn find_text<
++            Identity: NullableTextRange_Impl,
++            const OFFSET: isize,
++        >(
++            this: *mut core::ffi::c_void,
++            text: *mut core::ffi::c_void,
++            backward: BOOL,
++            ignore_case: BOOL,
++            result: *mut *mut core::ffi::c_void,
++        ) -> HRESULT {
++            if result.is_null() {
++                return HRESULT(0x80004003u32 as i32);
++            }
++            // All success/error paths initialize the caller's output. Never
++            // construct a Rust interface around a null COM pointer.
++            unsafe {
++                result.write(core::ptr::null_mut());
++                let identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
++                match identity.find_text_nullable(
++                    core::mem::transmute::<&*mut core::ffi::c_void, &BSTR>(&text),
++                    backward,
++                    ignore_case,
++                ) {
++                    Ok(Some(range)) => {
++                        result.write(range.into_raw());
++                        HRESULT(0)
++                    }
++                    Ok(None) => HRESULT(0),
++                    Err(error) => error.into(),
++                }
++            }
++        }
++        let mut vtable = ITextRangeProvider_Vtbl::new::<Identity, OFFSET>();
++        vtable.FindText = find_text::<Identity, OFFSET>;
++        Self(vtable)
++    }
++    pub fn matches(iid: &GUID) -> bool {
++        iid == &ITextRangeProvider::IID
++    }
++}
++impl RuntimeName for NullableTextRange {}
+--- a/src/text.rs
++++ b/src/text.rs
+@@ -18,7 +18,12 @@
+     core::*,
+ };
+ 
+-use crate::{context::Context, util::*};
++use crate::{
++    context::Context,
++    nullable_text_range::{NullableTextRange, NullableTextRange_Impl},
++    text_queries,
++    util::*,
++};
+ 
+ fn upgrade_range<'a>(weak: &WeakRange, tree_state: &'a TreeState) -> Result<Range<'a>> {
+     if let Some(range) = weak.upgrade(tree_state) {
+@@ -205,7 +210,7 @@
+     Ok((pos, moved))
+ }
+ 
+-#[implement(ITextRangeProvider)]
++#[implement(NullableTextRange)]
+ pub(crate) struct PlatformRange {
+     context: Weak<Context>,
+     state: RwLock<WeakRange>,
+@@ -217,6 +222,11 @@
+             context: context.clone(),
+             state: RwLock::new(range.downgrade()),
+         }
++    }
++
++    pub(crate) fn into_provider(self) -> ITextRangeProvider {
++        let nullable: NullableTextRange = self.into();
++        nullable.cast().expect("identical UIA interface IID")
+     }
+ 
+     fn upgrade_context(&self) -> Result<Arc<Context>> {
+@@ -286,6 +296,9 @@
+         let context = self.upgrade_context()?;
+         let tree = context.read_tree();
+         let range = self.upgrade_for_read(tree.state())?;
++        if range.node().is_disabled() {
++            return Err(element_not_enabled());
++        }
+         let request = f(range, &tree);
+         drop(tree);
+         context.do_action(request);
+@@ -310,19 +323,19 @@
+     }
+ }
+ 
+-// Some text range methods take another text range interface pointer as a
+-// parameter. We need to cast these interface pointers to their underlying
+-// implementations. We assume that AccessKit is the only UIA provider
+-// within this process. This seems a safe assumption for most AccessKit users.
++// Safely reject foreign range implementations rather than reinterpret-casting
++// their COM allocation as an AccessKit object.
+ 
+ #[allow(non_snake_case)]
+ impl ITextRangeProvider_Impl for PlatformRange_Impl {
+     fn Clone(&self) -> Result<ITextRangeProvider> {
+-        Ok(self.this.clone().into())
++        Ok(self.this.clone().into_provider())
+     }
+ 
+     fn Compare(&self, other: Ref<ITextRangeProvider>) -> Result<BOOL> {
+-        let other = unsafe { required_param(&other)?.as_impl() };
++        let other = &required_param(&other)?
++            .cast_object_ref::<PlatformRange>()?
++            .this;
+         Ok((self.context.ptr_eq(&other.context)
+             && *self.state.read().unwrap() == *other.state.read().unwrap())
+         .into())
+@@ -334,7 +347,9 @@
+         other: Ref<ITextRangeProvider>,
+         other_endpoint: TextPatternRangeEndpoint,
+     ) -> Result<i32> {
+-        let other = unsafe { required_param(&other)?.as_impl() };
++        let other = &required_param(&other)?
++            .cast_object_ref::<PlatformRange>()?
++            .this;
+         if std::ptr::eq(other as *const _, &self.this as *const _) {
+             // Comparing endpoints within the same range can be done
+             // safely without upgrading the range. This allows ATs
+@@ -398,21 +413,20 @@
+         _value: &VARIANT,
+         _backward: BOOL,
+     ) -> Result<ITextRangeProvider> {
+-        // TODO: implement when we support variable formatting (part of rich text)
+-        // Justification: JUCE doesn't implement this.
+-        Err(Error::empty())
++        // Variable rich-text attributes are not implemented. Return an actual
++        // failure rather than S_OK with an uninitialized output interface.
++        Err(not_implemented())
+     }
+ 
+     fn FindText(
+         &self,
+-        _text: &BSTR,
+-        _backward: BOOL,
+-        _ignore_case: BOOL,
++        text: &BSTR,
++        backward: BOOL,
++        ignore_case: BOOL,
+     ) -> Result<ITextRangeProvider> {
+-        // TODO: implement when there's a real-world use case that requires it
+-        // Justification: Quorum doesn't implement this and is being used
+-        // by blind students.
+-        Err(Error::empty())
++        // The nullable ABI entry overrides this generated entry point.
++        self.find_text_nullable(text, backward, ignore_case)?
++            .ok_or_else(not_implemented)
+     }
+ 
+     fn GetAttributeValue(&self, id: UIA_TEXTATTRIBUTE_ID) -> Result<VARIANT> {
+@@ -492,13 +506,18 @@
+ 
+     fn GetBoundingRectangles(&self) -> Result<*mut SAFEARRAY> {
+         self.read_with_context(|range, context| {
++            let clip = text_queries::viewport(*range.node());
+             let rects = range.bounding_boxes();
+-            if rects.is_empty() {
+-                return Ok(std::ptr::null_mut());
+-            }
+             let client_top_left = context.client_top_left();
+             let mut result = Vec::<f64>::with_capacity(rects.len() * 4);
+             for rect in rects {
++                let Some(clip) = clip else {
++                    continue;
++                };
++                let rect = rect.intersect(clip);
++                if rect.width() <= 0.0 || rect.height() <= 0.0 {
++                    continue;
++                }
+                 result.push(rect.x0 + client_top_left.x);
+                 result.push(rect.y0 + client_top_left.y);
+                 result.push(rect.width());
+@@ -571,7 +590,9 @@
+         other: Ref<ITextRangeProvider>,
+         other_endpoint: TextPatternRangeEndpoint,
+     ) -> Result<()> {
+-        let other = unsafe { required_param(&other)?.as_impl() };
++        let other = &required_param(&other)?
++            .cast_object_ref::<PlatformRange>()?
++            .this;
+         self.require_same_context(other)?;
+         // We have to obtain the tree state and ranges manually to avoid
+         // lifetime issues, and work with the two locks in a specific order
+@@ -649,3 +670,237 @@
+     fn assert_send_sync<T: Send + Sync>() {}
+     assert_send_sync::<PlatformRange>();
+ }
++
++#[allow(non_snake_case)]
++impl NullableTextRange_Impl for PlatformRange_Impl {
++    fn find_text_nullable(
++        &self,
++        text: &BSTR,
++        backward: BOOL,
++        ignore_case: BOOL,
++    ) -> Result<Option<ITextRangeProvider>> {
++        let needle = String::from_utf16(text).map_err(|_| invalid_arg())?;
++        if needle.is_empty() {
++            return Ok(None);
++        }
++        self.read(|range| {
++            let root = range.node();
++            let base = range.start().to_global_utf16_index();
++            let equal = |a: char, b: char| {
++                if !ignore_case.as_bool() {
++                    return a == b;
++                }
++                if a.len_utf16() != b.len_utf16() {
++                    return false;
++                }
++                let mut left = [0u16; 2];
++                let mut right = [0u16; 2];
++                let left = a.encode_utf16(&mut left);
++                let right = b.encode_utf16(&mut right);
++                (unsafe { windows::Win32::Globalization::CompareStringOrdinal(left, right, true) })
++                    == windows::Win32::Globalization::CSTR_EQUAL
++            };
++            let found =
++                text_queries::find_text(&range, &needle, backward.as_bool(), equal, |_, _| true);
++            let Some((start, end)) = found else {
++                return Ok(None);
++            };
++            let mut found = range;
++            found.set_start(
++                root.text_position_from_global_utf16_index(base + start)
++                    .ok_or_else(invalid_arg)?,
++            );
++            found.set_end(
++                root.text_position_from_global_utf16_index(base + end)
++                    .ok_or_else(invalid_arg)?,
++            );
++            Ok(Some(
++                PlatformRange::new(&self.context, found).into_provider(),
++            ))
++        })
++    }
++}
++
++#[cfg(test)]
++mod kael_text_tests {
++    use super::*;
++    use crate::{context::ActionHandlerNoMut, window_handle::WindowHandle};
++    use accesskit::{Node as Data, NodeId, Role, Tree as TreeData, TreeId, TreeUpdate};
++    struct NoActions;
++    impl ActionHandlerNoMut for NoActions {
++        fn do_action(&self, _: ActionRequest) {
++            panic!("unexpected native text mutation");
++        }
++    }
++    fn context(readonly: bool) -> Arc<Context> {
++        let mut root = Data::new(Role::MultilineTextInput);
++        root.set_children([NodeId(2), NodeId(3)]);
++        if readonly {
++            root.set_read_only();
++            root.add_action(Action::SetValue);
++        }
++        let mut first = Data::new(Role::TextRun);
++        first.set_value("日本語 👩🏽‍💻 café ");
++        first.set_character_lengths(
++            "日本語 👩🏽‍💻 café "
++                .chars()
++                .map(|ch| ch.len_utf8() as u8)
++                .collect::<Vec<_>>(),
++        );
++        let mut last = Data::new(Role::TextRun);
++        last.set_value("日本語 👩🏽‍💻 café");
++        last.set_character_lengths(
++            "日本語 👩🏽‍💻 café"
++                .chars()
++                .map(|ch| ch.len_utf8() as u8)
++                .collect::<Vec<_>>(),
++        );
++        Context::new(
++            WindowHandle(Default::default()),
++            Tree::new(
++                TreeUpdate {
++                    nodes: vec![(NodeId(1), root), (NodeId(2), first), (NodeId(3), last)],
++                    tree: Some(TreeData::new(NodeId(1))),
++                    tree_id: TreeId::ROOT,
++                    focus: NodeId(1),
++                },
++                true,
++            ),
++            Arc::new(NoActions),
++            false,
++        )
++    }
++    fn document(context: &Arc<Context>) -> ITextRangeProvider {
++        let tree = context.read_tree();
++        let node = tree.state().root();
++        PlatformRange::new(&Arc::downgrade(context), node.document_range()).into_provider()
++    }
++    #[test]
++    fn native_find_text_unicode_forward_backward_case_and_nullable_abi() -> Result<()> {
++        let context = context(false);
++        let range = document(&context);
++        let needle = BSTR::from("日本語 👩🏽‍💻 café");
++        let first = unsafe { range.FindText(&needle, false, false) }?;
++        let last = unsafe { range.FindText(&needle, true, false) }?;
++        assert_eq!(
++            unsafe { first.GetText(-1) }?.to_string(),
++            needle.to_string()
++        );
++        assert!(
++            unsafe {
++                first.CompareEndpoints(
++                    TextPatternRangeEndpoint_Start,
++                    &last,
++                    TextPatternRangeEndpoint_Start,
++                )
++            }? < 0
++        );
++        assert_eq!(
++            unsafe {
++                range
++                    .FindText(&BSTR::from("CAFÉ"), false, true)?
++                    .GetText(-1)
++            }?
++            .to_string(),
++            "café"
++        );
++        let missing = BSTR::from("not present");
++        let mut output = core::ptr::dangling_mut::<core::ffi::c_void>();
++        let result = unsafe {
++            (range.vtable().FindText)(
++                range.as_raw(),
++                missing.as_ptr().cast_mut().cast(),
++                false.into(),
++                false.into(),
++                &mut output,
++            )
++        };
++        assert_eq!(result, HRESULT(0));
++        assert!(
++            output.is_null(),
++            "S_OK no-match must initialize NULL, not preserve a caller sentinel"
++        );
++        let result = unsafe {
++            (range.vtable().FindText)(
++                range.as_raw(),
++                missing.as_ptr().cast_mut().cast(),
++                false.into(),
++                false.into(),
++                core::ptr::null_mut(),
++            )
++        };
++        assert_eq!(result, HRESULT(0x80004003u32 as i32));
++        let malformed = BSTR::from_wide(&[0xD800]);
++        let result = unsafe {
++            (range.vtable().FindText)(
++                range.as_raw(),
++                malformed.as_ptr().cast_mut().cast(),
++                false.into(),
++                false.into(),
++                &mut output,
++            )
++        };
++        assert_eq!(result, HRESULT(0x80070057u32 as i32));
++        assert!(output.is_null());
++        Ok(())
++    }
++    #[test]
++    fn native_visible_ranges_unknown_geometry_is_a_nonnull_degenerate_array() -> Result<()> {
++        let context = context(false);
++        let id = context.read_tree().state().root_id();
++        let provider = context
++            .get_or_create_platform_node(id)
++            .to_interface::<ITextProvider>();
++        let array = unsafe { provider.GetVisibleRanges() }?;
++        assert!(!array.is_null());
++        assert_eq!(
++            unsafe { windows::Win32::System::Ole::SafeArrayGetDim(array) },
++            1
++        );
++        assert_eq!(
++            unsafe { windows::Win32::System::Ole::SafeArrayGetLBound(array, 1) }?,
++            0
++        );
++        assert_eq!(
++            unsafe { windows::Win32::System::Ole::SafeArrayGetUBound(array, 1) }?,
++            0
++        );
++        unsafe { windows::Win32::System::Ole::SafeArrayDestroy(array) }?;
++        Ok(())
++    }
++    #[test]
++    fn native_com_range_rejects_foreign_owner() -> Result<()> {
++        let first_context = context(false);
++        let second_context = context(false);
++        let first = document(&first_context);
++        let other = document(&second_context);
++        assert_eq!(
++            unsafe {
++                first.CompareEndpoints(
++                    TextPatternRangeEndpoint_Start,
++                    &other,
++                    TextPatternRangeEndpoint_Start,
++                )
++            }
++            .unwrap_err()
++            .code(),
++            invalid_arg().code()
++        );
++        Ok(())
++    }
++    #[test]
++    fn native_readonly_value_mutation_is_rejected_before_action_dispatch() -> Result<()> {
++        let context = context(true);
++        let id = context.read_tree().state().root_id();
++        let provider = context
++            .get_or_create_platform_node(id)
++            .to_interface::<IValueProvider>();
++        assert_eq!(
++            unsafe { provider.SetValue(w!("forbidden")) }
++                .unwrap_err()
++                .code(),
++            invalid_operation().code()
++        );
++        Ok(())
++    }
++}
+--- /dev/null
++++ b/src/text_queries.rs
+@@ -0,0 +1,379 @@
++// Copyright 2026 The Kael contributors. All rights reserved.
++// Licensed under Apache-2.0 OR MIT. See PATCHES.md for upstream provenance.
++//! Portable query model. No full-document copy is needed for search.
++use accesskit::{Rect, TextDirection};
++use accesskit_consumer::{Node, TextRange};
++use std::collections::VecDeque;
++
++/// Streaming KMP, with UTF-16 offsets relative to the supplied range. The
++/// comparison must be an equivalence relation preserving UTF-16 scalar length.
++/// Matches respect the consumer's atomic text units (including CRLF). `accept`
++/// may apply an additional caller filter without indexing the document.
++pub(crate) fn find_text(
++    range: &TextRange<'_>,
++    needle: &str,
++    backward: bool,
++    mut equal: impl FnMut(char, char) -> bool,
++    mut accept: impl FnMut(usize, usize) -> bool,
++) -> Option<(usize, usize)> {
++    if needle.is_empty() {
++        return None;
++    }
++    let length = needle.encode_utf16().count();
++    if length > range.end().to_global_utf16_index() - range.start().to_global_utf16_index() {
++        return None;
++    }
++    let pattern: Vec<char> = needle.chars().collect();
++    let mut prefix = vec![0; pattern.len()];
++    let mut matched = 0;
++    for i in 1..pattern.len() {
++        while matched > 0 && !equal(pattern[i], pattern[matched]) {
++            matched = prefix[matched - 1];
++        }
++        if equal(pattern[i], pattern[matched]) {
++            matched += 1;
++        }
++        prefix[i] = matched;
++    }
++    let mut offset = 0;
++    matched = 0;
++    let mut result = None;
++    let mut boundaries = VecDeque::with_capacity(pattern.len());
++    range.traverse_text(|run, text| {
++        // Consumer traversal returns a complete-unit substring of this value.
++        // Find its starting unit without copying the document or constructing
++        // an index for every matching candidate (which would be quadratic).
++        let full = run.data().value().unwrap();
++        let slice_start = (text.as_ptr() as usize).checked_sub(full.as_ptr() as usize)?;
++        let slice_end = slice_start + text.len();
++        let mut byte = 0;
++        for &unit_length in run.data().character_lengths() {
++            let end = byte + usize::from(unit_length);
++            if byte >= slice_start && end <= slice_end {
++                let unit = &full[byte..end];
++                for (index, ch) in unit.char_indices() {
++                    if boundaries.len() == pattern.len() {
++                        boundaries.pop_front();
++                    }
++                    boundaries.push_back(index == 0);
++                    offset += ch.len_utf16();
++                    while matched > 0 && !equal(ch, pattern[matched]) {
++                        matched = prefix[matched - 1];
++                    }
++                    if equal(ch, pattern[matched]) {
++                        matched += 1;
++                    }
++                    if matched == pattern.len() {
++                        let start = offset - length;
++                        let atomic = boundaries.front() == Some(&true)
++                            && index + ch.len_utf8() == unit.len();
++                        if atomic && accept(start, offset) {
++                            result = Some((start, offset));
++                            if !backward {
++                                return Some(());
++                            }
++                        }
++                        matched = prefix[matched - 1];
++                    }
++                }
++            }
++            byte = end;
++            if byte >= slice_end {
++                break;
++            }
++        }
++        None
++    });
++    result
++}
++
++pub(crate) fn viewport(node: Node<'_>) -> Option<Rect> {
++    if node.is_hidden() {
++        return None;
++    }
++    let mut result = node.bounding_box()?;
++    let mut parent = node.parent();
++    while let Some(ancestor) = parent {
++        if ancestor.clips_children() {
++            result = result.intersect(ancestor.bounding_box()?);
++        }
++        parent = ancestor.parent();
++    }
++    (result.width() > 0.0 && result.height() > 0.0).then_some(result)
++}
++
++/// Visible character spans, including partial glyphs and zero-width marks.
++/// Missing geometry is unknown visibility, never evidence that the full text
++/// document is visible. Offscreen document runs still remain searchable.
++pub(crate) fn visible_ranges<'a>(node: &'a Node<'a>) -> Vec<TextRange<'a>> {
++    let document = node.document_range();
++    let Some(clip) = viewport(*node) else {
++        return vec![node.document_start().to_degenerate_range()];
++    };
++    let mut spans: Vec<(usize, usize)> = Vec::new();
++    let mut global = 0;
++    document.traverse_text(|run, text| {
++        let start = global;
++        global += text.encode_utf16().count();
++        if run.is_hidden() {
++            return None::<()>;
++        }
++        let (Some(bounds), Some(positions), Some(widths), Some(direction)) = (
++            run.data().bounds(),
++            run.data().character_positions(),
++            run.data().character_widths(),
++            run.text_direction(),
++        ) else {
++            return None;
++        };
++        let lengths = run.data().character_lengths();
++        if positions.len() != lengths.len() || widths.len() != lengths.len() {
++            return None;
++        }
++        let mut bytes = 0;
++        let mut utf16 = start;
++        for (i, len) in lengths.iter().enumerate() {
++            let end_bytes = bytes + usize::from(*len);
++            let unit = text.get(bytes..end_bytes)?;
++            let end_utf16 = utf16 + unit.encode_utf16().count();
++            let pos = f64::from(positions[i]);
++            let width = f64::from(widths[i]);
++            if !pos.is_finite() || !width.is_finite() || width < 0.0 {
++                return None;
++            }
++            let mut glyph = bounds;
++            match direction {
++                TextDirection::LeftToRight => {
++                    glyph.x0 = bounds.x0 + pos;
++                    glyph.x1 = glyph.x0 + width;
++                }
++                TextDirection::RightToLeft => {
++                    glyph.x1 = bounds.x1 - pos;
++                    glyph.x0 = glyph.x1 - width;
++                }
++                TextDirection::TopToBottom => {
++                    glyph.y0 = bounds.y0 + pos;
++                    glyph.y1 = glyph.y0 + width;
++                }
++                TextDirection::BottomToTop => {
++                    glyph.y1 = bounds.y1 - pos;
++                    glyph.y0 = glyph.y1 - width;
++                }
++            }
++            let glyph = run.transform().transform_rect_bbox(glyph);
++            // A combining mark/newline can have zero advance. Include it only
++            // when its baseline position and perpendicular extent are visible.
++            let visible = glyph.x1 > clip.x0
++                && glyph.x0 < clip.x1
++                && glyph.y1 > clip.y0
++                && glyph.y0 < clip.y1;
++            if visible {
++                if let Some(last) = spans.last_mut().filter(|last| last.1 == utf16) {
++                    last.1 = end_utf16;
++                } else {
++                    spans.push((utf16, end_utf16));
++                }
++            }
++            bytes = end_bytes;
++            utf16 = end_utf16;
++        }
++        None
++    });
++    let result: Vec<_> = spans
++        .into_iter()
++        .filter_map(|(start, end)| {
++            let mut range = document;
++            range.set_start(node.text_position_from_global_utf16_index(start)?);
++            range.set_end(node.text_position_from_global_utf16_index(end)?);
++            Some(range)
++        })
++        .collect();
++    if result.is_empty() {
++        vec![node.document_start().to_degenerate_range()]
++    } else {
++        result
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use accesskit::{Node as Data, NodeId, Role, Tree as TreeData, TreeUpdate};
++    use accesskit_consumer::Tree;
++    fn tree(runs: &[(&str, Option<Rect>, Option<TextDirection>)], clip: Rect) -> Tree {
++        let root_id = NodeId(1);
++        let mut root = Data::new(Role::MultilineTextInput);
++        root.set_bounds(clip);
++        root.set_clips_children();
++        root.set_children(
++            (0..runs.len())
++                .map(|i| NodeId(i as u64 + 2))
++                .collect::<Vec<_>>(),
++        );
++        let mut nodes = vec![(root_id, root)];
++        for (i, (value, bounds, direction)) in runs.iter().enumerate() {
++            let mut run = Data::new(Role::TextRun);
++            run.set_value(*value);
++            let mut chars = value.chars().peekable();
++            let mut lengths = Vec::new();
++            while let Some(ch) = chars.next() {
++                let mut length = ch.len_utf8() as u8;
++                if ch == '\r' && chars.peek() == Some(&'\n') {
++                    chars.next();
++                    length += 1;
++                }
++                lengths.push(length);
++            }
++            let unit_count = lengths.len();
++            run.set_character_lengths(lengths);
++            if let Some(bounds) = bounds {
++                run.set_bounds(*bounds);
++            }
++            if let Some(direction) = direction {
++                run.set_text_direction(*direction);
++                run.set_character_positions(
++                    (0..unit_count).map(|i| i as f32 * 10.0).collect::<Vec<_>>(),
++                );
++                run.set_character_widths(vec![10.0; unit_count]);
++            }
++            nodes.push((NodeId(i as u64 + 2), run));
++        }
++        Tree::new(
++            TreeUpdate {
++                nodes,
++                tree: Some(TreeData::new(root_id)),
++                focus: root_id,
++                tree_id: accesskit::TreeId::ROOT,
++            },
++            true,
++        )
++    }
++    #[test]
++    fn unicode_search_crosses_runs_and_retains_last_overlapping_match() {
++        let tree = tree(
++            &[("日本", None, None), ("語 👩🏽‍💻 café ababa", None, None)],
++            Rect::new(0., 0., 100., 100.),
++        );
++        let node = tree.state().root();
++        let range = node.document_range();
++        assert_eq!(
++            find_text(&range, "日本語 👩🏽‍💻", false, |a, b| a == b, |_, _| true),
++            Some((0, 11))
++        );
++        let start = range.text().find("ababa").unwrap();
++        let utf16 = range.text()[..start].encode_utf16().count();
++        assert_eq!(
++            find_text(&range, "aba", true, |a, b| a == b, |_, _| true),
++            Some((utf16 + 2, utf16 + 5))
++        );
++        assert_eq!(
++            find_text(&range, "absent", false, |a, b| a == b, |_, _| true),
++            None
++        );
++        assert_eq!(
++            find_text(
++                &range,
++                "CAFÉ",
++                false,
++                |a, b| a.eq_ignore_ascii_case(&b),
++                |_, _| true
++            )
++            .map(|(s, e)| e - s),
++            Some(5)
++        );
++    }
++    #[test]
++    fn horizontal_partial_visibility_preserves_disjoint_text_spans() {
++        let tree = tree(
++            &[
++                (
++                    "abcd",
++                    Some(Rect::new(0., 0., 40., 10.)),
++                    Some(TextDirection::LeftToRight),
++                ),
++                ("hidden", None, None),
++                (
++                    "日本",
++                    Some(Rect::new(0., 10., 20., 20.)),
++                    Some(TextDirection::RightToLeft),
++                ),
++            ],
++            Rect::new(15., 0., 25., 20.),
++        );
++        let node = tree.state().root();
++        let texts: Vec<_> = visible_ranges(&node).iter().map(TextRange::text).collect();
++        assert_eq!(texts, vec!["bc", "日"]);
++    }
++    #[test]
++    fn missing_or_offscreen_geometry_returns_one_degenerate_range() {
++        let tree = tree(
++            &[
++                (
++                    "offscreen",
++                    Some(Rect::new(0., 50., 100., 60.)),
++                    Some(TextDirection::LeftToRight),
++                ),
++                ("unknown", None, None),
++            ],
++            Rect::new(0., 0., 20., 20.),
++        );
++        let node = tree.state().root();
++        let ranges = visible_ranges(&node);
++        assert_eq!(ranges.len(), 1);
++        assert!(ranges[0].is_degenerate());
++    }
++    #[test]
++    fn search_does_not_split_crlf_or_surrogate_units() {
++        let tree = tree(&[("a\r\nb\nc👩", None, None)], Rect::new(0., 0., 20., 20.));
++        let node = tree.state().root();
++        let range = node.document_range();
++        assert_eq!(
++            find_text(&range, "\n", false, |a, b| a == b, |_, _| true),
++            Some((4, 5))
++        );
++        assert_eq!(
++            find_text(&range, "\r\n", false, |a, b| a == b, |_, _| true),
++            Some((1, 3))
++        );
++        assert_eq!(
++            find_text(&range, "👩", false, |a, b| a == b, |_, _| true),
++            Some((6, 8))
++        );
++    }
++    #[test]
++    fn backwards_repeated_matches_remain_linear() {
++        let text = "a".repeat(100_000);
++        let tree = tree(&[(&text, None, None)], Rect::new(0., 0., 20., 20.));
++        let node = tree.state().root();
++        let range = node.document_range();
++        let mut comparisons = 0;
++        assert_eq!(
++            find_text(
++                &range,
++                &"a".repeat(255),
++                true,
++                |a, b| {
++                    comparisons += 1;
++                    a == b
++                },
++                |_, _| true
++            ),
++            Some((99_745, 100_000))
++        );
++        assert!(
++            comparisons < 400_000,
++            "search comparisons grew beyond the linear bound: {comparisons}"
++        );
++    }
++    #[test]
++    fn search_uses_subset_and_rejected_atomic_boundaries_do_not_hide_later_match() {
++        let tree = tree(&[("aab aab", None, None)], Rect::new(0., 0., 20., 20.));
++        let node = tree.state().root();
++        let mut range = node.document_range();
++        range.set_start(node.text_position_from_global_utf16_index(1).unwrap());
++        assert_eq!(
++            find_text(&range, "ab", false, |a, b| a == b, |s, _| s > 0),
++            Some((4, 6))
++        );
++    }
++}

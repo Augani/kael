@@ -17,3 +17,4 @@ pub mod toolbar;
 pub mod top_nav;
 pub mod tree;
 pub mod virtual_list;
+pub mod virtual_tree;

@@ -94,6 +94,13 @@ impl UniformVirtualList {
         self
     }
 
+    /// Consume wheel movement only along this list's axis. This lets nested
+    /// horizontal lists pass vertical wheel movement to their scrolling parent.
+    pub fn restrict_scroll_to_axis(mut self, restrict: bool) -> Self {
+        self.base.style().restrict_scroll_to_axis = Some(restrict);
+        self
+    }
+
     pub fn with_sizing_behavior(mut self, behavior: ListSizingBehavior) -> Self {
         self.sizing_behavior = behavior;
         self

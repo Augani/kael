@@ -519,23 +519,14 @@ struct BlurFragmentInput {
 constexpr sampler blur_sampler(coord::normalized, filter::linear,
                                address::clamp_to_edge);
 
-float2 blur_position(float2 position, BlurPass blur) {
-  float2 target_origin = float2(blur.target_bounds.origin.x, blur.target_bounds.origin.y);
-  float2 target_size = max(
-      float2(blur.target_bounds.size.width, blur.target_bounds.size.height),
-      float2(1.0, 1.0));
-  float2 sample_origin = float2(blur.sample_bounds.origin.x, blur.sample_bounds.origin.y);
-  float2 sample_size = float2(blur.sample_bounds.size.width, blur.sample_bounds.size.height);
-  return sample_origin + ((position - target_origin) / target_size) * sample_size;
-}
-
 float4 blur_along_axis(texture2d<float, access::sample> source_texture,
                        float2 position, BlurPass blur, float2 axis) {
-  float2 sample_position = blur_position(position, blur);
   float sigma = max(blur.blur_radius, 0.001);
   int radius = min(int(ceil(blur.blur_radius * 3.0)), 16);
   float2 texture_size = float2(source_texture.get_width(), source_texture.get_height());
-  float2 sample_min = float2(blur.sample_bounds.origin.x, blur.sample_bounds.origin.y);
+  // Captures retain their absolute viewport coordinates. Clamp to texel
+  // centers so linear filtering cannot read outside the copied rectangle.
+  float2 sample_min = float2(blur.sample_bounds.origin.x, blur.sample_bounds.origin.y) + 0.5;
   float2 sample_max = sample_min +
       max(float2(blur.sample_bounds.size.width, blur.sample_bounds.size.height) - 1.0,
           float2(0.0, 0.0));
@@ -548,7 +539,7 @@ float4 blur_along_axis(texture2d<float, access::sample> source_texture,
     }
 
     float weight = gaussian(float(offset), sigma);
-    float2 clamped = clamp(sample_position + axis * float(offset), sample_min, sample_max);
+    float2 clamped = clamp(position + axis * float(offset), sample_min, sample_max);
     accum += source_texture.sample(blur_sampler, clamped / texture_size) * weight;
     weight_sum += weight;
   }
@@ -569,8 +560,10 @@ float4 composite_blur(float4 blurred, BlurPass blur) {
     return float4(0.0);
   }
 
+  // The blur target stores premultiplied RGB; saturated already includes its
+  // coverage alpha. Convert to straight output only after composing the tint.
   float3 color =
-      (tint.rgb * tint.a + saturated * blurred.a * (1.0 - tint.a)) / alpha;
+      (tint.rgb * tint.a + saturated * (1.0 - tint.a)) / alpha;
   return float4(color, alpha);
 }
 
@@ -610,12 +603,13 @@ fragment float4 blur_composite_fragment(
       blur.corner_radii.bottom_left == 0.0 &&
       blur.corner_radii.top_right == 0.0 &&
       blur.corner_radii.bottom_right == 0.0;
-  if (unrounded) {
-    return color;
+  float coverage = rounded_clip_factor(input.position.xy,
+      blur.rounded_clip_bounds, blur.rounded_clip_radii);
+  if (!unrounded) {
+    float distance = quad_sdf(input.position.xy, blur.target_bounds, blur.corner_radii);
+    coverage *= saturate(0.5 - distance);
   }
-
-  float distance = quad_sdf(input.position.xy, blur.target_bounds, blur.corner_radii);
-  return color * float4(1.0, 1.0, 1.0, saturate(0.5 - distance));
+  return color * float4(1.0, 1.0, 1.0, coverage);
 }
 
 // Returns the dash velocity of a corner given the dash velocity of the two
@@ -878,6 +872,15 @@ vertex MonochromeSpriteVertexOutput monochrome_sprite_vertex(
       {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
 }
 
+// Clamp each fragment's sampling footprint, retaining the original vertex UV
+// interpolation. Half-texel bounds keep linear filtering inside this tile.
+float2 clamp_tile_position(float2 position, AtlasTile tile, float2 atlas_size) {
+  float2 origin = float2(tile.bounds.origin.x, tile.bounds.origin.y);
+  float2 size = float2(tile.bounds.size.width, tile.bounds.size.height);
+  return clamp(position, (origin + 0.5) / atlas_size,
+               (origin + size - 0.5) / atlas_size);
+}
+
 fragment float4 monochrome_sprite_fragment(
     MonochromeSpriteFragmentInput input [[stage_in]],
     constant MonochromeSprite *sprites [[buffer(SpriteInputIndex_Sprites)]],
@@ -888,9 +891,11 @@ fragment float4 monochrome_sprite_fragment(
 
   constexpr sampler atlas_texture_sampler(mag_filter::linear,
                                           min_filter::linear);
-  float4 sample =
-      atlas_texture.sample(atlas_texture_sampler, input.tile_position);
   MonochromeSprite sprite = sprites[input.sprite_id];
+  float2 tile_position = clamp_tile_position(input.tile_position, sprite.tile,
+      float2(atlas_texture.get_width(), atlas_texture.get_height()));
+  float4 sample =
+      atlas_texture.sample(atlas_texture_sampler, tile_position);
   float4 color = input.color;
   color.a *= pow(sample.a, 0.85);
   color = apply_color_filter(color, sprite.color_filter);
@@ -980,8 +985,10 @@ fragment float4 polychrome_sprite_fragment(
   float2 local_position = apply_inverse_transform(input.position.xy, sprite.transformation);
   constexpr sampler atlas_texture_sampler(mag_filter::linear,
                                           min_filter::linear);
+  float2 tile_position = clamp_tile_position(input.tile_position, sprite.tile,
+      float2(atlas_texture.get_width(), atlas_texture.get_height()));
   float4 sample =
-      atlas_texture.sample(atlas_texture_sampler, input.tile_position);
+      atlas_texture.sample(atlas_texture_sampler, tile_position);
   float distance =
       quad_sdf(local_position, sprite.bounds, sprite.corner_radii);
 

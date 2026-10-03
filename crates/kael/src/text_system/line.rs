@@ -437,13 +437,14 @@ fn paint_line(
                 }
 
                 let max_glyph_bounds = Bounds {
-                    origin: glyph_origin,
+                    origin: glyph_origin + point(px(0.0), glyph.position.y),
                     size: max_glyph_size,
                 };
 
                 let content_mask = window.content_mask();
                 if max_glyph_bounds.intersects(&content_mask.bounds) {
-                    let baseline_origin = glyph_origin + baseline_offset;
+                    let baseline_origin =
+                        glyph_origin + baseline_offset + point(px(0.0), glyph.position.y);
                     let baseline_origin = point(
                         baseline_origin.x,
                         px(window
@@ -668,5 +669,187 @@ fn aligned_origin_x(
         TextAlign::Left => origin.x,
         TextAlign::Center => (origin.x * 2.0 + align_width - line_width) / 2.0,
         TextAlign::Right => origin.x + align_width - line_width,
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+    use crate::{
+        Context, IntoElement, Render, Styled, TestAppContext, TextRun, canvas_with_prepaint, font,
+    };
+
+    struct PositionedGlyphs {
+        shifted: bool,
+    }
+    impl Render for PositionedGlyphs {
+        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let mut line = window.text_system().shape_line(
+                "abcd".into(),
+                px(16.0),
+                &[TextRun {
+                    len: 4,
+                    font: font("Helvetica"),
+                    color: black(),
+                    background_color: None,
+                    underline: Some(UnderlineStyle {
+                        thickness: px(1.0),
+                        color: None,
+                        wavy: false,
+                    }),
+                    strikethrough: None,
+                }],
+                None,
+            );
+            if self.shifted {
+                let mut runs = line.runs.clone();
+                assert_eq!(runs[0].glyphs.len(), 4);
+                runs[0].glyphs[1].position.y = px(-8.0);
+                runs[0].glyphs[2].position.y = px(5.0);
+                line.layout = Arc::new(LineLayout {
+                    font_size: line.font_size,
+                    width: line.width,
+                    ascent: line.ascent,
+                    descent: line.descent,
+                    len: line.len(),
+                    runs,
+                });
+            }
+            canvas_with_prepaint(
+                |_, _, _| (),
+                move |_, _, window, cx| {
+                    line.paint(point(px(20.0), px(20.0)), px(32.0), window, cx)
+                        .unwrap();
+                },
+            )
+            .w(px(200.0))
+            .h(px(100.0))
+        }
+    }
+
+    #[crate::test]
+    fn positioned_glyph_offsets_reach_painted_sprite_destinations_and_keep_decorations(
+        cx: &mut TestAppContext,
+    ) {
+        cx.use_native_text_system_for_test();
+        let (view, window) = cx.add_window_view(|_, _| PositionedGlyphs { shifted: false });
+        let capture = |window: &mut Window, cx: &mut App| {
+            window.draw(cx).clear();
+            let scale = window.scale_factor();
+            let mut glyphs = window
+                .rendered_scene()
+                .monochrome_sprites
+                .iter()
+                .map(|sprite| {
+                    (
+                        sprite.bounds.origin.x.0 / scale,
+                        sprite.bounds.origin.y.0 / scale,
+                    )
+                })
+                .collect::<Vec<_>>();
+            glyphs.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            let decorations = window
+                .rendered_scene()
+                .underlines
+                .iter()
+                .map(|underline| underline.bounds)
+                .collect::<Vec<_>>();
+            (glyphs, decorations)
+        };
+        let original = window.update(capture);
+        window.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                view.shifted = true;
+                cx.notify();
+            })
+        });
+        let shifted = window.update(capture);
+        assert_eq!(
+            original.0.len(),
+            4,
+            "the native glyph rasterizer must produce four captured destinations"
+        );
+        assert_eq!(shifted.0.len(), 4);
+        for (index, offset) in [0.0, -8.0, 5.0, 0.0].into_iter().enumerate() {
+            assert_eq!(shifted.0[index].0, original.0[index].0);
+            assert!((shifted.0[index].1 - original.0[index].1 - offset).abs() < 0.01);
+        }
+        assert!(
+            !original.1.is_empty(),
+            "the fixture must paint its underline"
+        );
+        assert_eq!(
+            shifted.1, original.1,
+            "decorations retain the line baseline"
+        );
+    }
+
+    struct StyledLabelEmission;
+    impl Render for StyledLabelEmission {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            use crate::{ParentElement, div};
+            div()
+                .w(px(300.0))
+                .h(px(180.0))
+                .font_family("Helvetica")
+                .text_size(px(14.0))
+                .line_height(px(20.0))
+                .flex()
+                .flex_col()
+                .children(
+                    ["Launch plan", "Bold", "Source"]
+                        .map(|label| div().h(px(40.0)).flex_shrink_0().child(label)),
+                )
+        }
+    }
+
+    #[crate::test]
+    fn native_styled_labels_emit_every_glyph_with_untruncated_masks(cx: &mut TestAppContext) {
+        // Exercise StyledText's actual shape/cache/element path, independently
+        // of the manually shaped line fixture above and native GPU batching.
+        cx.use_native_text_system_for_test();
+        let (_, window) = cx.add_window_view(|_, _| StyledLabelEmission);
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let scale = window.scale_factor();
+            let sprites = &window.rendered_scene().monochrome_sprites;
+            assert_eq!(
+                sprites.len(),
+                20,
+                "all non-space native label glyphs emitted"
+            );
+            for (row, expected_count) in [10, 4, 6].into_iter().enumerate() {
+                let glyphs = sprites
+                    .iter()
+                    .filter(|sprite| {
+                        let y = sprite.bounds.origin.y.0 / scale;
+                        y >= row as f32 * 40.0 && y < (row + 1) as f32 * 40.0
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(glyphs.len(), expected_count, "complete styled label {row}");
+                let last = glyphs
+                    .iter()
+                    .max_by(|a, b| {
+                        a.bounds
+                            .origin
+                            .x
+                            .0
+                            .partial_cmp(&b.bounds.origin.x.0)
+                            .unwrap()
+                    })
+                    .unwrap();
+                assert!(
+                    last.bounds.origin.x.0 / scale > 14.0,
+                    "native shape retained the last characters"
+                );
+                for glyph in glyphs {
+                    assert!(glyph.bounds.intersects(&glyph.content_mask.bounds));
+                    assert!(
+                        glyph.content_mask.bounds.right() >= glyph.bounds.right(),
+                        "last glyph not clipped by text element mask"
+                    );
+                }
+            }
+        });
     }
 }

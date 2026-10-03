@@ -15,6 +15,7 @@ pub enum CachePriority {
 struct Entry<V: Clone> {
     value: V,
     eviction: EvictionKey,
+    bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -42,6 +43,9 @@ pub struct MemoryCache<V: Clone> {
     entries: HashMap<String, Entry<V>>,
     eviction_order: BTreeSet<EvictionKey>,
     max_entries: usize,
+    max_bytes: Option<u64>,
+    used_bytes: u64,
+    weigh: fn(&V) -> u64,
     access_counter: u64,
     hits: u64,
     misses: u64,
@@ -54,9 +58,26 @@ impl<V: Clone> MemoryCache<V> {
             entries: HashMap::new(),
             eviction_order: BTreeSet::new(),
             max_entries,
+            max_bytes: None,
+            used_bytes: 0,
+            weigh: |_| 0,
             access_counter: 0,
             hits: 0,
             misses: 0,
+        }
+    }
+
+    /// Creates a cache bounded by both entry count and caller-reported payload bytes.
+    ///
+    /// `weigh` is evaluated on insertion; report the bytes retained by each value.
+    /// Reinsert a value if its retained size changes through interior mutability.
+    /// Keys, cache metadata, and clones held by callers are outside this budget.
+    /// A zero byte budget admits only zero-weight values, subject to `max_entries`.
+    pub fn with_byte_budget(max_entries: usize, max_bytes: u64, weigh: fn(&V) -> u64) -> Self {
+        Self {
+            max_bytes: Some(max_bytes),
+            weigh,
+            ..Self::new(max_entries)
         }
     }
 
@@ -77,26 +98,29 @@ impl<V: Clone> MemoryCache<V> {
     }
 
     /// Inserts a value with the given priority, evicting the lowest-priority
-    /// least-recently-used entry if the cache is full.
+    /// least-recently-used entries if the cache is full.
+    ///
+    /// Values exceeding the byte budget are ignored, preserving an existing value
+    /// at the same key. Use [`Self::try_insert`] to check whether a value was admitted.
     pub fn insert(&mut self, key: String, value: V, priority: CachePriority) {
+        self.try_insert(key, value, priority);
+    }
+
+    /// Inserts a value if it fits the configured limits, returning whether it was admitted.
+    ///
+    /// Rejection preserves existing entries. Successful replacements update both
+    /// their priority and byte accounting before eviction.
+    pub fn try_insert(&mut self, key: String, value: V, priority: CachePriority) -> bool {
         if self.max_entries == 0 {
-            return;
+            return false;
         }
-
-        if self.entries.contains_key(&key) {
-            let access_order = self.next_access_order();
-            let Some(entry) = self.entries.get_mut(&key) else {
-                return;
-            };
-            self.eviction_order.remove(&entry.eviction);
-            entry.value = value;
-            entry.eviction.priority = priority;
-            entry.eviction.access_order = access_order;
-            self.eviction_order.insert(entry.eviction.clone());
-            return;
+        let bytes = (self.weigh)(&value);
+        let max_bytes = self.max_bytes.unwrap_or(u64::MAX);
+        if bytes > max_bytes {
+            return false;
         }
-
-        if self.entries.len() >= self.max_entries {
+        self.remove(&key);
+        while self.entries.len() >= self.max_entries || self.used_bytes > max_bytes - bytes {
             self.evict_one();
         }
 
@@ -107,15 +131,19 @@ impl<V: Clone> MemoryCache<V> {
             Entry {
                 value,
                 eviction: eviction.clone(),
+                bytes,
             },
         );
+        self.used_bytes += bytes;
         self.eviction_order.insert(eviction);
+        true
     }
 
     /// Removes and returns the value for `key`, if present.
     pub fn remove(&mut self, key: &str) -> Option<V> {
         self.entries.remove(key).map(|entry| {
             self.eviction_order.remove(&entry.eviction);
+            self.used_bytes -= entry.bytes;
             entry.value
         })
     }
@@ -124,6 +152,7 @@ impl<V: Clone> MemoryCache<V> {
     pub fn clear(&mut self) {
         self.entries.clear();
         self.eviction_order.clear();
+        self.used_bytes = 0;
     }
 
     /// Returns the number of entries currently cached.
@@ -134,6 +163,16 @@ impl<V: Clone> MemoryCache<V> {
     /// Returns `true` if the cache contains no entries.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Returns the payload-byte limit, or `None` for an entry-count-only cache.
+    pub fn max_bytes(&self) -> Option<u64> {
+        self.max_bytes
+    }
+
+    /// Returns the sum of retained payload weights (zero for an entry-count-only cache).
+    pub fn used_bytes(&self) -> u64 {
+        self.used_bytes
     }
 
     /// Returns the number of cache hits recorded.
@@ -148,7 +187,9 @@ impl<V: Clone> MemoryCache<V> {
 
     fn evict_one(&mut self) {
         if let Some(victim) = self.eviction_order.pop_first() {
-            self.entries.remove(victim.key.as_str());
+            if let Some(entry) = self.entries.remove(victim.key.as_str()) {
+                self.used_bytes -= entry.bytes;
+            }
         }
     }
 
@@ -313,5 +354,108 @@ mod tests {
     fn large_limits_do_not_allocate_eagerly() {
         let cache = MemoryCache::<i32>::new(usize::MAX);
         assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn payload_budget_evicts_multiple_entries_by_priority_then_recency() {
+        let mut cache = MemoryCache::with_byte_budget(10, 10, |bytes: &Vec<u8>| bytes.len() as u64);
+        cache.insert("high".into(), vec![1; 3], CachePriority::High);
+        cache.insert("old-low".into(), vec![2; 2], CachePriority::Low);
+        cache.insert("new-low".into(), vec![3; 2], CachePriority::Low);
+        cache.insert("normal".into(), vec![4; 2], CachePriority::Normal);
+        cache.get("old-low");
+
+        assert!(cache.try_insert("large".into(), vec![5; 5], CachePriority::Normal));
+
+        assert_eq!(cache.used_bytes(), 10);
+        assert_eq!(cache.get("new-low"), None);
+        assert_eq!(cache.get("old-low"), None);
+        assert_eq!(cache.get("high"), Some(vec![1; 3]));
+        assert_eq!(cache.get("normal"), Some(vec![4; 2]));
+        assert_eq!(cache.get("large"), Some(vec![5; 5]));
+    }
+
+    #[test]
+    fn replacement_releases_its_weight_before_evicting_other_entries() {
+        let mut cache = MemoryCache::with_byte_budget(2, 10, |bytes: &Vec<u8>| bytes.len() as u64);
+        cache.insert("a".into(), vec![1; 8], CachePriority::Normal);
+        cache.insert("b".into(), vec![2; 2], CachePriority::Normal);
+        cache.insert("a".into(), vec![3; 4], CachePriority::High);
+        assert_eq!(cache.used_bytes(), 6);
+        assert_eq!(cache.get("b"), Some(vec![2; 2]));
+        cache.insert("b".into(), vec![4; 7], CachePriority::Normal);
+        assert_eq!(cache.used_bytes(), 7);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.get("a"), None);
+    }
+
+    #[test]
+    fn oversized_insert_preserves_the_cache_and_previous_value() {
+        let mut cache = MemoryCache::with_byte_budget(2, 4, |bytes: &Vec<u8>| bytes.len() as u64);
+        cache.insert("a".into(), vec![1; 4], CachePriority::Normal);
+        assert!(!cache.try_insert("a".into(), vec![2; 5], CachePriority::High));
+        assert!(!cache.try_insert("b".into(), vec![3; 5], CachePriority::High));
+        assert_eq!(cache.used_bytes(), 4);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.get("a"), Some(vec![1; 4]));
+    }
+
+    #[test]
+    fn payload_accounting_tracks_removal_namespace_invalidation_and_clear() {
+        let mut cache = MemoryCache::with_byte_budget(4, 10, |bytes: &Vec<u8>| bytes.len() as u64);
+        cache.insert("ns:a".into(), vec![1; 3], CachePriority::Normal);
+        cache.insert("ns:b".into(), vec![2; 2], CachePriority::Normal);
+        cache.insert("other:c".into(), vec![3; 4], CachePriority::Normal);
+        assert_eq!(cache.remove("ns:a"), Some(vec![1; 3]));
+        assert_eq!(cache.used_bytes(), 6);
+        cache.remove_matching(|key| key.starts_with("ns:"));
+        assert_eq!(cache.used_bytes(), 4);
+        cache.clear();
+        assert_eq!(cache.used_bytes(), 0);
+        assert!(cache.is_empty());
+        assert!(cache.eviction_order.is_empty());
+    }
+
+    #[test]
+    fn zero_byte_budget_and_zero_entry_budget_remain_bounded() {
+        let mut cache = MemoryCache::with_byte_budget(1, 0, |bytes: &Vec<u8>| bytes.len() as u64);
+        assert!(!cache.try_insert("large".into(), vec![1], CachePriority::Normal));
+        assert!(cache.try_insert("empty".into(), vec![], CachePriority::Normal));
+        assert!(cache.try_insert("new-empty".into(), vec![], CachePriority::Normal));
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.used_bytes(), 0);
+        assert_eq!(cache.get("empty"), None);
+
+        let mut disabled = MemoryCache::with_byte_budget(0, u64::MAX, |weight: &u64| *weight);
+        assert!(!disabled.try_insert("empty".into(), 0, CachePriority::Normal));
+        assert!(disabled.is_empty());
+    }
+
+    #[test]
+    fn byte_accounting_does_not_overflow_with_maximum_weights() {
+        let mut cache = MemoryCache::with_byte_budget(4, u64::MAX, |weight: &u64| *weight);
+        assert!(cache.try_insert("full".into(), u64::MAX, CachePriority::High));
+        assert!(cache.try_insert("one".into(), 1, CachePriority::Low));
+        assert_eq!(cache.used_bytes(), 1);
+        assert_eq!(cache.get("full"), None);
+        assert!(cache.try_insert("full".into(), u64::MAX, CachePriority::Normal));
+        assert_eq!(cache.used_bytes(), u64::MAX);
+        assert_eq!(cache.remove("full"), Some(u64::MAX));
+        assert_eq!(cache.used_bytes(), 0);
+    }
+
+    #[test]
+    fn payload_budget_preserves_recency_when_access_counter_wraps() {
+        let mut cache = MemoryCache::with_byte_budget(3, 3, |weight: &u64| *weight);
+        cache.insert("a".into(), 1, CachePriority::Normal);
+        cache.insert("b".into(), 1, CachePriority::Normal);
+        cache.insert("c".into(), 1, CachePriority::Normal);
+        cache.access_counter = u64::MAX;
+        cache.get("a");
+        cache.insert("d".into(), 2, CachePriority::Normal);
+        assert_eq!(cache.get("b"), None);
+        assert_eq!(cache.get("c"), None);
+        assert_eq!(cache.get("a"), Some(1));
+        assert_eq!(cache.used_bytes(), 3);
     }
 }

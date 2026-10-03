@@ -1185,6 +1185,18 @@ impl Gtk4Window {
             pending_active: None,
             accessibility_root: AtSpiAccessibleRoot::new(),
         })));
+        let weak = Rc::downgrade(&this.0);
+        let executor = client.0.borrow().common.foreground_executor.clone();
+        this.0
+            .borrow()
+            .accessibility_root
+            .set_action_wake(&executor, move || {
+                if let Some(state) = weak.upgrade() {
+                    // Idle GTK windows stop frame polling. AT-SPI actions must
+                    // still drain through the normal foreground frame callback.
+                    request_window_frame_force(&state);
+                }
+            });
         GTK4_POINTER_LOCK_WINDOWS.with(|windows| {
             windows
                 .borrow_mut()
@@ -2124,6 +2136,10 @@ impl crate::PlatformWindow for Gtk4Window {
         self.0.borrow().renderer.set_atlas_byte_budget(budget);
     }
 
+    fn shed_memory(&self, level: crate::MemoryPressureLevel) {
+        self.0.borrow_mut().renderer.shed_memory(level);
+    }
+
     fn display_refresh_rate(&self) -> Option<f32> {
         self.display().and_then(|display| display.refresh_rate())
     }
@@ -2170,6 +2186,9 @@ impl crate::PlatformWindow for Gtk4Window {
         tree: &crate::AccessibilityTree,
     ) -> Vec<crate::AccessibilityActionRequest> {
         let state = self.0.borrow();
+        state
+            .accessibility_root
+            .update_window_focus_state(state.window.is_active());
         state.accessibility_root.update_tree(tree);
         state.accessibility_root.drain_actions(tree)
     }
@@ -2735,6 +2754,23 @@ fn connect_surface_metric_signals(state: &Rc<RefCell<Gtk4WindowState>>) {
     surface.connect_enter_monitor(move |_, _| refresh(&weak));
     let weak = Rc::downgrade(state);
     surface.connect_leave_monitor(move |_, _| refresh(&weak));
+
+    // Surface notifications can precede the Fixed widget's allocation. Read
+    // its actual client size after GTK finishes painting an existing frame;
+    // this observes native allocation without keeping idle windows ticking.
+    let weak = Rc::downgrade(state);
+    surface.frame_clock().connect_after_paint(move |_| {
+        let Some(state) = weak.upgrade() else { return };
+        let (fixed, previous) = {
+            let state = state.borrow();
+            (state.fixed.clone(), state.bounds.size)
+        };
+        // Scale and monitor notifications have their own signals above. A
+        // stable allocation needs no display lookup on every painted frame.
+        if fixed.width() as f32 != previous.width.0 || fixed.height() as f32 != previous.height.0 {
+            update_window_metrics(&state, &fixed);
+        }
+    });
 }
 
 fn set_window_frame_polling(state: &Rc<RefCell<Gtk4WindowState>>, active: bool) {
@@ -3029,6 +3065,12 @@ fn release_gtk_pointer_lock(state: &Rc<RefCell<Gtk4WindowState>>) -> Result<(), 
 fn update_window_metrics(state: &Rc<RefCell<Gtk4WindowState>>, fixed: &Fixed) {
     let width = fixed.width().max(0);
     let height = fixed.height().max(0);
+    // Realization happens before widget allocation. Publishing that temporary
+    // zero also clears the scene's size request and can strand flex content
+    // and its semantic children at an empty viewport indefinitely.
+    if width == 0 || height == 0 {
+        return;
+    }
     let (display, scale_factor, monitor_id) = {
         let state = state.borrow();
         let display = display_for_window(&state.window);
@@ -3106,6 +3148,7 @@ fn dispatch_deferred_window_metrics(state: &Rc<RefCell<Gtk4WindowState>>) {
 fn defer_window_active(state: &Rc<RefCell<Gtk4WindowState>>, active: bool) {
     let schedule = {
         let mut state = state.borrow_mut();
+        state.accessibility_root.update_window_focus_state(active);
         state.pending_active = Some(active);
         let schedule = !state.active_dispatch_scheduled;
         state.active_dispatch_scheduled = true;
@@ -3290,25 +3333,25 @@ fn read_clipboard_mimes(
     {
         return None;
     }
-    let result = Rc::new(RefCell::new(None));
-    let result_out = result.clone();
-    let main_loop = glib::MainLoop::new(None, false);
-    let finished_loop = main_loop.clone();
-    clipboard.read_async(
-        mime_types,
-        glib::Priority::DEFAULT,
-        None::<&gio::Cancellable>,
-        move |stream| {
-            *result_out.borrow_mut() = Some(
-                stream
-                    .map_err(anyhow::Error::from)
-                    .and_then(|(stream, _)| read_stream_bounded(&stream, byte_limit)),
-            );
-            finished_loop.quit();
-        },
-    );
-    main_loop.run();
-    match result.borrow_mut().take()? {
+    // GDK can return a pipe whose producer still needs this main context to
+    // serialize a local provider. A synchronous stream read inside read_async's
+    // callback starves that producer and hangs even a Copy/Paste in one app.
+    // Drive both opening and bounded streaming asynchronously. Dropping the
+    // unfinished GioFuture at the deadline cancels the native request.
+    let result = glib::MainContext::ref_thread_default().block_on(async {
+        let read = async {
+            let (stream, _) = clipboard
+                .read_future(mime_types, glib::Priority::DEFAULT)
+                .await?;
+            read_stream_bounded(&stream, byte_limit).await
+        };
+        futures::pin_mut!(read);
+        match futures::future::select(read, glib::timeout_future(Duration::from_secs(3))).await {
+            futures::future::Either::Left((result, _)) => result,
+            futures::future::Either::Right(_) => anyhow::bail!("clipboard read deadline exceeded"),
+        }
+    });
+    match result {
         Ok(bytes) => Some(bytes),
         Err(error) => {
             log::warn!("reading GTK4 clipboard content failed: {error:#}");
@@ -3317,15 +3360,20 @@ fn read_clipboard_mimes(
     }
 }
 
-fn read_stream_bounded(stream: &gio::InputStream, byte_limit: usize) -> anyhow::Result<Vec<u8>> {
+async fn read_stream_bounded(
+    stream: &gio::InputStream,
+    byte_limit: usize,
+) -> anyhow::Result<Vec<u8>> {
     const CHUNK_SIZE: usize = 64 * 1024;
     let mut output = Vec::new();
     loop {
         let remaining = byte_limit.saturating_sub(output.len());
-        let chunk = stream.read_bytes(
-            remaining.saturating_add(1).min(CHUNK_SIZE),
-            None::<&gio::Cancellable>,
-        )?;
+        let chunk = stream
+            .read_bytes_future(
+                remaining.saturating_add(1).min(CHUNK_SIZE),
+                glib::Priority::DEFAULT,
+            )
+            .await?;
         if chunk.is_empty() {
             break;
         }
@@ -3426,6 +3474,33 @@ fn gtk_renderer_is_software(renderer_name: &str, renderer_override: Option<&str>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipboard_stream_preserves_exact_byte_limit_across_chunks() {
+        let context = glib::MainContext::new();
+        for length in [0, 7, 64 * 1024, 64 * 1024 + 1] {
+            let bytes = vec![0x81; length];
+            let stream =
+                gio::MemoryInputStream::from_bytes(&glib::Bytes::from_owned(bytes.clone()));
+            let output = context
+                .block_on(read_stream_bounded(stream.upcast_ref(), length))
+                .unwrap();
+            assert_eq!(output, bytes);
+        }
+    }
+
+    #[test]
+    fn clipboard_stream_rejects_one_byte_over_limit_across_chunks() {
+        let context = glib::MainContext::new();
+        for limit in [0, 7, 64 * 1024, 64 * 1024 + 1] {
+            let stream =
+                gio::MemoryInputStream::from_bytes(&glib::Bytes::from_owned(vec![0x81; limit + 1]));
+            let error = context
+                .block_on(read_stream_bounded(stream.upcast_ref(), limit))
+                .unwrap_err();
+            assert!(error.to_string().contains("exceeds"), "{error}");
+        }
+    }
 
     #[test]
     fn native_window_extent_rejects_hostile_values() {

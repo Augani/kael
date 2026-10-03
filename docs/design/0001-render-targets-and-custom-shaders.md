@@ -1,6 +1,6 @@
 # Design 0001: Public render targets, passes, and custom shaders
 
-- Status: **Draft — for discussion**
+- Status: **Fragment implementation delivered; compute and GPU graph completion in progress**
 - Tracks: roadmap workstreams P0-A (offscreen targets + pass API), P0-B (custom
   + compute shaders), P0-C (render-graph executor)
 - Audience: anyone building on Kael, and other GPUI forks interested in
@@ -8,19 +8,21 @@
 
 ## Motivation
 
-The single most-requested capability in the GPUI ecosystem is the one upstream
-has declined to add: a way for applications to run their own GPU work. Without
-it, anything beyond the built-in primitive set — performant custom gradients,
-generative backgrounds, shader-driven effects, offscreen composition — is
-either impossible or requires forking the renderer.
+Applications need a public way to run their own GPU work for generative
+backgrounds, domain-specific visualization, and shader-driven composition.
+Kael offers built-in gradients, effects, canvas primitives, and an opt-in
+validated custom fragment API with GPU-resident targets. The implemented API
+and current runtime evidence are documented in [the completion review](../reviews/2026-10-02-shader-completion.md).
+The historical proposal below explains the wider compute and graph contract;
+its sketches are not the authoritative public API.
 
 Kael's renderer today is a fixed-function 2D batcher. `Primitive`
-(`crates/kael/src/scene.rs:311`) is a closed, crate-private enum of 8 variants
+(`crates/kael/src/scene.rs`) is a closed, crate-private enum of 8 variants
 (shadow, blur rect, quad, path, underline, mono/poly sprite, surface), each
 drawn by a fixed pipeline compiled from built-in shader source per backend
 (MSL / HLSL / WGSL). Adding one visual effect means editing the enum, all
 three backends, and all three shader files in lockstep. The existing
-`runtime_shaders` cargo feature (`platform/mac/metal_renderer.rs:41-43`) only
+`runtime_shaders` cargo feature (`platform/mac/metal_renderer.rs`) only
 recompiles the *built-in* source at runtime — it is a development convenience,
 not an extensibility API.
 
@@ -101,7 +103,7 @@ the same contract `kael_gpu_budget` defines for its evictable resources).
 pub struct ShaderBindings {
     /// Sampled texture inputs, bound in declaration order.
     pub textures: u32,
-    /// Size of the uniform block in bytes (std140-compatible layout).
+    /// Reflected WGSL uniform block size in bytes, including required padding.
     pub uniform_bytes: u32,
 }
 
@@ -122,6 +124,14 @@ or unsupported features fail here with a source-mapped error, never at draw
 time. Fragment shaders receive a full-target triangle with UV; the binding
 contract (declared textures + one uniform block) is fixed, which is what
 makes three-backend portability tractable.
+
+Uniform bytes must follow the reflected layout of the validated WGSL module,
+including member offsets, alignment, array stride, and uniform-address-space
+constraints. A Rust `#[repr(C)]` struct alone cannot prove that contract, and
+the API must not treat all WGSL layouts as interchangeable with std140. See the
+[WGSL layout specification](https://www.w3.org/TR/WGSL/#address-space-layout-constraints).
+Reflection must also validate texture sample types, sampler requirements,
+binding access, entry-point stage, and the device's supported limits.
 
 ### Passes and the graph
 
@@ -189,6 +199,36 @@ pre-warms the current swapchain format.
 A non-media example ships with slice 1 (e.g. a shader-driven animated
 gradient background) per the workspace layering rule: public framework
 features are exercised by at least one non-media consumer.
+
+## Implementation readiness (2026-10-02 review)
+
+This remains a proposal. `graphics_capability_report()` continues to report
+public render targets and custom shaders as roadmap features. Headless Metal
+exports and compute demonstrations are internal test paths and do not satisfy
+the proposed application API.
+
+Before slice 1 can ship, implement and test these boundaries:
+
+- An opt-in runtime WGSL validator/translator with bounded source, binding,
+  uniform, and pipeline-cache storage. Existing Naga usage is build-time.
+- A render-target handle that owns device resources, validates dimensions and
+  byte costs before allocation, and reports allocation failure and eviction.
+- An explicit color-space and alpha contract. A sampled composited target is
+  premultiplied; shaders and blending must agree on that representation.
+- Device/window ownership and pipeline caching keyed by shader and target
+  format, with deterministic teardown and device-loss handling.
+- A GPU texture source that the UI can sample without CPU readback or
+  per-frame decoding. This is a required slice-1 exit criterion.
+- Tests for malformed WGSL, reflected layout mismatches, resize, transparency,
+  clipping, target reuse/drop, allocation rejection, and actual output pixels.
+- A non-media example and per-backend capability reporting. Keep unsupported
+  backends explicit until their execution and pixel tests pass.
+
+Browser fragment support requires a separate GLSL ES/WebGL2 path or WebGPU
+backend. The current WebGL2 renderer cannot provide compute parity; Khronos
+retired its WebGL compute proposal in favor of
+[WebGPU for browser compute](https://registry.khronos.org/webgl/specs/latest/2.0-compute/).
+Expose native compute separately from portable fragment-pass support.
 
 ## Open questions
 
