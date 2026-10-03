@@ -17,7 +17,7 @@ int main(int argc, char **argv) {
     pid_t target = (pid_t)parsed;
     struct proc_bsdinfo info = {0};
     if (proc_pidinfo(target, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != sizeof(info)
-        || info.pbi_ppid != getppid()) return 3;
+        || info.pbi_ppid != (uint32_t)getppid()) return 3;
     @autoreleasepool {
         NSRunningApplication *application =
             [NSRunningApplication runningApplicationWithProcessIdentifier:target];
