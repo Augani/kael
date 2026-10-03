@@ -2754,6 +2754,14 @@ fn connect_surface_metric_signals(state: &Rc<RefCell<Gtk4WindowState>>) {
     surface.connect_enter_monitor(move |_, _| refresh(&weak));
     let weak = Rc::downgrade(state);
     surface.connect_leave_monitor(move |_, _| refresh(&weak));
+
+    // Surface notifications can precede the Fixed widget's allocation. Read
+    // its actual client size after GTK finishes painting an existing frame;
+    // this observes native allocation without keeping idle windows ticking.
+    let weak = Rc::downgrade(state);
+    surface
+        .frame_clock()
+        .connect_after_paint(move |_| refresh(&weak));
 }
 
 fn set_window_frame_polling(state: &Rc<RefCell<Gtk4WindowState>>, active: bool) {
@@ -3048,6 +3056,12 @@ fn release_gtk_pointer_lock(state: &Rc<RefCell<Gtk4WindowState>>) -> Result<(), 
 fn update_window_metrics(state: &Rc<RefCell<Gtk4WindowState>>, fixed: &Fixed) {
     let width = fixed.width().max(0);
     let height = fixed.height().max(0);
+    // Realization happens before widget allocation. Publishing that temporary
+    // zero also clears the scene's size request and can strand flex content
+    // and its semantic children at an empty viewport indefinitely.
+    if width == 0 || height == 0 {
+        return;
+    }
     let (display, scale_factor, monitor_id) = {
         let state = state.borrow();
         let display = display_for_window(&state.window);

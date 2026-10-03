@@ -451,3 +451,18 @@ including CRLF graphemes and vertical-tab whitespace. Independent Unicode
 reference checks cover every ASCII byte pair and longer generated sequences;
 all 100 core accessibility tests and strict native Clippy pass. Full paired
 before/after Editor runs are pending before claiming a performance improvement.
+
+The first ASCII before/after sequence yields three accepted captures and then
+rejects a fourth when churn has zero renders/draws/submissions. Its raw logs
+remain in `.artifacts/editor-ascii-word-policy-matched`; this incomplete sequence
+establishes no performance improvement. The new macOS controller uses an
+AppKit helper to activate only its owned child at active/churn begin, with a
+shared-parent PID check and recorded acceptance. Both frozen variants use that
+same controller in a separate full sequence; native painting is still required.
+
+The focused GTK trace shows repeated 0×0 viewports. Early realization reads the
+Fixed widget before allocation, overwrites requested bounds with zero and also
+clears the scene's size request. The backend now preserves the last valid size
+through that transient stage and observes actual Fixed allocation after native
+painting, without adding an idle polling clock. Full GTK protocol verification
+of this correction remains pending.

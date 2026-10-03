@@ -202,3 +202,10 @@ replaces 100,000 owned labels every 30 updates; its cost includes application
 allocation and framework invalidation. Data-table churn swaps retained snapshots
 instead. Preserve startup/cold outliers and
 report per-run percentiles and distributions before combining results.
+
+The macOS controller requests foreground activation for its owned child at the
+start of active and churn phases. The helper checks the shared parent PID before
+calling AppKit and records accepted requests; native frame activity remains
+mandatory. This gives both engines the same foreground workload. It does not
+establish continuously unobstructed display, physical power or compositor
+completion, and interrupted/paused captures still fail validation.

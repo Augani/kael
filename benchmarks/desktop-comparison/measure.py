@@ -251,13 +251,14 @@ def quantile(samples, fraction):
 
 
 def run(engine, executable, helper, destination, index, frame_timing=True,
-        contract='native-navigation-detail-v1', rows=100_000):
+        contract='native-navigation-detail-v1', rows=100_000, activation_helper=None):
     log = destination / f'{index:02}-{engine}.log'
     samples = []
     phases = []
     result = None
     pending = ''
     phase = 'startup'
+    window_activations = []
     with log.open('w') as output, log.open() as stream:
         started = time.monotonic()
         child = subprocess.Popen([str(executable.resolve())], stdout=output, stderr=subprocess.STDOUT)
@@ -277,6 +278,11 @@ def run(engine, executable, helper, destination, index, frame_timing=True,
                         marker = json.loads(line.removeprefix('KAEL_PHASE '))
                         phase = marker['phase']
                         phases.append(marker)
+                        if activation_helper is not None and phase in ('active', 'churn'):
+                            accepted = json.loads(command(str(activation_helper), str(child.pid)))
+                            if accepted.get('activation_accepted') is not True:
+                                raise RuntimeError('owned native window activation was not accepted')
+                            window_activations.append({'phase': phase, **accepted})
                 time.sleep(.25)
             return_code = child.wait()
         finally:
@@ -300,6 +306,8 @@ def run(engine, executable, helper, destination, index, frame_timing=True,
     if return_code != 0 or result is None:
         raise RuntimeError(f'{engine} returned {return_code} without a completed workload; inspect {log}')
     validate_workload(result, phases, engine, frame_timing, contract, rows)
+    if activation_helper is not None and [entry['phase'] for entry in window_activations] != ['active', 'churn']:
+        raise RuntimeError('missing owned foreground phase activation')
     if len(samples) < 60:
         raise RuntimeError('missing phase markers or process samples')
     phase_metrics = {}
@@ -321,6 +329,7 @@ def run(engine, executable, helper, destination, index, frame_timing=True,
         }
     report = {'engine': engine, 'index': index, 'binary_sha256': digest(executable),
               'process_samples': samples, 'phases': phases, 'application': result,
+              'phase_window_activation': window_activations,
               'phase_metrics': phase_metrics,
               'draw_us': {str(q): quantile(result['draw_cpu_us'], q) for q in (.5, .95, .99)},
               'submission_us': {str(q): quantile(result['submission_cpu_us'], q) for q in (.5, .95, .99)}}
@@ -352,6 +361,10 @@ def main():
     destination.mkdir(parents=True, exist_ok=True)
     helper = destination / 'process-metrics'
     subprocess.run(['cc', '-O2', str(Path(__file__).with_name('process_metrics_macos.c')), '-o', str(helper)], check=True)
+    activation_helper = destination / 'activate-native-window'
+    activation_source = Path(__file__).with_name('activate_owned_window_macos.m')
+    subprocess.run(['cc', '-O2', str(activation_source), '-framework', 'AppKit',
+                    '-o', str(activation_helper)], check=True)
     adapter_sample = json.loads(command(str(helper), str(os.getpid())))
     metadata = {'schema_version': 3, 'platform': platform.platform(), 'cpu': command('sysctl', '-n', 'machdep.cpu.brand_string'),
                 'memory_bytes': int(command('sysctl', '-n', 'hw.memsize')), 'cpu_count': os.cpu_count(),
@@ -370,6 +383,9 @@ def main():
                 'adapter_source_sha256': digest(Path(__file__).with_name('process_metrics_macos.c')),
                 'adapter_binary_sha256': digest(helper),
                 'framework_frame_timing_enabled': not args.without_frame_timing,
+                'window_activation_scope': 'request foreground for the owned child at active/churn begin; repaint activity remains mandatory',
+                'activation_source_sha256': digest(activation_source),
+                'activation_binary_sha256': digest(activation_helper),
                 'native_geometry_scope': 'actual client viewport and scale at each phase begin/end; stable and equal across all captures required',
                 'timing_scope': 'CPU draw and platform submission when enabled; common application callback timing always enabled; no GPU/compositor completion measurement'}
     (destination / 'environment.json').write_text(json.dumps(metadata, indent=2) + '\n')
@@ -383,6 +399,7 @@ def main():
         for engine, executable in order:
             report = run(engine, executable, helper, destination, index,
                          frame_timing=not args.without_frame_timing,
+                         activation_helper=activation_helper,
                          contract=args.contract,
                          rows={'native-editor-document-v1': 16_001,
                                'native-virtual-tree-v1': 100_025,
