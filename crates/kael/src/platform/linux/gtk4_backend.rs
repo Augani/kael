@@ -3377,11 +3377,13 @@ async fn read_stream_bounded(
         if chunk.is_empty() {
             break;
         }
-        output.extend_from_slice(&chunk);
         anyhow::ensure!(
-            output.len() <= byte_limit,
+            chunk.len() <= remaining,
             "clipboard representation exceeds its {byte_limit}-byte limit"
         );
+        // Reject the excess byte before growing the retained buffer. Otherwise
+        // a power-of-two limit can briefly double its allocation on rejection.
+        output.extend_from_slice(&chunk);
     }
     Ok(output)
 }
