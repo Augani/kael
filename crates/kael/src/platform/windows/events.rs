@@ -64,7 +64,14 @@ impl WindowsWindowInner {
                 if self.accessibility_provider.take_valid_host_focus_request() {
                     // Only the owning thread calls SetFocus, after adapter,
                     // semantic-tree and App/window borrows have been released.
+                    // Activate the requested host before assigning its keyboard
+                    // focus. SetFocus on an inactive thread alone does not make
+                    // its descendant the desktop's UIA focused element.
                     // WM_SETFOCUS records actual host focus for UIA queries.
+                    unsafe {
+                        let _ = SetActiveWindow(handle);
+                        let _ = SetForegroundWindow(handle);
+                    }
                     let result = unsafe { SetFocus(Some(handle)) };
                     if unsafe { GetFocus() } != handle {
                         log::warn!("native accessibility host focus was not acquired: {result:?}");

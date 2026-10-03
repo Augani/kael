@@ -97,3 +97,12 @@ Undo/Redo and live preview pixels pass in
 `.artifacts/native-ui-idle-wake/workspace-native-interactions.json`. The native OS
 dead-key path composes `é` with one-step Undo/Redo. Full details and binary
 hashes are in [the follow-up](2026-10-03-native-quality-followup.md).
+
+Fresh integrated native End/Home/Right input reveals the final Notes column and
+returns to Score while Title/Owner remain frozen and vertical position stays
+unchanged. `.artifacts/native-ui-idle-wake/grid-horizontal-native-keyboard.json`
+records binary SHA-256
+`b890ae056e9d81015609964bacbffcb2179ad5930d53ba085496f804b1ee49e3`.
+The prior horizontal wheel attempts are now diagnosed: the CUA tool delivers
+`scrollingDeltaX=0` and `scrollingDeltaY=0` on this host, as preserved in
+`grid-horizontal-scroll-diagnostics.log`. They provide no nonzero wheel test.

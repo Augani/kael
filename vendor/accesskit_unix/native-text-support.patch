@@ -18,7 +18,7 @@
 -description = "AccessKit UI accessibility infrastructure: Linux adapter"
 +description = "Kael-maintained AccessKit Unix adapter with native EditableText support"
  readme = "README.md"
-+exclude = ["Cargo.toml.orig"]
++exclude = ["Cargo.toml.orig", ".cargo_vcs_info.json"]
  keywords = [
      "gui",
      "ui",
@@ -96,7 +96,39 @@
              id,
 --- a/src/atspi/bus.rs
 +++ b/src/atspi/bus.rs
-@@ -159,6 +159,10 @@
+@@ -82,12 +82,6 @@
+             .at(path.clone(), ApplicationInterface(node.clone()))
+             .await?
+         {
+-            let desktop = self
+-                .socket_proxy
+-                .embed(&(self.unique_name().as_str(), ObjectId::Root.path().into()))
+-                .await?;
+-            let _ = self.desktop.set(desktop);
+-
+             self.conn
+                 .object_server()
+                 .at(
+@@ -111,6 +105,18 @@
+                     ),
+                 )
+                 .await?;
++
++            // Embed publishes the application to external clients, which may
++            // immediately request Accessible and Cache. Install both before
++            // publication rather than exposing a partially registered root.
++            let desktop = self
++                .socket_proxy
++                .embed(&(self.unique_name().as_str(), ObjectId::Root.path().into()))
++                .await?;
++            let _ = self.desktop.set(desktop);
++            if std::env::var_os("KAEL_ATSPI_TRACE").is_some() {
++                eprintln!("KAEL_ATSPI_ROOT_READY: service={}", self.unique_name());
++            }
+         }
+ 
+         Ok(())
+@@ -159,6 +165,10 @@
              self.register_interface(&path, TextInterface::new(node.clone()))
                  .await?;
          }
@@ -107,7 +139,7 @@
          if new_interfaces.contains(Interface::Value) {
              self.register_interface(&path, ValueInterface::new(node.clone()))
                  .await?;
-@@ -210,6 +214,10 @@
+@@ -210,6 +220,10 @@
          }
          if old_interfaces.contains(Interface::Text) {
              self.unregister_interface::<TextInterface>(&path).await?;
@@ -118,7 +150,7 @@
          }
          if old_interfaces.contains(Interface::Value) {
              self.unregister_interface::<ValueInterface>(&path).await?;
-@@ -396,7 +404,10 @@
+@@ -396,7 +410,10 @@
          let Ok(item) = cache_item_for_node(self.unique_name().inner(), &node) else {
              return Ok(());
          };
@@ -130,7 +162,7 @@
      }
  
      pub(crate) async fn emit_cache_remove(&self, adapter_id: usize, node_id: NodeId) -> Result<()> {
-@@ -407,7 +418,8 @@
+@@ -407,7 +424,8 @@
                  node: node_id,
              },
          );
@@ -140,7 +172,7 @@
      }
  
      async fn emit_cache_signal<B>(&self, signal_name: &str, body: &B) -> Result<()>
-@@ -473,3 +485,36 @@
+@@ -473,3 +491,36 @@
          Err(_) => Ok(default),
      }
  }
@@ -256,6 +288,40 @@
  pub(crate) use hyperlink::*;
  pub(crate) use selection::*;
  pub(crate) use text::*;
+--- a/src/context.rs
++++ b/src/context.rs
+@@ -193,6 +193,9 @@
+ 
+     let mut atspi_bus = None;
+     let mut adapters: Vec<AdapterEntry> = Vec::new();
++    let mut processed_messages = 0usize;
++    let trace = std::env::var_os("KAEL_ATSPI_TRACE").is_some();
++    let mut traced_registrations = 0usize;
+ 
+     loop {
+         select! {
+@@ -203,7 +206,21 @@
+             }
+             message = messages.next() => {
+                 if let Some(message) = message {
++                    if trace && matches!(&message, Message::RegisterInterfaces { .. }) {
++                        traced_registrations += 1;
++                        if traced_registrations % 4096 == 0 {
++                            eprintln!("KAEL_ATSPI_REGISTRATIONS: count={traced_registrations}");
++                        }
++                    }
+                     process_adapter_message(&atspi_bus, &mut adapters, message).await?;
++                    processed_messages += 1;
++                    if processed_messages == 64 {
++                        // Registering interfaces often completes synchronously.
++                        // A large logical tree must not monopolize this executor
++                        // while the independent D-Bus dispatch task has queries.
++                        futures_lite::future::yield_now().await;
++                        processed_messages = 0;
++                    }
+                 }
+             }
+         }
 --- a/src/lib.rs
 +++ b/src/lib.rs
 @@ -24,4 +24,5 @@

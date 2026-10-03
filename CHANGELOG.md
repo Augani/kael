@@ -63,6 +63,12 @@ stabilised — minor version bumps may include breaking changes.
 
 ### Fixed
 
+- Establish macOS activation policy before startup callbacks show their first
+  window, and activate the Windows host for accepted native accessibility focus.
+- Register Unix accessibility root/cache interfaces before desktop publication,
+  yield during large registration batches and refresh client capability caches
+  when text runs add or remove native text interfaces.
+
 - Resume idle native frame polling when application models notify or refresh,
   including updates that arrive without pointer or keyboard input.
 - Include fractional CoreText antialias padding in declared glyph bounds before

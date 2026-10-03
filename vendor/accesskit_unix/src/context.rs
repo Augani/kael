@@ -193,6 +193,9 @@ async fn run_event_loop(
 
     let mut atspi_bus = None;
     let mut adapters: Vec<AdapterEntry> = Vec::new();
+    let mut processed_messages = 0usize;
+    let trace = std::env::var_os("KAEL_ATSPI_TRACE").is_some();
+    let mut traced_registrations = 0usize;
 
     loop {
         select! {
@@ -203,7 +206,21 @@ async fn run_event_loop(
             }
             message = messages.next() => {
                 if let Some(message) = message {
+                    if trace && matches!(&message, Message::RegisterInterfaces { .. }) {
+                        traced_registrations += 1;
+                        if traced_registrations % 4096 == 0 {
+                            eprintln!("KAEL_ATSPI_REGISTRATIONS: count={traced_registrations}");
+                        }
+                    }
                     process_adapter_message(&atspi_bus, &mut adapters, message).await?;
+                    processed_messages += 1;
+                    if processed_messages == 64 {
+                        // Registering interfaces often completes synchronously.
+                        // A large logical tree must not monopolize this executor
+                        // while the independent D-Bus dispatch task has queries.
+                        futures_lite::future::yield_now().await;
+                        processed_messages = 0;
+                    }
                 }
             }
         }

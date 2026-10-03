@@ -23,6 +23,10 @@ worker and must queue bounded foreground work, check current document identity
 again at dispatch and use the platform clipboard on its proper thread.
 
 Both async-io and Tokio runtime modes remain available and mutually exclusive.
+Root Accessible/Cache interfaces are installed before desktop publication.
+Bounded registration batches yield to the D-Bus dispatcher during large logical
+tree updates. `KAEL_ATSPI_TRACE` optionally records registration counts without
+document contents; the external CI clients preserve these failure diagnostics.
 Translation/unit checks on another Unix host are compile/logic evidence only.
 Actual Linux AT-SPI D-Bus exploration, disclosure, Unicode selection/geometry,
 editing, clipboard and stale/lifecycle rejection remain native CI gates.

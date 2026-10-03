@@ -27,10 +27,13 @@ def require(condition, message):
 
 def children(node):
     node.clear_cache()
+    started = time.monotonic()
     count = node.get_child_count()
-    require(0 <= count <= 4_000,
-            f'native hierarchy exceeded fixture bounds: name={node.get_name()!r} '
-            f'role={node.get_role_name()!r} count={count}')
+    if not 0 <= count <= 4_000:
+        raise RuntimeError(f'native hierarchy exceeded fixture bounds: count={count}')
+    if time.monotonic() - started > 1:
+        print(f'NATIVE_ATSPI_QUERY: child_count={count} '
+              f'seconds={time.monotonic() - started:.3f}', flush=True)
     return count
 
 
@@ -82,10 +85,12 @@ def main():
                         continue
             raise RuntimeError('owned logical tree not registered on the native accessibility bus')
         tree = wait(owned_tree)
+        print('NATIVE_ATSPI_STAGE: owned logical tree discovered', flush=True)
         def projects_ready():
             require(children(tree) == 25, 'expected 25 native project roots')
             return [tree.get_child_at_index(index) for index in range(25)]
         projects = wait(projects_ready)
+        print('NATIVE_ATSPI_STAGE: 25 project roots discovered', flush=True)
         total = 25
         for index, project in enumerate(projects):
             def descendants_ready():

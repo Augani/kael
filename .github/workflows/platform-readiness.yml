@@ -174,11 +174,13 @@ jobs:
           DOCS_RS=1 RUSTDOCFLAGS='--cfg docsrs -D warnings' \
             cargo doc -p kael_media_sys --target aarch64-apple-darwin --no-deps
           cargo doc --workspace --all-features --no-deps \
+            --exclude kael_accesskit_unix \
             --exclude kael-cli \
             --exclude xtask \
             --exclude dashboard-app \
             --exclude messaging-app \
             --exclude workspace-app
+          RUSTDOCFLAGS='-D warnings' cargo doc -p kael_accesskit_unix --no-deps
 
       - name: Audit locked dependencies
         if: runner.os == 'Linux'

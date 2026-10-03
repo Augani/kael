@@ -482,6 +482,9 @@ mod native {
                     "NATIVE_RENDERER_SMOKE_STAGE: initial render_calls={}",
                     render_count.load(Ordering::Acquire)
                 );
+                let _ = window.update(cx, |_, window, _| {
+                    println!("NATIVE_RENDERER_WINDOW_STATE: {:?}", window.runtime_snapshot());
+                });
                 for revision in 1..REQUIRED_RENDER_REVISIONS {
                     // Let the visible window stop its frame clock before a
                     // worker-style model notification. No input, resize, or
@@ -596,6 +599,9 @@ mod native {
                             break;
                         }
                         if Instant::now() >= deadline {
+                            let _ = window.update(cx, |_, window, _| {
+                                eprintln!("NATIVE_RENDERER_WINDOW_STATE: {:?}", window.runtime_snapshot());
+                            });
                             eprintln!("NATIVE_RENDERER_SMOKE_FAIL: no drawable presentation callback within two seconds");
                             outcome.store(2, Ordering::Release);
                             let _ = cx.update(|cx| cx.quit());

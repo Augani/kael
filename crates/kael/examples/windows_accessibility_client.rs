@@ -23,7 +23,7 @@ fn main() -> anyhow::Result<()> {
             },
             UI::{
                 Accessibility::*,
-                WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId},
+                WindowsAndMessaging::{FindWindowW, GetForegroundWindow, GetWindowThreadProcessId},
             },
         },
         core::{PCWSTR, w},
@@ -154,7 +154,13 @@ fn main() -> anyhow::Result<()> {
     thread::sleep(Duration::from_secs(2));
     unsafe { restored.SetFocus() }?;
     wait(|| {
-        let focused = unsafe { uia.GetFocusedElement() }?;
+        let foreground = unsafe { GetForegroundWindow() };
+        let mut foreground_pid = 0;
+        unsafe { GetWindowThreadProcessId(foreground, Some(&mut foreground_pid)) };
+        let focused = unsafe { uia.GetFocusedElement() }.with_context(|| {
+            format!("desktop UIA focus missing: foreground_pid={foreground_pid} owned_pid={process_id} owned_node_keyboard_focus={:?}",
+                    unsafe { restored.CurrentHasKeyboardFocus() })
+        })?;
         ensure!(
             unsafe { uia.CompareElements(&focused, &restored) }?.as_bool(),
             "offscreen idle focus was not executed"

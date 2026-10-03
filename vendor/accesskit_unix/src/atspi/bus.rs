@@ -82,12 +82,6 @@ impl Bus {
             .at(path.clone(), ApplicationInterface(node.clone()))
             .await?
         {
-            let desktop = self
-                .socket_proxy
-                .embed(&(self.unique_name().as_str(), ObjectId::Root.path().into()))
-                .await?;
-            let _ = self.desktop.set(desktop);
-
             self.conn
                 .object_server()
                 .at(
@@ -111,6 +105,18 @@ impl Bus {
                     ),
                 )
                 .await?;
+
+            // Embed publishes the application to external clients, which may
+            // immediately request Accessible and Cache. Install both before
+            // publication rather than exposing a partially registered root.
+            let desktop = self
+                .socket_proxy
+                .embed(&(self.unique_name().as_str(), ObjectId::Root.path().into()))
+                .await?;
+            let _ = self.desktop.set(desktop);
+            if std::env::var_os("KAEL_ATSPI_TRACE").is_some() {
+                eprintln!("KAEL_ATSPI_ROOT_READY: service={}", self.unique_name());
+            }
         }
 
         Ok(())

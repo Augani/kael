@@ -18,7 +18,7 @@
 -description = "AccessKit UI accessibility infrastructure: macOS adapter"
 +description = "Kael-maintained AccessKit macOS adapter with native outline and text support"
  readme = "README.md"
-+exclude = ["Cargo.toml.orig"]
++exclude = ["Cargo.toml.orig", ".cargo_vcs_info.json"]
  keywords = [
      "gui",
      "ui",

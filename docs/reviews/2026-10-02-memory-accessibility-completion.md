@@ -386,11 +386,11 @@ CopyText's C/GI success boolean for its void D-Bus reply.
   and pressure hooks with native Metal/Blade proof and cross-checks.
 - [x] GTK4 shedding/admission implementation and regression source.
 - [ ] GTK4 native test/runtime execution and presentation-safety proof.
-- [ ] Metal scratch/atlas pressure runtime, continued live-target validity and
+- [x] Metal scratch/atlas pressure runtime, continued live-target validity and
   redraw/reallocation proof after shedding.
 - [ ] DirectX 11 scratch/atlas pressure parity, in-flight retirement and real
   pressure/redraw/lifetime runtime proof.
-- [ ] Blade scratch/atlas pressure parity, in-flight retirement and real
+- [x] Blade scratch/atlas pressure parity, in-flight retirement and real
   pressure/redraw/lifetime runtime proof.
 - [ ] Linux/Windows native queue tests, close/reopen lifecycle and actual idle
   action execution using AT-SPI/UI Automation.
@@ -409,3 +409,20 @@ CopyText's C/GI success boolean for its void D-Bus reply.
   action fetching, plus native Linux/Windows exploration/actions (R6).
 
 No unchecked item is waived by this document or by the passing core suite.
+
+The final local Metal/Blade atlas identity checkpoints include actual
+pressure/replay/reupload and scratch recovery pixel cases. They verify retained
+live targets while shed cache storage is recreated; checked texture and packed
+tile identities reject retired scenes, foreign atlases and delayed releases.
+`.artifacts/kael-atlas-identity-metal-final.log` records 59 executions across
+58 unique tests (including the shared identity models), and
+`.artifacts/kael-atlas-identity-blade-final.log` records 29 executions. These
+are real M2 Pro Metal and Blade-on-Metal fixtures; DirectX, Linux/GTK and browser
+backend acceptance remains tied to fresh hosted results.
+
+The refreshed macOS provider run in
+`.artifacts/kael-final-followon-native-macos-provider-tests.log` passes three
+portable outline cases and actual full 100,025-row NSAccessibility getters,
+4,000 disclosed children, offscreen actions, stable native objects and released
+lifecycle. Its actual Unicode text provider fixture also passes geometry/hit
+testing, reveal, partial editing/clipboard and detached/read-only/disabled guards.

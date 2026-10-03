@@ -11,6 +11,11 @@ the complete source/manifest changes against the published source.
 
 ## Changes
 
+- Refresh the existing native cache object when its advertised interfaces change,
+  including text runs arriving after provider activation or disappearing later.
+  Addition/removal regressions require the same native identity and truthful
+  Text/EditableText capability sets.
+
 - Capability-derived Click, Expand and Collapse actions, with deterministic
   ordering, supported current-state dispatch and current enabled/visible guards.
 - Expandable, Expanded and Collapsed states, using the existing native state

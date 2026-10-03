@@ -100,12 +100,19 @@ def main():
     try:
         document = wait(lambda: find_owned(args.pid, 'Native Unicode document'))
         readonly = wait(lambda: find_owned(args.pid, 'Read-only Unicode document'))
-        text = document.get_text_iface()
-        edit = document.get_editable_text_iface()
-        ro_text = readonly.get_text_iface()
-        ro_edit = readonly.get_editable_text_iface()
-        require(all(item is not None for item in (text, edit, ro_text, ro_edit)),
-                'native Text/EditableText capability missing')
+        def text_capabilities():
+            # Semantic nodes can precede asynchronous D-Bus interface
+            # registration. Wait for the complete provider, refreshing native
+            # discovery rather than accepting an incomplete capability set.
+            document.clear_cache()
+            readonly.clear_cache()
+            interfaces = (document.get_text_iface(), document.get_editable_text_iface(),
+                          readonly.get_text_iface(), readonly.get_editable_text_iface())
+            require(all(item is not None for item in interfaces),
+                    'native Text/EditableText capability missing')
+            return interfaces
+        text, edit, ro_text, ro_edit = wait(text_capabilities)
+        print('NATIVE_ATSPI_TEXT_STAGE: full native Text/EditableText discovered', flush=True)
 
         def contents(expected):
             document.clear_cache()

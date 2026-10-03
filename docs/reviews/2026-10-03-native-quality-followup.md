@@ -50,6 +50,7 @@ does not establish hardware performance.
 | Native renderer | `.artifacts/native-ui-idle-wake/native_renderer_smoke.log` | Real M2 Pro Metal submission/completion/display, model-only idle wake and populated framebuffer export; no comparative power claim |
 | Filesystem pointer move | `.artifacts/native-ui-idle-wake/filesystem-pointer-move.json`; binary SHA-256 `71b3e6b27ab0d0214f032d38fe58b7d8cc5235dfb978b598cd6fb70dd92bef84` | CUA pointer drag of `readme` into `Archive`, both parents refreshed, independent source/destination bytes, hidden-file toggle and complete native pixels in the isolated fixture |
 | Document/data interactions | `.artifacts/native-ui-idle-wake/document-data-native-interactions.json` | Native Markdown formatting/Undo, Unicode remote edit and record identity across sort/reload, atomic 2×2 TSV paste/Undo/Redo, frozen-row vertical scrolling and populated pixels |
+| Native horizontal grid | `.artifacts/native-ui-idle-wake/grid-horizontal-native-keyboard.json`; binary SHA-256 `b890ae056e9d81015609964bacbffcb2179ad5930d53ba085496f804b1ee49e3` | Actual OS End/Home/Right reveals Notes then Score with unchanged vertical position and frozen Title/Owner pixels. CUA horizontal-wheel attempts deliver native zero deltas; no wheel proof is inferred |
 | Browser scale | `.artifacts/kael-browser-suite-projection-runtime.log` and `target/browser-suite-smoke-logs/http.log` | Wide/compact application routes, 1M×16,384 spreadsheet, 250k blocks, 10k slides and 100k shapes with bounded mounted/semantic nodes |
 | Workspace | `.artifacts/native-ui-idle-wake/workspace-native-interactions.json`; binary SHA-256 `d3544394d47c2c30baf41b1ae41c488b8cf5d0b93f03c25f850cb3bbb2b5afd3` | Actual pointer float move/resize, tab movement between groups and nested edge split, keyboard edge docking, save/reset/restore for floating and nested layouts, redock, Unicode inspector edits/Undo/Redo and live preview pixels |
 | Packaging | `.artifacts/kael-final-followon-publish-preflight.log` | All 38 package archives verified; no registry upload |
@@ -80,10 +81,51 @@ engine, instrumentation mode and contract: one hundred runs.
 The historical sixty-run hosted checkpoint predates the glyph correction.
 Current-source repeated comparison, controlled power/wakeup evidence and
 comparative presentation measurements remain required. Native physical IME,
-screen-reader exploration and horizontal remote-grid scrolling also remain
-separate acceptance requirements. Fresh actual workspace move/resize/redock, pointer tab/split movement, nested
+screen-reader exploration remain separate acceptance requirements. Horizontal
+remote-grid keyboard reveal and populated/frozen-column pixels now pass. The
+wheel tool delivers zero native deltas on this host, so native nonzero horizontal
+wheel delivery remains unverified. Fresh actual workspace move/resize/redock, pointer tab/split movement, nested
 persistence and inspector Undo/Redo evidence now passes on the integrated source.
 
 Windows UIA focus, Linux AT-SPI wire behavior, GTK shedding, all-backend resource
 pressure/lifetime checks and native renderer gates require fresh hosted runs.
 Local compilation and old successful GPU fixtures cannot replace those results.
+
+## Hosted follow-up and startup corrections
+
+The `dacdea1` [platform run](https://github.com/Augani/kael/actions/runs/37134833027)
+executes the corrected glyph/atlas source. Its mandatory WebGL2 shader and
+context-loss pixels, Linux Blade retained scenes, GTK4 atlas admission/retirement,
+Wayland/XWayland embedded WebViews, Windows 2022 Direct3D retained scenes and
+WebView, macOS outline/text protocols and Metal-backed Chromium performance
+steps pass. The complete run is not green: Unix runtime discovery, desktop UIA
+focus and the hosted native Metal presentation callback still fail.
+The full Chromium/Firefox/WebKit browser job subsequently completes
+successfully, including the large application suite and consumer graph checks.
+
+Workspace-wide `--all-features` selected both mutually exclusive runtimes of
+the maintained Unix adapter. The quality/docs matrix now excludes that package
+as an all-features root and checks its default and Tokio configurations
+separately, including the Windows verification script. The corrected workspace
+Clippy graph passes locally. Fork archives exclude the tracked upstream
+`.cargo_vcs_info.json` copies: Cargo reserves that name for its generated Kael
+package metadata. Original provenance remains available in the source checkout
+and upstream hash records; all four complete adapter patches reconstruct exactly.
+
+The next source revision installs the Unix Accessible/Cache interfaces before
+publishing the application, yields between bounded registration batches, and
+refreshes libatspi's existing cache object when its text capabilities change.
+A regression reproduces the missing capability refresh, then passes on addition
+and removal of text runs; all twelve common-provider and six Unix-provider
+tests pass. Opt-in registration counts and client stages remain in failure
+artifacts. These changes still require the external Linux runtime run.
+
+Mac startup now establishes its activation policy before invoking callbacks
+that show/activate the first window. The same native smoke launched directly
+from the terminal passes with sixty actual GPU-completed/displayed frames,
+the model-only idle wake, complete glyph pixels and framebuffer export
+(`.artifacts/kael-native-startup-policy-smoke.log`). Its local pass does not
+replace the outstanding hosted presentation gate. Accepted Windows accessibility
+focus now requests host activation before assigning keyboard focus, and the
+external client reports foreground PID/owned-node focus when desktop discovery
+fails; the full Windows cross-target Clippy graph passes.

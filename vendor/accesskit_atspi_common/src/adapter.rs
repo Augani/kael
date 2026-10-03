@@ -312,6 +312,12 @@ impl TreeChangeHandler for AdapterChangeHandler<'_> {
                 .unregister_interfaces(new_wrapper.id(), old_interfaces ^ kept_interfaces);
             self.adapter
                 .register_interfaces(new_node.id(), new_interfaces ^ kept_interfaces);
+            if old_interfaces != new_interfaces {
+                // libatspi caches interface discovery independently of node
+                // properties. Refresh the same object after its new interfaces
+                // are registered, including text runs arriving after activation.
+                self.adapter.emit_cache_added(new_node.id());
+            }
             let bounds = *self.adapter.context.read_root_window_bounds();
             new_wrapper.notify_changes(&bounds, self.adapter, &old_wrapper);
             self.emit_text_selection_change(Some(old_node), new_node);
@@ -698,6 +704,50 @@ mod tests {
     fn no_cache_events_on_construction() {
         let (_adapter, ops) = build(initial_tree());
         assert!(ops.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn native_text_capability_changes_refresh_the_existing_cache_object() {
+        let (mut adapter, ops) = build(TreeUpdate {
+            nodes: vec![
+                (
+                    LocalNodeId(0),
+                    with_children(Role::Window, &[LocalNodeId(1)]),
+                ),
+                (LocalNodeId(1), Node::new(Role::MultilineTextInput)),
+            ],
+            tree: Some(Tree::new(LocalNodeId(0))),
+            tree_id: TreeId::ROOT,
+            focus: LocalNodeId(0),
+        });
+        let mut run = Node::new(Role::TextRun);
+        run.set_value("日本");
+        run.set_character_lengths(vec![3, 3]);
+        adapter.update(update(vec![
+            (
+                LocalNodeId(1),
+                with_children(Role::MultilineTextInput, &[LocalNodeId(2)]),
+            ),
+            (LocalNodeId(2), run),
+        ]));
+        let captured = ops.lock().unwrap().clone();
+        let identity = match captured.as_slice() {
+            [CacheOp::Added(id)] => *id,
+            other => panic!("existing text object needs one capability refresh, got {other:?}"),
+        };
+        let interfaces = adapter.platform_node(identity).interfaces().unwrap();
+        assert!(interfaces.contains(atspi_common::Interface::Text));
+        assert!(interfaces.contains(atspi_common::Interface::EditableText));
+
+        ops.lock().unwrap().clear();
+        adapter.update(update(vec![(
+            LocalNodeId(1),
+            Node::new(Role::MultilineTextInput),
+        )]));
+        assert_eq!(*ops.lock().unwrap(), vec![CacheOp::Added(identity)]);
+        let interfaces = adapter.platform_node(identity).interfaces().unwrap();
+        assert!(!interfaces.contains(atspi_common::Interface::Text));
+        assert!(!interfaces.contains(atspi_common::Interface::EditableText));
     }
 
     #[test]
