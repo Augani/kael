@@ -412,11 +412,16 @@ jobs:
         run: |
           cargo test --locked -p kael --no-default-features \
             --features font-kit,webview-wayland-gtk4 --lib gtk4_backend::tests::clipboard_stream
-          cargo clippy --locked -p kael -p kael_ui --no-default-features \
-            --features kael_ui/native,kael_ui/editor,kael/webview-wayland-gtk4 \
+          # Check the selected GTK host without pulling in UI/native's
+          # mutually exclusive legacy X11/Wayland backend flags.
+          cargo clippy --locked -p kael --no-default-features \
+            --features font-kit,webview-wayland-gtk4 \
+            --lib -- -D warnings
+          cargo clippy --locked -p kael_ui --features editor \
             --lib -- -D warnings
 
       - name: Verify native X11 outline actions
+        if: ${{ !cancelled() }}
         run: bash scripts/ci/verify-linux-native-accessibility.sh
 
       - name: Verify native X11 Unicode editor

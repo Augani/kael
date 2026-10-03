@@ -97,6 +97,9 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+# Confirm the owned X server accepts an authenticated client before launching
+# the fixture, and preserve its extensions/display details on startup failure.
+xdpyinfo > "${evidence_dir}/x-server.txt"
 app_log="${evidence_dir}/${example_name}.log"
 client_log="${evidence_dir}/atspi-client.log"
 "${workspace_dir}/target/debug/examples/${example_name}" \
