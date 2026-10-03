@@ -21,6 +21,16 @@ pixels. Five maintained benchmark contracts now cover the application-shaped
 surfaces. Historical comparisons remain qualified until corrected-source runs
 and the remaining platform runtime gates pass.
 
+The corrected-source hosted checkpoint now preserves eighty completed
+navigation/editor/data/tree runs in both instrumentation modes. Its
+[diagnostic summary](2026-10-03-hosted-comparison-diagnostic.json) identifies
+Editor CPU and tree memory costs; actual constrained viewport equality and
+comparative presentation/power remain unverified. A docking harness geometry
+defect is reproduced and corrected on real compact windows. The continuation
+also replaces prefix-scanned UTF-16 conversion and fixes painted accessibility
+callbacks that retained outgoing tree models. Current measurements and native
+platform acceptance stay in the October 3 follow-up and completion ledger.
+
 ## Component coverage and gaps
 
 The library already contains most common controls, so component count alone is

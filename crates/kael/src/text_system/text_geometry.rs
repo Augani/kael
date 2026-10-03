@@ -156,4 +156,122 @@ impl LineTextGeometry {
         }
         merged
     }
+
+    /// The first contiguous logical fragment and its actual native rectangle.
+    /// Preserve source order instead of choosing the leftmost bidi rectangle.
+    /// Whole native clusters are retained, and missing requested source spans
+    /// or disjoint physical geometry end the fragment. No new shaping occurs.
+    pub fn first_fragment_for_bytes(
+        &self,
+        range: Range<usize>,
+    ) -> Option<(Range<usize>, Range<Pixels>)> {
+        if range.start >= range.end {
+            return None;
+        }
+        let index = self
+            .clusters
+            .partition_point(|cluster| cluster.bytes.end <= range.start);
+        let first = self.clusters.get(index)?;
+        if !first.bytes.contains(&range.start) {
+            return None;
+        }
+        let mut actual = first.bytes.clone();
+        let mut rectangle = first.leading.min(first.trailing)..first.leading.max(first.trailing);
+        for next in &self.clusters[index + 1..] {
+            if next.bytes.start >= range.end || next.bytes.start != actual.end {
+                break;
+            }
+            let left = next.leading.min(next.trailing);
+            let right = next.leading.max(next.trailing);
+            if left > rectangle.end + crate::px(0.01) || right + crate::px(0.01) < rectangle.start {
+                break;
+            }
+            actual.end = next.bytes.end;
+            rectangle.start = rectangle.start.min(left);
+            rectangle.end = rectangle.end.max(right);
+        }
+        Some((actual, rectangle))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::px;
+
+    #[test]
+    fn first_fragment_follows_source_order_and_stops_at_physical_gaps() {
+        let geometry = LineTextGeometry::new(
+            "abcd",
+            vec![
+                ShapedTextCluster {
+                    bytes: 0..1,
+                    leading: px(90.0),
+                    trailing: px(80.0),
+                    right_to_left: true,
+                },
+                ShapedTextCluster {
+                    bytes: 1..2,
+                    leading: px(80.0),
+                    trailing: px(70.0),
+                    right_to_left: true,
+                },
+                ShapedTextCluster {
+                    bytes: 2..3,
+                    leading: px(10.0),
+                    trailing: px(20.0),
+                    right_to_left: false,
+                },
+                ShapedTextCluster {
+                    bytes: 3..4,
+                    leading: px(20.0),
+                    trailing: px(30.0),
+                    right_to_left: false,
+                },
+            ],
+            px(30.0),
+        )
+        .unwrap();
+        assert_eq!(
+            geometry.first_fragment_for_bytes(0..4),
+            Some((0..2, px(70.0)..px(90.0)))
+        );
+        assert_eq!(
+            geometry.first_fragment_for_bytes(1..4),
+            Some((1..2, px(70.0)..px(80.0)))
+        );
+        assert_eq!(
+            geometry.first_fragment_for_bytes(2..4),
+            Some((2..4, px(10.0)..px(30.0)))
+        );
+    }
+
+    #[test]
+    fn first_fragment_preserves_clusters_and_stops_at_missing_source_coverage() {
+        let geometry = LineTextGeometry::new(
+            "e\u{301}ab",
+            vec![
+                ShapedTextCluster {
+                    bytes: 0..3,
+                    leading: px(0.0),
+                    trailing: px(10.0),
+                    right_to_left: false,
+                },
+                ShapedTextCluster {
+                    bytes: 4..5,
+                    leading: px(10.0),
+                    trailing: px(20.0),
+                    right_to_left: false,
+                },
+            ],
+            px(20.0),
+        )
+        .unwrap();
+        assert_eq!(
+            geometry.first_fragment_for_bytes(1..5),
+            Some((0..3, px(0.0)..px(10.0)))
+        );
+        assert_eq!(geometry.first_fragment_for_bytes(3..5), None);
+        assert_eq!(geometry.first_fragment_for_bytes(0..0), None);
+    }
 }

@@ -168,7 +168,14 @@ for semantic comparison. Requested resize tolerance is 0.005 and persistence
 float tolerance is 0.01 px. GPUI Kit does not serialize zoom, so persistence runs
 after unzoom. This contract excludes floating panes and edge docks. Collect with
 `--contract native-dock-workspace-v1`, in both instrumentation modes; `--quick`
-is smoke evidence only.
+is smoke evidence only. `--quick-compact` exercises an 880×640 px native window
+and is likewise rejected as a measured workload. Initial split sizes and later
+resize operations use the actual measured native container, because AppKit can
+constrain the requested window to the display. Both engines normalize the
+initial 0.5 root ratio after the one-second warmup and settle for 40 ms before
+the first measured phase. The original geometry and persistence tolerances
+remain unchanged. CI executes the compact regression for both engines and both
+instrumentation modes before collecting full runs.
 
 On macOS, the shared adapter uses the SDK's `proc_pid_rusage(RUSAGE_INFO_V4)` for
 CPU, resident bytes, physical footprint, idle/interrupt wakeups, I/O, and raw

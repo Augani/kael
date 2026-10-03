@@ -35,17 +35,23 @@ const AREA_ID: &str = "comparison-workspace";
 #[derive(Clone, Copy)]
 struct Options {
     quick: bool,
+    compact: bool,
 }
 impl Options {
     fn parse() -> Self {
         let mut quick = false;
+        let mut compact = false;
         for arg in std::env::args().skip(1) {
             match arg.as_str() {
                 "--quick" => quick = true,
-                _ => panic!("unknown flag {arg}; use --quick"),
+                "--quick-compact" => {
+                    quick = true;
+                    compact = true;
+                }
+                _ => panic!("unknown flag {arg}; use --quick or --quick-compact"),
             }
         }
-        Self { quick }
+        Self { quick, compact }
     }
 }
 #[derive(Clone)]
@@ -407,14 +413,12 @@ fn make_control(
                 layout.panel_view(panel_handle(panels[id].clone()), cx)
             })
         };
-        let layout = DockLayout::h_split()
-            .child(tabs(0, cx), Some(px(WINDOW_WIDTH / 2.0)))
-            .child(
-                DockLayout::v_split()
-                    .child(tabs(4, cx), Some(px(CONTENT_HEIGHT / 2.0)))
-                    .child(tabs(8, cx), None),
-                None,
-            );
+        let layout = DockLayout::h_split().child(tabs(0, cx), None).child(
+            DockLayout::v_split()
+                .child(tabs(4, cx), None)
+                .child(tabs(8, cx), None),
+            None,
+        );
         area.update(cx, |area, cx| area.set_center(layout, window, cx));
         area
     }
@@ -694,9 +698,18 @@ impl Workload {
             #[cfg(feature = "gpui-kit-engine")]
             {
                 let root = control.layout(DockPlacement::Center).unwrap().root().id();
+                let state = control.dump(cx);
+                let PanelInfo::Stack { sizes, .. } = &state.center.info else {
+                    panic!("root split")
+                };
+                let total = sizes.iter().map(|size| f32::from(*size)).sum::<f32>();
+                assert!(
+                    total.is_finite() && total > 0.0,
+                    "native root split not measured"
+                );
                 control.set_split_sizes(
                     root,
-                    vec![px(WINDOW_WIDTH * ratio), px(WINDOW_WIDTH * (1.0 - ratio))],
+                    vec![px(total * ratio), px(total * (1.0 - ratio))],
                     window,
                     cx,
                 );
@@ -822,7 +835,8 @@ impl Workload {
         assert_eq!(actual_zoomed, self.zoomed);
         assert!(
             (ratio - self.root_ratio).abs() < 0.005,
-            "native persisted resize geometry"
+            "native persisted resize geometry: actual={ratio} expected={} native={native}",
+            self.root_ratio
         );
         if self.zoomed {
             let (_, active_pane) = self.expected.tabs_for(&pane_id(0)).unwrap();
@@ -931,7 +945,14 @@ fn launch(started: Instant, options: Options, cx: &mut App) {
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                 None,
-                size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)),
+                size(
+                    px(if options.compact { 880.0 } else { WINDOW_WIDTH }),
+                    px(if options.compact {
+                        640.0
+                    } else {
+                        WINDOW_HEIGHT
+                    }),
+                ),
                 cx,
             ))),
             ..Default::default()
@@ -943,6 +964,14 @@ fn launch(started: Instant, options: Options, cx: &mut App) {
             window
                 .spawn(cx, async move |cx| {
                     cx.background_executor().timer(Duration::from_secs(1)).await;
+                    // AppKit can constrain the requested window to the screen.
+                    // Normalize the initial split against its measured native
+                    // container, before any timed idle/interaction phase.
+                    weak.update_in(cx, |view, window, cx| view.resize(0.5, window, cx))
+                        .unwrap();
+                    cx.background_executor()
+                        .timer(Duration::from_millis(40))
+                        .await;
                     for phase in PHASES {
                         weak.update_in(cx, |view, window, cx| view.set_phase(phase, window, cx))
                             .unwrap();

@@ -44,6 +44,10 @@ stabilised — minor version bumps may include breaking changes.
 
 ### Changed
 
+- Use Ropey's indexed UTF-16 conversions for editor input ranges instead of
+  scanning the document prefix, retaining forward adjustment inside surrogate pairs.
+- Cache filtered AT-SPI child indices per queried parent and invalidate them on
+  tree or host-focus changes, avoiding repeated sibling scans in large trees.
 - Bound the shared shaped-text cache to 4,096 entries and 8 MiB of charged
   allocations, use second-chance eviction and clear it under memory pressure.
 - Keep editor line mapping proportional to visible lines and collapsed folds;
@@ -63,6 +67,17 @@ stabilised — minor version bumps may include breaking changes.
 
 ### Fixed
 
+- Verify release archives in fresh staging so repeated preflights cannot compile
+  against a stale local-registry core package with the same unreleased version.
+- Report the actual first line/grapheme fragment in AppKit candidate-rectangle
+  queries, including zero-width insertion points and logical bidi source order.
+- Update the locked Rustls dependency to its patched 0.23.45 release and replace
+  the yanked ChaCha20 0.10.1 dependency with 0.10.2.
+- Exercise the native UIA SelectionItem pattern for stateful tree selection and
+  disambiguate libatspi's Text interface methods in the Linux editor client.
+- Release painted accessibility callbacks after their rows leave the viewport,
+  preventing complete outgoing virtual-tree models from accumulating while
+  logical offscreen accessibility actions continue to use the current model.
 - Establish macOS activation policy before startup callbacks show their first
   window, and activate the Windows host for accepted native accessibility focus.
 - Register Unix accessibility root/cache interfaces before desktop publication,

@@ -1685,6 +1685,20 @@ impl EditorState {
     }
 
     fn bounds_for_byte_range(&self, range: Range<usize>) -> Option<Bounds<Pixels>> {
+        self.bounds_for_byte_range_with_actual_range(range)
+            .map(|(mut bounds, _)| {
+                bounds.size.width = bounds.size.width.max(px(1.0));
+                bounds
+            })
+    }
+
+    fn bounds_for_byte_range_with_actual_range(
+        &self,
+        range: Range<usize>,
+    ) -> Option<(Bounds<Pixels>, Range<usize>)> {
+        if range.start > range.end || range.end > self.rope.len_bytes() {
+            return None;
+        }
         let bounds = self.last_bounds?;
         let start = self.byte_offset_to_pos(range.start);
         let row = self.buffer_line_to_display_row(start.line)?;
@@ -1698,28 +1712,63 @@ impl EditorState {
         } else {
             px(12.0)
         };
-        let end = self.byte_offset_to_pos(range.end);
-        let first_fragment = self
-            .line_range_rectangles(
-                start.line,
-                start.col..if end.line == start.line {
-                    end.col
+        let line_start = self.rope.line_to_byte(start.line);
+        let line_length = self.line_len(start.line);
+        let line_end = line_start + self.rope.line(start.line).len_bytes();
+        let first_end = range.end.min(line_end);
+        let local_start = start.col.min(line_length);
+        let local_end = (first_end - line_start).min(line_length);
+        let native = self.native_geometry_for_line(start.line);
+        let (actual, rectangle) = if local_start == local_end {
+            let caret_byte = native
+                .and_then(|geometry| geometry.cluster_for_byte(local_start))
+                .map_or(local_start, |cluster| cluster.bytes.start);
+            let x = self.line_caret_x(start.line, caret_byte);
+            (
+                if range.is_empty() {
+                    line_start + caret_byte..line_start + caret_byte
                 } else {
-                    self.line_len(start.line)
+                    range.start..first_end
                 },
+                x..x,
             )
-            .into_iter()
-            .next();
-        let (x, end_x) = first_fragment.map_or_else(
-            || {
-                let caret = self.line_caret_x(start.line, start.col);
-                (caret, caret)
-            },
-            |rectangle| (rectangle.start, rectangle.end),
-        );
-        let width = (end_x - x).max(px(1.0));
+        } else {
+            let (mut actual, rectangle) = native
+                .and_then(|geometry| geometry.first_fragment_for_bytes(local_start..local_end))
+                .unwrap_or_else(|| {
+                    let text = self.line_text(start.line);
+                    let actual_start = text
+                        .grapheme_indices(true)
+                        .map(|(byte, _)| byte)
+                        .take_while(|byte| *byte <= local_start)
+                        .last()
+                        .unwrap_or(0);
+                    let actual_end = text
+                        .grapheme_indices(true)
+                        .map(|(byte, _)| byte)
+                        .find(|byte| *byte >= local_end)
+                        .unwrap_or(text.len());
+                    let a = self.line_caret_x(start.line, actual_start);
+                    let b = self.line_caret_x(start.line, actual_end);
+                    (actual_start..actual_end, a.min(b)..a.max(b))
+                });
+            // A line terminator has no ink but belongs to this line fragment.
+            // Including it lets AppKit advance directly to the following line.
+            if actual.end == line_length && first_end > line_start + line_length {
+                actual.end = first_end - line_start;
+            }
+            (
+                line_start + actual.start..line_start + actual.end,
+                rectangle,
+            )
+        };
+        let width = rectangle.end - rectangle.start;
+        let x = rectangle.start;
         let x = bounds.left() + gutter + x - self.scroll_offset_x;
-        Some(Bounds::new(point(x, y), size(width, self.line_height)))
+        Some((
+            Bounds::new(point(x, y), size(width, self.line_height)),
+            actual,
+        ))
     }
 
     fn prepare_accessibility_geometry(
@@ -3208,26 +3257,18 @@ impl EditorState {
     fn offset_to_utf16(&self, byte_offset: usize) -> usize {
         let byte_offset = min(byte_offset, self.rope.len_bytes());
         let char_offset = self.rope.byte_to_char(byte_offset);
-        let mut utf16_offset = 0;
-        for ch_idx in 0..char_offset {
-            let ch = self.rope.char(ch_idx);
-            utf16_offset += ch.len_utf16();
-        }
-        utf16_offset
+        self.rope.char_to_utf16_cu(char_offset)
     }
 
     fn offset_from_utf16(&self, utf16_offset: usize) -> usize {
-        let mut utf16_count = 0;
-        let mut byte_offset = 0;
-        for ch_idx in 0..self.rope.len_chars() {
-            if utf16_count >= utf16_offset {
-                break;
-            }
-            let ch = self.rope.char(ch_idx);
-            utf16_count += ch.len_utf16();
-            byte_offset += ch.len_utf8();
+        let utf16_offset = utf16_offset.min(self.rope.len_utf16_cu());
+        let mut char_offset = self.rope.utf16_cu_to_char(utf16_offset);
+        // Preserve the input handler's existing forward adjustment when an
+        // editing range ends inside a surrogate pair.
+        if self.rope.char_to_utf16_cu(char_offset) < utf16_offset {
+            char_offset += 1;
         }
-        byte_offset
+        self.rope.char_to_byte(char_offset)
     }
 
     fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
@@ -4676,6 +4717,31 @@ impl EntityInputHandler for EditorState {
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         self.bounds_for_byte_range(self.range_from_utf16(&range_utf16))
+    }
+
+    fn bounds_for_range_with_actual_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        _bounds: Bounds<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<(Bounds<Pixels>, Range<usize>)> {
+        if range_utf16.start > range_utf16.end {
+            return None;
+        }
+        // Candidate geometry starts at the containing scalar/cluster; editing
+        // retains its separate forward surrogate adjustment above.
+        let start = self.rope.char_to_byte(
+            self.rope
+                .utf16_cu_to_char(range_utf16.start.min(self.rope.len_utf16_cu())),
+        );
+        let end = if range_utf16.is_empty() {
+            start
+        } else {
+            self.offset_from_utf16(range_utf16.end)
+        };
+        self.bounds_for_byte_range_with_actual_range(start..end)
+            .map(|(bounds, actual)| (bounds, self.range_to_utf16(&actual)))
     }
 
     fn character_index_for_point(
@@ -6684,6 +6750,86 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn indexed_utf16_offsets_preserve_scalar_rounding_clamping_and_edits() {
+        let mut cx = TestAppContext::single();
+        let state = cx.new(EditorState::new);
+        for text in [
+            "a🙂𐐷e\u{301}日本\r\nאבג\n".repeat(32),
+            "🙂".into(),
+            String::new(),
+        ] {
+            state.update(&mut cx, |state, cx| state.set_content(&text, cx));
+            cx.update(|cx| {
+                let state = state.read(cx);
+                let text = state.content();
+                for byte in (0..=text.len()).chain([usize::MAX]) {
+                    let mut boundary = byte.min(text.len());
+                    while !text.is_char_boundary(boundary) {
+                        boundary -= 1;
+                    }
+                    assert_eq!(
+                        state.offset_to_utf16(byte),
+                        text[..boundary].encode_utf16().count(),
+                        "byte offset {byte}"
+                    );
+                }
+                for utf16 in (0..=text.encode_utf16().count()).chain([usize::MAX]) {
+                    let mut units = 0;
+                    let mut bytes = 0;
+                    for character in text.chars() {
+                        if units >= utf16 {
+                            break;
+                        }
+                        units += character.len_utf16();
+                        bytes += character.len_utf8();
+                    }
+                    assert_eq!(state.offset_from_utf16(utf16), bytes, "UTF-16 {utf16}");
+                }
+            });
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn ime_actual_range_covers_first_line_graphemes_and_zero_width_carets() {
+        let mut cx = TestAppContext::single();
+        let content = "e\u{301}🙂\r\n日本";
+        let (state, window) = document_window(&mut cx, content);
+        window.update(|window, cx| {
+            state.update(cx, |state, cx| {
+                let (first, actual) = state
+                    .bounds_for_range_with_actual_range(
+                        0..content.encode_utf16().count(),
+                        Bounds::default(),
+                        window,
+                        cx,
+                    )
+                    .unwrap();
+                assert_eq!(actual, 0..6, "include the first line's CRLF only");
+                assert!(first.size.width > px(0.0));
+                let (grapheme, actual) = state
+                    .bounds_for_range_with_actual_range(1..2, Bounds::default(), window, cx)
+                    .unwrap();
+                assert_eq!(actual, 0..2);
+                assert!(grapheme.size.width > px(0.0));
+                let (_, actual) = state
+                    .bounds_for_range_with_actual_range(3..4, Bounds::default(), window, cx)
+                    .unwrap();
+                assert_eq!(
+                    actual,
+                    2..4,
+                    "interior UTF-16 surrogate expands to its scalar"
+                );
+                let (caret, actual) = state
+                    .bounds_for_range_with_actual_range(2..2, Bounds::default(), window, cx)
+                    .unwrap();
+                assert_eq!(actual, 2..2);
+                assert_eq!(caret.size.width, px(0.0));
+                assert!(caret.size.height > px(0.0));
+            });
+        });
+    }
+
+    #[::core::prelude::v1::test]
     fn text_geometry_is_shaped_bounded_and_reused_across_caret_redraws() {
         let mut cx = TestAppContext::single();
         let content = "café 日本🙂 e\u{301}\n".repeat(100_000);
@@ -6813,6 +6959,10 @@ mod tests {
             let ime = state.bounds_for_byte_range(4..6).unwrap();
             assert_eq!(ime.left(), bounds.left() + px(80.0) + px(60.0));
             assert_eq!(ime.size.width, px(10.0));
+            let (first, actual) = state.bounds_for_byte_range_with_actual_range(2..6).unwrap();
+            assert_eq!(actual, 2..4, "only the first contiguous logical fragment");
+            assert_eq!(first.left(), bounds.left() + px(80.0) + px(20.0));
+            assert_eq!(first.size.width, px(20.0));
             let geometry = &state.accessibility_geometry.as_ref().unwrap().1;
             let rtl = geometry
                 .runs()

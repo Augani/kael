@@ -167,9 +167,12 @@ fn main() -> anyhow::Result<()> {
         );
         Ok(())
     })?;
-    let invoke: IUIAutomationInvokePattern =
-        unsafe { restored.GetCurrentPatternAs(UIA_InvokePatternId) }?;
-    unsafe { invoke.Invoke() }?;
+    // Stateful tree items expose SelectionItem, rather than Invoke. Select
+    // exercises the provider's native selection action on the offscreen row.
+    let selection: IUIAutomationSelectionItemPattern =
+        unsafe { restored.GetCurrentPatternAs(UIA_SelectionItemPatternId) }
+            .context("offscreen tree row is missing native SelectionItem")?;
+    unsafe { selection.Select() }.context("native offscreen row selection rejected")?;
     wait(|| {
         let log = fs::read_to_string(&app_log)?;
         for marker in [
@@ -184,7 +187,7 @@ fn main() -> anyhow::Result<()> {
         Ok(())
     })?;
     println!(
-        "NATIVE_ACCESSIBILITY_RUNTIME_OK: backend=uia rows={rows} projects=25 children=4000 last=100024 idle_disclosure=true idle_focus=true idle_select=true"
+        "NATIVE_ACCESSIBILITY_RUNTIME_OK: backend=uia rows={rows} projects=25 children=4000 last=100024 idle_disclosure=true idle_focus=true idle_select=true native_selection_item=true"
     );
     Ok(())
 }

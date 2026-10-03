@@ -4516,6 +4516,16 @@ impl Window {
             .on_action(node_id, action, handler);
     }
 
+    pub(crate) fn on_frame_accessibility_action(
+        &mut self,
+        node_id: crate::AccessibilityId,
+        action: crate::AccessibilityAction,
+        handler: impl FnMut(crate::AccessibilityActionRequest) + 'static,
+    ) {
+        self.accessibility_action_router
+            .on_frame_action(node_id, action, handler);
+    }
+
     /// Return whether this window has a handler for one accessibility action.
     pub fn has_accessibility_action_handler(
         &self,

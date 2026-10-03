@@ -11,6 +11,13 @@ the complete source/manifest changes against the published source.
 
 ## Changes
 
+- Index filtered sibling positions once per queried parent and tree revision.
+  Native cache publication and index queries no longer scan each row's entire
+  preceding sibling prefix. Hierarchy, hidden-state, focus-only and host-focus
+  changes invalidate the indexes under the tree write lock; outgoing index
+  allocations are released. Large-parent, reorder, filtering, shrinking and
+  transparent-container focus regressions exercise the same retained handles.
+
 - Refresh the existing native cache object when its advertised interfaces change,
   including text runs arriving after provider activation or disappearing later.
   Addition/removal regressions require the same native identity and truthful

@@ -699,7 +699,8 @@ async fn composition_checks(
     )?;
 
     let emoji = "👩🏽\u{200d}💻";
-    let marked_text = format!("日本{emoji}e\u{301}");
+    let first_line = format!("日本{emoji}e\u{301}\n");
+    let marked_text = format!("{first_line}次の行");
     let local_selection = NSRange::new(2, emoji.encode_utf16().count());
     mark_text(&view, &marked_text, local_selection);
     let second = format!("{}{marked_text}{}", &ORIGINAL[..start], &ORIGINAL[end..]);
@@ -752,6 +753,41 @@ async fn composition_checks(
                 && rejected.size.height == 0.0
                 && rejected_actual == NSRange::new(NSNotFound as usize, 0),
             "invalid candidate range did not return empty geometry and NSNotFound",
+        )
+    })
+    .await?;
+
+    poll_native("candidate first-line and grapheme ranges", || {
+        let requested = mark;
+        let mut actual = NSRange::new(NSNotFound as usize, 0);
+        let rect: NSRect = unsafe {
+            msg_send![&*view, firstRectForCharacterRange: requested, actualRange: &mut actual as *mut NSRange]
+        };
+        require(
+            actual == NSRange::new(mark.location, first_line.encode_utf16().count())
+                && rect.size.width > 0.0
+                && rect.size.height > 0.0,
+            "multiline candidate rectangle claims characters outside its first line",
+        )?;
+        let combining = mark.location + "日本".encode_utf16().count()
+            + emoji.encode_utf16().count();
+        let requested = NSRange::new(combining + 1, 1);
+        let rect: NSRect = unsafe {
+            msg_send![&*view, firstRectForCharacterRange: requested, actualRange: &mut actual as *mut NSRange]
+        };
+        require(
+            actual == NSRange::new(combining, 2)
+                && rect.size.width > 0.0
+                && rect.size.height > 0.0,
+            "candidate range does not cover the actual combining grapheme",
+        )?;
+        let caret = NSRange::new(mark.location, 0);
+        let rect: NSRect = unsafe {
+            msg_send![&*view, firstRectForCharacterRange: caret, actualRange: &mut actual as *mut NSRange]
+        };
+        require(
+            actual == caret && rect.size.width == 0.0 && rect.size.height > 0.0,
+            "candidate insertion rectangle must have zero width",
         )
     })
     .await?;

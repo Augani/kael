@@ -1,0 +1,343 @@
+{
+  "contract": "native-virtual-tree-v1",
+  "scope": "Kael before/after painted accessibility callback retirement; three complete runs each, same full accessibility contract and frame instrumentation; active shared native M2 Pro desktop",
+  "host": {
+    "model": "Apple M2 Pro",
+    "memory_bytes": 17179869184,
+    "os": "macOS-27.2-arm64-arm-64bit-Mach-O",
+    "power_source": "AC"
+  },
+  "order": [
+    "after",
+    "before",
+    "before",
+    "after",
+    "after",
+    "before"
+  ],
+  "limitations": [
+    "Active shared desktop; diagnostic rather than controlled cross-framework ranking.",
+    "Three repetitions per variant; process RSS and physical footprint include application/framework/OS storage.",
+    "No physical power or comparative GPU presentation claim."
+  ],
+  "variants": {
+    "before": {
+      "repetitions": 3,
+      "binary_sha256": "75625a92a4b18590570e87c7575b4eee1ca4a7da01edfa6616e75283880b127b",
+      "peak_rss_median_bytes": 3514892288,
+      "phases": {
+        "idle-before": {
+          "cpu_percent": 0.04911695217554286,
+          "rss_median_bytes": 333037568.0,
+          "footprint_max_bytes": 318244112
+        },
+        "active": {
+          "cpu_percent": 71.45934465195279,
+          "rss_median_bytes": 2389573632,
+          "footprint_max_bytes": 3000487584
+        },
+        "idle-after": {
+          "cpu_percent": 0.010604102977133307,
+          "rss_median_bytes": 2906980352.0,
+          "footprint_max_bytes": 2977124000
+        },
+        "churn": {
+          "cpu_percent": 77.58855921737218,
+          "rss_median_bytes": 2988859392.0,
+          "footprint_max_bytes": 3868152320
+        }
+      },
+      "runs": [
+        {
+          "raw_file": "01-kael.json",
+          "peak_rss_bytes": 3205152768,
+          "phase_metrics": {
+            "idle-before": {
+              "rss_median_bytes": 143081472.0,
+              "footprint_max_bytes": 319227176,
+              "cpu_percent": 0.041273735140308104,
+              "idle_wakeups_per_s": 0.0,
+              "interrupt_wakeups_per_s": 1.8235824891087855,
+              "billed_energy_raw_delta": 13821897,
+              "serviced_energy_raw_delta": 0
+            },
+            "active": {
+              "rss_median_bytes": 2577956864,
+              "footprint_max_bytes": 3247017944,
+              "cpu_percent": 71.32435721265077,
+              "idle_wakeups_per_s": 0.9670716427603444,
+              "interrupt_wakeups_per_s": 49.05690696911565,
+              "billed_energy_raw_delta": 35653577,
+              "serviced_energy_raw_delta": 6001011
+            },
+            "idle-after": {
+              "rss_median_bytes": 3004809216.0,
+              "footprint_max_bytes": 3209973720,
+              "cpu_percent": 0.010604102977133307,
+              "idle_wakeups_per_s": 0.0,
+              "interrupt_wakeups_per_s": 0.8883018200739944,
+              "billed_energy_raw_delta": 0,
+              "serviced_energy_raw_delta": 0
+            },
+            "churn": {
+              "rss_median_bytes": 2988859392.0,
+              "footprint_max_bytes": 3610513728,
+              "cpu_percent": 77.58855921737218,
+              "idle_wakeups_per_s": 0.7193241733817599,
+              "interrupt_wakeups_per_s": 45.767000531414475,
+              "billed_energy_raw_delta": 33590641,
+              "serviced_energy_raw_delta": 0
+            }
+          },
+          "draw_p99_us": 2288
+        },
+        {
+          "raw_file": "02-kael.json",
+          "peak_rss_bytes": 3514892288,
+          "phase_metrics": {
+            "idle-before": {
+              "rss_median_bytes": 333692928.0,
+              "footprint_max_bytes": 318244112,
+              "cpu_percent": 0.058868520710393286,
+              "idle_wakeups_per_s": 0.0,
+              "interrupt_wakeups_per_s": 1.785303875040548,
+              "billed_energy_raw_delta": 7082987,
+              "serviced_energy_raw_delta": 0
+            },
+            "active": {
+              "rss_median_bytes": 2212872192,
+              "footprint_max_bytes": 2969243296,
+              "cpu_percent": 72.24426754918177,
+              "idle_wakeups_per_s": 0.26345163367215146,
+              "interrupt_wakeups_per_s": 49.96799318648472,
+              "billed_energy_raw_delta": 31184243,
+              "serviced_energy_raw_delta": 0
+            },
+            "idle-after": {
+              "rss_median_bytes": 2888728576.0,
+              "footprint_max_bytes": 2977124000,
+              "cpu_percent": 0.006683105167273116,
+              "idle_wakeups_per_s": 0.0,
+              "interrupt_wakeups_per_s": 0.6685890955171104,
+              "billed_energy_raw_delta": 0,
+              "serviced_energy_raw_delta": 0
+            },
+            "churn": {
+              "rss_median_bytes": 2788835328,
+              "footprint_max_bytes": 3942650368,
+              "cpu_percent": 79.44871097786091,
+              "idle_wakeups_per_s": 0.6158302351209834,
+              "interrupt_wakeups_per_s": 46.451194877697034,
+              "billed_energy_raw_delta": 35609374,
+              "serviced_energy_raw_delta": 0
+            }
+          },
+          "draw_p99_us": 2309
+        },
+        {
+          "raw_file": "05-kael.json",
+          "peak_rss_bytes": 3703668736,
+          "phase_metrics": {
+            "idle-before": {
+              "rss_median_bytes": 333037568.0,
+              "footprint_max_bytes": 317687080,
+              "cpu_percent": 0.04911695217554286,
+              "idle_wakeups_per_s": 0.22347472979829547,
+              "interrupt_wakeups_per_s": 2.234747297982955,
+              "billed_energy_raw_delta": 6965651,
+              "serviced_energy_raw_delta": 0
+            },
+            "active": {
+              "rss_median_bytes": 2389573632,
+              "footprint_max_bytes": 3000487584,
+              "cpu_percent": 71.45934465195279,
+              "idle_wakeups_per_s": 1.1395055065554305,
+              "interrupt_wakeups_per_s": 47.07034284771279,
+              "billed_energy_raw_delta": 34180434,
+              "serviced_energy_raw_delta": 0
+            },
+            "idle-after": {
+              "rss_median_bytes": 2906980352.0,
+              "footprint_max_bytes": 2894630584,
+              "cpu_percent": 0.4842352276000418,
+              "idle_wakeups_per_s": 0.0,
+              "interrupt_wakeups_per_s": 0.898293144766173,
+              "billed_energy_raw_delta": 0,
+              "serviced_energy_raw_delta": 5285142
+            },
+            "churn": {
+              "rss_median_bytes": 3560439808.0,
+              "footprint_max_bytes": 3868152320,
+              "cpu_percent": 76.73487767381633,
+              "idle_wakeups_per_s": 0.9890363041068162,
+              "interrupt_wakeups_per_s": 45.67549477147842,
+              "billed_energy_raw_delta": 34736397,
+              "serviced_energy_raw_delta": 0
+            }
+          },
+          "draw_p99_us": 2243
+        }
+      ]
+    },
+    "after": {
+      "repetitions": 3,
+      "binary_sha256": "f43fd2c1f8761d603bdae1ef08b540e622fd0ba666a605e930a4d2b1d9cd566d",
+      "peak_rss_median_bytes": 1192083456,
+      "phases": {
+        "idle-before": {
+          "cpu_percent": 0.05124894895673403,
+          "rss_median_bytes": 333365248.0,
+          "footprint_max_bytes": 317752616
+        },
+        "active": {
+          "cpu_percent": 69.34748498995546,
+          "rss_median_bytes": 1134903296,
+          "footprint_max_bytes": 1171638504
+        },
+        "idle-after": {
+          "cpu_percent": 0.011777309834061573,
+          "rss_median_bytes": 1161183232.0,
+          "footprint_max_bytes": 1144883408
+        },
+        "churn": {
+          "cpu_percent": 70.6976599592578,
+          "rss_median_bytes": 1119657984.0,
+          "footprint_max_bytes": 1152436456
+        }
+      },
+      "runs": [
+        {
+          "raw_file": "00-kael.json",
+          "peak_rss_bytes": 1174913024,
+          "phase_metrics": {
+            "idle-before": {
+              "rss_median_bytes": 333365248.0,
+              "footprint_max_bytes": 317752592,
+              "cpu_percent": 0.02693128071763491,
+              "idle_wakeups_per_s": 0.0,
+              "interrupt_wakeups_per_s": 2.5101006593243227,
+              "billed_energy_raw_delta": 39561234,
+              "serviced_energy_raw_delta": 0
+            },
+            "active": {
+              "rss_median_bytes": 823574528.0,
+              "footprint_max_bytes": 1171196112,
+              "cpu_percent": 71.45366519543204,
+              "idle_wakeups_per_s": 0.0,
+              "interrupt_wakeups_per_s": 47.571668804739446,
+              "billed_energy_raw_delta": 44983909,
+              "serviced_energy_raw_delta": 0
+            },
+            "idle-after": {
+              "rss_median_bytes": 591183872,
+              "footprint_max_bytes": 888719400,
+              "cpu_percent": 0.006405403844641139,
+              "idle_wakeups_per_s": 0.0,
+              "interrupt_wakeups_per_s": 0.8600281750078732,
+              "billed_energy_raw_delta": 0,
+              "serviced_energy_raw_delta": 0
+            },
+            "churn": {
+              "rss_median_bytes": 1050959872.0,
+              "footprint_max_bytes": 1152436456,
+              "cpu_percent": 73.51831695364788,
+              "idle_wakeups_per_s": 0.0,
+              "interrupt_wakeups_per_s": 43.05240823996979,
+              "billed_energy_raw_delta": 23785022,
+              "serviced_energy_raw_delta": 0
+            }
+          },
+          "draw_p99_us": 1915
+        },
+        {
+          "raw_file": "03-kael.json",
+          "peak_rss_bytes": 1192083456,
+          "phase_metrics": {
+            "idle-before": {
+              "rss_median_bytes": 334397440.0,
+              "footprint_max_bytes": 318801168,
+              "cpu_percent": 0.05124894895673403,
+              "idle_wakeups_per_s": 0.0,
+              "interrupt_wakeups_per_s": 2.014846790356871,
+              "billed_energy_raw_delta": 7827666,
+              "serviced_energy_raw_delta": 0
+            },
+            "active": {
+              "rss_median_bytes": 1144619008,
+              "footprint_max_bytes": 1180240128,
+              "cpu_percent": 68.43579574082368,
+              "idle_wakeups_per_s": 1.055122964903687,
+              "interrupt_wakeups_per_s": 49.59077935047329,
+              "billed_energy_raw_delta": 40520866,
+              "serviced_energy_raw_delta": 0
+            },
+            "idle-after": {
+              "rss_median_bytes": 1166000128.0,
+              "footprint_max_bytes": 1153796352,
+              "cpu_percent": 0.011777309834061573,
+              "idle_wakeups_per_s": 0.0,
+              "interrupt_wakeups_per_s": 0.6731494070432906,
+              "billed_energy_raw_delta": 0,
+              "serviced_energy_raw_delta": 0
+            },
+            "churn": {
+              "rss_median_bytes": 1119657984.0,
+              "footprint_max_bytes": 1147193624,
+              "cpu_percent": 70.45372603257826,
+              "idle_wakeups_per_s": 1.3519952491948437,
+              "interrupt_wakeups_per_s": 46.50863657230263,
+              "billed_energy_raw_delta": 36742286,
+              "serviced_energy_raw_delta": 0
+            }
+          },
+          "draw_p99_us": 1961
+        },
+        {
+          "raw_file": "04-kael.json",
+          "peak_rss_bytes": 1209008128,
+          "phase_metrics": {
+            "idle-before": {
+              "rss_median_bytes": 333365248.0,
+              "footprint_max_bytes": 317752616,
+              "cpu_percent": 0.05844495085782214,
+              "idle_wakeups_per_s": 0.22306884074646977,
+              "interrupt_wakeups_per_s": 2.007619566718228,
+              "billed_energy_raw_delta": 6561234,
+              "serviced_energy_raw_delta": 0
+            },
+            "active": {
+              "rss_median_bytes": 1134903296,
+              "footprint_max_bytes": 1171638504,
+              "cpu_percent": 69.34748498995546,
+              "idle_wakeups_per_s": 0.4404730480577386,
+              "interrupt_wakeups_per_s": 48.18775145751661,
+              "billed_energy_raw_delta": 37468984,
+              "serviced_energy_raw_delta": 0
+            },
+            "idle-after": {
+              "rss_median_bytes": 1161183232.0,
+              "footprint_max_bytes": 1144883408,
+              "cpu_percent": 0.01245673772481321,
+              "idle_wakeups_per_s": 0.0,
+              "interrupt_wakeups_per_s": 0.8881144530935802,
+              "billed_energy_raw_delta": 0,
+              "serviced_energy_raw_delta": 0
+            },
+            "churn": {
+              "rss_median_bytes": 1130979328.0,
+              "footprint_max_bytes": 1188890880,
+              "cpu_percent": 70.6976599592578,
+              "idle_wakeups_per_s": 0.6307412778784401,
+              "interrupt_wakeups_per_s": 46.49464276932502,
+              "billed_energy_raw_delta": 35735837,
+              "serviced_energy_raw_delta": 0
+            }
+          },
+          "draw_p99_us": 2082
+        }
+      ]
+    }
+  },
+  "raw_directory": ".artifacts/tree-callback-memory-matched",
+  "retirement_patch_sha256": "5e21204d7a3d54539d339575923a9dfae78c918b18278d77b12fba40406b4cdb"
+}

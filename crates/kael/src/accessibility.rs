@@ -802,7 +802,7 @@ impl AccessibilityActionRequest {
 /// directly in tests or custom accessibility integrations.
 #[derive(Default)]
 pub struct AccessibilityActionRouter {
-    handlers: HashMap<(AccessibilityId, AccessibilityAction), AccessibilityActionHandler>,
+    handlers: HashMap<(AccessibilityId, AccessibilityAction), RegisteredAccessibilityActionHandler>,
     subtree_handlers: HashMap<
         AccessibilityId,
         (
@@ -813,6 +813,11 @@ pub struct AccessibilityActionRouter {
 }
 
 type AccessibilityActionHandler = Box<dyn FnMut(AccessibilityActionRequest) + 'static>;
+
+struct RegisteredAccessibilityActionHandler {
+    handler: AccessibilityActionHandler,
+    frame_only: bool,
+}
 
 impl AccessibilityActionRouter {
     /// Create an empty router.
@@ -827,7 +832,30 @@ impl AccessibilityActionRouter {
         action: AccessibilityAction,
         handler: impl FnMut(AccessibilityActionRequest) + 'static,
     ) {
-        self.handlers.insert((node_id, action), Box::new(handler));
+        self.handlers.insert(
+            (node_id, action),
+            RegisteredAccessibilityActionHandler {
+                handler: Box::new(handler),
+                frame_only: false,
+            },
+        );
+    }
+
+    /// A painted element's handler cannot outlive its frame overlay. Logical
+    /// subtree routing supplies offscreen actions without retaining old views.
+    pub(crate) fn on_frame_action(
+        &mut self,
+        node_id: AccessibilityId,
+        action: AccessibilityAction,
+        handler: impl FnMut(AccessibilityActionRequest) + 'static,
+    ) {
+        self.handlers.insert(
+            (node_id, action),
+            RegisteredAccessibilityActionHandler {
+                handler: Box::new(handler),
+                frame_only: true,
+            },
+        );
     }
 
     /// Remove a handler for one node/action pair.
@@ -836,7 +864,9 @@ impl AccessibilityActionRouter {
         node_id: AccessibilityId,
         action: AccessibilityAction,
     ) -> Option<AccessibilityActionHandler> {
-        self.handlers.remove(&(node_id, action))
+        self.handlers
+            .remove(&(node_id, action))
+            .map(|entry| entry.handler)
     }
 
     /// Return whether a handler is registered for one node/action pair.
@@ -859,14 +889,30 @@ impl AccessibilityActionRouter {
             .insert(snapshot.root, (snapshot, Box::new(handler)));
     }
 
-    /// Retain handlers using effective lookup without collecting all logical IDs.
+    /// Retain explicit handlers while their logical nodes exist. Painted
+    /// handlers need a current frame overlay and retire when subtree routing
+    /// already supplies the action, releasing outgoing view/model captures.
+    /// This never collects or scans all logical node identities.
     pub fn retain_tree(&mut self, tree: &AccessibilityTree) {
-        self.handlers.retain(|(id, _), _| tree.get(*id).is_some());
         self.subtree_handlers.retain(|root, (snapshot, _)| {
             tree.nodes
                 .snapshots
                 .get(root)
                 .is_some_and(|current| std::sync::Arc::ptr_eq(current, snapshot))
+        });
+        self.handlers.retain(|(id, action), entry| {
+            if entry.frame_only {
+                tree.nodes.frame.get(id).is_some_and(|node| {
+                    node.actions.contains(action)
+                        && !self.subtree_handlers.values().any(|(snapshot, _)| {
+                            snapshot
+                                .get(*id)
+                                .is_some_and(|node| node.actions.contains(action))
+                        })
+                })
+            } else {
+                tree.get(*id).is_some()
+            }
         });
     }
 
@@ -890,8 +936,8 @@ impl AccessibilityActionRouter {
                 return true;
             }
         }
-        if let Some(handler) = self.handlers.get_mut(&(request.node_id, request.action)) {
-            handler(request);
+        if let Some(entry) = self.handlers.get_mut(&(request.node_id, request.action)) {
+            (entry.handler)(request);
             return true;
         }
         false
@@ -4606,6 +4652,76 @@ mod accesskit_spike_tests {
         assert!(router.has_handler(retained, AccessibilityAction::Click));
         assert!(!router.has_handler(removed, AccessibilityAction::Focus));
         assert_eq!(router.handler_count(), 1);
+    }
+
+    #[test]
+    fn painted_action_handlers_retire_without_removing_logical_actions() {
+        use std::{cell::Cell, rc::Rc, sync::Arc};
+
+        let window = AccessibilityNode::new(AccessibilityRole::Window);
+        let mut root = AccessibilityNode::new(AccessibilityRole::Tree);
+        let root_id = root.id;
+        let mut row = AccessibilityNode::new(AccessibilityRole::TreeItem)
+            .with_actions(vec![AccessibilityAction::Click]);
+        let row_id = row.id;
+        row.parent = Some(root_id);
+        root.children.push(row_id);
+        let snapshot = AccessibilitySnapshot::new(root_id, [root, row.clone()]).unwrap();
+        let mut tree = AccessibilityTree::new(window);
+        tree.nodes.attach(snapshot.clone());
+        tree.set_parent(root_id, tree.root);
+        tree.nodes.insert(row_id, row.clone());
+
+        let seen = Rc::new(Cell::new(0));
+        let captured = Arc::new(vec![0_u8; 1024]);
+        let retired = Arc::downgrade(&captured);
+        let mut router = AccessibilityActionRouter::new();
+        let handler_seen = seen.clone();
+        router.on_frame_action(row_id, AccessibilityAction::Click, move |_| {
+            handler_seen.set(captured.len());
+        });
+        router.retain_tree(&tree.clone());
+        assert!(router.dispatch(AccessibilityActionRequest::new(
+            row_id,
+            AccessibilityAction::Click,
+        )));
+        assert_eq!(seen.get(), 1024, "cached painted overlays retain handlers");
+        tree.nodes.frame.remove(&row_id);
+        router.retain_tree(&tree);
+        assert!(tree.get(row_id).is_some(), "logical row remains available");
+        assert_eq!(router.handler_count(), 0);
+        assert!(
+            retired.upgrade().is_none(),
+            "outgoing captures are released"
+        );
+
+        let logical_seen = seen.clone();
+        router.on_action(row_id, AccessibilityAction::Click, move |_| {
+            logical_seen.set(2);
+        });
+        router.retain_tree(&tree);
+        assert!(router.has_handler(row_id, AccessibilityAction::Click));
+        assert_eq!(
+            router.handler_count(),
+            1,
+            "explicit logical handlers persist"
+        );
+
+        tree.nodes.insert(row_id, row);
+        router.on_frame_action(row_id, AccessibilityAction::Click, |_| {
+            panic!("mounted pointer handler must not override logical routing")
+        });
+        let subtree_seen = seen.clone();
+        router.on_subtree(snapshot, move |_| subtree_seen.set(3));
+        router.retain_tree(&tree);
+        assert_eq!(router.handler_count(), 0, "shadowed captures are released");
+        tree.nodes.frame.remove(&row_id);
+        router.retain_tree(&tree);
+        assert!(router.dispatch(AccessibilityActionRequest::new(
+            row_id,
+            AccessibilityAction::Click,
+        )));
+        assert_eq!(seen.get(), 3, "offscreen action reaches current subtree");
     }
 
     #[test]

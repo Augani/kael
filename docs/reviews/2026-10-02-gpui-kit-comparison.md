@@ -158,3 +158,35 @@ Energy fields are raw counters and provide no reliable power comparison here.
 The executable digests identify the measured binaries; the workspace was still
 under development. A repeat against finalized source, controlled desktop and
 uninstrumented builds is required before publishing a ranking.
+
+## Corrected-source hosted diagnostic checkpoint
+
+The `dacdea1` [performance workflow](https://github.com/Augani/kael/actions/runs/37134841337)
+completes eighty native navigation/editor/data/tree runs, with five repetitions
+per framework and instrumentation mode. The
+[machine-readable summary](2026-10-03-hosted-comparison-diagnostic.json) preserves
+the run/artifact IDs, raw archive digest, executable digests and limitations.
+The virtual host is an Apple M1 with three cores, 7 GiB RAM and macOS 26.6.2.
+
+Median uninstrumented active Editor CPU is 35.76% for Kael and 9.17% for GPUI
+Kit. The tree is 69.29% versus 15.99% CPU, and 1,641.28 versus 603.50 MiB RSS.
+These are actionable diagnostic costs. Kael's tree publishes complete logical
+accessibility while the pinned competitor publishes mounted rows. Requested
+native window dimensions were recorded, but actual constrained viewport
+equality was not established. The runs supply no comparative GPU presentation
+or physical power proof, so they do not establish a fair overall ranking.
+
+Docking aborts at the first competitor idle oracle after one completed Kael
+run. A fixed 550 px pane assumes an unconstrained 1,100 px native window.
+An actual 880×640 native run reproduces the incorrect 0.625 initial ratio.
+The fixture now calculates ratios from actual measured native split sizes,
+normalizes both engines before timing, and passes normal/compact native smoke
+checks with unchanged identity/content/persistence oracles. CI exercises that
+regression in both instrumentation modes before full collection. Nineteen
+remaining docking runs were absent from the failed checkpoint.
+
+The continuation corrects prefix-scanned editor UTF-16 conversion and painted
+row callbacks that retained outgoing full tree models. Its local regression
+fails before the callback fix and passes afterward, preserving full offscreen
+actions and stable identities. Fresh complete performance and platform runs
+are required for those changes; earlier results remain historical.

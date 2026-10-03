@@ -42,23 +42,30 @@ def state(path):
 
 def find_owned(pid, label):
     desktop = Atspi.get_desktop(0)
+    failures = []
     for index in range(desktop.get_child_count()):
         app = desktop.get_child_at_index(index)
         if app.get_process_id() != pid:
             continue
-        queue = [app]
-        seen = 0
-        while queue:
-            node = queue.pop(0)
-            seen += 1
-            require(seen <= 512, 'owned editor layout exceeded bound')
-            node.clear_cache()
-            if node.get_name() == label:
-                return node
-            count = node.get_child_count()
-            require(0 <= count <= 512, f'unexpected editor hierarchy count={count}')
-            queue.extend(node.get_child_at_index(i) for i in range(count))
-    raise RuntimeError(f'owned native node not found: {label}')
+        try:
+            queue = [app]
+            seen = 0
+            while queue:
+                node = queue.pop(0)
+                seen += 1
+                require(seen <= 512, 'owned editor layout exceeded bound')
+                node.clear_cache()
+                if node.get_name() == label:
+                    return node
+                count = node.get_child_count()
+                require(0 <= count <= 512, f'unexpected editor hierarchy count={count}')
+                queue.extend(node.get_child_at_index(i) for i in range(count))
+        except (GLib.GError, RuntimeError) as error:
+            # GTK and AccessKit may publish separate applications for this
+            # same owned PID. A broken/stale GTK widget hierarchy must not
+            # hide the independent Kael semantic hierarchy.
+            failures.append(str(error))
+    raise RuntimeError(f'owned native node not found: {label}; roots={failures!r}')
 
 
 def click(pid, label):
@@ -117,18 +124,18 @@ def main():
         def contents(expected):
             document.clear_cache()
             require(text.get_character_count() == len(expected), 'native scalar count mismatch')
-            require(text.get_text(0, -1) == expected, 'native complete text mismatch')
+            require(Atspi.Text.get_text(text, 0, -1) == expected, 'native complete text mismatch')
             return state(args.app_log)
 
         wait(lambda: contents(original))
-        require(ro_text.get_text(0, -1) == original, 'read-only full text mismatch')
+        require(Atspi.Text.get_text(ro_text, 0, -1) == original, 'read-only full text mismatch')
         require(text.set_selection(0, start, end), 'native Unicode selection rejected')
 
         def selected():
             selection = text.get_selection(0)
             require((selection.start_offset, selection.end_offset) == (start, end),
                     'native selected scalar range mismatch')
-            require(text.get_text(start, end) == needle, 'native selected Unicode text mismatch')
+            require(Atspi.Text.get_text(text, start, end) == needle, 'native selected Unicode text mismatch')
             current = state(args.app_log)
             require((current['anchor'], current['focus']) ==
                     (bytes_at(original, start), bytes_at(original, end)),
@@ -172,7 +179,7 @@ def main():
         require(not ro_edit.cut_text(start, end), 'read-only Cut falsely accepted')
         require(not ro_edit.paste_text(start), 'read-only Paste falsely accepted')
         require(not ro_edit.set_text_contents('invalid'), 'read-only SetTextContents accepted')
-        require(ro_text.get_text(0, -1) == original, 'read-only content changed')
+        require(Atspi.Text.get_text(ro_text, 0, -1) == original, 'read-only content changed')
 
         click(args.pid, 'Toggle disabled document')
         wait(lambda: require('NATIVE_TEXT_DISABLED: disabled=true' in args.app_log.read_text(),
@@ -188,7 +195,7 @@ def main():
             require(not edit.copy_text(start, end), 'disabled clipboard action accepted')
         except GLib.GError:
             pass  # void CopyText reports NotSupported on the D-Bus interface.
-        require(text.get_text(0, -1) == original, 'disabled editor mutated')
+        require(Atspi.Text.get_text(text, 0, -1) == original, 'disabled editor mutated')
         click(args.pid, 'Toggle disabled document')
         def enabled():
             document.clear_cache()
@@ -233,7 +240,7 @@ def main():
         wait(lambda: contents(original))
         click(args.pid, 'Replace document')
         wait(lambda: contents(replacement))
-        require(ro_text.get_text(0, -1) == original, 'independent read-only editor changed')
+        require(Atspi.Text.get_text(ro_text, 0, -1) == original, 'independent read-only editor changed')
         click(args.pid, 'Native text checks complete')
         print('NATIVE_TEXT_ACCESSIBILITY_OK platform=linux '
               'utf8=105391 scalars=63390 utf16=66983 lines=1001 '

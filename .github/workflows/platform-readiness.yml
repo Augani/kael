@@ -121,6 +121,8 @@ jobs:
           targets: wasm32-unknown-unknown,aarch64-apple-darwin
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       - name: Verify native workspace
         shell: bash
@@ -280,6 +282,8 @@ jobs:
           toolchain: 1.97.1
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       - name: Execute Blade retained-scene and generated-project runtime proofs
         shell: bash
@@ -399,6 +403,8 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       - name: Install version-matched WebAssembly packager
         run: cargo install wasm-bindgen-cli --version 0.2.122 --locked
@@ -551,6 +557,8 @@ jobs:
           components: clippy
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       - name: Locate Windows vcpkg for the canonical compile runner
         if: matrix.os == 'windows-2025-vs2026'

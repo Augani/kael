@@ -3062,7 +3062,7 @@ impl Interactivity {
             let window_handle = window.window_handle();
             let async_cx = cx.to_async();
             let executor = cx.foreground_executor().clone();
-            window.on_accessibility_action(
+            window.on_frame_accessibility_action(
                 node.id,
                 crate::AccessibilityAction::Focus,
                 move |request| {
@@ -3097,7 +3097,7 @@ impl Interactivity {
             let window_handle = window.window_handle();
             let async_cx = cx.to_async();
             let executor = cx.foreground_executor().clone();
-            window.on_accessibility_action(node.id, action, move |request| {
+            window.on_frame_accessibility_action(node.id, action, move |request| {
                 let listener = listener.clone();
                 let mut async_cx = async_cx.clone();
                 executor
@@ -3133,7 +3133,7 @@ impl Interactivity {
             let window_handle = window.window_handle();
             let async_cx = cx.to_async();
             let executor = cx.foreground_executor().clone();
-            window.on_accessibility_action(node.id, action, move |request| {
+            window.on_frame_accessibility_action(node.id, action, move |request| {
                 let listeners = listeners.clone();
                 let mut async_cx = async_cx.clone();
                 executor

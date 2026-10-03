@@ -535,6 +535,10 @@ impl Adapter {
         let mut handler = AdapterChangeHandler::new(self);
         let mut tree = self.context.tree.write().unwrap();
         tree.update_and_process_changes(update, &mut handler);
+        // Tree readers also hold the tree lock when using these indexes;
+        // invalidate before publishing the changed hierarchy to them. Focus
+        // alone can include a previously transparent or hidden node.
+        self.context.invalidate_filtered_child_indexes();
         drop(tree);
         handler.emit_selection_changed();
     }
@@ -543,6 +547,7 @@ impl Adapter {
         let mut handler = AdapterChangeHandler::new(self);
         let mut tree = self.context.tree.write().unwrap();
         tree.update_host_focus_state_and_process_changes(is_focused, &mut handler);
+        self.context.invalidate_filtered_child_indexes();
     }
 
     fn window_created(&self, adapter_index: usize, window: NodeId) {
@@ -698,6 +703,97 @@ mod tests {
             tree_id: TreeId::ROOT,
             focus: LocalNodeId(0),
         }
+    }
+
+    #[test]
+    fn cache_indexes_reuse_parent_scan_and_release_outgoing_hierarchy() {
+        let children = (1..=4_000).map(LocalNodeId).collect::<Vec<_>>();
+        let mut nodes = vec![(LocalNodeId(0), with_children(Role::Window, &children))];
+        nodes.extend(children.iter().map(|id| (*id, Node::new(Role::Button))));
+        let (mut adapter, _) = build(TreeUpdate {
+            nodes,
+            tree: Some(Tree::new(LocalNodeId(0))),
+            tree_id: TreeId::ROOT,
+            focus: LocalNodeId(0),
+        });
+        let rows = adapter
+            .platform_node(adapter.root_id())
+            .map_children::<Vec<_>, _>(|id| adapter.platform_node(id))
+            .unwrap();
+        for (index, row) in rows.iter().enumerate() {
+            assert_eq!(row.index_in_parent().unwrap(), index as i32);
+            assert_eq!(row.cache_node().unwrap().index_in_parent, index as i32);
+        }
+        assert_eq!(adapter.context.filtered_child_index_counts(), (1, 4_000));
+
+        let reversed = children.iter().rev().copied().collect::<Vec<_>>();
+        adapter.update(update(vec![(
+            LocalNodeId(0),
+            with_children(Role::Window, &reversed),
+        )]));
+        assert_eq!(adapter.context.filtered_child_index_counts(), (0, 0));
+        assert_eq!(rows[0].index_in_parent().unwrap(), 3_999);
+        assert_eq!(rows[3_999].cache_node().unwrap().index_in_parent, 0);
+
+        let mut hidden = Node::new(Role::Button);
+        hidden.set_hidden();
+        adapter.update(update(vec![(LocalNodeId(2_000), hidden)]));
+        assert_eq!(rows[0].index_in_parent().unwrap(), 3_998);
+        assert_eq!(adapter.context.filtered_child_index_counts(), (1, 3_999));
+
+        adapter.update(update(vec![(
+            LocalNodeId(0),
+            with_children(Role::Window, &[LocalNodeId(1)]),
+        )]));
+        assert_eq!(adapter.context.filtered_child_index_counts(), (0, 0));
+        assert!(rows[3_999].cache_node().is_err());
+        assert_eq!(rows[0].cache_node().unwrap().index_in_parent, 0);
+        assert_eq!(adapter.context.filtered_child_index_counts(), (1, 1));
+    }
+
+    #[test]
+    fn cache_indexes_follow_focus_only_transparent_container_changes() {
+        let (mut adapter, _) = build(TreeUpdate {
+            nodes: vec![
+                (
+                    LocalNodeId(0),
+                    with_children(Role::Window, &[LocalNodeId(10), LocalNodeId(20)]),
+                ),
+                (
+                    LocalNodeId(10),
+                    with_children(Role::GenericContainer, &[LocalNodeId(11)]),
+                ),
+                (LocalNodeId(11), Node::new(Role::Button)),
+                (LocalNodeId(20), Node::new(Role::Button)),
+            ],
+            tree: Some(Tree::new(LocalNodeId(0))),
+            tree_id: TreeId::ROOT,
+            focus: LocalNodeId(0),
+        });
+        adapter.update_window_focus_state(true);
+        let (container_id, button_id) = {
+            let tree = adapter.context.read_tree();
+            let container = tree.state().root().children().next().unwrap();
+            (container.id(), container.children().next().unwrap().id())
+        };
+        let container = adapter.platform_node(container_id);
+        let button = adapter.platform_node(button_id);
+        assert_eq!(button.cache_node().unwrap().index_in_parent, 0);
+        assert_eq!(adapter.context.filtered_child_index_counts(), (1, 2));
+        adapter.update(TreeUpdate {
+            nodes: vec![],
+            tree: None,
+            tree_id: TreeId::ROOT,
+            focus: LocalNodeId(10),
+        });
+        assert_eq!(adapter.context.filtered_child_index_counts(), (0, 0));
+        assert_eq!(container.cache_node().unwrap().index_in_parent, 0);
+        assert_eq!(button.cache_node().unwrap().index_in_parent, 0);
+        assert_eq!(adapter.context.filtered_child_index_counts(), (2, 3));
+        adapter.update_window_focus_state(false);
+        assert_eq!(adapter.context.filtered_child_index_counts(), (0, 0));
+        assert_eq!(button.cache_node().unwrap().index_in_parent, 0);
+        assert_eq!(adapter.context.filtered_child_index_counts(), (1, 2));
     }
 
     #[test]

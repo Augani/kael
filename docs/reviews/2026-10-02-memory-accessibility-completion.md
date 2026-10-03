@@ -1,5 +1,12 @@
 # Memory pressure and accessibility completion evidence
 
+The October 3 continuation reproduces and fixes retained painted callbacks in
+large logical trees. Three complete native release runs per version reduce
+median peak RSS from 3,352.06 to 1,136.86 MiB while preserving full offscreen
+actions. The [matched diagnostic](2026-10-03-tree-callback-memory-diagnostic.json)
+and [native follow-up](2026-10-03-native-quality-followup.md) record scope,
+executable hashes, regressions and remaining platform requirements.
+
 This track implements requirements R6/R7/R8 in the full completion ledger. The
 requirements remain open until native platform runtime evidence covers the
 items below. Compilation and headless tests prove their stated scopes only.

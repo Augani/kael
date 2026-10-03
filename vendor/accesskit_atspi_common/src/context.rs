@@ -5,6 +5,8 @@
 
 use accesskit::{ActionHandler, ActionRequest, NodeId, TextSelection, TreeId};
 use accesskit_consumer::Tree;
+use accesskit_consumer::{Node as ConsumerNode, NodeId as ConsumerNodeId};
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -91,6 +93,10 @@ pub(crate) struct Context {
     pub(crate) tree: RwLock<Tree>,
     pub(crate) action_handler: Arc<dyn ActionHandlerNoMut + Send + Sync>,
     pub(crate) root_window_bounds: RwLock<WindowBounds>,
+    // Built once per queried filtered parent in the current tree revision.
+    // Cache.AddAccessible must not rescan every preceding sibling for every
+    // node in a large logical tree. Updates drop all outgoing index storage.
+    filtered_child_indexes: Mutex<HashMap<ConsumerNodeId, HashMap<ConsumerNodeId, i32>>>,
 }
 
 impl Debug for Context {
@@ -116,7 +122,42 @@ impl Context {
             tree: RwLock::new(tree),
             action_handler,
             root_window_bounds: RwLock::new(root_window_bounds),
+            filtered_child_indexes: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub(crate) fn filtered_child_index(
+        &self,
+        parent: ConsumerNode<'_>,
+        child: ConsumerNodeId,
+    ) -> crate::Result<i32> {
+        let mut indexes = self.filtered_child_indexes.lock().unwrap();
+        if let std::collections::hash_map::Entry::Vacant(entry) = indexes.entry(parent.id()) {
+            let children = parent
+                .filtered_children(&crate::filters::filter)
+                .enumerate()
+                .map(|(index, node)| {
+                    i32::try_from(index)
+                        .map(|index| (node.id(), index))
+                        .map_err(|_| crate::Error::IndexOutOfRange)
+                })
+                .collect::<crate::Result<HashMap<_, _>>>()?;
+            entry.insert(children);
+        }
+        indexes[&parent.id()]
+            .get(&child)
+            .copied()
+            .ok_or(crate::Error::Defunct)
+    }
+
+    pub(crate) fn invalidate_filtered_child_indexes(&self) {
+        *self.filtered_child_indexes.lock().unwrap() = HashMap::new();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn filtered_child_index_counts(&self) -> (usize, usize) {
+        let indexes = self.filtered_child_indexes.lock().unwrap();
+        (indexes.len(), indexes.values().map(HashMap::len).sum())
     }
 
     pub(crate) fn read_tree(&self) -> RwLockReadGuard<'_, Tree> {

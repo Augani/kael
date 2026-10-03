@@ -1563,6 +1563,56 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn outgoing_models_retire_when_rows_scroll_out_of_view() {
+        let nodes = (0..1000)
+            .map(|id| TreeNode::new(id, format!("File {id}")))
+            .collect::<Vec<_>>();
+        let mut model = VirtualTreeModel::new(&nodes, &HashSet::new()).unwrap();
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| crate::theme::install_theme(cx, Theme::dark()));
+        let state = cx.new(|cx| VirtualTreeState::new(cx));
+        let worker = cx.background_executor.clone();
+        let context = cx.update(|cx| {
+            state
+                .read(cx)
+                .accessibility_preparation_context("Tree navigation", true)
+        });
+        model.prepare_accessibility(context, &worker).unwrap();
+        let outgoing = Arc::downgrade(&model.data);
+        let (view, window) = cx.add_window_view(|_, cx| TestTreeView {
+            model,
+            state,
+            selected: Rc::new(Cell::new(None)),
+            toggles: Rc::new(RefCell::new(Vec::new())),
+            outside_focus: cx.focus_handle().tab_index(0).tab_stop(true),
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.focus(&view.read(cx).state.read(cx).focus_handle);
+        });
+        window.simulate_keystrokes("end");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            view.update(cx, |view, cx| {
+                let mut replacement = VirtualTreeModel::new(&nodes, &HashSet::new()).unwrap();
+                let context = view
+                    .state
+                    .read(cx)
+                    .accessibility_preparation_context("Tree navigation", true);
+                replacement.prepare_accessibility(context, &worker).unwrap();
+                view.model = replacement;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+        });
+        assert!(
+            outgoing.upgrade().is_none(),
+            "offscreen mounted-row callbacks must not retain an outgoing logical model"
+        );
+    }
+
+    #[::core::prelude::v1::test]
     fn hundred_thousand_rows_mount_only_the_viewport_and_end_scrolls_into_view() {
         let nodes = (0..100_000)
             .map(|id| TreeNode::new(id, format!("File {id}")))

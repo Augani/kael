@@ -6392,14 +6392,14 @@ extern "C" fn first_rect_for_character_range(
     }
     let frame = get_frame(this);
     with_input_handler(this, |input_handler| {
-        input_handler.bounds_for_range(range.to_range()?)
+        input_handler.bounds_for_range_with_actual_range(range.to_range()?)
     })
     .flatten()
     .map_or(
         NSRect::new(NSPoint::new(0., 0.), NSSize::new(0., 0.)),
-        |bounds| {
+        |(bounds, adjusted)| {
             if !actual_range.0.is_null() {
-                unsafe { actual_range.0.write(range) };
+                unsafe { actual_range.0.write(adjusted.into()) };
             }
             NSRect::new(
                 NSPoint::new(

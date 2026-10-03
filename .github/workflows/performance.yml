@@ -37,6 +37,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          cache-on-failure: true
           workspaces: benchmarks/desktop-comparison
 
       - name: Build pinned competitor and local framework
@@ -97,6 +98,18 @@ jobs:
             .artifacts/competition/binaries/kael-tree-without-frame-timing
           cp benchmarks/desktop-comparison/target/release/workspace_comparison \
             .artifacts/competition/binaries/kael-workspace-without-frame-timing
+
+      - name: Verify native docking on a constrained viewport
+        shell: bash
+        timeout-minutes: 2
+        run: |
+          set -o pipefail
+          unset KAEL_HEADLESS
+          for binary in kael-workspace gpui-kit-workspace \
+            kael-workspace-without-frame-timing gpui-kit-workspace-without-frame-timing; do
+            .artifacts/competition/binaries/"$binary" --quick-compact \
+              2>&1 | tee ".artifacts/competition/${binary}-compact.log"
+          done
 
       - name: Collect five alternating native runs per engine
         shell: bash
@@ -244,6 +257,8 @@ jobs:
           toolchain: 1.97.1
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       - name: Download the main-branch baseline
         id: download-baseline

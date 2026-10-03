@@ -939,9 +939,8 @@ impl PlatformNode {
 
     pub fn index_in_parent(&self) -> Result<i32> {
         self.resolve_with_context(|node, _tree, context| {
-            if node.filtered_parent(&filter).is_some() {
-                i32::try_from(node.preceding_filtered_siblings(&filter).count())
-                    .map_err(|_| Error::IndexOutOfRange)
+            if let Some(parent) = node.filtered_parent(&filter) {
+                context.filtered_child_index(parent, node.id())
             } else {
                 let index = context
                     .read_app_context()
@@ -954,9 +953,8 @@ impl PlatformNode {
 
     pub fn cache_node(&self) -> Result<CacheNode> {
         self.resolve_with_context(|node, tree, context| {
-            let index_in_parent = if node.filtered_parent(&filter).is_some() {
-                i32::try_from(node.preceding_filtered_siblings(&filter).count())
-                    .map_err(|_| Error::IndexOutOfRange)?
+            let index_in_parent = if let Some(parent) = node.filtered_parent(&filter) {
+                context.filtered_child_index(parent, node.id())?
             } else {
                 let index = context
                     .read_app_context()

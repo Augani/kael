@@ -1,3 +1,5 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 1940b48..1927182 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
 @@ -12,8 +12,8 @@
@@ -11,7 +13,7 @@
  authors = ["The AccessKit contributors"]
  build = false
  autolib = false
-@@ -21,8 +21,9 @@
+@@ -21,8 +21,9 @@ autobins = false
  autoexamples = false
  autotests = false
  autobenches = false
@@ -22,7 +24,7 @@
  keywords = [
      "gui",
      "ui",
-@@ -30,7 +31,7 @@
+@@ -30,7 +31,7 @@ keywords = [
  ]
  categories = ["gui"]
  license = "MIT OR Apache-2.0"
@@ -31,9 +33,11 @@
  resolver = "2"
  
  [features]
+diff --git a/src/adapter.rs b/src/adapter.rs
+index 6b7db3c..c794d7f 100644
 --- a/src/adapter.rs
 +++ b/src/adapter.rs
-@@ -312,6 +312,12 @@
+@@ -312,6 +312,12 @@ impl TreeChangeHandler for AdapterChangeHandler<'_> {
                  .unregister_interfaces(new_wrapper.id(), old_interfaces ^ kept_interfaces);
              self.adapter
                  .register_interfaces(new_node.id(), new_interfaces ^ kept_interfaces);
@@ -46,10 +50,127 @@
              let bounds = *self.adapter.context.read_root_window_bounds();
              new_wrapper.notify_changes(&bounds, self.adapter, &old_wrapper);
              self.emit_text_selection_change(Some(old_node), new_node);
-@@ -701,6 +707,50 @@
+@@ -529,6 +535,10 @@ impl Adapter {
+         let mut handler = AdapterChangeHandler::new(self);
+         let mut tree = self.context.tree.write().unwrap();
+         tree.update_and_process_changes(update, &mut handler);
++        // Tree readers also hold the tree lock when using these indexes;
++        // invalidate before publishing the changed hierarchy to them. Focus
++        // alone can include a previously transparent or hidden node.
++        self.context.invalidate_filtered_child_indexes();
+         drop(tree);
+         handler.emit_selection_changed();
+     }
+@@ -537,6 +547,7 @@ impl Adapter {
+         let mut handler = AdapterChangeHandler::new(self);
+         let mut tree = self.context.tree.write().unwrap();
+         tree.update_host_focus_state_and_process_changes(is_focused, &mut handler);
++        self.context.invalidate_filtered_child_indexes();
      }
  
+     fn window_created(&self, adapter_index: usize, window: NodeId) {
+@@ -694,12 +705,147 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn cache_indexes_reuse_parent_scan_and_release_outgoing_hierarchy() {
++        let children = (1..=4_000).map(LocalNodeId).collect::<Vec<_>>();
++        let mut nodes = vec![(LocalNodeId(0), with_children(Role::Window, &children))];
++        nodes.extend(children.iter().map(|id| (*id, Node::new(Role::Button))));
++        let (mut adapter, _) = build(TreeUpdate {
++            nodes,
++            tree: Some(Tree::new(LocalNodeId(0))),
++            tree_id: TreeId::ROOT,
++            focus: LocalNodeId(0),
++        });
++        let rows = adapter
++            .platform_node(adapter.root_id())
++            .map_children::<Vec<_>, _>(|id| adapter.platform_node(id))
++            .unwrap();
++        for (index, row) in rows.iter().enumerate() {
++            assert_eq!(row.index_in_parent().unwrap(), index as i32);
++            assert_eq!(row.cache_node().unwrap().index_in_parent, index as i32);
++        }
++        assert_eq!(adapter.context.filtered_child_index_counts(), (1, 4_000));
++
++        let reversed = children.iter().rev().copied().collect::<Vec<_>>();
++        adapter.update(update(vec![(
++            LocalNodeId(0),
++            with_children(Role::Window, &reversed),
++        )]));
++        assert_eq!(adapter.context.filtered_child_index_counts(), (0, 0));
++        assert_eq!(rows[0].index_in_parent().unwrap(), 3_999);
++        assert_eq!(rows[3_999].cache_node().unwrap().index_in_parent, 0);
++
++        let mut hidden = Node::new(Role::Button);
++        hidden.set_hidden();
++        adapter.update(update(vec![(LocalNodeId(2_000), hidden)]));
++        assert_eq!(rows[0].index_in_parent().unwrap(), 3_998);
++        assert_eq!(adapter.context.filtered_child_index_counts(), (1, 3_999));
++
++        adapter.update(update(vec![(
++            LocalNodeId(0),
++            with_children(Role::Window, &[LocalNodeId(1)]),
++        )]));
++        assert_eq!(adapter.context.filtered_child_index_counts(), (0, 0));
++        assert!(rows[3_999].cache_node().is_err());
++        assert_eq!(rows[0].cache_node().unwrap().index_in_parent, 0);
++        assert_eq!(adapter.context.filtered_child_index_counts(), (1, 1));
++    }
++
++    #[test]
++    fn cache_indexes_follow_focus_only_transparent_container_changes() {
++        let (mut adapter, _) = build(TreeUpdate {
++            nodes: vec![
++                (
++                    LocalNodeId(0),
++                    with_children(Role::Window, &[LocalNodeId(10), LocalNodeId(20)]),
++                ),
++                (
++                    LocalNodeId(10),
++                    with_children(Role::GenericContainer, &[LocalNodeId(11)]),
++                ),
++                (LocalNodeId(11), Node::new(Role::Button)),
++                (LocalNodeId(20), Node::new(Role::Button)),
++            ],
++            tree: Some(Tree::new(LocalNodeId(0))),
++            tree_id: TreeId::ROOT,
++            focus: LocalNodeId(0),
++        });
++        adapter.update_window_focus_state(true);
++        let (container_id, button_id) = {
++            let tree = adapter.context.read_tree();
++            let container = tree.state().root().children().next().unwrap();
++            (container.id(), container.children().next().unwrap().id())
++        };
++        let container = adapter.platform_node(container_id);
++        let button = adapter.platform_node(button_id);
++        assert_eq!(button.cache_node().unwrap().index_in_parent, 0);
++        assert_eq!(adapter.context.filtered_child_index_counts(), (1, 2));
++        adapter.update(TreeUpdate {
++            nodes: vec![],
++            tree: None,
++            tree_id: TreeId::ROOT,
++            focus: LocalNodeId(10),
++        });
++        assert_eq!(adapter.context.filtered_child_index_counts(), (0, 0));
++        assert_eq!(container.cache_node().unwrap().index_in_parent, 0);
++        assert_eq!(button.cache_node().unwrap().index_in_parent, 0);
++        assert_eq!(adapter.context.filtered_child_index_counts(), (2, 3));
++        adapter.update_window_focus_state(false);
++        assert_eq!(adapter.context.filtered_child_index_counts(), (0, 0));
++        assert_eq!(button.cache_node().unwrap().index_in_parent, 0);
++        assert_eq!(adapter.context.filtered_child_index_counts(), (1, 2));
++    }
++
      #[test]
+     fn no_cache_events_on_construction() {
+         let (_adapter, ops) = build(initial_tree());
+         assert!(ops.lock().unwrap().is_empty());
+     }
+ 
++    #[test]
 +    fn native_text_capability_changes_refresh_the_existing_cache_object() {
 +        let (mut adapter, ops) = build(TreeUpdate {
 +            nodes: vec![
@@ -93,22 +214,26 @@
 +        assert!(!interfaces.contains(atspi_common::Interface::EditableText));
 +    }
 +
-+    #[test]
+     #[test]
      fn add_node_emits_one_added() {
          let (mut adapter, ops) = build(initial_tree());
-         ops.lock().unwrap().clear();
+diff --git a/src/context.rs b/src/context.rs
+index 79e5fd7..d64b54c 100644
 --- a/src/context.rs
 +++ b/src/context.rs
-@@ -3,7 +3,7 @@
+@@ -3,8 +3,10 @@
  // the LICENSE-APACHE file) or the MIT license (found in
  // the LICENSE-MIT file), at your option.
  
 -use accesskit::{ActionHandler, ActionRequest};
 +use accesskit::{ActionHandler, ActionRequest, NodeId, TextSelection, TreeId};
  use accesskit_consumer::Tree;
++use accesskit_consumer::{Node as ConsumerNode, NodeId as ConsumerNodeId};
++use std::collections::HashMap;
  use std::fmt::{Debug, Formatter};
  use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
-@@ -14,6 +14,60 @@
+ 
+@@ -14,6 +16,60 @@ use crate::WindowBounds;
  /// state transitions with minimal overhead.
  pub trait ActionHandlerNoMut {
      fn do_action(&self, request: ActionRequest);
@@ -169,9 +294,67 @@
  }
  
  /// This is an implementation detail of `accesskit_unix`, required for robust
+@@ -37,6 +93,10 @@ pub(crate) struct Context {
+     pub(crate) tree: RwLock<Tree>,
+     pub(crate) action_handler: Arc<dyn ActionHandlerNoMut + Send + Sync>,
+     pub(crate) root_window_bounds: RwLock<WindowBounds>,
++    // Built once per queried filtered parent in the current tree revision.
++    // Cache.AddAccessible must not rescan every preceding sibling for every
++    // node in a large logical tree. Updates drop all outgoing index storage.
++    filtered_child_indexes: Mutex<HashMap<ConsumerNodeId, HashMap<ConsumerNodeId, i32>>>,
+ }
+ 
+ impl Debug for Context {
+@@ -62,9 +122,44 @@ impl Context {
+             tree: RwLock::new(tree),
+             action_handler,
+             root_window_bounds: RwLock::new(root_window_bounds),
++            filtered_child_indexes: Mutex::new(HashMap::new()),
+         })
+     }
+ 
++    pub(crate) fn filtered_child_index(
++        &self,
++        parent: ConsumerNode<'_>,
++        child: ConsumerNodeId,
++    ) -> crate::Result<i32> {
++        let mut indexes = self.filtered_child_indexes.lock().unwrap();
++        if let std::collections::hash_map::Entry::Vacant(entry) = indexes.entry(parent.id()) {
++            let children = parent
++                .filtered_children(&crate::filters::filter)
++                .enumerate()
++                .map(|(index, node)| {
++                    i32::try_from(index)
++                        .map(|index| (node.id(), index))
++                        .map_err(|_| crate::Error::IndexOutOfRange)
++                })
++                .collect::<crate::Result<HashMap<_, _>>>()?;
++            entry.insert(children);
++        }
++        indexes[&parent.id()]
++            .get(&child)
++            .copied()
++            .ok_or(crate::Error::Defunct)
++    }
++
++    pub(crate) fn invalidate_filtered_child_indexes(&self) {
++        *self.filtered_child_indexes.lock().unwrap() = HashMap::new();
++    }
++
++    #[cfg(test)]
++    pub(crate) fn filtered_child_index_counts(&self) -> (usize, usize) {
++        let indexes = self.filtered_child_indexes.lock().unwrap();
++        (indexes.len(), indexes.values().map(HashMap::len).sum())
++    }
++
+     pub(crate) fn read_tree(&self) -> RwLockReadGuard<'_, Tree> {
+         self.tree.read().unwrap()
+     }
+diff --git a/src/error.rs b/src/error.rs
+index b612903..3dd1a75 100644
 --- a/src/error.rs
 +++ b/src/error.rs
-@@ -9,6 +9,7 @@
+@@ -9,6 +9,7 @@ use std::fmt;
  pub enum Error {
      Defunct,
      UnsupportedInterface,
@@ -179,7 +362,7 @@
      TooManyChildren,
      IndexOutOfRange,
      TooManyCharacters,
-@@ -20,6 +21,7 @@
+@@ -20,6 +21,7 @@ impl fmt::Display for Error {
          f.write_str(match self {
              Self::Defunct => "defunct",
              Self::UnsupportedInterface => "unsupported interface",
@@ -187,9 +370,11 @@
              Self::TooManyChildren => "too many children",
              Self::IndexOutOfRange => "index out of range",
              Self::TooManyCharacters => "too many characters",
+diff --git a/src/lib.rs b/src/lib.rs
+index f296305..e67a659 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -11,6 +11,8 @@
+@@ -11,6 +11,8 @@ mod error;
  mod events;
  mod filters;
  mod node;
@@ -198,7 +383,7 @@
  mod rect;
  #[cfg(feature = "simplified-api")]
  pub mod simplified;
-@@ -25,7 +27,10 @@
+@@ -25,7 +27,10 @@ pub use atspi_common::{
  pub use action::*;
  pub use adapter::{Adapter, next_adapter_id};
  pub use callback::AdapterCallback;
@@ -210,9 +395,11 @@
  pub use error::*;
  pub use events::*;
  pub use node::{CacheNode, NodeIdOrRoot, PlatformNode, PlatformRoot};
+diff --git a/src/node.rs b/src/node.rs
+index ce197b1..bcc0237 100644
 --- a/src/node.rs
 +++ b/src/node.rs
-@@ -312,13 +312,26 @@
+@@ -312,13 +312,26 @@ impl NodeWrapper<'_> {
          if state.is_text_input() && !state.is_read_only() {
              atspi_state.insert(State::Editable);
          }
@@ -240,7 +427,7 @@
          }
          if state.is_required() {
              atspi_state.insert(State::Required);
-@@ -372,7 +385,8 @@
+@@ -372,7 +385,8 @@ impl NodeWrapper<'_> {
  
          if state.is_read_only_supported() && state.is_read_only_or_disabled() {
              atspi_state.insert(State::ReadOnly);
@@ -250,7 +437,7 @@
              atspi_state.insert(State::Enabled | State::Sensitive);
          }
  
-@@ -431,7 +445,7 @@
+@@ -431,7 +445,7 @@ impl NodeWrapper<'_> {
      }
  
      fn supports_action(&self) -> bool {
@@ -259,30 +446,30 @@
      }
  
      fn supports_component(&self) -> bool {
-@@ -448,6 +462,12 @@
- 
-     fn supports_text(&self) -> bool {
+@@ -450,6 +464,12 @@ impl NodeWrapper<'_> {
          self.0.supports_text_ranges()
-+    }
-+
+     }
+ 
 +    fn supports_editable_text(&self) -> bool {
 +        // Read-only text still permits CopyText. Each mutation checks current
 +        // capabilities and enabled/read-only state independently.
 +        self.supports_text() && self.0.is_text_input()
-     }
- 
++    }
++
      fn supports_value(&self) -> bool {
-@@ -470,6 +490,9 @@
-         }
+         self.current_value().is_some()
+     }
+@@ -471,6 +491,9 @@ impl NodeWrapper<'_> {
          if self.supports_text() {
              interfaces.insert(Interface::Text);
-+        }
+         }
 +        if self.supports_editable_text() {
 +            interfaces.insert(Interface::EditableText);
-         }
++        }
          if self.supports_value() {
              interfaces.insert(Interface::Value);
-@@ -487,18 +510,55 @@
+         }
+@@ -487,18 +510,55 @@ impl NodeWrapper<'_> {
      }
  
      fn n_actions(&self) -> i32 {
@@ -293,12 +480,6 @@
      fn get_action_name(&self, index: i32) -> String {
 -        if index != 0 {
 -            return String::new();
--        }
--        String::from(if self.0.is_clickable(&filter) {
--            "click"
--        } else {
--            ""
--        })
 +        self.native_action(index)
 +            .map_or("", |action| match action {
 +                Action::Click => "click",
@@ -315,7 +496,12 @@
 +            || filter(self.0) != FilterResult::Include
 +        {
 +            return false;
-+        }
+         }
+-        String::from(if self.0.is_clickable(&filter) {
+-            "click"
+-        } else {
+-            ""
+-        })
 +        let mut ancestor = self.0.parent();
 +        while let Some(node) = ancestor {
 +            if node.is_disabled()
@@ -347,7 +533,7 @@
      }
  
      fn raw_bounds_and_transform(&self) -> (Option<Rect>, Affine) {
-@@ -759,7 +819,7 @@
+@@ -759,7 +819,7 @@ impl PlatformNode {
          self.resolve_for_text_with_context(|node, _, _| f(node))
      }
  
@@ -356,7 +542,7 @@
      where
          F: FnOnce(&TreeState, &Context, LocalNodeId, TreeId) -> ActionRequest,
      {
-@@ -767,9 +827,18 @@
+@@ -767,9 +827,18 @@ impl PlatformNode {
          let tree = context.read_tree();
          if let Some((target_node, target_tree)) = tree.state().locate_node(target) {
              let request = f(tree.state(), &context, target_node, target_tree);
@@ -376,7 +562,31 @@
          } else {
              Err(Error::Defunct)
          }
-@@ -1032,16 +1101,25 @@
+@@ -870,9 +939,8 @@ impl PlatformNode {
+ 
+     pub fn index_in_parent(&self) -> Result<i32> {
+         self.resolve_with_context(|node, _tree, context| {
+-            if node.filtered_parent(&filter).is_some() {
+-                i32::try_from(node.preceding_filtered_siblings(&filter).count())
+-                    .map_err(|_| Error::IndexOutOfRange)
++            if let Some(parent) = node.filtered_parent(&filter) {
++                context.filtered_child_index(parent, node.id())
+             } else {
+                 let index = context
+                     .read_app_context()
+@@ -885,9 +953,8 @@ impl PlatformNode {
+ 
+     pub fn cache_node(&self) -> Result<CacheNode> {
+         self.resolve_with_context(|node, tree, context| {
+-            let index_in_parent = if node.filtered_parent(&filter).is_some() {
+-                i32::try_from(node.preceding_filtered_siblings(&filter).count())
+-                    .map_err(|_| Error::IndexOutOfRange)?
++            let index_in_parent = if let Some(parent) = node.filtered_parent(&filter) {
++                context.filtered_child_index(parent, node.id())?
+             } else {
+                 let index = context
+                     .read_app_context()
+@@ -1032,16 +1099,25 @@ impl PlatformNode {
      }
  
      pub fn do_action(&self, index: i32) -> Result<bool> {
@@ -412,7 +622,7 @@
      }
  
      pub fn contains(&self, x: i32, y: i32, coord_type: CoordType) -> Result<bool> {
-@@ -1101,8 +1179,7 @@
+@@ -1101,8 +1177,7 @@ impl PlatformNode {
              target_tree,
              target_node,
              data: None,
@@ -422,7 +632,7 @@
      }
  
      pub fn scroll_to(&self, scroll_type: ScrollType) -> Result<bool> {
-@@ -1111,12 +1188,16 @@
+@@ -1111,12 +1186,16 @@ impl PlatformNode {
              target_tree,
              target_node,
              data: atspi_scroll_type_to_scroll_hint(scroll_type).map(ActionData::ScrollHint),
@@ -441,7 +651,7 @@
              let window_bounds = context.read_root_window_bounds();
              let point = window_bounds.atspi_point_to_accesskit_point(
                  Point::new(x.into(), y.into()),
-@@ -1131,9 +1212,8 @@
+@@ -1131,9 +1210,8 @@ impl PlatformNode {
                  target_node,
                  data: Some(ActionData::ScrollToPoint(point)),
              });
@@ -453,7 +663,7 @@
      }
  
      pub fn n_anchors(&self) -> Result<i32> {
-@@ -1201,9 +1281,15 @@
+@@ -1201,9 +1279,15 @@ impl PlatformNode {
      pub fn select_child(&self, child_index: usize) -> Result<bool> {
          self.resolve_for_selection_with_context(|node, tree, context| {
              if let Some(child) = node.filtered_children(filter).nth(child_index) {
@@ -470,7 +680,7 @@
                      let (target_node, target_tree) =
                          tree.state().locate_node(child.id()).ok_or(Error::Defunct)?;
                      context.do_action(ActionRequest {
-@@ -1229,7 +1315,7 @@
+@@ -1229,7 +1313,7 @@ impl PlatformNode {
                  .filter(|c| c.is_selected() == Some(true))
                  .nth(selected_child_index)
              {
@@ -479,7 +689,7 @@
                      let (target_node, target_tree) =
                          tree.state().locate_node(child.id()).ok_or(Error::Defunct)?;
                      context.do_action(ActionRequest {
-@@ -1272,7 +1358,10 @@
+@@ -1272,7 +1356,10 @@ impl PlatformNode {
              if let Some(child) = node.filtered_children(filter).nth(child_index) {
                  if let Some(false) = child.is_selected() {
                      Ok(true)
@@ -491,7 +701,7 @@
                      let (target_node, target_tree) =
                          tree.state().locate_node(child.id()).ok_or(Error::Defunct)?;
                      context.do_action(ActionRequest {
-@@ -1337,15 +1426,49 @@
+@@ -1337,15 +1424,49 @@ impl PlatformNode {
  
      pub fn text(&self, start_offset: i32, end_offset: i32) -> Result<String> {
          self.resolve_for_text(|node| {
@@ -544,12 +754,10 @@
              let (target_node, target_tree) =
                  tree.state().locate_node(node.id()).ok_or(Error::Defunct)?;
              context.do_action(ActionRequest {
-@@ -1358,6 +1481,98 @@
-             });
-             Ok(true)
+@@ -1360,6 +1481,98 @@ impl PlatformNode {
          })
-+    }
-+
+     }
+ 
 +    pub fn set_text_contents(&self, text: &str) -> Result<bool> {
 +        if text.len() > 16 * 1024 * 1024 {
 +            return Ok(false);
@@ -640,10 +848,12 @@
 +
 +    pub fn paste_text(&self, position: i32) -> Result<bool> {
 +        self.edit_text(position, position, crate::TextEditOperation::Paste)
-     }
- 
++    }
++
      pub fn text_attribute_value(&self, offset: i32, attribute_name: &str) -> Result<String> {
-@@ -1467,6 +1682,11 @@
+         self.resolve_for_text(|node| {
+             let pos = text_position_from_offset(&node, offset).ok_or(Error::IndexOutOfRange)?;
+@@ -1467,6 +1680,11 @@ impl PlatformNode {
          }
  
          self.resolve_for_text_with_context(|node, tree, context| {
@@ -655,7 +865,7 @@
              // Simply collapse the selection to the position of the caret if a caret is
              // visible, otherwise set the selection to 0.
              let selection_end = node
-@@ -1497,8 +1717,18 @@
+@@ -1497,8 +1715,18 @@ impl PlatformNode {
          }
  
          self.resolve_for_text_with_context(|node, tree, context| {
@@ -674,7 +884,7 @@
              let (target_node, target_tree) =
                  tree.state().locate_node(node.id()).ok_or(Error::Defunct)?;
              context.do_action(ActionRequest {
-@@ -1578,6 +1808,11 @@
+@@ -1578,6 +1806,11 @@ impl PlatformNode {
          scroll_type: ScrollType,
      ) -> Result<bool> {
          self.resolve_for_text_with_context(|node, tree, context| {
@@ -686,7 +896,7 @@
              if let Some(range) = text_range_from_offsets(&node, start_offset, end_offset) {
                  let position = if matches!(
                      scroll_type,
-@@ -1613,6 +1848,11 @@
+@@ -1613,6 +1846,11 @@ impl PlatformNode {
          y: i32,
      ) -> Result<bool> {
          self.resolve_for_text_with_context(|node, tree, context| {
@@ -698,20 +908,23 @@
              let window_bounds = context.read_root_window_bounds();
              let target_point = window_bounds.atspi_point_to_accesskit_point(
                  Point::new(x.into(), y.into()),
-@@ -1661,6 +1901,13 @@
-             target_tree,
+@@ -1662,6 +1900,13 @@ impl PlatformNode {
              target_node,
              data: Some(ActionData::NumericValue(value)),
-+        })
+         })
 +        .and_then(|accepted| {
 +            if accepted {
 +                Ok(())
 +            } else {
 +                Err(Error::UnsupportedOperation)
 +            }
-         })
++        })
      }
  }
+ 
+diff --git a/src/protocol_tests.rs b/src/protocol_tests.rs
+new file mode 100644
+index 0000000..ddb0735
 --- /dev/null
 +++ b/src/protocol_tests.rs
 @@ -0,0 +1,291 @@

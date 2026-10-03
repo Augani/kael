@@ -39,7 +39,7 @@ path = "src/lib.rs"
 
 [dependencies]
 # Core framework
-kael = { path = "../kael", version = "0.4.0", default-features = false, features = ["icons"] }
+kael = { path = "../kael", version = "0.4.1", default-features = false, features = ["icons"] }
 kael_engines = { path = "../kael_engines", version = "0.4.0" }
 smallvec.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -135,7 +135,7 @@ features = ["browser"]
 optional = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kael = { path = "../kael", version = "0.4.0", features = ["runtime_shaders", "test-support"] }
+kael = { path = "../kael", version = "0.4.1", features = ["runtime_shaders", "test-support"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 objc2 = "0.5.2"

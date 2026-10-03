@@ -129,3 +129,142 @@ replace the outstanding hosted presentation gate. Accepted Windows accessibility
 focus now requests host activation before assigning keyboard focus, and the
 external client reports foreground PID/owned-node focus when desktop discovery
 fails; the full Windows cross-target Clippy graph passes.
+
+## Indexed input and accessibility lifetime correction
+
+Editor UTF-16 conversions now use Ropey's indexed byte/character/code-unit
+operations, rather than repeatedly looking up every preceding character.
+Surrogate-interior editing offsets retain the original forward adjustment.
+String-oracle regressions cover every byte/code-unit offset, overflow-sized
+requests, combining marks, CRLF, supplementary scalars and document replacement.
+All 22 Editor tests pass. Native AppKit candidate queries now return the actual
+first contiguous logical fragment and its adjusted range, preserving complete
+clusters, first-line coverage and zero-width insertion points. The owned native
+protocol reproduces the old multiline failure, then passes with real marked
+text, a combining-mark request and an empty caret range. This follows
+[Apple's actual-range contract](https://developer.apple.com/documentation/appkit/nstextinputclient/firstrect(forcharacterrange:actualrange:)).
+The green protocol log is `.artifacts/kael-ime-actual-range-native-green.log`;
+its executable SHA-256 is
+`c10e9699189761ff5724b92e942810d1a5d17517f5cd48c26d028ddb80eb07ce`.
+Physical input-source candidate selection remains separate.
+
+A subsequent complete native Editor run passes on the current callback/input
+source, including clipboard restoration
+(`.artifacts/kael-painted-callback-native-editor-runtime.log`, executable
+SHA-256 `b7a51de8767ed05a8b678c8562d400c2fb8b1e52ebf19a7ca6aae840232b39c0`).
+
+The common AT-SPI provider caches filtered child indices per queried parent.
+Preparing every child's native cache entry previously counted preceding
+siblings again, making a wide parent quadratic. Reorder, removal, hidden-node,
+focus-only and host-focus changes invalidate the index and release its outgoing
+storage. Fourteen common-provider tests pass; the complete patch reconstructs
+all fifteen modified upstream files exactly. Native Linux clients explicitly
+call `Atspi.Text.get_text`, because GI otherwise resolves the no-argument
+Accessible method with the same name. A same-PID GTK application root can fail
+discovery without suppressing the separate AccessKit root.
+
+The actual Windows 2022 desktop check now passes global focused-element identity
+at `ecf874d`, but its next operation incorrectly requests Invoke on a stateful
+TreeItem. The client now exercises that node's actual SelectionItem pattern and
+calls Select. The unchanged full hierarchy/collapse/expand/focus gates and the
+new selection call still require a fresh Windows runtime run.
+
+An owned 100,025-node native tree run reproduces severe model retention:
+3,005.77 MiB peak RSS, with 2,537.97 MiB still resident near exit. A read-only
+live heap inspection finds twenty-five separate 51,527,680-byte allocations
+and millions of small live allocations; this is live storage, not merely
+allocator reservation. Mounted row callbacks were retained whenever their
+offscreen logical node survived, keeping entire outgoing models and semantic
+snapshots alive. Painted handlers now expire with their frame overlay and
+release captures when the current subtree handler already supplies the action.
+Explicit persistent handlers retain their prior lifecycle. The current logical
+subtree still handles offscreen actions. A weak-reference regression fails
+before the fix and passes after it; all eleven virtual-tree and 97 core
+accessibility tests pass.
+
+[The matched memory diagnostic](2026-10-03-tree-callback-memory-diagnostic.json)
+preserves three complete release runs per version on this M2 Pro. Median peak
+RSS falls from 3,352.06 to 1,136.86 MiB (66.1%); median idle-after RSS falls from
+2,772.31 to 1,107.39 MiB. The maintained collector validates all four full
+phases and the same complete logical accessibility contract. Both versions use
+frame instrumentation. Median active CPU is 71.46% before and 69.35% after;
+no general CPU improvement is claimed. The desktop remains shared and active,
+so these are process-memory diagnostics rather than a controlled overall
+ranking. Raw captures remain in `.artifacts/tree-callback-memory-matched/`.
+
+## Latest hosted results and comparison repair
+
+The `ecf874d` [platform run](https://github.com/Augani/kael/actions/runs/37137770933)
+passes the complete Chromium/Firefox/WebKit job, native macOS outline/text
+protocols, Linux Blade/GTK4 GPU pressure and retained-scene tests, Wayland/XWayland
+WebViews, and Windows 2022 Direct3D/WebView proofs. Linux workspace Clippy,
+tests, both Unix runtime configurations, format and docs pass. Dependency audit
+finds [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285.html)
+and a yanked ChaCha20 release. The root lockfile now uses patched Rustls
+0.23.45, WebPKI 0.103.15 and ChaCha20 0.10.2; the unchanged strict audit script
+passes locally. No advisory or yank exclusion was added. The isolated benchmark
+lockfile already contains the patched Rustls/ChaCha20 versions.
+
+Hosted Metal submission and the model-only idle wake pass, but the virtual Mac
+still supplies no drawable-presentation callback within two seconds. The
+recorded window is visible and later active. The actual local M2 Pro supplies
+sixty GPU-completed/presented frames. The hosted presentation requirement remains
+open; neither CPU submission nor a virtual host is treated as display proof.
+
+The [latest performance run](https://github.com/Augani/kael/actions/runs/37134841337)
+preserves eighty completed native navigation/editor/data/tree runs: five
+repetitions per engine, contract and instrumentation mode. Docking aborts on
+the first competitor idle oracle after one completed Kael docking run. Its
+fixed 550 px first pane incorrectly assumes an unconstrained 1,100 px native
+window. An actual compact native competitor run reproduces a 0.625 ratio where
+the oracle expects 0.5. Initial and resized splits now use measured native
+container sizes. Both engines pass normal and 880×640 compact native fixtures
+with the same geometry, pane-identity, Unicode-content and persistence checks.
+The workflow runs the compact regression before collecting full runs; quick
+fixtures remain rejected as performance evidence.
+
+[The retained diagnostic summary](2026-10-03-hosted-comparison-diagnostic.json)
+records the eighty completed runs, executable/archive hashes and limitations.
+In uninstrumented runs, median active Editor CPU is 35.76% for Kael versus
+9.17% for GPUI Kit. The tree is 69.29% versus 15.99%, with 1,641.28 MiB versus
+603.50 MiB median active RSS. These identify work to investigate; they predate
+the input/callback fixes, and full versus mounted-only tree semantics differ.
+Actual constrained viewport equality, comparative GPU completion/presentation,
+physical power and controlled thermal/display conditions are not established.
+
+An owned native System Trace capture of the local navigation fixture completes
+all phases with nominal recorded thermal state. Its executable SHA-256 is
+`29b9a1ce72f7012e4eacca01cbad73a3f7938ff99bb4d04b35911c6303492b4f`;
+the trace, thermal table and native workload log remain under
+`.artifacts/kael-system-trace-probe*`. This establishes capture availability,
+not a comparative power measurement. The installed Power Profiler rejects
+macOS recording, and ordinary-user `powermetrics` exits because it requires
+superuser privileges. No privilege change or physical-power claim is inferred.
+
+## Current archive and source verification
+
+All 448 UI library tests, 97 core accessibility tests, fourteen common AT-SPI
+tests and six tests in each Unix runtime configuration pass. Strict native
+all-target Clippy and both benchmark engine graphs pass, as do fifteen collector
+regressions, format, workflow lint and the docs build. All four adapter patches
+reconstruct their upstream changes exactly.
+
+The first current archive preflight exposes Cargo reusing an older cached
+local-registry core archive at version 0.4.1. The extracted new core contains
+the new input/geometry APIs, while the reused cached source lacks them. Release
+verification now gives both Cargo output directories fresh staging and retains
+the upstream download cache. The UI also requires core 0.4.1. All 38 archives
+then compile and pass the size/content checks
+(`.artifacts/kael-isolated-package-registry-preflight.log`). Verified archives
+are copied to the normal output directory only after the complete set succeeds;
+no crate is uploaded. Native CI retains dependency caches when a later runtime
+protocol fails, allowing subsequent corrected-source runs to reuse compiled
+dependencies without weakening those runtime gates.
+
+An owned native Time Profiler capture of the corrected tree binary completes
+the full workload. Accessibility snapshot construction and hashing dominate
+its sampled stacks, including repeated map growth. The trace and parsed summary
+remain at `.artifacts/kael-tree-current-time-profiler.trace` and
+`.artifacts/kael-tree-current-time-profiler-summary.json`. Compilation was active
+elsewhere during capture, and inclusive stack weights overlap; these samples
+identify the next implementation target rather than establish a CPU ranking.

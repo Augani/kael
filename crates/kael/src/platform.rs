@@ -2052,9 +2052,24 @@ impl PlatformInputHandler {
             .ok();
     }
 
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     fn bounds_for_range(&mut self, range_utf16: Range<usize>) -> Option<Bounds<Pixels>> {
         self.cx
             .update(|window, cx| self.handler.bounds_for_range(range_utf16, window, cx))
+            .ok()
+            .flatten()
+    }
+
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn bounds_for_range_with_actual_range(
+        &mut self,
+        range_utf16: Range<usize>,
+    ) -> Option<(Bounds<Pixels>, Range<usize>)> {
+        self.cx
+            .update(|window, cx| {
+                self.handler
+                    .bounds_for_range_with_actual_range(range_utf16, window, cx)
+            })
             .ok()
             .flatten()
     }
@@ -2177,6 +2192,28 @@ pub trait InputHandler: 'static {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<Bounds<Pixels>>;
+
+    /// Get the first logical rectangle and the UTF-16 range it actually covers.
+    /// Multiline or disjoint bidi ranges may cover only the first fragment;
+    /// native grapheme or ligature geometry may expand its character boundaries.
+    /// An insertion point has an empty range and a zero-width rectangle.
+    ///
+    /// Existing handlers keep their requested range by default. Override this
+    /// when [`Self::bounds_for_range`] returns an adjusted fragment.
+    fn bounds_for_range_with_actual_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<(Bounds<Pixels>, Range<usize>)> {
+        self.bounds_for_range(range_utf16.clone(), window, cx)
+            .map(|mut bounds| {
+                if range_utf16.is_empty() {
+                    bounds.size.width = crate::px(0.0);
+                }
+                (bounds, range_utf16)
+            })
+    }
 
     /// Get the character offset for the given point in terms of UTF16 characters
     ///

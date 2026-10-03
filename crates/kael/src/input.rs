@@ -63,6 +63,23 @@ pub trait EntityInputHandler: 'static + Sized {
         cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>>;
 
+    /// See [`InputHandler::bounds_for_range_with_actual_range`] for details.
+    fn bounds_for_range_with_actual_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        element_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(Bounds<Pixels>, Range<usize>)> {
+        self.bounds_for_range(range_utf16.clone(), element_bounds, window, cx)
+            .map(|mut bounds| {
+                if range_utf16.is_empty() {
+                    bounds.size.width = crate::px(0.0);
+                }
+                (bounds, range_utf16)
+            })
+    }
+
     /// See [`InputHandler::character_index_for_point`] for details
     fn character_index_for_point(
         &mut self,
@@ -175,6 +192,17 @@ impl<V: EntityInputHandler> InputHandler for ElementInputHandler<V> {
     ) -> Option<usize> {
         self.view.update(cx, |view, cx| {
             view.character_index_for_point(point, window, cx)
+        })
+    }
+
+    fn bounds_for_range_with_actual_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<(Bounds<Pixels>, Range<usize>)> {
+        self.view.update(cx, |view, cx| {
+            view.bounds_for_range_with_actual_range(range_utf16, self.element_bounds, window, cx)
         })
     }
 }
