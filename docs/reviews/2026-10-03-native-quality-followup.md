@@ -396,3 +396,58 @@ its single native action. GTK Editor discovery remains unresolved; bounded
 owned-node diagnostics and opt-in semantic publication counts will distinguish
 an absent native hierarchy from stale client discovery. Fresh runtime CI is
 required for both changes. No proposed client correction counts as a pass.
+
+## Awake physical Metal acceptance at `01e1cad`
+
+After the physical display wakes, the complete native renderer script passes:
+7 fragment/compute tests, 6 graph tests and 46 additional resource/atlas/lifetime
+checks, exact initial 720×460 client size, model-only idle wake and 59 actual
+GPU-completed/displayed frames with ordered timestamps. Fresh framebuffer
+pixels show complete text and retained scenes. The preserved evidence is
+`.artifacts/native-size-awake-proof/`, including full logs, GPU test records,
+framebuffer pixels, source checkpoint and binary/log hashes. This physical
+acceptance does not establish comparative latency or controlled power.
+
+The hosted `f81adaf` macOS trace distinguishes a different failure: native
+occlusion includes the Visible bit, the display link runs and model-only idle
+wake reaches submission, but every drawable callback reports presentation time
+zero. The physical display's successful timestamps do not substitute for that
+hosted gate. The cause of the hosted missing display timestamps remains open.
+
+Fresh isolated package verification at `01e1cad` passes all 38 archives after
+the multiline provider, client-size and collector changes. All four maintained
+adapter patches reconstruct exactly from verified upstream source hashes.
+No crate is uploaded.
+
+## Native viewport/activity checks and Editor CPU target
+
+At `01e1cad`, [schema-3 native captures](2026-10-03-native-viewport-activity-validation.json)
+pass all original oracles for navigation, Editor, data and docking in both
+engines. All eight runs have stable, equal 1100×760 client viewports at scale 2
+and active/churn repaint/draw/submission activity. These single repetitions on
+a shared desktop validate the new gates; they establish no performance ranking.
+Kael's full tree capture also passes. GPUI's tree aborts during churn because
+target 100024 remains absent from its mounted rows after fresh validation
+painting. That entire pair is excluded and the original failure is preserved;
+extra failure-only scroll-state diagnostics do not relax the oracle.
+
+Current Windows 2022 native UIA text and outline checks both pass, including
+full Unicode multiline values and read-only/disabled guards. Linux X11 and
+GTK4 both pass complete outline idle focus/disclosure/selection; X11 also
+passes the full Unicode Editor protocol. GTK Editor still publishes only two
+semantic nodes and exposes an empty container. Bounded fixture render/viewport
+traces and a manual focused Linux accessibility mode will investigate this
+failure while pull requests retain the complete mandatory platform matrix.
+
+An owned native Editor Time Profiler captures 17,345 CPU samples; 41 have no
+backtrace. Accessibility document construction appears in 13,981 ms (about 81%)
+of inclusive sampled CPU weight, primarily on workers. Grapheme iteration and
+bidi classification dominate its leaf stacks. Startup, validation and cleanup
+are included, inclusive weights overlap and this is not a comparison or a
+phase-calibrated CPU total. Raw trace, workload, exports and summary remain in
+`.artifacts/kael-editor-schema3-time-profiler*` with the binary hash recorded.
+An ASCII word-segmentation path now preserves the existing Unicode policy,
+including CRLF graphemes and vertical-tab whitespace. Independent Unicode
+reference checks cover every ASCII byte pair and longer generated sequences;
+all 100 core accessibility tests and strict native Clippy pass. Full paired
+before/after Editor runs are pending before claiming a performance improvement.

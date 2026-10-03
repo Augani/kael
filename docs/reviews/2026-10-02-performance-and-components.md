@@ -21,14 +21,15 @@ pixels. Five maintained benchmark contracts now cover the application-shaped
 surfaces. Historical comparisons remain qualified until corrected-source runs
 and the remaining platform runtime gates pass.
 
-The corrected-source hosted checkpoint now preserves eighty completed
-navigation/editor/data/tree runs in both instrumentation modes. Its
-[diagnostic summary](2026-10-03-hosted-comparison-diagnostic.json) identifies
-Editor CPU and tree memory costs; actual constrained viewport equality and
-comparative presentation/power remain unverified. A docking harness geometry
-defect is reproduced and corrected on real compact windows. The continuation
-also replaces prefix-scanned UTF-16 conversion and fixes painted accessibility
-callbacks that retained outgoing tree models. Current measurements and native
+The latest hosted checkpoint preserves all one hundred full navigation,
+Editor, data, tree and workspace runs in both instrumentation modes. Its
+[diagnostic summary](2026-10-03-hosted-100-run-diagnostic.json) revalidates each
+original workload oracle and retains raw hashes and environment metadata.
+These schema-2 captures lack actual constrained viewport and comparative
+presentation/power proof. Schema 3 adds equal actual client geometry and
+active/churn frame requirements. The continuation also replaces prefix-scanned
+UTF-16 conversion, releases outgoing tree models held by painted callbacks and
+reserves accessibility snapshot storage. Current measurements and native
 platform acceptance stay in the October 3 follow-up and completion ledger.
 
 ## Component coverage and gaps

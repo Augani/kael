@@ -501,6 +501,20 @@ impl Workload {
                 state.scroll_handle().to_text(),
             );
         }
+        #[cfg(feature = "gpui-kit-engine")]
+        if !mounted.contains(&target) {
+            let state = self.control.read(cx);
+            let scroll = state.scroll_handle().0.borrow();
+            eprintln!(
+                "GPUI_TREE_REVEAL_DIAGNOSTIC: pending_item={:?} scroll={:?} item_size={:?}",
+                scroll
+                    .deferred_scroll_to_item
+                    .as_ref()
+                    .map(|request| request.item_index),
+                scroll.base_handle.offset(),
+                scroll.last_item_size,
+            );
+        }
         assert!(
             mounted.contains(&target),
             "native reveal target physically rendered: phase={} sequence={} target={} mounted={mounted:?}",

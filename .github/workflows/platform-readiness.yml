@@ -7,6 +7,14 @@ on:
       - main
       - master
   workflow_dispatch:
+    inputs:
+      scope:
+        description: Validation scope (pull requests always run the complete matrix)
+        type: choice
+        default: full
+        options:
+          - full
+          - linux-accessibility
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -73,7 +81,7 @@ jobs:
   verify:
     name: Quality / Native (${{ matrix.label }})
     needs: changes
-    if: needs.changes.outputs.code_changed == 'true'
+    if: needs.changes.outputs.code_changed == 'true' && (github.event_name != 'workflow_dispatch' || inputs.scope != 'linux-accessibility')
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -262,7 +270,7 @@ jobs:
   linux-runtime:
     name: Linux Renderer / WebView Runtime
     needs: changes
-    if: needs.changes.outputs.code_changed == 'true'
+    if: needs.changes.outputs.code_changed == 'true' && (github.event_name != 'workflow_dispatch' || inputs.scope != 'linux-accessibility')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -371,10 +379,62 @@ jobs:
             ${{ runner.temp }}/kael-webview-xwayland/*.log
           if-no-files-found: warn
 
+  linux-accessibility:
+    name: Focused Linux / GTK4 native accessibility
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' && inputs.scope == 'linux-accessibility'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      KAEL_NATIVE_RENDERER_USE_SOFTWARE: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install owned virtual-desktop and native protocol dependencies
+        shell: bash
+        run: |
+          bash scripts/ci/install-linux-deps.sh
+          sudo apt-get install --yes --no-install-recommends \
+            at-spi2-core dbus-x11 python3-gi gir1.2-atspi-2.0 mesa-vulkan-drivers \
+            xvfb xdotool xclip x11-utils
+
+      - name: Install matched toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-24
+        with:
+          toolchain: 1.97.1
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+          shared-key: linux-accessibility
+
+      - name: Verify native X11 outline actions
+        run: bash scripts/ci/verify-linux-native-accessibility.sh
+
+      - name: Verify native X11 Unicode editor
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/verify-linux-native-accessibility.sh --text
+
+      - name: Verify native GTK4 outline actions
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/verify-linux-native-accessibility.sh --gtk4
+
+      - name: Verify native GTK4 Unicode editor
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/verify-linux-native-accessibility.sh --gtk4 --text
+
+      - name: Preserve every native protocol result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: focused-linux-accessibility-evidence
+          path: target/native-accessibility-smoke
+          if-no-files-found: error
+
   browser:
     name: WebAssembly / WebGL2 Browser
     needs: changes
-    if: needs.changes.outputs.code_changed == 'true'
+    if: needs.changes.outputs.code_changed == 'true' && (github.event_name != 'workflow_dispatch' || inputs.scope != 'linux-accessibility')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -538,7 +598,7 @@ jobs:
   windows-runtime-and-msi:
     name: Windows Native / WebView / MSI (${{ matrix.os }})
     needs: changes
-    if: needs.changes.outputs.code_changed == 'true'
+    if: needs.changes.outputs.code_changed == 'true' && (github.event_name != 'workflow_dispatch' || inputs.scope != 'linux-accessibility')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 100
     strategy:
@@ -653,7 +713,7 @@ jobs:
 
   readiness:
     name: Platform readiness
-    if: always()
+    if: always() && (github.event_name != 'workflow_dispatch' || inputs.scope != 'linux-accessibility')
     needs:
       - changes
       - verify

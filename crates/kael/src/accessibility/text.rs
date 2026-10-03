@@ -356,6 +356,45 @@ impl AccessibilityTextDocument {
     // The editor's word policy: alphanumeric/underscore graphemes form words,
     // punctuation is one grapheme, trailing whitespace belongs to its word.
     fn word_starts(value: &str) -> Vec<usize> {
+        if value.is_ascii() {
+            return Self::ascii_word_starts(value.as_bytes());
+        }
+        Self::unicode_word_starts(value)
+    }
+
+    fn ascii_word_starts(bytes: &[u8]) -> Vec<usize> {
+        let mut result = Vec::new();
+        let mut offset = 0;
+        while offset < bytes.len() {
+            result.push(offset);
+            let first = bytes[offset];
+            // CRLF is the only multi-byte grapheme in an ASCII string.
+            offset += if first == b'\r' && bytes.get(offset + 1) == Some(&b'\n') {
+                2
+            } else {
+                1
+            };
+            if first.is_ascii_alphanumeric() || first == b'_' {
+                while bytes
+                    .get(offset)
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+                {
+                    offset += 1;
+                }
+            }
+            // char::is_whitespace includes vertical tab; u8's ASCII predicate
+            // does not. Preserve the existing Unicode word policy exactly.
+            while bytes
+                .get(offset)
+                .is_some_and(|byte| matches!(*byte, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c))
+            {
+                offset += 1;
+            }
+        }
+        result
+    }
+
+    fn unicode_word_starts(value: &str) -> Vec<usize> {
         let mut result = Vec::new();
         let mut graphemes = value.grapheme_indices(true).peekable();
         while let Some((offset, text)) = graphemes.next() {
@@ -590,6 +629,53 @@ mod tests {
         AccessibilityAction, AccessibilityActionPayload, AccessibilityActionRequest,
         AccessibilityAttributes, AccessibilityRole, AccessibilityState, AccessibilityTree,
     };
+
+    #[test]
+    fn ascii_words_match_unicode_grapheme_policy_for_every_byte_pair() {
+        for first in 0..=127 {
+            for second in 0..=127 {
+                let bytes = [first, second];
+                let value = std::str::from_utf8(&bytes).unwrap();
+                assert_eq!(
+                    AccessibilityTextDocument::word_starts(value),
+                    AccessibilityTextDocument::unicode_word_starts(value),
+                    "ASCII bytes {bytes:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ascii_words_preserve_crlf_controls_and_long_mixed_sequences() {
+        let mut inputs = vec![
+            String::new(),
+            "a\r\nb\t_c\u{0b}\u{0c}! \r\n".to_string(),
+            "\r\n\r\n\u{0b}\u{0c}\t 0_a: punctuation...\n".to_string(),
+        ];
+        let mut seed = 0x4173_625b_u32;
+        for length in 0..512 {
+            let bytes = (0..length)
+                .map(|_| {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    (seed >> 24) as u8 & 0x7f
+                })
+                .collect();
+            inputs.push(String::from_utf8(bytes).unwrap());
+        }
+        for value in inputs {
+            assert_eq!(
+                AccessibilityTextDocument::word_starts(&value),
+                AccessibilityTextDocument::unicode_word_starts(&value),
+                "word policy for {value:?}"
+            );
+        }
+        for value in ["A🙂e\u{301}\r\n第二行\n", "אבג 123 café\t", "क्\u{200d}ष"] {
+            assert_eq!(
+                AccessibilityTextDocument::word_starts(value),
+                AccessibilityTextDocument::unicode_word_starts(value)
+            );
+        }
+    }
 
     #[test]
     fn unicode_directed_endpoints_roundtrip_and_reject_foreign_or_nonboundary_positions() {

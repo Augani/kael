@@ -25,6 +25,7 @@ struct TextFixture {
     original: bool,
     replacement: bool,
     disabled: bool,
+    remaining_window_probes: u8,
     complete: Arc<AtomicBool>,
     _observer: Subscription,
 }
@@ -53,6 +54,11 @@ impl TextFixture {
             original: true,
             replacement: false,
             disabled: false,
+            remaining_window_probes: if std::env::var_os("KAEL_NATIVE_TEXT_SMOKE").is_some() {
+                8
+            } else {
+                0
+            },
             complete,
             _observer: observer,
         };
@@ -102,7 +108,11 @@ impl TextFixture {
 }
 
 impl Render for TextFixture {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.remaining_window_probes > 0 {
+            self.remaining_window_probes -= 1;
+            eprintln!("NATIVE_TEXT_WINDOW_RENDER: {:?}", window.runtime_snapshot());
+        }
         let theme = cx.global::<Theme>().clone();
         div()
             .size_full()
