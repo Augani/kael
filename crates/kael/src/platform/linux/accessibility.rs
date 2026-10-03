@@ -219,7 +219,7 @@ impl AtSpiAccessibleRoot {
         if self.trace_updates {
             let focused = tree.focused_node();
             eprintln!(
-                "KAEL_ATSPI_TREE_UPDATE: root={:?} nodes={} host_focused={} focused={:?} active_descendant={:?}",
+                "KAEL_ATSPI_TREE_UPDATE: root={:?} nodes={} host_focused={} focused={:?} active_descendant={:?} descendant_states={:?} descendant_focusable={}",
                 tree.root,
                 tree.nodes.len(),
                 self.window_focused.get(),
@@ -227,6 +227,16 @@ impl AtSpiAccessibleRoot {
                 focused
                     .and_then(|id| tree.get(id))
                     .and_then(|node| node.active_descendant),
+                focused
+                    .and_then(|id| tree.get(id))
+                    .and_then(|node| node.active_descendant)
+                    .and_then(|id| tree.get(id))
+                    .map(|node| node.states),
+                focused
+                    .and_then(|id| tree.get(id))
+                    .and_then(|node| node.active_descendant)
+                    .and_then(|id| tree.get(id))
+                    .is_some_and(|node| node.actions.contains(&crate::AccessibilityAction::Focus)),
             );
         }
         let previous = if let Ok(mut guard) = self.latest.lock() {

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """External AT-SPI client for an owned Kael virtual-tree test process."""
 import argparse
+import os
 from pathlib import Path
 import time
 import gi
 
 gi.require_version('Atspi', '2.0')
-from gi.repository import Atspi, GLib
+from gi.repository import Atspi, Gio, GLib
 
 
 def wait(read, seconds=30):
@@ -47,6 +48,32 @@ def native_identity(node):
             isinstance(identity[1], str) and identity[1].startswith('/'),
             f'invalid native object identity: {identity!r}')
     return identity
+
+
+def trace_native_state(node):
+    """Compare the retained libatspi proxy with one fresh native wire read."""
+    bus, path = native_identity(node)
+    connection = Gio.DBusConnection.new_for_address_sync(
+        os.environ['AT_SPI_BUS_ADDRESS'],
+        Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT |
+        Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None)
+    try:
+        words, = connection.call_sync(
+            bus, path, 'org.a11y.atspi.Accessible', 'GetState', None,
+            GLib.VariantType.new('(au)'), Gio.DBusCallFlags.NONE, 3000, None).unpack()
+        def present(state):
+            ordinal = int(state)
+            return bool(words[ordinal // 32] & (1 << (ordinal % 32)))
+        node.clear_cache()
+        cached = node.get_state_set()
+        print('NATIVE_ATSPI_STATE_DIAGNOSTIC: '
+              f'identity={(bus, path)!r} wire_words={words!r} '
+              f'wire_focused={present(Atspi.StateType.FOCUSED)} '
+              f'wire_focusable={present(Atspi.StateType.FOCUSABLE)} '
+              f'wire_selected={present(Atspi.StateType.SELECTED)} '
+              f'cached_defunct={cached.contains(Atspi.StateType.DEFUNCT)}', flush=True)
+    finally:
+        connection.close_sync(None)
 
 
 def find_tree(app):
@@ -170,7 +197,14 @@ def main():
                     'native active descendant did not receive focus: '
                     f'focusable={states.contains(Atspi.StateType.FOCUSABLE)} '
                     f'selected={states.contains(Atspi.StateType.SELECTED)}')
-        wait(selected)
+        try:
+            wait(selected)
+        except Exception:
+            try:
+                trace_native_state(last)
+            except Exception as error:
+                print(f'NATIVE_ATSPI_STATE_DIAGNOSTIC_ERROR: {error}', flush=True)
+            raise
         print(f'NATIVE_ACCESSIBILITY_RUNTIME_OK: backend=atspi rows={total} '
               'projects=25 children=4000 last=100024 idle_select=true native_focus=true '
               'native_disclosure=true stable_identity=true')
