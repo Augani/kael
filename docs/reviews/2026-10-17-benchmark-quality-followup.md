@@ -97,6 +97,42 @@ captures. Independent raw-result revalidation and contract-specific results
 are recorded below. The binaries predate the subsequent framework changes;
 this run verifies the sizing correction at its own checkpoint.
 
+The [independently revalidated hundred-run diagnostic](2026-10-17-hosted-desktop-comparison.json)
+checks the exact unmodified `b11ed50` collector, all original workload and
+activity gates, all 800 phase geometry boundaries and all 50 cross-engine pairs.
+Every actual viewport is 1100×645 at scale 1: the virtual runner constrains the
+requested height equally. All ten environments identify the same clean source,
+and all 2,864 eligible file hashes match the frozen Git blobs. The artifact
+preserves raw logs/reports and helper executables; application executable bytes
+were omitted by its frozen upload paths, so their 20 SHA identities are checked
+for collector-recorded consistency rather than independently rehashed.
+
+The following general-desktop medians use five captures per engine with optional
+frame timing disabled. Each cell gives **Kael / GPUI Kit**:
+
+| Contract | Active process CPU | Churn process CPU | Stable sampled peak RSS, MiB |
+| --- | ---: | ---: | ---: |
+| Navigation/detail | 14.52% / 13.71% | 10.51% / 10.54% | 92.45 / 78.86 |
+| Data table | 30.07% / 23.48% | 25.41% / 17.39% | 204.98 / 136.42 |
+| Virtual tree | 61.25% / 14.58% | 30.54% / 9.27% | 1,094.73 / 650.89 |
+| Docking workspace | 17.48% / 18.93% | 11.28% / 11.93% | 81.80 / 79.92 |
+
+At this checkpoint, tree and data CPU/RSS remain the clearest general-desktop
+profiling targets. Workspace active/churn CPU is lower for Kael in this mode,
+with slightly higher sampled RSS. Kael idle-after CPU is lower in all four
+contracts. The tree contract includes Kael's complete logical accessibility
+projection versus the competitor's mounted rows; this implementation difference
+stays visible rather than dropping semantics to equalize cost. The report also
+retains the existing document contract and all instrumented results, including
+CPU draw/submission tails. Modes remain separate; no pooled result is used.
+
+This is one three-core, 7 GiB Apple M1 virtual runner with an empty display
+inventory. Accepted foreground requests and active repaint checks establish
+neither monitor presentation nor visible smoothness. Stable sampled RSS excludes
+startup and oracle validation; whole-phase CPU is not normalized per operation.
+No comparative GPU/compositor completion or controlled power result is available.
+The later shared controls and native font cache are absent from these binaries.
+
 A fresh [focused Linux run at `92d0cd7`](https://github.com/Augani/kael/actions/runs/39057690389)
 passes both X11/GTK4 outline and full Unicode protocols, separate strict graphs,
 and both clipboard byte-bound tests on October 17. The earlier intermittent

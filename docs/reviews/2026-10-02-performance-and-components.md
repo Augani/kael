@@ -21,7 +21,7 @@ pixels. Five maintained benchmark contracts now cover the application-shaped
 surfaces. Historical comparisons remain qualified until corrected-source runs
 and the remaining platform runtime gates pass.
 
-The latest hosted checkpoint preserves all one hundred full navigation,
+The earlier October 3 hosted checkpoint preserves all one hundred full navigation,
 Editor, data, tree and workspace runs in both instrumentation modes. Its
 [diagnostic summary](2026-10-03-hosted-100-run-diagnostic.json) revalidates each
 original workload oracle and retains raw hashes and environment metadata.
