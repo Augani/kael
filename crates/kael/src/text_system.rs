@@ -489,7 +489,7 @@ impl WindowTextSystem {
             font_runs.clear();
             let line_end = line_start + line_text.len();
 
-            let mut last_font: Option<FontId> = None;
+            let mut last_font: Option<Font> = None;
             let mut decoration_runs = SmallVec::<[DecorationRun; 32]>::new();
             let mut run_start = line_start;
             while run_start < line_end {
@@ -519,13 +519,13 @@ impl WindowTextSystem {
                 };
 
                 if let Some(font_run) = font_runs.last_mut()
-                    && Some(font_run.font_id) == last_font
+                    && last_font.as_ref() == Some(&run.font)
                     && !decoration_changed
                 {
                     font_run.len += run_len_within_line;
                 } else {
                     let font_id = self.resolve_font(&run.font);
-                    last_font = Some(font_id);
+                    last_font = Some(run.font.clone());
                     font_runs.push(FontRun {
                         len: run_len_within_line,
                         font_id,
@@ -664,7 +664,7 @@ impl WindowTextSystem {
 
     fn populate_font_runs(&self, runs: &[TextRun], font_runs: &mut Vec<FontRun>) {
         let mut last_run = None::<&TextRun>;
-        let mut last_font: Option<FontId> = None;
+        let mut last_font: Option<Font> = None;
         font_runs.clear();
 
         for run in runs {
@@ -680,13 +680,13 @@ impl WindowTextSystem {
             };
 
             if let Some(font_run) = font_runs.last_mut()
-                && Some(font_run.font_id) == last_font
+                && last_font.as_ref() == Some(&run.font)
                 && !decoration_changed
             {
                 font_run.len += run.len;
             } else {
                 let font_id = self.resolve_font(&run.font);
-                last_font = Some(font_id);
+                last_font = Some(run.font.clone());
                 font_runs.push(FontRun {
                     len: run.len,
                     font_id,
@@ -904,6 +904,130 @@ impl Hash for RenderGlyphParams {
 mod tests {
     use super::*;
     use std::hash::{Hash, Hasher};
+
+    fn label_run(font: Font, len: usize) -> TextRun {
+        TextRun {
+            len,
+            font,
+            color: crate::black(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }
+    }
+
+    #[kael::test]
+    fn styled_label_font_runs_preserve_font_changes(cx: &mut crate::TestAppContext) {
+        let text_system = cx.update(|cx| cx.text_system().clone());
+        let regular = font("label-font");
+        let mut features = regular.clone();
+        features.features = FontFeatures(Arc::new(vec![("liga".into(), 0)]));
+        let fonts = [
+            regular.clone(),
+            regular.clone().bold(),
+            regular.clone().italic(),
+            font("another-label-font"),
+            features,
+        ];
+        // Isolate run construction from installed font availability. Each
+        // descriptor resolves through the ordinary font cache to a distinct ID.
+        for (index, descriptor) in fonts.iter().enumerate() {
+            text_system
+                .font_ids_by_font
+                .write()
+                .insert(descriptor.clone(), Ok(FontId(100 + index)));
+        }
+        let window_text = WindowTextSystem::new(text_system);
+        let runs = fonts
+            .iter()
+            .map(|descriptor| label_run(descriptor.clone(), 2))
+            .collect::<Vec<_>>();
+        let mut actual = Vec::new();
+        window_text.populate_font_runs(&runs, &mut actual);
+        assert_eq!(actual.len(), fonts.len());
+        for (index, run) in actual.iter().enumerate() {
+            assert_eq!(run.font_id, FontId(100 + index));
+            assert_eq!(run.len, 2);
+        }
+
+        // Equal fonts and decorations still coalesce, while a color boundary
+        // remains an explicit shaping boundary for ligature separation.
+        let mut recolored = label_run(regular.clone(), 3);
+        recolored.color = crate::white();
+        window_text.populate_font_runs(
+            &[
+                label_run(regular.clone(), 2),
+                label_run(regular, 4),
+                recolored,
+            ],
+            &mut actual,
+        );
+        assert_eq!(actual.len(), 2);
+        assert_eq!(actual[0].len, 6);
+        assert_eq!(actual[1].len, 3);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn styled_label_native_unwrapped_keeps_bold_runs() {
+        let text_system = Arc::new(TextSystem::new(Arc::new(
+            crate::platform::MacTextSystem::new(),
+        )));
+        let window_text = WindowTextSystem::new(text_system);
+        let regular = font(".SystemUIFont");
+        let bold = regular.clone().bold();
+        let regular_id = window_text.resolve_font(&regular);
+        let bold_id = window_text.resolve_font(&bold);
+        assert_ne!(regular_id, bold_id, "fixture must resolve distinct fonts");
+        let font_ids = |layout: &LineLayout| {
+            layout
+                .runs
+                .iter()
+                .map(|run| run.font_id)
+                .collect::<Vec<_>>()
+        };
+        let runs = [label_run(regular.clone(), 6), label_run(bold.clone(), 6)];
+        let unwrapped = window_text.layout_line("officeoffice", px(16.0), &runs, None);
+        assert_eq!(font_ids(&unwrapped), vec![regular_id, bold_id]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn styled_label_native_wrapped_keeps_bold_runs_across_newline() {
+        let window_text = WindowTextSystem::new(Arc::new(TextSystem::new(Arc::new(
+            crate::platform::MacTextSystem::new(),
+        ))));
+        let regular = font(".SystemUIFont");
+        let bold = regular.clone().bold();
+        let regular_id = window_text.resolve_font(&regular);
+        let bold_id = window_text.resolve_font(&bold);
+        assert_ne!(regular_id, bold_id, "fixture must resolve distinct fonts");
+        let font_ids = |layout: &LineLayout| {
+            layout
+                .runs
+                .iter()
+                .map(|run| run.font_id)
+                .collect::<Vec<_>>()
+        };
+
+        let multiline: SharedString = "officeoffice\nWWWW".into();
+        let wrapped = window_text
+            .shape_text(
+                multiline,
+                px(16.0),
+                &[label_run(regular, 6), label_run(bold, 11)],
+                Some(px(200.0)),
+                None,
+            )
+            .unwrap();
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(
+            font_ids(&wrapped[0].unwrapped_layout),
+            vec![regular_id, bold_id]
+        );
+        assert_eq!(font_ids(&wrapped[1].unwrapped_layout), vec![bold_id]);
+        assert_eq!(wrapped[0].decoration_runs.len(), 1);
+    }
 
     #[derive(Default)]
     struct RecordingHasher {
