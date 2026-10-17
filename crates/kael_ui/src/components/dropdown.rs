@@ -407,7 +407,7 @@ impl RenderOnce for Dropdown {
         let first_enabled = enabled_indices.first().copied();
         let highlighted_index = highlighted_index
             .filter(|index| enabled_indices.contains(index))
-            .or_else(|| if is_open { first_enabled } else { None });
+            .or(if is_open { first_enabled } else { None });
         let activate_highlighted = {
             let state = state.clone();
             let items = keyboard_items.clone();
