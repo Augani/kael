@@ -545,3 +545,17 @@ registry aliases, and records 6,022,866 compressed archive bytes. The ownership
 validation record links this separate receipt. Earlier verified archives are
 preserved before replacement. No package was uploaded; later tree and
 notification changes require their own validation.
+
+The [notification wire validation](2026-10-17-notification-wire-validation.json)
+records a separate Linux interoperability correction at `c01cb86`. Body clicks
+advertise the protocol's `default` key and map back to Kael's stable public
+identifier. Private keys preserve custom IDs including `default`, `__closed` and
+`__default`; only exact advertised keys dispatch. This follows the
+[freedesktop notification specification](https://specifications.freedesktop.org/notification/latest/basic-design.html).
+The exact production Zbus 5.18 backend passes 22 tests over an isolated private
+bus on macOS, with every registry dependency matched to the root lock. Linux
+all-target compilation and strict Clippy pass; native Linux desktop activation
+remains a distinct runtime requirement. A separate Zbus 6 feasibility port also
+passes its own wire tests, but no production dependency migration or advisory
+ignore is introduced. Existing one-thread-per-actionable-notification behavior
+and the six denied unmaintained dependency warnings remain.
