@@ -620,6 +620,8 @@ pub struct LruImageCache {
     max_pending_loads: usize,
     weak_self: WeakEntity<Self>,
     pressure_subscription: Option<Subscription>,
+    #[cfg(test)]
+    eviction_worklists_built: usize,
 }
 
 impl fmt::Debug for LruImageCache {
@@ -655,6 +657,8 @@ impl LruImageCache {
             max_pending_loads: limits.max_pending_loads,
             weak_self: cx.weak_entity(),
             pressure_subscription: None,
+            #[cfg(test)]
+            eviction_worklists_built: 0,
         });
         let weak = e.downgrade();
         let subscription = cx.on_memory_pressure(move |level, cx| {
@@ -785,10 +789,25 @@ impl LruImageCache {
     ) {
         // Shared tasks may have completed without another request for their
         // keys. Promote every ready result before evaluating decoded capacity.
+        let mut count = 0;
+        let mut bytes = 0_u128;
         for entry in self.items.values_mut() {
             if entry.item.is_loading() {
                 entry.item.get();
             }
+            if let ImageCacheItem::Loaded(result) = &entry.item {
+                count += 1;
+                bytes += u128::from(result.as_ref().map_or(0, |image| image.decoded_bytes()));
+            }
+        }
+        // Layout and paint both look up cached images. Ordinary hits should
+        // not allocate and sort a full eviction worklist while limits hold.
+        if count <= self.max_images && bytes <= u128::from(self.max_decoded_bytes) {
+            return;
+        }
+        #[cfg(test)]
+        {
+            self.eviction_worklists_built += 1;
         }
         let mut loaded: Vec<_> = self
             .items
@@ -806,8 +825,6 @@ impl LruImageCache {
             })
             .collect();
         loaded.sort_by_key(|(key, used, _)| (*used, *key));
-        let mut count = loaded.len();
-        let mut bytes: u128 = loaded.iter().map(|(_, _, bytes)| u128::from(*bytes)).sum();
         for (key, _, weight) in loaded {
             if count <= self.max_images && bytes <= u128::from(self.max_decoded_bytes) {
                 break;
@@ -1070,12 +1087,169 @@ mod tests {
         RetainAllImageCache, capacity_class, lru, retain_all, select_lru_victims,
     };
     use crate::{
-        Context, Entity, IntoElement, Render, RenderImage, RequestFrameOptions, Resource, Task,
-        TestAppContext, VisualContext, Window, div, hash,
+        Context, Entity, ImageCacheError, IntoElement, Render, RenderImage, RequestFrameOptions,
+        Resource, Task, TestAppContext, VisualContext, Window, div, hash,
     };
     use futures::FutureExt;
     use smallvec::SmallVec;
     use std::sync::Arc;
+
+    #[crate::test]
+    fn lru_repeated_hits_at_both_limits_build_no_eviction_worklists(cx: &mut TestAppContext) {
+        const IMAGES: usize = 64;
+        const ROUNDS: usize = 32;
+        let window = cx.add_empty_window();
+        let sources = (0..IMAGES)
+            .map(|index| Resource::Embedded(format!("cached-{index}").into()))
+            .collect::<Vec<_>>();
+        let images = (0..IMAGES).map(|_| test_image()).collect::<Vec<_>>();
+        window.update(|window, cx| {
+            let cache = LruImageCache::with_limits(
+                ImageCacheLimits {
+                    max_images: IMAGES + 1,
+                    max_decoded_bytes: (IMAGES * 4) as u64,
+                    max_pending_loads: 1,
+                },
+                cx,
+            );
+            cache.update(cx, |cache, cx| {
+                for (index, (source, image)) in sources.iter().zip(&images).enumerate() {
+                    cache.items.insert(
+                        hash(source),
+                        LruImageEntry {
+                            // A ready completion must be promoted before deciding
+                            // that the cache fits, even when no eviction is needed.
+                            item: if index == 0 {
+                                ImageCacheItem::Loading(Task::ready(Ok(image.clone())).shared())
+                            } else {
+                                ImageCacheItem::Loaded(Ok(image.clone()))
+                            },
+                            last_used: index as u64 + 1,
+                            observer: None,
+                            cancellation: None,
+                        },
+                    );
+                }
+                let error_key = hash(&Resource::Embedded("failed-image".into()));
+                cache.items.insert(
+                    error_key,
+                    LruImageEntry {
+                        item: ImageCacheItem::Loaded(Err(ImageCacheError::Other(Arc::new(
+                            anyhow::anyhow!("fixture image failed"),
+                        )))),
+                        last_used: 0,
+                        observer: None,
+                        cancellation: None,
+                    },
+                );
+                cache.tick = IMAGES as u64;
+                for _ in 0..ROUNDS {
+                    for (source, image) in sources.iter().zip(&images) {
+                        assert_eq!(
+                            cache.load(source, window, cx).unwrap().unwrap().id,
+                            image.id
+                        );
+                    }
+                }
+                assert_eq!(cache.len(), IMAGES + 1);
+                assert_eq!(cache.loaded_count(), IMAGES);
+                assert_eq!(cache.error_count(), 1);
+                assert_eq!(cache.loading_count(), 0);
+                assert_eq!(cache.decoded_bytes(), (IMAGES * 4) as u64);
+                assert_eq!(cache.eviction_worklists_built, 0);
+                eprintln!(
+                    "steady_image_cache: lookups={} completed={} eviction_worklists={}",
+                    IMAGES * ROUNDS,
+                    cache.len(),
+                    cache.eviction_worklists_built,
+                );
+
+                // Zero-byte failures still count toward the entry limit. A
+                // lower limit must leave the fast path and remove the oldest.
+                cache.set_limits(
+                    ImageCacheLimits {
+                        max_images: IMAGES,
+                        max_decoded_bytes: (IMAGES * 4) as u64,
+                        max_pending_loads: 1,
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(cache.eviction_worklists_built, 1);
+                assert!(!cache.items.contains_key(&error_key));
+                assert_eq!(cache.len(), IMAGES);
+            });
+        });
+    }
+
+    #[crate::test]
+    fn lru_ready_completions_under_pressure_preserve_requested_image_and_lru_order(
+        cx: &mut TestAppContext,
+    ) {
+        let window = cx.add_empty_window();
+        let sources = [
+            Resource::Embedded("oldest-requested".into()),
+            Resource::Embedded("middle-evicted".into()),
+            Resource::Embedded("newest".into()),
+        ];
+        let images = [test_image(), test_image(), test_image()];
+        window.update(|window, cx| {
+            let cache = LruImageCache::with_limits(
+                ImageCacheLimits {
+                    max_images: 2,
+                    max_decoded_bytes: 8,
+                    max_pending_loads: 3,
+                },
+                cx,
+            );
+            cache.update(cx, |cache, cx| {
+                for (index, (source, image)) in sources.iter().zip(&images).enumerate() {
+                    cache.items.insert(
+                        hash(source),
+                        LruImageEntry {
+                            item: ImageCacheItem::Loading(Task::ready(Ok(image.clone())).shared()),
+                            last_used: index as u64 + 1,
+                            observer: None,
+                            cancellation: None,
+                        },
+                    );
+                }
+                cache.tick = 3;
+                assert_eq!(
+                    cache.load(&sources[0], window, cx).unwrap().unwrap().id,
+                    images[0].id
+                );
+                assert_eq!(cache.eviction_worklists_built, 1);
+                assert_eq!(cache.len(), 2);
+                assert_eq!(cache.decoded_bytes(), 8);
+                assert_eq!(cache.loading_count(), 0);
+                assert!(cache.items.contains_key(&hash(&sources[0])));
+                assert!(!cache.items.contains_key(&hash(&sources[1])));
+                assert!(cache.items.contains_key(&hash(&sources[2])));
+                assert_eq!(Arc::strong_count(&images[1]), 1);
+
+                // Repeated hits after pressure has cleared must return to the
+                // allocation-free policy path, without changing the survivors.
+                for _ in 0..16 {
+                    assert!(cache.load(&sources[0], window, cx).unwrap().is_ok());
+                }
+                assert_eq!(cache.eviction_worklists_built, 1);
+                cache.set_limits(
+                    ImageCacheLimits {
+                        max_images: 1,
+                        max_decoded_bytes: 4,
+                        max_pending_loads: 3,
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(cache.eviction_worklists_built, 2);
+                assert_eq!(cache.len(), 1);
+                assert!(cache.items.contains_key(&hash(&sources[0])));
+                assert_eq!(Arc::strong_count(&images[2]), 1);
+            });
+        });
+    }
 
     #[crate::test]
     fn lru_byte_budget_counts_every_animation_frame_and_preserves_requested_image(
