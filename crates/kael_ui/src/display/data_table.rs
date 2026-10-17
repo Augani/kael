@@ -4547,4 +4547,226 @@ mod mounted_parent_layout_regression_tests {
         assert_unconsumed_horizontal_wheel_bubbles(700.0, false, -1.0);
         assert_unconsumed_horizontal_wheel_bubbles(700.0, false, 1.0);
     }
+
+    #[::core::prelude::v1::test]
+    fn virtual_horizontal_native_qa_skeleton_cached_long_text_and_resize() {
+        let mut app = TestAppContext::single();
+        app.update(|cx| {
+            crate::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::dark());
+        });
+        let (host, mut window) = app.add_window_view(|_, cx| Host {
+            table: cx.new(|cx| {
+                let columns = [200.0, 120.0, 104.0, 80.0, 104.0, 144.0, 112.0, 200.0]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(column, width)| {
+                        ColumnDef::new(
+                            format!("column-{column}"),
+                            format!("Column {column}"),
+                            move |row: &Row| {
+                                if row.0 == 17 && column == 7 {
+                                    "日本語👩🏽‍💻café".repeat(128).into()
+                                } else {
+                                    format!("Record {} / value {column}", row.0).into()
+                                }
+                            },
+                        )
+                        .width(px(width))
+                        .sortable(false)
+                        .resizable(false)
+                        .editable(false)
+                    })
+                    .collect();
+                DataTable::new_virtual(100_000, columns, 64, cx)
+                    .show_search(false)
+                    .fill_parent(true)
+            }),
+            parent_wheel_events: Rc::default(),
+        });
+        draw_at(&mut window, 1100.0, 792.0);
+        window.update(|_, cx| {
+            assert_eq!(host.read(cx).table.read(cx).cached_row_count(), 0);
+            assert_eq!(
+                host.read(cx)
+                    .table
+                    .read(cx)
+                    .horizontal_scroll_handle
+                    .max_offset()
+                    .width,
+                px(0.0)
+            );
+        });
+        draw_at(&mut window, 950.0, 792.0);
+
+        for phase in ["skeleton", "cached-short", "cached-long"] {
+            if phase == "cached-short" {
+                window.update(|_, cx| {
+                    let table = host.read(cx).table.clone();
+                    table.update(cx, |table, cx| {
+                        let request = table.state.virtual_requests_for_range(0..64).remove(0);
+                        assert!(table.set_page_data_for(request, (0..64).map(Row).collect(), cx));
+                    });
+                });
+            } else if phase == "cached-long" {
+                window.update(|_, cx| {
+                    let table = host.read(cx).table.clone();
+                    table.update(cx, |table, cx| {
+                        table
+                            .scroll_handle
+                            .set_offset(point(px(0.0), px(-16.0 * 48.0)));
+                        cx.notify();
+                    });
+                });
+            }
+            draw_at(&mut window, 950.0, 792.0);
+            let (position, previous_y, first_header_x) = window.update(|window, cx| {
+                let table = host.read(cx).table.read(cx);
+                let body = table.scroll_handle.bounds();
+                let horizontal = &table.horizontal_scroll_handle;
+                assert_eq!(horizontal.offset().x, px(0.0));
+                assert!(horizontal.max_offset().width > px(0.0));
+                assert_eq!(horizontal.max_offset().width, px(1064.0) - horizontal.bounds().size.width);
+                if phase != "skeleton" {
+                    assert_eq!(table.cached_row_count(), 64);
+                }
+                let tree = window.accessibility_tree();
+                let header = tree.nodes.values().find(|node| node.role == AccessibilityRole::ColumnHeader && node.column_index == Some(1)).unwrap().bounds.unwrap();
+                if phase == "cached-long" {
+                    let cell = tree.nodes.values().find(|node| node.role == AccessibilityRole::Cell && node.row_index == Some(19) && node.column_index == Some(8)).expect("long Unicode row17 Notes cell is mounted").bounds.unwrap();
+                    assert_eq!(cell.width, 200.0, "unbroken long value must not expand fixed column geometry");
+                }
+                eprintln!("virtual-horizontal phase={phase} body={body:?} horizontal_bounds={:?} max={:?}", horizontal.bounds(), horizontal.max_offset());
+                (body.origin + point(px(24.0), px(24.0)), table.scroll_handle.offset().y, header.x)
+            });
+            for (delta, expected_x) in [(-48.0, -48.0), (48.0, 0.0)] {
+                window.simulate_event(ScrollWheelEvent {
+                    position,
+                    delta: ScrollDelta::Pixels(point(px(delta), px(0.0))),
+                    ..Default::default()
+                });
+                window.run_until_parked();
+                window.update(|window, cx| {
+                    window.draw(cx).clear();
+                    let table = host.read(cx).table.read(cx);
+                    eprintln!("virtual-horizontal phase={phase} delta={delta} offset={:?} y={:?}", table.horizontal_scroll_handle.offset(), table.scroll_handle.offset());
+                    assert_eq!(table.horizontal_scroll_handle.offset().x, px(expected_x), "actual x-only wheel must move columns: {phase}");
+                    assert_eq!(table.scroll_handle.offset().y, previous_y, "x-only wheel must preserve vertical rows: {phase}");
+                    let tree = window.accessibility_tree();
+                    let bar = tree.nodes.values().find(|node| node.role == AccessibilityRole::ScrollBar).unwrap();
+                    assert!(matches!(bar.value, Some(AccessibilityValue::Range { current, .. }) if current == f64::from(-expected_x)), "scrollbar must expose actual x movement: {phase}");
+                    let header = tree.nodes.values().find(|node| node.role == AccessibilityRole::ColumnHeader && node.column_index == Some(1)).unwrap().bounds.unwrap();
+                    assert_eq!(header.x, first_header_x + f64::from(expected_x), "header must paint the same shared offset: {phase}");
+                });
+            }
+        }
+        // Shrink the scroll range back to zero, then grow it without replacing the table.
+        draw_at(&mut window, 1100.0, 792.0);
+        window.update(|_, cx| {
+            let table = host.read(cx).table.read(cx);
+            assert_eq!(table.horizontal_scroll_handle.max_offset().width, px(0.0));
+            assert_eq!(table.horizontal_scroll_handle.offset().x, px(0.0));
+        });
+        draw_at(&mut window, 950.0, 792.0);
+        let position = window.update(|_, cx| {
+            host.read(cx).table.read(cx).scroll_handle.bounds().origin + point(px(24.0), px(24.0))
+        });
+        window.simulate_event(ScrollWheelEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(-48.0), px(0.0))),
+            ..Default::default()
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(
+                host.read(cx)
+                    .table
+                    .read(cx)
+                    .horizontal_scroll_handle
+                    .offset()
+                    .x,
+                px(-48.0)
+            );
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn virtual_horizontal_native_qa_scrollbar_declared_actions_dispatch() {
+        let (host, mut window) = fixture_with(1_000, true, false, true);
+        draw_at(&mut window, 400.0, 792.0);
+        let (bar_id, declared_actions) = window.update(|window, cx| {
+            let table = host.read(cx).table.read(cx);
+            assert!(table.horizontal_scroll_handle.max_offset().width > px(40.0));
+            let bar = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| node.role == AccessibilityRole::ScrollBar)
+                .unwrap();
+            let actions = bar.actions.clone();
+            eprintln!(
+                "table-scrollbar actions={actions:?} handlers={:?}",
+                actions
+                    .iter()
+                    .map(|action| (
+                        *action,
+                        window.has_accessibility_action_handler(bar.id, *action)
+                    ))
+                    .collect::<Vec<_>>()
+            );
+            (bar.id, actions)
+        });
+        assert!(declared_actions.contains(&AccessibilityAction::SetValue));
+        let first_header_x = window.update(|window, _| {
+            for action in &declared_actions {
+                assert!(window.has_accessibility_action_handler(bar_id, *action));
+            }
+            window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| {
+                    node.role == AccessibilityRole::ColumnHeader && node.column_index == Some(1)
+                })
+                .unwrap()
+                .bounds
+                .unwrap()
+                .x
+        });
+        for (action, payload, expected) in [
+            (
+                AccessibilityAction::SetValue,
+                Some(AccessibilityActionPayload::NumericValue(40.0)),
+                40.0,
+            ),
+            (AccessibilityAction::Increment, None, 80.0),
+            (AccessibilityAction::Decrement, None, 40.0),
+            (
+                AccessibilityAction::SetValue,
+                Some(AccessibilityActionPayload::NumericValue(0.0)),
+                0.0,
+            ),
+        ] {
+            window.update(|window, _| {
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest {
+                    node_id: bar_id,
+                    action,
+                    payload,
+                })
+            });
+            window.run_until_parked();
+            window.update(|window, cx| {
+                window.draw(cx).clear();
+                let table = host.read(cx).table.read(cx);
+                assert_eq!(table.horizontal_scroll_handle.offset().x, px(-expected));
+                assert_eq!(table.scroll_handle.offset().y, px(0.0));
+                let tree = window.accessibility_tree();
+                let bar = tree.get(bar_id).unwrap();
+                assert!(matches!(bar.value, Some(AccessibilityValue::Range { current, .. }) if current == f64::from(expected)));
+                let header = tree.nodes.values().find(|node| node.role == AccessibilityRole::ColumnHeader && node.column_index == Some(1)).unwrap().bounds.unwrap();
+                assert_eq!(header.x, first_header_x - f64::from(expected), "native action must move the actual painted header with the shared handle");
+            });
+        }
+    }
 }

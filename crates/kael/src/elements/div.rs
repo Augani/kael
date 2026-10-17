@@ -6391,6 +6391,11 @@ impl ScrollHandle {
         Self(Rc::default())
     }
 
+    /// Whether both handles refer to the same scrolling state.
+    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+
     /// Seconds since the last scroll event, or `f64::MAX` if never scrolled.
     pub fn seconds_since_last_scroll(&self) -> f64 {
         self.0.borrow().elastic.borrow().seconds_since_last_scroll()

@@ -268,6 +268,13 @@ window.on_accessibility_action(
 );
 ```
 
+Built-in scrollbars handle `Focus`, `Increment`, `Decrement`, and numeric
+`SetValue` requests. Their native range uses positive logical pixels from the
+start, with a maximum determined by the current viewport and content. This
+differs from `ScrollBarRenderState::percentage`, which is between zero and one.
+Numeric requests clamp to the live range and preserve the other scroll axis;
+nonfinite values and string payloads are rejected.
+
 For custom test harnesses or non-window integrations, route normalized requests
 through `AccessibilityActionRouter`:
 
