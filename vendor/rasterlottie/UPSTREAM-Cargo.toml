@@ -1,0 +1,101 @@
+[package]
+name = "rasterlottie"
+version = "0.2.1"
+edition = "2024"
+description = "Pure Rust, headless Lottie rasterizer for deterministic server-side rendering"
+license = "MIT OR Apache-2.0"
+publish = ["crates-io"]
+readme = "README.md"
+documentation = "https://docs.rs/rasterlottie"
+homepage = "https://github.com/neodyland/rasterlottie"
+repository = "https://github.com/neodyland/rasterlottie"
+keywords = ["lottie", "renderer", "rasterizer", "gif", "animation"]
+categories = ["graphics", "multimedia::images"]
+include = [
+    "/CHANGELOG.md",
+    "/Cargo.toml",
+    "/LICENSE-APACHE",
+    "/LICENSE-MIT",
+    "/README.md",
+    "/examples/**",
+    "/src/**",
+    "/tests/**",
+    "/tools/bench/**",
+]
+
+rust-version = "1.92"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = ["gif", "images", "text"]
+dotlottie = ["dep:zip"]
+gif = ["dep:color_quant", "dep:gif"]
+images = ["dep:base64", "dep:image"]
+text = ["dep:unicode-segmentation"]
+tracing = ["dep:tracing"]
+
+[dependencies]
+base64 = { version = "0.22", optional = true }
+color_quant = { version = "1", optional = true }
+gif = { version = "0.14", optional = true }
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"], optional = true }
+rustc-hash = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tiny-skia = "0.12"
+tracing = { version = "0.1", optional = true }
+unicode-segmentation = { version = "1", optional = true }
+zip = { version = "8", default-features = false, features = ["deflate"], optional = true }
+
+[dev-dependencies]
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png"] }
+seahorse = "2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[lints.rust]
+missing_debug_implementations = "deny"
+missing_docs = "deny"
+
+[lints.clippy]
+absolute_paths = "warn"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+arbitrary_source_item_ordering = "deny"
+cast_lossless = "allow"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+cfg_not_test = "deny"
+clone_on_ref_ptr = "deny"
+create_dir = "deny"
+dbg_macro = "warn"
+disallowed_script_idents = "deny"
+error_impl_error = "deny"
+exhaustive_enums = "warn"
+exit = "deny"
+filetype_is_file = "deny"
+infinite_loop = "deny"
+nursery = { level = "warn", priority = -1 }
+panic = "deny"
+panic_in_result_fn = "deny"
+pathbuf_init_then_push = "deny"
+pedantic = { level = "warn", priority = -1 }
+print_stderr = "warn"
+print_stdout = "warn"
+rc_mutex = "deny"
+redundant_test_prefix = "deny"
+redundant_type_annotations = "deny"
+string_slice = "deny"
+struct_excessive_bools = "allow"
+tests_outside_test_module = "deny"
+todo = "warn"
+undocumented_unsafe_blocks = "deny"
+unimplemented = "warn"
+unnecessary_safety_comment = "deny"
+unnecessary_safety_doc = "deny"
+unwrap_used = "warn"

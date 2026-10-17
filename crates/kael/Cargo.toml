@@ -499,7 +499,9 @@ version = "2.0.0"
 version = "0.12.1"
 
 [dependencies.rasterlottie]
-version = "0.2.1"
+path = "../../vendor/rasterlottie"
+version = "0.4.1"
+package = "kael_rasterlottie"
 default-features = false
 features = ["dotlottie", "images", "text"]
 optional = true

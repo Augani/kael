@@ -205,7 +205,7 @@ impl OfficePackage {
                 .context("Office ZIP part name is not UTF-8")?
                 .to_string();
             ensure!(
-                raw_name == entry.name(),
+                raw_name == entry.name().context("invalid Office ZIP part name")?,
                 "Office ZIP part name is ambiguously encoded"
             );
             if entry.is_dir() {

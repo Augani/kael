@@ -54,6 +54,7 @@ crates=(
   kael_accesskit_atspi_common
   kael_accesskit_unix
   kael_accesskit_windows
+  kael_rasterlottie
   kael
   kael_ui
 )
@@ -237,6 +238,8 @@ if [[ "$mode" == "execute" ]]; then
     exit 2
   fi
 fi
+
+python3 scripts/ci/verify-rasterlottie-fork.py
 
 echo "Kael $package_version crate ${mode}: ${#crates[@]} packages"
 for crate in "${crates[@]}"; do
