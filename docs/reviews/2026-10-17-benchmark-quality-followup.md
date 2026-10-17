@@ -92,11 +92,10 @@ shared desktop establishes no overall performance or power ranking.
 
 The [full hosted rerun](https://github.com/Augani/kael/actions/runs/39057746656)
 also uses `b11ed50` and retains the complete five-contract, two-mode,
-five-repetition-per-engine suite. Its first ten instrumented navigation runs
-pass the strict geometry/activity and original workload gates; collection
-continues with the uninstrumented builds and remaining contracts. The final
-outcome and raw revalidation must be recorded separately; neither the local
-pair nor that first completed group establishes all hundred runs.
+five-repetition-per-engine suite. The complete job now passes all hundred
+captures. Independent raw-result revalidation and contract-specific results
+are recorded below. The binaries predate the subsequent framework changes;
+this run verifies the sizing correction at its own checkpoint.
 
 A fresh [focused Linux run at `92d0cd7`](https://github.com/Augani/kael/actions/runs/39057690389)
 passes both X11/GTK4 outline and full Unicode protocols, separate strict graphs,
@@ -258,3 +257,88 @@ The three subsequent control/cache commits are absent from these binaries.
 Separate sampling captures, excluded from this table, identify general UI text
 shaping during navigation churn as a profiling lead rather than an established
 optimization or a reason to expand editor-specific work.
+
+The next source-frozen batch addresses text and form behavior shared by desktop
+applications:
+
+- `5811652`: adjacent styled label runs retain distinct font descriptors even
+  when their colors match. The previous last-font comparison compared an ID
+  with itself and could collapse regular, bold, italic and other font changes.
+  Three independent construction/native shaping regressions fail before the
+  fix and pass afterward, including wrapped text with a newline.
+- `3e8a2d8`: a run beginning with a byte-order mark preserves its UTF-16 length
+  when constructing the native string. The former UTF-8 constructor could strip
+  that mark, misalign subsequent attributed ranges and crash CoreText even with
+  font reuse disabled. Explicit UTF-16 construction is confined to this prefix
+  case. Leading, interior and split marks, NUL and multibyte boundaries pass;
+  nonpainting marks retain the existing empty-output behavior.
+- `4da2a9c`: native text shaping retains at most 128 sized CoreText font handles,
+  keyed by effective font identity after optical substitution and exact size
+  bits. Invalid sizes retain their existing factory path. Eviction and owner
+  teardown release the handles; text and layouts are not retained. The cap is
+  a handle count, not a native-byte budget. In the 48-case script/font/size
+  fixture, 24 supported cases retain exact glyphs, positions, indices, widths
+  and metrics; 24 baseline-unsupported cases retain their existing `None` result.
+- `a72e29b`: Combobox executes its advertised native actions and opens from the
+  keyboard while closed. One semantic/focus owner retains stable original-index
+  option IDs. Current query, disabled state and live selection guard stale
+  actions; single selection closes before callbacks. Measured option reveal,
+  clear actions, pointer/wheel boundaries and active-window Tab dismissal pass
+  14 focused tests. Closed rendering avoids scanning all options.
+- `9227207`: Select clears search consistently on every close path and restores
+  a valid highlight when filtering becomes empty. Live query, disabled and
+  loading state guard queued actions; loading retains focus and busy semantics
+  while blocking mutation. Active-window Tab dismissal needs weak deferred
+  cleanup so the next ordinary render retires popup semantics. All 18 focused
+  tests pass, including closed rendering of 100,000 options without filtering.
+
+The corrected focus fixtures explicitly deactivate and reactivate their test
+window before asserting active-window behavior. Earlier inactive-window failures
+are retained as fixture errors. Test-support effect flushing draws dirty windows,
+so these tests do not isolate the production frame clock. Select dismissal on
+OS-window/app deactivation remains unproved. Combobox non-ASCII/IME query entry,
+its fully mounted filtered popup and the separate Dropdown remain follow-ups.
+
+A [source-isolated native font-cache diagnostic](2026-10-17-native-font-cache-diagnostic.json)
+contains three alternating navigation pairs. Both builds include the BOM fix;
+their only source difference is the bounded font cache. All six captures pass
+the original workload/activity gates and all eight geometry boundaries at
+1100×760, scale 2. Owned builds, tests and native workloads were paused throughout
+collection. The initial driver mistakenly invoked the two-engine geometry
+validator for a Kael/Kael pair and stopped after one pair; the corrected driver
+retains and revalidates that pair and collects the remaining four captures.
+Both driver versions, the failure and environment notes are preserved.
+
+| Median navigation diagnostic | Before font cache | With font cache |
+| --- | ---: | ---: |
+| Active process CPU | 25.602% | 21.148% |
+| Churn process CPU | 32.208% | 22.377% |
+| Stable sampled peak RSS | 115.00 MiB | 115.80 MiB |
+| Per-run draw p99, median | 5,586 µs | 5,309 µs |
+| Per-run CPU submission p99, median | 194 µs | 624 µs |
+
+This workload shows 17.4% lower active CPU, 30.5% lower churn CPU and 5.0% lower
+CPU-side draw p99, with 0.80 MiB higher stable sampled peak RSS. All runs,
+including the unusually low first cached churn sample, remain in the medians.
+CPU submission tails worsen in all three pairs: median per-run p50/p95/p99
+changes from 76/119/194 to 105/488/624 µs. The CPU reduction therefore does not
+establish improved end-to-end latency.
+The separate mixed-script `.SystemUIFont` API diagnostic removes repeated
+factory calls but demonstrates no timing gain (43.054 versus 43.405 ms medians).
+The navigation app uses `.AppleSystemUIFont` and mostly ASCII labels. These
+results support retaining the bounded cache for this app workload, not a general
+text speedup. They establish no GPUI Kit ranking, per-operation normalized result,
+comparative presentation or controlled power claim. The styled-label and final
+form fixes are deliberately excluded from these isolated binaries.
+
+The [final text/control validation](2026-10-17-text-control-native-validation.json)
+identifies source `9227207` and individual file hashes. The complete core graph
+passes 2,162 tests with zero failures; two opt-in native diagnostics are ignored
+there and have separately recorded explicit passes. All 497 UI tests pass, and
+strict native all-target Clippy passes. Fresh physical Metal validation passes
+all 59 required GPU tests with zero skips. The visible smoke starts at 720×460
+logical pixels, scale 2, wakes from a model-only idle notification and records
+60 GPU-completed frames with compositor presentation timestamps. Its final
+readback retains 6,067 text-probe pixels and the earlier scene fingerprint.
+Concurrent correctness builds were allowed; these are correctness checks and
+do not compare latency or power. Fresh platform execution remains separate.

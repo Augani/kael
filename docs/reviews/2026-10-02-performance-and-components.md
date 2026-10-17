@@ -37,6 +37,11 @@ client-size mismatch correction and fresh matched native navigation diagnostics,
 alongside subsequent image-cache, display-link, Select, menu, data-table and
 cached accessibility improvements. General desktop workloads and shared controls
 are the ongoing priority; historical editor results remain scoped evidence.
+The full sizing-corrected hosted suite now completes all hundred schema-3
+captures. A later isolated native text-cache experiment reduces navigation CPU
+with a small RSS increase and worse CPU submission tails; it establishes no
+overall framework ranking. Shared styled labels, BOM handling and form-control
+focus/actions have fresh complete core/UI and physical Metal correctness proof.
 
 ## Component coverage and gaps
 

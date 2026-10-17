@@ -1,0 +1,713 @@
+{
+  "scope": "Three alternating before/after pairs on physical Mac; only changed source is bounded sized CoreText font cache, both builds include BOM correction; not a cross-framework ranking",
+  "date": "2026-10-17",
+  "contract": "native-navigation-detail-v1",
+  "build_manifest": ".artifacts/2026-10-17-font-cache-navigation/build-source.json",
+  "build_manifest_sha256": "c3816e875eb2d4aa5bed85fc4ab15917f1e1afe18b2118b851bea1939a586fc6",
+  "environment": ".artifacts/2026-10-17-font-cache-navigation/environment.json",
+  "environment_sha256": "9a6bf5ae3f645fdb7caabb0dd621d06aec69253e0ab501044cb2819618642477",
+  "runs": ".artifacts/2026-10-17-font-cache-navigation/runs.json",
+  "runs_sha256": "9640df115ca20712073efe0f4ee7869b188b2b584ff2887ea2dfede1613b84bd",
+  "collector_sha256": "33ac20f340e8ea6ec8fd8a4981779e133fc31eba38e77546037a9e59b6220341",
+  "captures": [
+    {
+      "build": "before",
+      "index": 0,
+      "raw": ".artifacts/2026-10-17-font-cache-navigation/before/00-kael.json",
+      "raw_sha256": "30997cb94473cfac4e2bf1c69a1c75a0e64360ac46c37dbf793aa8f934e925ed",
+      "binary_sha256": "689dafb8f42670d257082b60ef5364f88177ec718d2bbde0ba6714e761b9ba8f",
+      "phase_frame_counts": [
+        {
+          "phase": "idle-before",
+          "renders": 3,
+          "draws": 3,
+          "submissions": 3
+        },
+        {
+          "phase": "active",
+          "renders": 688,
+          "draws": 688,
+          "submissions": 688
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 668,
+          "draws": 668,
+          "submissions": 668
+        }
+      ],
+      "native_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "submission_cpu_us_quantiles": {
+        "0.5": 86,
+        "0.95": 141,
+        "0.99": 194
+      }
+    },
+    {
+      "build": "after",
+      "index": 0,
+      "raw": ".artifacts/2026-10-17-font-cache-navigation/after/00-kael.json",
+      "raw_sha256": "2290b992aabbd3a23c3d927f332efa8c5c5428c3660149c57e37149f01032b83",
+      "binary_sha256": "fd8593f77e446b19f19fefeb934ca2cce74f47de2b6f3892edabdc510a224dcc",
+      "phase_frame_counts": [
+        {
+          "phase": "idle-before",
+          "renders": 2,
+          "draws": 2,
+          "submissions": 2
+        },
+        {
+          "phase": "active",
+          "renders": 687,
+          "draws": 687,
+          "submissions": 687
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 676,
+          "draws": 676,
+          "submissions": 676
+        }
+      ],
+      "native_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "submission_cpu_us_quantiles": {
+        "0.5": 71,
+        "0.95": 257,
+        "0.99": 487
+      }
+    },
+    {
+      "build": "after",
+      "index": 1,
+      "raw": ".artifacts/2026-10-17-font-cache-navigation/after/01-kael.json",
+      "raw_sha256": "598a63cf95bf37119032cca48dd6534b4dd6ce5fdce33f7273800173247a7c8b",
+      "binary_sha256": "fd8593f77e446b19f19fefeb934ca2cce74f47de2b6f3892edabdc510a224dcc",
+      "phase_frame_counts": [
+        {
+          "phase": "idle-before",
+          "renders": 2,
+          "draws": 2,
+          "submissions": 2
+        },
+        {
+          "phase": "active",
+          "renders": 685,
+          "draws": 685,
+          "submissions": 685
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 661,
+          "draws": 661,
+          "submissions": 661
+        }
+      ],
+      "native_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "submission_cpu_us_quantiles": {
+        "0.5": 105,
+        "0.95": 488,
+        "0.99": 624
+      }
+    },
+    {
+      "build": "before",
+      "index": 1,
+      "raw": ".artifacts/2026-10-17-font-cache-navigation/before/01-kael.json",
+      "raw_sha256": "a07c4a55b4312c23948d8c507b105ce1c0e9d3f1071b14bd84841b90b0b93ff6",
+      "binary_sha256": "689dafb8f42670d257082b60ef5364f88177ec718d2bbde0ba6714e761b9ba8f",
+      "phase_frame_counts": [
+        {
+          "phase": "idle-before",
+          "renders": 2,
+          "draws": 2,
+          "submissions": 2
+        },
+        {
+          "phase": "active",
+          "renders": 686,
+          "draws": 686,
+          "submissions": 686
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 665,
+          "draws": 665,
+          "submissions": 665
+        }
+      ],
+      "native_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "submission_cpu_us_quantiles": {
+        "0.5": 75,
+        "0.95": 119,
+        "0.99": 180
+      }
+    },
+    {
+      "build": "before",
+      "index": 2,
+      "raw": ".artifacts/2026-10-17-font-cache-navigation/before/02-kael.json",
+      "raw_sha256": "63cc5f277f0f01f37612e532217cc25aa8428cd1f29b444740972f4b8ff7035a",
+      "binary_sha256": "689dafb8f42670d257082b60ef5364f88177ec718d2bbde0ba6714e761b9ba8f",
+      "phase_frame_counts": [
+        {
+          "phase": "idle-before",
+          "renders": 2,
+          "draws": 2,
+          "submissions": 2
+        },
+        {
+          "phase": "active",
+          "renders": 685,
+          "draws": 685,
+          "submissions": 685
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 664,
+          "draws": 664,
+          "submissions": 664
+        }
+      ],
+      "native_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "submission_cpu_us_quantiles": {
+        "0.5": 76,
+        "0.95": 117,
+        "0.99": 208
+      }
+    },
+    {
+      "build": "after",
+      "index": 2,
+      "raw": ".artifacts/2026-10-17-font-cache-navigation/after/02-kael.json",
+      "raw_sha256": "24c1007b60cec3695c4ed4a1cf6ff8d9431fe58c639a948aefe7134311b21eb6",
+      "binary_sha256": "fd8593f77e446b19f19fefeb934ca2cce74f47de2b6f3892edabdc510a224dcc",
+      "phase_frame_counts": [
+        {
+          "phase": "idle-before",
+          "renders": 2,
+          "draws": 2,
+          "submissions": 2
+        },
+        {
+          "phase": "active",
+          "renders": 682,
+          "draws": 682,
+          "submissions": 682
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 660,
+          "draws": 660,
+          "submissions": 660
+        }
+      ],
+      "native_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "submission_cpu_us_quantiles": {
+        "0.5": 111,
+        "0.95": 491,
+        "0.99": 640
+      }
+    }
+  ],
+  "summary": {
+    "before": {
+      "repetitions": 3,
+      "stable_sampled_peak_rss_bytes": [
+        120586240,
+        111886336,
+        121438208
+      ],
+      "median_stable_sampled_peak_rss_bytes": 120586240,
+      "median_phase_metrics": {
+        "idle-before": {
+          "cpu_percent": 0.10361936913230468,
+          "rss_median_bytes": 111067136.0,
+          "footprint_max_bytes": 94192624
+        },
+        "active": {
+          "cpu_percent": 25.602315269340174,
+          "rss_median_bytes": 112803840.0,
+          "footprint_max_bytes": 97584112
+        },
+        "idle-after": {
+          "cpu_percent": 0.020435656533602947,
+          "rss_median_bytes": 112852992.0,
+          "footprint_max_bytes": 97518624
+        },
+        "churn": {
+          "cpu_percent": 32.208163856662146,
+          "rss_median_bytes": 120078336.0,
+          "footprint_max_bytes": 106546208
+        }
+      },
+      "median_draw_us": {
+        "0.5": 4550,
+        "0.95": 5343,
+        "0.99": 5586
+      },
+      "median_submission_us": {
+        "0.5": 76,
+        "0.95": 119,
+        "0.99": 194
+      }
+    },
+    "after": {
+      "repetitions": 3,
+      "stable_sampled_peak_rss_bytes": [
+        124010496,
+        121421824,
+        121176064
+      ],
+      "median_stable_sampled_peak_rss_bytes": 121421824,
+      "median_phase_metrics": {
+        "idle-before": {
+          "cpu_percent": 0.06033632346562172,
+          "rss_median_bytes": 111165440,
+          "footprint_max_bytes": 94422000
+        },
+        "active": {
+          "cpu_percent": 21.147650350933272,
+          "rss_median_bytes": 112869376.0,
+          "footprint_max_bytes": 98075632
+        },
+        "idle-after": {
+          "cpu_percent": 0.012079015937304852,
+          "rss_median_bytes": 112902144.0,
+          "footprint_max_bytes": 97895432
+        },
+        "churn": {
+          "cpu_percent": 22.377108272423076,
+          "rss_median_bytes": 121356288,
+          "footprint_max_bytes": 106923016
+        }
+      },
+      "median_draw_us": {
+        "0.5": 2687,
+        "0.95": 4745,
+        "0.99": 5309
+      },
+      "median_submission_us": {
+        "0.5": 105,
+        "0.95": 488,
+        "0.99": 624
+      }
+    }
+  },
+  "observed_changes": {
+    "active_cpu_percent_change": -17.39946122662409,
+    "churn_cpu_percent_change": -30.5234897213973,
+    "sampled_peak_rss_bytes_delta": 835584,
+    "draw_p99_percent_change": -4.9588256355173606,
+    "submission_us_quantile_changes": {
+      "0.5": {
+        "before_us": 76,
+        "after_us": 105,
+        "delta_us": 29,
+        "percent_change": 38.15789473684211
+      },
+      "0.95": {
+        "before_us": 119,
+        "after_us": 488,
+        "delta_us": 369,
+        "percent_change": 310.0840336134454
+      },
+      "0.99": {
+        "before_us": 194,
+        "after_us": 624,
+        "delta_us": 430,
+        "percent_change": 221.6494845360825
+      }
+    }
+  },
+  "limitations": [
+    "Single navigation contract,one physical shared Mac,three repetitions per build,frame instrumentation enabled; no framework-wide speedup or cross-framework ranking.",
+    "Whole-phase CPU is not normalized per operation; raw frame/row counts are retained and time-paced counts vary.",
+    "RSS uses maximum stable samples [1:-1] in each measured phase,not the true instantaneous high-water mark; startup/warmup excluded.",
+    "Draw durations are CPU-side wall spans,not thread CPU time or display latency; startup geometry is unpaired.",
+    "No comparative GPU/compositor completion or controlled watts/joules proof.",
+    "All owned compiler/test/native-window loads were paused; other desktop activity was uncontrolled.",
+    "First pair was retained/revalidated after the driver incorrectly required two different engines; failed driver/log and both environment snapshots are preserved.",
+    "Both builds deliberately exclude later generic styled-label and Select/Combobox changes to isolate native font cache.",
+    "The separate .SystemUIFont mixed-script native API diagnostic had no demonstrated timing gain; this application uses .AppleSystemUIFont and mostly ASCII labels.",
+    "Cache cap bounds retained native handle count,not CoreText internal bytes.",
+    "CPU submission spans increased in all three pairs: median per-run p50 76 to 105 us, p95 119 to 488 us, and p99 194 to 624 us. These CPU-side wall spans are a measured tradeoff; no GPU or end-to-end latency attribution is established."
+  ]
+}

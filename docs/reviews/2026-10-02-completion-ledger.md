@@ -96,7 +96,7 @@ fails its mandatory gate. Historical environment statements above describe
 their original captures. The physical display is awake for the new sizing
 validation: all eight navigation boundaries match 1100×760 at scale 2, with
 active/churn frame activity on both engines. The complete schema-3 hosted rerun
-at `b11ed50` remains in progress. Its binaries predate the subsequent image
+at `b11ed50` now passes all hundred captures. Its binaries predate the subsequent image
 cache, display-link and shared control improvements; those changes require
 separate evidence. Following the user's direction, further profiling prioritizes
 general desktop workloads rather than additional editor-specific optimization.
@@ -111,3 +111,14 @@ and separate sampling profiles. Later measured Select reveal, disabled submenu
 ownership and cached semantic reparenting fixes pass their focused regressions,
 the full core/UI graphs and a fresh 59-test physical Metal capture; those fixes
 are absent from both frozen comparison builds.
+
+The next frozen source `9227207` passes 2,162 core tests, all 497 UI tests,
+strict native Clippy, 59 required physical Metal GPU checks and 60 actual
+completed-and-presented smoke frames. The October 17 follow-up links exact
+source/log/image identities. Shared styled-label font preservation, a macOS
+BOM attributed-string crash and Select/Combobox action/focus/search invariants
+are corrected. Physical screen-reader and input-source IME acceptance remains.
+A separate three-pair navigation experiment isolates a bounded 128-handle
+CoreText font cache: active/churn CPU medians fall 17.4%/30.5%, sampled peak RSS
+rises 0.80 MiB, draw p99 falls 5.0% and CPU submission p99 rises 194→624 µs.
+This is a workload-specific tradeoff, with no overall or display-latency ranking.
