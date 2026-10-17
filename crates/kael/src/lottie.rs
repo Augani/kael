@@ -23,6 +23,7 @@ use web_time::Instant;
 const MAX_LOTTIE_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LOTTIE_DIMENSION: u32 = 8_192;
 const MAX_LOTTIE_FRAME_BYTES: usize = 256 * 1024 * 1024;
+const MAX_LOTTIE_RENDER_BATCH_BYTES: usize = 256 * 1024 * 1024;
 const MAX_LOTTIE_FRAMES: usize = 100_000;
 const MAX_LOTTIE_FPS: f32 = 1_000.0;
 const MAX_LOTTIE_RENDER_BATCH: usize = 256;
@@ -42,6 +43,9 @@ thread_local! {
 
     #[cfg(test)]
     static PREPARED_ANIMATION_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+
+    #[cfg(test)]
+    static RENDERED_FRAME_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A type alias to the resource loader that the `lottie()` element uses.
@@ -128,6 +132,13 @@ pub(crate) struct LottieRenderBatch {
 pub(crate) struct LottieRenderedFrame {
     pub(crate) frame_index: usize,
     pub(crate) image: Arc<RenderImage>,
+}
+
+struct LottieRenderPlan {
+    width: u32,
+    height: u32,
+    frame_bytes: usize,
+    config: RenderConfig,
 }
 
 /// An error that can occur when loading or rendering a Lottie animation.
@@ -318,6 +329,53 @@ impl LottieAnimation {
         render_size: Size<DevicePixels>,
         frames: &[usize],
     ) -> Result<LottieRenderBatch, LottieError> {
+        self.render_batch_with_budget(render_size, frames, MAX_LOTTIE_RENDER_BATCH_BYTES)
+    }
+
+    pub(crate) fn max_admitted_frame_count(
+        &self,
+        render_size: Size<DevicePixels>,
+    ) -> Result<usize, LottieError> {
+        self.max_admitted_frame_count_with_budget(render_size, MAX_LOTTIE_RENDER_BATCH_BYTES)
+    }
+
+    pub(crate) fn max_admitted_frame_count_with_budget(
+        &self,
+        render_size: Size<DevicePixels>,
+        max_bytes: usize,
+    ) -> Result<usize, LottieError> {
+        let plan = self.render_plan(render_size)?;
+        let frames = (max_bytes / plan.frame_bytes).min(MAX_LOTTIE_RENDER_BATCH);
+        if frames == 0 {
+            return Err(anyhow::anyhow!(
+                "Lottie frame exceeds the {max_bytes} byte render batch limit"
+            )
+            .into());
+        }
+        Ok(frames)
+    }
+
+    fn render_plan(
+        &self,
+        render_size: Size<DevicePixels>,
+    ) -> Result<LottieRenderPlan, LottieError> {
+        validate_render_size(render_size)?;
+        let scale = render_scale(self.data.native_pixel_size, render_size);
+        let (width, height) = render_canvas_dimensions(self.data.native_pixel_size, scale)?;
+        Ok(LottieRenderPlan {
+            width,
+            height,
+            frame_bytes: checked_frame_len(width, height)?,
+            config: RenderConfig::new(Rgba8::TRANSPARENT, scale),
+        })
+    }
+
+    pub(crate) fn render_batch_with_budget(
+        &self,
+        render_size: Size<DevicePixels>,
+        frames: &[usize],
+        max_bytes: usize,
+    ) -> Result<LottieRenderBatch, LottieError> {
         validate_render_size(render_size)?;
         if frames.len() > MAX_LOTTIE_RENDER_BATCH {
             return Err(anyhow::anyhow!(
@@ -325,13 +383,36 @@ impl LottieAnimation {
             )
             .into());
         }
-        let scale = render_scale(self.data.native_pixel_size, render_size);
-        let config = RenderConfig::new(Rgba8::TRANSPARENT, scale);
+        if frames.is_empty() {
+            return Ok(LottieRenderBatch {
+                render_size,
+                frames: Vec::new(),
+            });
+        }
+        let plan = self.render_plan(render_size)?;
+        // Bound output buffers retained by this call before preparation, renderer
+        // execution or the output Vec allocation. Prepared assets, renderer/layer
+        // scratch, concurrent calls and the element's frame cache are additional.
+        let batch_bytes = plan
+            .frame_bytes
+            .checked_mul(frames.len())
+            .ok_or_else(|| anyhow::anyhow!("Lottie render batch byte count overflowed"))?;
+        if batch_bytes > max_bytes {
+            return Err(anyhow::anyhow!(
+                "Lottie render batch cannot exceed {max_bytes} retained frame bytes"
+            )
+            .into());
+        }
         with_prepared_animation(&self.data.bytes, |prepared| {
             let mut rendered_frames = Vec::with_capacity(frames.len());
 
             for &frame_index in frames {
-                let frame = prepared.render_frame(self.timeline_frame(frame_index), config)?;
+                #[cfg(test)]
+                RENDERED_FRAME_COUNT.with(|count| count.set(count.get() + 1));
+                let frame = prepared.render_frame(self.timeline_frame(frame_index), plan.config)?;
+                if (frame.width, frame.height) != (plan.width, plan.height) {
+                    return Err(LottieError::InvalidFrameBuffer);
+                }
                 rendered_frames.push(LottieRenderedFrame {
                     frame_index,
                     image: raster_frame_to_image(frame)?,
@@ -816,6 +897,7 @@ fn with_prepared_animation<T>(
 fn reset_prepared_animation_cache() {
     PREPARED_ANIMATION_CACHE.with(|cache| cache.borrow_mut().clear());
     PREPARED_ANIMATION_COUNT.with(|count| count.set(0));
+    RENDERED_FRAME_COUNT.with(|count| count.set(0));
 }
 
 #[cfg(test)]
@@ -961,6 +1043,28 @@ fn render_scale(native_size: Size<DevicePixels>, render_size: Size<DevicePixels>
         .max(1.0 / native_width.max(native_height))
 }
 
+fn render_canvas_dimensions(
+    native_size: Size<DevicePixels>,
+    scale: f32,
+) -> Result<(u32, u32), LottieError> {
+    // Match the pinned rasterlottie resolve_output_canvas_size f32 multiplication
+    // and ceil exactly. Fitted output can differ from the requested rectangle,
+    // including a rounding pixel; actual-pixel regressions guard this coupling.
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(anyhow::anyhow!("Lottie render scale must be finite and positive").into());
+    }
+    let width = ((native_size.width.0 as f32) * scale).ceil().max(1.0);
+    let height = ((native_size.height.0 as f32) * scale).ceil().max(1.0);
+    if !width.is_finite()
+        || !height.is_finite()
+        || width > u32::MAX as f32
+        || height > u32::MAX as f32
+    {
+        return Err(anyhow::anyhow!("Lottie scaled canvas dimensions overflowed").into());
+    }
+    Ok((width as u32, height as u32))
+}
+
 /// Embed a Lottie asset directly into the binary at compile time.
 #[macro_export]
 macro_rules! include_lottie {
@@ -1034,6 +1138,116 @@ mod tests {
                 frame.image.size(0),
                 size(DevicePixels(128), DevicePixels(64))
             );
+        }
+    }
+
+    #[test]
+    fn render_batch_rejects_aggregate_bytes_before_preparation_or_pixels() {
+        let animation =
+            LottieAnimation::from_json_str(r#"{"fr":30,"ip":0,"op":30,"w":1,"h":1,"layers":[]}"#)
+                .unwrap();
+        reset_prepared_animation_cache();
+        let render_size = size(DevicePixels(1), DevicePixels(1));
+        assert_eq!(
+            animation.max_admitted_frame_count(render_size).unwrap(),
+            MAX_LOTTIE_RENDER_BATCH
+        );
+        assert!(
+            animation
+                .max_admitted_frame_count_with_budget(render_size, 3)
+                .is_err()
+        );
+        assert_eq!(
+            animation
+                .max_admitted_frame_count_with_budget(render_size, 4)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            animation
+                .max_admitted_frame_count_with_budget(render_size, 8)
+                .unwrap(),
+            2
+        );
+        assert!(
+            animation
+                .render_batch_with_budget(render_size, &[0, 1, 2], 8)
+                .is_err()
+        );
+        assert_eq!(prepared_animation_count(), 0);
+        assert_eq!(RENDERED_FRAME_COUNT.with(std::cell::Cell::get), 0);
+        assert_eq!(prepared_animation_cache_len(), 0);
+        let batch = animation
+            .render_batch_with_budget(render_size, &[0, 1], 8)
+            .unwrap();
+        assert_eq!(batch.frames.len(), 2);
+        assert!(
+            batch
+                .frames
+                .iter()
+                .all(|frame| frame.image.size(0) == render_size)
+        );
+        assert_eq!(prepared_animation_count(), 1);
+        assert_eq!(RENDERED_FRAME_COUNT.with(std::cell::Cell::get), 2);
+        assert!(
+            animation
+                .render_batch_with_budget(render_size, &[0, 1], 7)
+                .is_err()
+        );
+        assert_eq!(prepared_animation_count(), 1);
+        assert_eq!(RENDERED_FRAME_COUNT.with(std::cell::Cell::get), 2);
+        reset_prepared_animation_cache();
+        let empty = animation
+            .render_batch_with_budget(render_size, &[], 0)
+            .unwrap();
+        assert!(empty.frames.is_empty());
+        assert_eq!(empty.render_size, render_size);
+        assert_eq!(prepared_animation_count(), 0);
+        assert_eq!(RENDERED_FRAME_COUNT.with(std::cell::Cell::get), 0);
+    }
+
+    #[test]
+    fn render_batch_accounts_for_actual_fitted_and_rounded_canvas() {
+        for (native, requested, actual) in
+            [((13, 1), (7, 7), (8, 1)), ((1, 8192), (10000, 1), (1, 1))]
+        {
+            let animation = LottieAnimation::from_json_str(&format!(
+                r#"{{"fr":30,"ip":0,"op":1,"w":{},"h":{},"layers":[]}}"#,
+                native.0, native.1,
+            ))
+            .unwrap();
+            let requested = size(DevicePixels(requested.0), DevicePixels(requested.1));
+            let exact_bytes = actual.0 * actual.1 * 4;
+            reset_prepared_animation_cache();
+            assert!(
+                animation
+                    .max_admitted_frame_count_with_budget(requested, exact_bytes - 1)
+                    .is_err()
+            );
+            assert_eq!(
+                animation
+                    .max_admitted_frame_count_with_budget(requested, exact_bytes)
+                    .unwrap(),
+                1
+            );
+            assert!(
+                animation
+                    .render_batch_with_budget(requested, &[0], exact_bytes - 1)
+                    .is_err()
+            );
+            assert_eq!(prepared_animation_count(), 0);
+            assert_eq!(RENDERED_FRAME_COUNT.with(std::cell::Cell::get), 0);
+            let batch = animation
+                .render_batch_with_budget(requested, &[0], exact_bytes)
+                .unwrap();
+            assert_eq!(batch.render_size, requested);
+            assert_eq!(
+                batch.frames[0].image.size(0),
+                size(DevicePixels(actual.0 as i32), DevicePixels(actual.1 as i32))
+            );
+            assert_eq!(prepared_animation_count(), 1);
+            assert_eq!(RENDERED_FRAME_COUNT.with(std::cell::Cell::get), 1);
+            reset_prepared_animation_cache();
         }
     }
 

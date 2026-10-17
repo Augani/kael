@@ -163,8 +163,10 @@ verify_package_archives() {
   # upstream download cache remains shared. Never delete the user's source cache.
   package_target_dir="$(mktemp -d "${TMPDIR:-/tmp}/kael-package-preflight.XXXXXX")"
   echo "Fresh package staging: $package_target_dir"
+  # The maintained fork explicitly allows only crates.io. Select that registry
+  # for the set, including crates whose default publish setting is unrestricted.
   CARGO_BUILD_BUILD_DIR="$package_target_dir" cargo package \
-    --target-dir "$package_target_dir" --locked --allow-dirty "${package_args[@]}"
+    --target-dir "$package_target_dir" --registry crates-io --locked --allow-dirty "${package_args[@]}"
 
   for crate in "${crates[@]}"; do
     archive="$package_target_dir/package/${crate}-${package_version}.crate"

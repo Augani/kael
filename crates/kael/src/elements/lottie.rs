@@ -113,7 +113,9 @@ impl Lottie {
         self
     }
 
-    /// Set how many frames should be prefetched ahead of the current frame.
+    /// Set the upper bound on frames prefetched ahead of the current frame.
+    /// Large rendered frames reduce the effective prefetch and cache count to
+    /// fit the per-batch byte budget.
     pub fn prefetch_frames(mut self, prefetch_frames: usize) -> Self {
         self.prefetch_frames = prefetch_frames.max(1);
         self
@@ -147,7 +149,7 @@ impl Lottie {
         self.loop_mode
     }
 
-    /// Returns the number of frames this element prefetches ahead of playback.
+    /// Returns the configured prefetch upper bound ahead of playback.
     pub fn prefetch_frame_count(&self) -> usize {
         self.prefetch_frames
     }
@@ -364,33 +366,29 @@ impl Element for Lottie {
                         |state: Option<Option<LottieState>>, window| {
                             let mut state = state.map(|state| state.unwrap_or_default());
                             let image = if let Some(state) = &mut state {
+                                let admitted_frames =
+                                    animation.max_admitted_frame_count(render_size).unwrap_or(0);
+                                let prefetch_frames = state.admitted_prefetch_frames(
+                                    self.prefetch_frames,
+                                    admitted_frames,
+                                );
                                 let animations_enabled = window.animations_enabled();
                                 state.sync_animation(
                                     animation.clone(),
                                     self.autoplay,
                                     animations_enabled,
                                     self.loop_mode,
-                                    self.prefetch_frames,
+                                    prefetch_frames,
                                     Instant::now(),
                                 );
                                 state.frame_cache.bind_atlas(window.sprite_atlas().clone());
-                                state.frame_cache.set_max_frames(self.prefetch_frames);
+                                state.frame_cache.set_max_frames(prefetch_frames);
                                 state.frame_cache.set_render_size(render_size);
                                 state.poll_pending_batch();
 
                                 let now = Instant::now();
-                                let (current_frame, requested_frames, is_animating) = {
-                                    let player =
-                                        state.player.as_mut().expect("player initialized above");
-                                    let current_frame = player.update(now);
-                                    let requested_frames = if player.is_animating() {
-                                        player.upcoming_frames(now, self.prefetch_frames)
-                                    } else {
-                                        vec![current_frame]
-                                    };
-                                    let is_animating = player.is_animating();
-                                    (current_frame, requested_frames, is_animating)
-                                };
+                                let (current_frame, requested_frames, should_animate) =
+                                    state.plan_frames(now, prefetch_frames);
 
                                 state.schedule_missing_frames(
                                     animation.clone(),
@@ -400,7 +398,7 @@ impl Element for Lottie {
                                     cx,
                                 );
 
-                                if is_animating {
+                                if should_animate {
                                     window.request_animation_frame();
                                 }
 
@@ -454,6 +452,30 @@ impl InteractiveElement for Lottie {
 }
 
 impl LottieState {
+    fn admitted_prefetch_frames(&mut self, configured: usize, admitted: usize) -> usize {
+        let effective = configured.max(1).min(admitted);
+        self.frame_cache.set_max_frames(effective);
+        effective
+    }
+
+    fn plan_frames(&mut self, now: Instant, prefetch_frames: usize) -> (usize, Vec<usize>, bool) {
+        let player = self.player.as_mut().expect("player initialized above");
+        let current_frame = player.update(now);
+        let is_animating = player.is_animating();
+        let requested_frames = if prefetch_frames == 0 {
+            Vec::new()
+        } else if is_animating {
+            player.upcoming_frames(now, prefetch_frames)
+        } else {
+            vec![current_frame]
+        };
+        (
+            current_frame,
+            requested_frames,
+            is_animating && prefetch_frames > 0,
+        )
+    }
+
     fn sync_animation(
         &mut self,
         animation: Arc<LottieAnimation>,
@@ -685,8 +707,13 @@ fn object_fit_key(object_fit: &ObjectFit) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{LottieState, lottie};
-    use crate::{IntoElement, LoopMode, LottieAnimation, ObjectFit, ParentElement, div};
-    use std::{sync::Arc, time::Instant};
+    use crate::{
+        DevicePixels, IntoElement, LoopMode, LottieAnimation, ObjectFit, ParentElement, div, size,
+    };
+    use std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
     const SIMPLE_LOTTIE: &str = r#"{
         "v":"5.7.6",
@@ -720,6 +747,51 @@ mod tests {
                 .is_some_and(|player| !player.is_animating())
         );
         assert!(!state.autoplay_started);
+    }
+
+    #[test]
+    fn admitted_prefetch_clips_real_plans_and_cache_while_frames_advance() {
+        let animation = Arc::new(
+            LottieAnimation::from_json_str(r#"{"fr":30,"ip":0,"op":30,"w":1,"h":1,"layers":[]}"#)
+                .unwrap(),
+        );
+        let render_size = size(DevicePixels(1), DevicePixels(1));
+        let admitted = animation
+            .max_admitted_frame_count_with_budget(render_size, 8)
+            .unwrap();
+        assert_eq!(admitted, 2);
+        let start = Instant::now();
+        let mut state = LottieState::default();
+        state.sync_animation(animation.clone(), true, true, LoopMode::Loop, 1000, start);
+        for (elapsed_ms, expected) in [(0, 0), (40, 1), (980, 29), (1040, 1)] {
+            let effective = state.admitted_prefetch_frames(1000, admitted);
+            let (current, requested, animating) =
+                state.plan_frames(start + Duration::from_millis(elapsed_ms), effective);
+            assert!(animating);
+            assert_eq!(current, expected);
+            assert_eq!(requested.len(), 2);
+            assert_eq!(requested[0], current);
+            let batch = animation
+                .render_batch_with_budget(render_size, &requested, 8)
+                .unwrap();
+            state.frame_cache.insert_batch(batch);
+            assert_eq!(state.frame_cache.max_frames, 2);
+            assert!(state.frame_cache.frames.len() <= 2);
+            assert!(state.frame_cache.get(current).is_some());
+        }
+        let effective = state.admitted_prefetch_frames(1000, 0);
+        let (_, requested, should_animate) =
+            state.plan_frames(start + Duration::from_millis(1080), effective);
+        assert!(requested.is_empty());
+        assert!(!should_animate);
+        assert!(state.player.as_ref().unwrap().is_animating());
+        let effective = state.admitted_prefetch_frames(1000, admitted);
+        let (current, requested, should_animate) =
+            state.plan_frames(start + Duration::from_millis(1120), effective);
+        assert_eq!(current, 3);
+        assert_eq!(requested[0], current);
+        assert_eq!(requested.len(), 2);
+        assert!(should_animate);
     }
 
     #[test]
