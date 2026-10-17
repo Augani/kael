@@ -191,12 +191,70 @@ The editor-specific ASCII bidi candidate remains unapplied. Subsequent shared
 cache, display-link and component changes are absent from the frozen benchmark
 binaries and require their own validation.
 
-The shared-control review also identifies follow-up work outside the fixes
-above. Select's keyboard reveal assumes 28px rows despite variable text/padding
-and group-header heights; acceptance must compare actual row and viewport
-bounds, including initial offscreen selection. Cached semantic replay also
-retains an old external parent if an outer element changes its explicit
-accessibility ID without invalidating the cached view. Stable Select ownership
-does not exercise that case. A disabled navigation submenu can still attach a
-pointer activation handler. These findings remain open; existing focused or
-full-suite passes do not establish their correctness.
+The subsequent shared-control fixes preserve the failures that prompted them:
+
+- `8d3f530`: Select reveals the highlighted option using measured child bounds,
+  including wrapped group headings, inherited typography and all three control
+  sizes. Opening at option 79, batched keyboard navigation, narrowing/widening
+  search, stable semantic IDs and wheel scrolling pass nine focused tests.
+  Two measured-geometry tests fail before the fix. The shared ScrollHandle now
+  resolves requests after publishing current viewport metrics, preserves an
+  unresolved request through empty content, and clears stale child bounds.
+  Two scroll tests pass, including first paint, resize, padding and explicit
+  bottom-request precedence. Ordinary redraws preserve wheel offsets.
+- `60141bf`: cached view and element semantics rebase external root parents
+  during cache hits, including deferred content. Internal parent links, action
+  handlers and snapshot storage remain intact. Scalar allocator scopes preserve
+  anonymous IDs through a subsequent fresh repaint; no-op paths reuse storage,
+  and changed shared buffers use copy-on-write. Four independent reparenting
+  variants fail before the fix; six focused tests pass afterward, including
+  root transitions, retained old snapshots and bounded retired metadata.
+- `9bae63b`: disabled submenus reject pointer/native activation and hide their
+  previously expanded children. Enabled submenus retain their stored disclosure
+  state. The submenu's semantic owner is its MenuItem, with unchanged row-sized
+  bounds and independent child keyboard handling. Ten focused menu tests pass;
+  two disabled-state cases fail before the fix. A separate hierarchy assertion
+  reproduces the former sibling relation before ownership is corrected.
+
+The complete second core graph passes 2,153 tests with zero failures and the
+same opt-in native probe ignored. All 476 UI tests pass. Strict native all-target
+Clippy passes after replacing one equivalent test assertion with `contains`.
+These graphs overlap the focused results and are not unique aggregate counts.
+Headless event dispatch and exported native trees do not establish screen-reader
+exploration. These commits have separate source identities from the running
+`ac7811f` platform matrix.
+
+The [second physical Metal capture](2026-10-17-control-native-validation.json)
+identifies the committed core source after these changes and again passes all
+59 required GPU tests with zero skips. The visible window verifies its requested
+720×460 logical client size, resumes from a model-only idle notification, and
+records an actual completed-and-presented frame. Its final readback retains
+6,067 text-probe pixels. Concurrent correctness builds were allowed; this is
+correctness evidence and does not compare presentation latency or frame counts.
+
+A [three-pair native navigation diagnostic](2026-10-17-current-navigation-diagnostic.json)
+uses a clean frozen `ac7811f` worktree and the unchanged pinned competitor. All
+six captures pass the original workload and schema-3 gates, with all eight
+phase boundaries at 1100×760 logical pixels and scale 2. Owned compiler, test and
+native-window workloads were paused during collection; other desktop activity
+was uncontrolled and the recorded load averages are retained.
+
+| Median diagnostic | Kael | GPUI Kit |
+| --- | ---: | ---: |
+| Idle-before process CPU | 0.050% | 0.911% |
+| Active process CPU | 25.736% | 25.489% |
+| Idle-after process CPU | 0.010% | 0.812% |
+| Churn process CPU | 31.932% | 30.121% |
+| Stable sampled peak RSS | 118.16 MiB | 110.08 MiB |
+| Per-run draw p99, median | 5,684 µs | 5,453 µs |
+
+This one navigation contract shows lower idle CPU, similar active CPU, and
+higher churn CPU and sampled peak RSS for Kael. Time-paced runs have slightly
+different operation/frame counts; CPU percentages are whole-phase diagnostics,
+not normalized per-operation results. Draw spans measure CPU-side wall time,
+not thread CPU time or display latency. Startup geometry is unpaired, and no
+comparative compositor or controlled watts/joules measurement is established.
+The three subsequent control/cache commits are absent from these binaries.
+Separate sampling captures, excluded from this table, identify general UI text
+shaping during navigation churn as a profiling lead rather than an established
+optimization or a reason to expand editor-specific work.

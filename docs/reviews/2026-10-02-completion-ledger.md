@@ -100,3 +100,14 @@ at `b11ed50` remains in progress. Its binaries predate the subsequent image
 cache, display-link and shared control improvements; those changes require
 separate evidence. Following the user's direction, further profiling prioritizes
 general desktop workloads rather than additional editor-specific optimization.
+
+The subsequent clean `ac7811f` native navigation diagnostic contains three
+alternating pairs, with all schema-3/original gates and all eight boundaries
+matching 1100×760 at scale 2. It shows lower idle CPU, similar active CPU, and
+higher churn CPU and sampled peak RSS for Kael on this shared Mac. It supplies
+neither an overall ranking nor controlled power/comparative presentation proof.
+The October 17 follow-up preserves raw and binary hashes, measurement scope,
+and separate sampling profiles. Later measured Select reveal, disabled submenu
+ownership and cached semantic reparenting fixes pass their focused regressions,
+the full core/UI graphs and a fresh 59-test physical Metal capture; those fixes
+are absent from both frozen comparison builds.

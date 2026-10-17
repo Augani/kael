@@ -32,6 +32,12 @@ UTF-16 conversion, releases outgoing tree models held by painted callbacks and
 reserves accessibility snapshot storage. Current measurements and native
 platform acceptance stay in the October 3 follow-up and completion ledger.
 
+The [October 17 follow-up](2026-10-17-benchmark-quality-followup.md) records the
+client-size mismatch correction and fresh matched native navigation diagnostics,
+alongside subsequent image-cache, display-link, Select, menu, data-table and
+cached accessibility improvements. General desktop workloads and shared controls
+are the ongoing priority; historical editor results remain scoped evidence.
+
 ## Component coverage and gaps
 
 The library already contains most common controls, so component count alone is
