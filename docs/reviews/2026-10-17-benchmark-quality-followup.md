@@ -464,11 +464,12 @@ size, preserving playback when one frame fits but the default five-frame request
 does not. Loop advancement and cache bounds are exercised through the caller's
 real planner with eight-byte batches.
 
-These limits do not establish a global memory ceiling. ZIP constructor metadata,
-parsed models/base64 strings, decoder-private allocations, allocator overhead,
-posters, renderer scratch, prepared animations and overlapping detached tasks
-remain additional. Worker budgets are independent. Existing requested-rectangle
-validation also remains in force when the fitted output would be smaller.
+At that admission checkpoint, ZIP constructor metadata, parsed models/base64
+strings, decoder-private allocations, allocator overhead, posters, renderer
+scratch, prepared animations and overlapping detached tasks remained additional.
+Worker budgets were independent, without a global memory ceiling. Existing
+requested-rectangle validation remains in force when the fitted output would be
+smaller.
 
 At the final animation source `90743b8`, all 2,178 core tests pass with the two
 explicit native diagnostic probes left opt-in. Strict native all-target Clippy,
@@ -489,3 +490,43 @@ those metadata fields do not establish a clean packaging checkout. Actual byte
 comparison supplies the source identity. Future benchmark uploads also retain
 the measured executables for independent rehashing; the historical 100-capture
 artifact and its recorded binary-byte limitation remain unchanged.
+
+The later [animation task ownership validation](2026-10-17-animation-task-ownership-validation.json)
+replaces detached element render tasks with owned tasks and immediate cancellation
+signals. Source replacement, resizing, failed/loading sources, zero drawable area
+and element-state drop retire obsolete requests. A lane retained across source
+and size changes prevents replacement work from overlapping its old worker;
+two shared worker slots limit active element rendering across windows. Both
+permits stay inside the worker until synchronous work returns. Cancellation is
+checked before preparation and between/after frames, discarding partial output
+and observed-cancelled prepared assets. A frame already executing cannot be
+preempted. Ready results do not hold worker slots, so other waiting elements can
+progress while the UI remains unblocked.
+
+A genuine regression first shows a completed old-size batch resetting the current
+cache geometry. All 22 focused tests now pass, including actual one-pixel renders,
+weak-reference lifetime checks and controlled executor cancellation during a
+background poll. Full native core validation passes 2,184 tests with only the two
+explicit diagnostic probes opt-in. Strict native Kael/UI all-target Clippy and
+the browser/Lottie Wasm consumer compile pass. These are exact-source results;
+the Wasm check does not execute browser ownership tests or extend the earlier
+release-archive preflight to the new source.
+
+The fixed two-worker default trades aggregate throughput for bounded active work.
+Its two 256 MiB output admissions allow up to 512 MiB of active batch output;
+ready results, per-element caches, posters, prepared assets, source/model storage,
+renderer scratch and allocator overhead remain additional. Completed preparation
+can enter the bounded weak-source LRU if cancellation races after the final
+check. This slice closes the detached element-task ownership gap without claiming
+a unified global memory policy, hard RSS ceiling or completed R8 acceptance.
+
+The [independent presentation control](2026-10-17-native-presentation-environment-validation.json)
+runs Apple MTKView and two direct CAMetalLayer paths on a separate diagnostic
+branch. All three hosted controls complete 60 GPU frames and receive 60 drawable
+callbacks, but every presentation timestamp is zero. The virtual display is
+active and awake before and after the bounded wake assertion; its lock state is
+unavailable. The physical Mac separately remains locked, and waking its displays
+also leaves all three controls without positive timestamps. Display sleep alone
+does not explain these results. A Kael-specific defect or working compositor
+fix is not established. The actual Kael presentation gate remains unchanged;
+this diagnostic supplies neither runtime acceptance nor comparative latency.

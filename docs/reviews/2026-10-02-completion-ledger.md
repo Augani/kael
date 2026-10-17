@@ -153,3 +153,16 @@ Those results predate the current fixes. Latest platform execution, controlled
 power/comparative presentation and physical IME/screen-reader acceptance remain
 open. General desktop forms, data, navigation, workspaces, media and shared
 rendering remain the priority; Tree disclosure needs profiling before attribution.
+
+The subsequent [animation task ownership checkpoint](2026-10-17-animation-task-ownership-validation.json)
+owns pending element render tasks, cancels obsolete source/size/drop work and
+rejects ready batches for stale geometry. Worker-held permits retain admission
+until an executing synchronous frame returns; cancellation cannot preempt that
+frame. A fixed two-worker limit bounds active element work while ready results
+and per-element caches remain additional. All 22 focused regressions and 2,184
+native core tests pass, with the two explicit diagnostic probes opt-in; strict
+native all-target Clippy and the browser/Lottie Wasm compile also pass. The
+record preserves exact source/log hashes and the real geometry RED. This ownership
+checkpoint adds no release-preflight or browser ownership-runtime claim. Unified
+configurable memory accounting and cross-platform R8 lifecycle acceptance remain
+open; the earlier animation validation record stays immutable.
