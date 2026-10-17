@@ -1380,6 +1380,45 @@
           "source_crate_root": "crates/kael_ui"
         }
       ]
+    },
+    "independent_archive_audit_v2": {
+      "schema_version": 1,
+      "verified_at_utc": "2026-10-17T20:47:19.258227+00:00",
+      "source_commit_for_byte_comparison": "90743b817ff7f3f29a8efd476ae4a16352d1d4f5",
+      "archive_count": 39,
+      "metadata_sha256": "830d763d19447b9b9241399ec1875366261fa7e903bf9d1e2780f9ebcf5feb29",
+      "verifier_sha256": "e9055d29c2d848f948e7090df3ba08ebc6d0a6a625cad8ba2c80237dacc3dcfb",
+      "max_compressed_archive_bytes": 10485760,
+      "archive_bytes": 6019103,
+      "rust_file_count": 928,
+      "rust_bytes": 23222165,
+      "all_included_rust_files_match_source_commit": true,
+      "archived_vcs_metadata_histogram": {
+        "{\"sha1\": \"83190dc65173b040b3ed6c47d2b70702f4a4838c\"}": 30,
+        "{\"sha1\": \"90743b817ff7f3f29a8efd476ae4a16352d1d4f5\"}": 9
+      },
+      "archived_vcs_dirty_field_histogram": {
+        "absent": 39
+      },
+      "limitations": [
+        "Archived VCS IDs/dirty flags are reported as packaged; Rust bytes were independently compared with the named immutable source commit.",
+        "An absent archived VCS dirty field is unknown metadata, not proof of a clean or dirty packaging checkout.",
+        "This artifact audit performs no build, upload, registry publication, native UI, GPU, browser, or performance measurement.",
+        "Every included Rust file was checked; package include rules intentionally omit some checkout sources, examples and benchmarks."
+      ],
+      "additional_guards": [
+        "Exact optional Kael fork alias, dotlottie/images/text features and lottie feature linkage",
+        "Complete64 tracked fork source/test payload files",
+        "All4 AccessKit LICENSE.chromium notices equal their immutable Git source",
+        "Singular bench directories and fork tools excluded"
+      ],
+      "same_archive_hashes_rust_records_and_vcs_as_first_audit": true,
+      "chromium_licenses": {
+        "kael_accesskit_macos": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308",
+        "kael_accesskit_atspi_common": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308",
+        "kael_accesskit_unix": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308",
+        "kael_accesskit_windows": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308"
+      }
     }
   },
   "prior_platform_checkpoint": {
@@ -1562,6 +1601,21 @@
       "path": ".artifacts/2026-10-17-lottie-final-docs.log",
       "bytes": 104,
       "sha256": "0fb87ecae09e05f755df5b77bb290e1636d51926a57bb5e2361c5a19dddcce3f"
+    },
+    {
+      "path": ".artifacts/2026-10-17-verify-release-archives-v2.py",
+      "bytes": 16669,
+      "sha256": "e9055d29c2d848f948e7090df3ba08ebc6d0a6a625cad8ba2c80237dacc3dcfb"
+    },
+    {
+      "path": ".artifacts/2026-10-17-release-archives-v2.json",
+      "bytes": 351433,
+      "sha256": "0a0207ada436ed5dfcfcb721b5fd7cacc7fc084886b6732541168ccedae296a9"
+    },
+    {
+      "path": ".artifacts/2026-10-17-release-archives-v2.log",
+      "bytes": 4154,
+      "sha256": "f2aeb523f8e618222bedae3eca7cc8ec58ccebd1445ff9563d61065d35ddf696"
     }
   ],
   "remaining_acceptance": [
