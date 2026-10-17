@@ -200,11 +200,12 @@ starts excluding rows:
 ```rust,ignore
 DataTable::new_virtual(1_000_000, columns, 128, cx)
     .max_cached_pages(8)
+    .max_in_flight_pages(4)
     .show_selection(true)
     .on_fetch_page_request(|request, _window, cx| {
         // Fetch or compute only request.page_start()..page_start + page_size.
         // Commit with set_page_data_for(request, rows, cx); stale generations
-        // are rejected automatically.
+        // are rejected automatically. Report errors with page_load_failed.
     })
     .on_selection_change_snapshot(|selection, _window, _cx| {
         println!(
@@ -229,6 +230,20 @@ Virtual-table search and sort are query inputs for the backing source. Kael
 invalidates the current generation and cache; the application or a Kael Web
 Worker performs the large search/sort and returns the requested page. Kael does
 not scan or allocate the million-row logical range on the UI thread.
+
+Virtual paging admits at most eight pending pages per query by default;
+`max_in_flight_pages` configures this limit with a minimum of one. Finish each
+request with `set_page_data_for` (or legacy `set_page_data`) and report errors
+with `page_load_failed` to free its slot.
+When a slot opens, the next frame considers the current viewport without
+retaining a queue of previously visited pages. Cached pages use a separate
+`max_cached_pages` limit.
+
+Fetch tasks belong to the application. Reset, search, and sort invalidate the
+query and its reservations, but do not cancel tasks from older queries. Cancel
+those tasks in the data source when a limit across queries is required. Prefer
+the generation-safe callback above for asynchronous sources; legacy
+`on_fetch_page`/`set_page_data` callbacks cannot identify stale query results.
 
 ### Data table with uniform_list
 

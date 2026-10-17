@@ -547,11 +547,13 @@ enum DataBacking<T: Clone + 'static> {
         in_flight_pages: HashMap<usize, u64>,
         page_size: usize,
         max_cached_pages: usize,
+        max_in_flight_pages: usize,
         generation: u64,
     },
 }
 
 const DEFAULT_MAX_CACHED_PAGES: usize = 16;
+const DEFAULT_MAX_IN_FLIGHT_PAGES: usize = 8;
 /// Maximum exact selection size delivered to the legacy slice callback.
 ///
 /// Larger all-except selections remain available through
@@ -567,6 +569,8 @@ pub struct DataTableState<T: Clone + 'static> {
     scroller: VirtualScroller,
     selection: RowSelection,
     backing: DataBacking<T>,
+    #[cfg(test)]
+    last_page_request_visit_count: usize,
 }
 
 impl<T: Clone + 'static> DataTableState<T> {
@@ -589,6 +593,8 @@ impl<T: Clone + 'static> DataTableState<T> {
             scroller: VirtualScroller::new(total_items, viewport),
             selection: RowSelection::default(),
             backing: DataBacking::InMemory { data },
+            #[cfg(test)]
+            last_page_request_visit_count: 0,
         }
     }
 
@@ -665,6 +671,7 @@ impl<T: Clone + 'static> DataTableState<T> {
                     in_flight_pages: HashMap::new(),
                     page_size: page_size.unwrap_or(200).max(1),
                     max_cached_pages: DEFAULT_MAX_CACHED_PAGES,
+                    max_in_flight_pages: DEFAULT_MAX_IN_FLIGHT_PAGES,
                     generation: 1,
                 };
             }
@@ -688,6 +695,7 @@ impl<T: Clone + 'static> DataTableState<T> {
             page_size,
             max_cached_pages,
             generation,
+            ..
         } = &mut self.backing
         {
             let Some(in_flight_generation) = in_flight_pages.get(&page_start).copied() else {
@@ -755,13 +763,29 @@ impl<T: Clone + 'static> DataTableState<T> {
         }
     }
 
+    fn set_max_in_flight_pages(&mut self, max_in_flight_pages: usize) {
+        if let DataBacking::Virtual {
+            max_in_flight_pages: configured,
+            ..
+        } = &mut self.backing
+        {
+            // Existing reservations continue until their callback settles.
+            *configured = max_in_flight_pages.max(1);
+        }
+    }
+
     fn virtual_requests_for_range(&mut self, range: Range<usize>) -> Vec<DataTablePageRequest> {
+        #[cfg(test)]
+        {
+            self.last_page_request_visit_count = 0;
+        }
         let DataBacking::Virtual {
             total_items,
             cached_pages,
             page_lru,
             in_flight_pages,
             page_size,
+            max_in_flight_pages,
             generation,
             ..
         } = &mut self.backing
@@ -780,18 +804,48 @@ impl<T: Clone + 'static> DataTableState<T> {
 
         let first_page = (start / *page_size) * *page_size;
         let last_page = ((end - 1) / *page_size) * *page_size;
+        // Touch resident pages in the same ascending order as the logical
+        // scan, even when admission is full. Work depends on cache size rather
+        // than the requested range; the default cache fits on the stack.
+        let mut cached_page_starts = smallvec::SmallVec::<[usize; DEFAULT_MAX_CACHED_PAGES]>::new();
+        for &cached_start in cached_pages.keys() {
+            #[cfg(test)]
+            {
+                self.last_page_request_visit_count += 1;
+            }
+            if (first_page..=last_page).contains(&cached_start) {
+                cached_page_starts.push(cached_start);
+            }
+        }
+        cached_page_starts.sort_unstable();
+        for cached_start in cached_page_starts {
+            touch_lru_page(page_lru, cached_start);
+        }
+
         let mut requests = Vec::new();
+        if in_flight_pages.len() >= *max_in_flight_pages {
+            return requests;
+        }
+        // Each cursor visit passes a cached/pending page or consumes a free
+        // slot, so even a huge requested range has bounded planning work.
         let mut page_start = first_page;
         loop {
-            if cached_pages.contains_key(&page_start) {
-                touch_lru_page(page_lru, page_start);
-            } else if let Entry::Vacant(entry) = in_flight_pages.entry(page_start) {
+            #[cfg(test)]
+            {
+                self.last_page_request_visit_count += 1;
+            }
+            if !cached_pages.contains_key(&page_start)
+                && let Entry::Vacant(entry) = in_flight_pages.entry(page_start)
+            {
                 entry.insert(*generation);
                 requests.push(DataTablePageRequest {
                     page_start,
                     page_size: (*page_size).min(total_items.saturating_sub(page_start)),
                     generation: *generation,
                 });
+                if in_flight_pages.len() >= *max_in_flight_pages {
+                    break;
+                }
             }
 
             if page_start == last_page {
@@ -926,7 +980,7 @@ impl<T: Clone + 'static> DataTableState<T> {
         }
     }
 
-    /// Number of in-flight virtual pages.
+    /// Number of pending virtual pages in the current query.
     pub fn in_flight_page_count(&self) -> usize {
         match &self.backing {
             DataBacking::Virtual {
@@ -942,6 +996,17 @@ impl<T: Clone + 'static> DataTableState<T> {
             DataBacking::Virtual {
                 max_cached_pages, ..
             } => Some(*max_cached_pages),
+            DataBacking::InMemory { .. } => None,
+        }
+    }
+
+    /// Configured maximum pending pages in the current virtual query.
+    pub fn max_in_flight_pages(&self) -> Option<usize> {
+        match &self.backing {
+            DataBacking::Virtual {
+                max_in_flight_pages,
+                ..
+            } => Some(*max_in_flight_pages),
             DataBacking::InMemory { .. } => None,
         }
     }
@@ -1038,7 +1103,7 @@ impl<T: Clone + 'static> DataTableState<T> {
     /// Content-safe summary for logs, tests, and AI-agent diagnostics.
     pub fn to_text(&self) -> String {
         format!(
-            "data_table_state(columns={}, rows={}, backing={}, virtual={}, cached_rows={}, cached_pages={}, max_cached_pages={}, in_flight_pages={}, page_size={}, generation={}, selected={}, selection_representation={}, stored_selection_indices={}, has_sort={}, sort_column={}, sort_direction={}, sortable_columns={}, editable_columns={}, resizable_columns={}, row_height_class={}, viewport_class={})",
+            "data_table_state(columns={}, rows={}, backing={}, virtual={}, cached_rows={}, cached_pages={}, max_cached_pages={}, in_flight_pages={}, max_in_flight_pages={}, page_size={}, generation={}, selected={}, selection_representation={}, stored_selection_indices={}, has_sort={}, sort_column={}, sort_direction={}, sortable_columns={}, editable_columns={}, resizable_columns={}, row_height_class={}, viewport_class={})",
             self.column_count(),
             self.row_count(),
             self.backing_kind(),
@@ -1047,6 +1112,7 @@ impl<T: Clone + 'static> DataTableState<T> {
             self.cached_page_count(),
             self.max_cached_pages().unwrap_or(0),
             self.in_flight_page_count(),
+            self.max_in_flight_pages().unwrap_or(0),
             self.page_size().map_or(0, |size| size),
             self.virtual_generation().unwrap_or(0),
             self.selected_count(),
@@ -1415,6 +1481,25 @@ impl<T: Clone + 'static> DataTable<T> {
         self
     }
 
+    /// Configures the maximum pending virtual pages in the current query.
+    ///
+    /// The default is eight pages and the minimum is one. Additional visible
+    /// pages are reconsidered after a request completes or fails; no backlog
+    /// is retained. Finish requests with [`Self::set_page_data_for`] (or legacy
+    /// [`Self::set_page_data`]) and report errors with [`Self::page_load_failed`]
+    /// to release their slots.
+    /// Lowering the limit preserves pending requests and pauses admission
+    /// until their count falls below the new limit.
+    ///
+    /// Fetch tasks belong to the application. Resetting, searching, or sorting
+    /// starts a new query with empty reservations, but does not cancel tasks
+    /// from older queries. Applications must cancel those tasks themselves
+    /// when they need a limit across queries.
+    pub fn max_in_flight_pages(mut self, max_in_flight_pages: usize) -> Self {
+        self.state.set_max_in_flight_pages(max_in_flight_pages);
+        self
+    }
+
     /// Set callback for when a cell is edited
     ///
     /// The callback receives: (row_index, column_id, old_value, new_value, context)
@@ -1744,6 +1829,16 @@ impl<T: Clone + 'static> DataTable<T> {
     /// Configured maximum resident virtual pages, or `None` for in-memory data.
     pub fn max_cached_page_count(&self) -> Option<usize> {
         self.state.max_cached_pages()
+    }
+
+    /// Number of pending virtual pages in the current query.
+    pub fn in_flight_page_count(&self) -> usize {
+        self.state.in_flight_page_count()
+    }
+
+    /// Configured maximum pending pages, or `None` for in-memory data.
+    pub fn max_in_flight_page_count(&self) -> Option<usize> {
+        self.state.max_in_flight_pages()
     }
 
     /// Number of row indices retained by the compressed selection model.
@@ -2197,6 +2292,15 @@ mod tests {
         ]
     }
 
+    fn indexed_rows(start: usize, count: usize) -> Vec<PrivateRow> {
+        (start..start + count)
+            .map(|index| PrivateRow {
+                name: format!("row-{index}").into(),
+                revenue: "$1".into(),
+            })
+            .collect()
+    }
+
     #[::core::prelude::v1::test]
     fn data_table_column_and_action_summary_is_content_safe() {
         let column = ColumnDef::new("private-customer", "Secret Customer", |row: &PrivateRow| {
@@ -2549,6 +2653,287 @@ mod tests {
         assert!(state.virtual_page_failed(request[0]));
         let retry = state.virtual_requests_for_range(0..1);
         assert_eq!(retry, vec![request[0]]);
+    }
+
+    #[::core::prelude::v1::test]
+    fn virtual_pending_pages_stay_bounded_during_rapid_scrolling() {
+        let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        state.virtual_reset(1_000_000, Some(10));
+        assert_eq!(state.max_in_flight_pages(), Some(8));
+
+        let mut dispatched = Vec::new();
+        for start in (0..100_000).step_by(10) {
+            dispatched.extend(state.virtual_requests_for_range(start..start + 1));
+            assert!(state.in_flight_page_count() <= 8);
+        }
+        assert_eq!(dispatched.len(), 8);
+        assert_eq!(state.in_flight_page_count(), 8);
+        assert_eq!(state.cached_row_count(), 0);
+
+        // Scrolling did not discard an older reservation to conceal its work.
+        let oldest = dispatched[0];
+        assert!(state.virtual_set_page(
+            oldest.page_start(),
+            indexed_rows(oldest.page_start(), oldest.page_size()),
+            Some(oldest.generation()),
+        ));
+        assert_eq!(state.in_flight_page_count(), 7);
+
+        // The next frame admits the current viewport, with no historical queue.
+        let latest = state.virtual_requests_for_range(99_990..100_000);
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].page_start(), 99_990);
+        assert_eq!(state.in_flight_page_count(), 8);
+        assert_eq!(state.get_row(0).unwrap().name, "row-0");
+        assert!(
+            state
+                .virtual_requests_for_range(100_000..100_010)
+                .is_empty()
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn virtual_pending_limit_preserves_failures_retries_and_other_reservations() {
+        let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        state.virtual_reset(1_000, Some(10));
+        state.set_max_in_flight_pages(2);
+
+        let requests = state.virtual_requests_for_range(0..1_000);
+        assert_eq!(requests.len(), 2);
+        assert_eq!(state.in_flight_page_count(), 2);
+        assert!(state.virtual_requests_for_range(900..910).is_empty());
+        assert!(state.virtual_page_failed(requests[0]));
+        assert!(!state.virtual_page_failed(requests[0]));
+        assert_eq!(state.in_flight_page_count(), 1);
+
+        let retry = state.virtual_requests_for_range(0..10);
+        assert_eq!(retry, vec![requests[0]]);
+        assert!(state.virtual_requests_for_range(0..20).is_empty());
+        assert!(state.virtual_set_page(
+            requests[1].page_start(),
+            indexed_rows(10, 10),
+            Some(requests[1].generation()),
+        ));
+
+        let latest = state.virtual_requests_for_range(900..910);
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].page_start(), 900);
+        assert_eq!(state.in_flight_page_count(), 2);
+        assert_eq!(state.get_row(10).unwrap().name, "row-10");
+    }
+
+    #[::core::prelude::v1::test]
+    fn virtual_pending_limit_survives_reset_and_rejects_stale_settlements() {
+        let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        state.virtual_reset(100, Some(10));
+        state.set_max_in_flight_pages(1);
+
+        for reset in [true, false] {
+            let stale = state.virtual_requests_for_range(0..1).remove(0);
+            if reset {
+                state.virtual_reset(100, None);
+            } else {
+                state.sort_by_column(0, SortDirection::Descending);
+            }
+            assert_eq!(state.max_in_flight_pages(), Some(1));
+            assert_eq!(state.in_flight_page_count(), 0);
+            assert_eq!(state.cached_row_count(), 0);
+
+            let current = state.virtual_requests_for_range(0..1).remove(0);
+            assert_ne!(stale.generation(), current.generation());
+            assert!(!state.virtual_page_failed(stale));
+            assert!(!state.virtual_set_page(
+                stale.page_start(),
+                indexed_rows(0, 10),
+                Some(stale.generation()),
+            ));
+            assert_eq!(state.in_flight_page_count(), 1);
+            assert!(state.get_row(0).is_none());
+            assert!(state.virtual_requests_for_range(10..20).is_empty());
+
+            assert!(state.virtual_set_page(
+                current.page_start(),
+                indexed_rows(0, 10),
+                Some(current.generation()),
+            ));
+            assert_eq!(state.in_flight_page_count(), 0);
+            assert_eq!(state.get_row(0).unwrap().name, "row-0");
+            // Make the same page requestable for the next invalidation case.
+            assert!(state.invalidate_virtual_query());
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn virtual_cached_hits_preserve_lru_and_row_identity_at_pending_limit() {
+        let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        state.virtual_reset(35, Some(10));
+        state.set_max_cached_pages(2);
+        state.set_max_in_flight_pages(1);
+        for start in [0, 10] {
+            let request = state.virtual_requests_for_range(start..start + 1)[0];
+            assert!(state.virtual_set_page(
+                start,
+                indexed_rows(start, 10),
+                Some(request.generation()),
+            ));
+        }
+        state.toggle_row(0);
+
+        let last = state.virtual_requests_for_range(30..usize::MAX)[0];
+        assert_eq!(last.page_start(), 30);
+        assert_eq!(last.page_size(), 5);
+        assert!(state.virtual_requests_for_range(0..10).is_empty());
+        assert_eq!(state.in_flight_page_count(), 1);
+        assert!(state.virtual_requests_for_range(20..30).is_empty());
+        assert!(state.virtual_set_page(30, indexed_rows(30, 10), Some(last.generation())));
+
+        assert_eq!(state.cached_page_count(), 2);
+        assert_eq!(state.cached_row_count(), 15);
+        assert!(state.get_row(10).is_none());
+        assert!(state.get_row(35).is_none());
+        for index in (0..10).chain(30..35) {
+            assert_eq!(state.get_row(index).unwrap().name, format!("row-{index}"));
+        }
+        assert!(state.is_row_selected(0));
+        assert!(!state.virtual_set_page(30, indexed_rows(0, 5), Some(last.generation())));
+        assert_eq!(state.get_row(30).unwrap().name, "row-30");
+        assert_eq!(state.virtual_requests_for_range(10..20).len(), 1);
+    }
+
+    #[::core::prelude::v1::test]
+    fn virtual_pending_limit_configuration_normalizes_zero_and_retains_reservations() {
+        let cx = TestAppContext::single();
+        let table = cx.update(|cx| {
+            cx.new(|cx| {
+                DataTable::new_virtual(30, private_columns(), 10, cx).max_in_flight_pages(0)
+            })
+        });
+        cx.update(|cx| {
+            table.update(cx, |table, cx| {
+                assert_eq!(table.max_in_flight_page_count(), Some(1));
+                let requests = table.state.virtual_requests_for_range(0..30);
+                assert_eq!(requests.len(), 1);
+                assert_eq!(table.in_flight_page_count(), 1);
+                assert!(table.page_load_failed(requests[0], cx));
+                let retry = table.state.virtual_requests_for_range(0..30);
+                assert_eq!(retry, requests);
+                assert!(table.set_page_data_for(retry[0], indexed_rows(0, 10), cx));
+                assert_eq!(table.in_flight_page_count(), 0);
+                let legacy = table.state.virtual_requests_for_range(10..20)[0];
+                table.set_page_data(legacy.page_start(), indexed_rows(10, 10), cx);
+                assert_eq!(table.in_flight_page_count(), 0);
+                assert_eq!(table.cached_row_count(), 20);
+                assert!(table.to_text().contains("max_in_flight_pages=1"));
+            });
+        });
+
+        let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        assert_eq!(state.max_in_flight_pages(), None);
+        state.virtual_reset(100, Some(10));
+        state.set_max_in_flight_pages(3);
+        let requests = state.virtual_requests_for_range(0..100);
+        assert_eq!(requests.len(), 3);
+        state.set_max_in_flight_pages(1);
+        assert_eq!(state.in_flight_page_count(), 3);
+        for request in requests {
+            assert!(state.virtual_requests_for_range(90..100).is_empty());
+            assert!(state.virtual_page_failed(request));
+        }
+        assert_eq!(state.virtual_requests_for_range(90..100).len(), 1);
+    }
+
+    #[::core::prelude::v1::test]
+    fn virtual_pending_limit_bounds_huge_range_work_and_preserves_cached_touch_order() {
+        let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        state.virtual_reset(1_000_000, Some(10));
+        state.set_max_cached_pages(2);
+        state.set_max_in_flight_pages(1);
+        for start in [0, 999_990] {
+            let request = state.virtual_requests_for_range(start..start + 1)[0];
+            assert!(state.virtual_set_page(
+                start,
+                indexed_rows(start, 10),
+                Some(request.generation()),
+            ));
+        }
+        // Reverse the existing LRU order before touching the whole range.
+        assert!(state.virtual_requests_for_range(0..1).is_empty());
+        let pending = state.virtual_requests_for_range(10..20)[0];
+
+        assert!(state.virtual_requests_for_range(0..1_000_000).is_empty());
+        assert!(
+            state.last_page_request_visit_count <= 2,
+            "a full pending budget must visit only the two resident pages, visited {}",
+            state.last_page_request_visit_count,
+        );
+        assert!(state.virtual_set_page(10, indexed_rows(10, 10), Some(pending.generation())));
+        assert!(state.get_row(0).is_none());
+        assert_eq!(state.get_row(999_990).unwrap().name, "row-999990");
+        assert_eq!(state.get_row(10).unwrap().name, "row-10");
+
+        // A free slot also stops the logical scan as soon as it is filled.
+        let next = state.virtual_requests_for_range(0..1_000_000);
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].page_start(), 0);
+        assert!(state.last_page_request_visit_count <= 3);
+    }
+
+    #[::core::prelude::v1::test]
+    fn mounted_virtual_table_refills_unchanged_viewport_after_settlement() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::dark());
+        });
+        let requests = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let (table, window) = cx.add_window_view({
+            let requests = requests.clone();
+            move |_, cx| {
+                DataTable::new_virtual(30, private_columns(), 1, cx)
+                    .max_in_flight_pages(1)
+                    .on_fetch_page_request(move |request, _, _| {
+                        requests.borrow_mut().push(request);
+                    })
+            }
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+        });
+        assert_eq!(requests.borrow().len(), 1);
+        let first = requests.borrow()[0];
+        assert_eq!(first.page_start(), 0);
+
+        window.update(|_, cx| {
+            table.update(cx, |table, cx| {
+                assert!(table.set_page_data_for(first, indexed_rows(0, 1), cx));
+            });
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+        });
+        assert_eq!(requests.borrow().len(), 2);
+        let second = requests.borrow()[1];
+        assert_eq!(second.page_start(), 1);
+        assert_eq!(second.generation(), first.generation());
+
+        window.update(|_, cx| {
+            table.update(cx, |table, cx| {
+                assert!(table.page_load_failed(second, cx));
+            });
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+        });
+        assert_eq!(requests.borrow().as_slice(), &[first, second, second]);
+        window.update(|_, cx| {
+            assert_eq!(table.read(cx).in_flight_page_count(), 1);
+            assert_eq!(table.read(cx).cached_row_count(), 1);
+        });
     }
 
     #[::core::prelude::v1::test]
