@@ -2674,7 +2674,6 @@ impl MacWindowState {
     }
 
     fn start_display_link(&mut self) {
-        self.stop_display_link();
         if !self.frame_polling_active {
             return;
         }
@@ -2684,20 +2683,24 @@ impl MacWindowState {
                 .occlusionState()
                 .contains(NSWindowOcclusionState::Visible)
             {
+                self.stop_display_link();
                 return;
             }
         }
         let display_id = unsafe { display_id_for_screen(self.native_window.screen()) };
-        if let Some(mut display_link) =
-            DisplayLink::new(display_id, self.native_view.as_ptr() as *mut c_void, step).log_err()
-        {
-            display_link.start().log_err();
-            self.display_link = Some(display_link);
-        }
+        DisplayLink::resume_retained(
+            &mut self.display_link,
+            display_id,
+            self.native_view.as_ptr() as *mut c_void,
+            step,
+        )
+        .log_err();
     }
 
     fn stop_display_link(&mut self) {
-        self.display_link = None;
+        if let Some(display_link) = self.display_link.as_mut() {
+            display_link.stop().log_err();
+        }
     }
 
     fn is_maximized(&self) -> bool {
@@ -4147,8 +4150,8 @@ impl Drop for MacWindow {
     }
 }
 
-fn should_start_display_link(active: bool, was_active: bool, has_display_link: bool) -> bool {
-    active && (!was_active || !has_display_link)
+fn should_start_display_link(active: bool, was_active: bool, display_link_running: bool) -> bool {
+    active && (!was_active || !display_link_running)
 }
 
 impl PlatformWindow for MacWindow {
@@ -4549,17 +4552,25 @@ impl PlatformWindow for MacWindow {
         let was_active = this.frame_polling_active;
         this.frame_polling_active = active;
         // Polling can first be enabled while AppKit still reports the window as
-        // occluded, in which case `start_display_link` deliberately leaves no
-        // link behind. A transient CoreVideo start failure has the same state.
+        // occluded, leaving a stopped link or none yet. A transient CoreVideo
+        // start failure also keeps its native object for a later retry.
         // Treat a later active refresh as a retry instead of requiring an
         // unrelated false -> true transition to make the window render again.
-        if should_start_display_link(active, was_active, this.display_link.is_some()) {
+        if should_start_display_link(
+            active,
+            was_active,
+            this.display_link
+                .as_ref()
+                .is_some_and(DisplayLink::is_running),
+        ) {
             this.start_display_link();
             if this.frame_polling_trace {
                 let occlusion = unsafe { this.native_window.occlusionState() };
                 eprintln!(
                     "KAEL_NATIVE_FRAME_POLLING: active={active} was_active={was_active} link_started={} occlusion={occlusion:?}",
-                    this.display_link.is_some()
+                    this.display_link
+                        .as_ref()
+                        .is_some_and(DisplayLink::is_running)
                 );
             }
         } else if !active && was_active {
@@ -7014,7 +7025,7 @@ mod tests {
     }
 
     #[test]
-    fn active_frame_polling_retries_a_missing_display_link() {
+    fn active_frame_polling_retries_a_missing_or_stopped_display_link() {
         assert!(should_start_display_link(true, false, false));
         assert!(should_start_display_link(true, true, false));
         assert!(!should_start_display_link(true, true, true));
