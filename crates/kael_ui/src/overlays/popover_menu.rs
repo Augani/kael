@@ -4,7 +4,7 @@ use crate::components::icon::Icon;
 use crate::theme::Theme;
 use kael::prelude::FluentBuilder;
 use kael::*;
-use std::{panic::Location, rc::Rc};
+use std::{cell::Cell, panic::Location, rc::Rc};
 
 pub struct PopoverMenuItem {
     pub id: SharedString,
@@ -122,6 +122,10 @@ impl RenderOnce for PopoverMenu {
         let theme = Theme::of(cx).clone();
         let on_close_backdrop = self.on_close.clone();
         let on_close_menu = self.on_close.clone();
+        // A closing menu may receive several native requests before the next
+        // frame removes it. All items share one claim for this mounted render.
+        let activation_claimed = self.on_close.as_ref().map(|_| Rc::new(Cell::new(false)));
+        let backdrop_claimed = activation_claimed.clone();
         let user_style = self.style;
         let overlay_hover = crate::astryx::overlay_hover(theme.tokens.background.l < 0.5);
         let menu_id = self.id.clone();
@@ -183,9 +187,7 @@ impl RenderOnce for PopoverMenu {
             .left_0()
             .size_full()
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                if let Some(ref handler) = on_close_backdrop {
-                    handler(window, cx);
-                }
+                dismiss_menu(&on_close_backdrop, &backdrop_claimed, window, cx);
             })
             .child(
                 deferred(
@@ -218,11 +220,15 @@ impl RenderOnce for PopoverMenu {
                                 })
                                 .when(on_close_menu.is_some(), |this| {
                                     let on_close = on_close_menu.clone();
+                                    let activation_claimed = activation_claimed.clone();
                                     this.on_key_down(move |event: &KeyDownEvent, window, cx| {
                                         if event.keystroke.key.as_str() == "escape" {
-                                            if let Some(handler) = on_close.as_ref() {
-                                                handler(window, cx);
-                                            }
+                                            dismiss_menu(
+                                                &on_close,
+                                                &activation_claimed,
+                                                window,
+                                                cx,
+                                            );
                                             cx.stop_propagation();
                                             window.prevent_default();
                                         }
@@ -236,6 +242,7 @@ impl RenderOnce for PopoverMenu {
                                         focus_handles.clone(),
                                         interactive_indices.clone(),
                                         on_close_menu.clone(),
+                                        activation_claimed.clone(),
                                         overlay_hover,
                                         &theme,
                                         window,
@@ -262,6 +269,21 @@ fn sanitize_position(position: Point<Pixels>) -> Point<Pixels> {
     point(coordinate(position.x), coordinate(position.y))
 }
 
+fn dismiss_menu(
+    on_close: &Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    activation_claimed: &Option<Rc<Cell<bool>>>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if let Some(handler) = on_close.as_ref()
+        && !activation_claimed
+            .as_ref()
+            .is_some_and(|claimed| claimed.replace(true))
+    {
+        handler(window, cx);
+    }
+}
+
 fn render_popover_menu_item(
     index: usize,
     item: PopoverMenuItem,
@@ -269,6 +291,7 @@ fn render_popover_menu_item(
     focus_handles: Rc<Vec<FocusHandle>>,
     interactive_indices: Rc<Vec<usize>>,
     on_close: Option<Rc<dyn Fn(&mut Window, &mut App) + 'static>>,
+    activation_claimed: Option<Rc<Cell<bool>>>,
     overlay_hover: Hsla,
     theme: &Theme,
     window: &mut Window,
@@ -276,13 +299,28 @@ fn render_popover_menu_item(
     let on_click = item.on_click;
     let interactive = !item.disabled && on_click.is_some();
     let focus_handle = focus_handles[index].clone();
-    let focus_on_mouse = focus_handle.clone();
+    let focus_on_activation = focus_handle.clone();
     let handles_for_key = focus_handles.clone();
     let indices_for_key = interactive_indices.clone();
-    let on_click_mouse = on_click.clone();
-    let on_click_key = on_click.clone();
-    let close_mouse = on_close.clone();
-    let close_key = on_close;
+    let close_key = on_close.clone();
+    let close_key_claimed = activation_claimed.clone();
+    let activate: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |window, cx| {
+        if activation_claimed
+            .as_ref()
+            .is_some_and(|claimed| claimed.replace(true))
+        {
+            return;
+        }
+        window.focus(&focus_on_activation);
+        if let Some(handler) = on_click.as_ref() {
+            handler(window, cx);
+        }
+        if let Some(handler) = on_close.as_ref() {
+            handler(window, cx);
+        }
+    });
+    let activate_mouse = activate.clone();
+    let activate_native = activate.clone();
     let label = item.label.clone();
     let mut state = AccessibilityState::NONE;
     if !interactive {
@@ -376,14 +414,11 @@ fn render_popover_menu_item(
         })
         .when(interactive, |this| {
             this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                window.focus(&focus_on_mouse);
-                if let Some(ref handler) = on_click_mouse {
-                    handler(window, cx);
-                }
-                if let Some(ref handler) = close_mouse {
-                    handler(window, cx);
-                }
+                activate_mouse(window, cx);
                 cx.stop_propagation();
+            })
+            .on_accessibility_action(AccessibilityAction::Click, move |_, window, cx| {
+                activate_native(window, cx);
             })
             .on_key_down(move |event: &KeyDownEvent, window, cx| {
                 let key = event.keystroke.key.as_str();
@@ -406,17 +441,10 @@ fn render_popover_menu_item(
                     window.focus(&handles_for_key[indices_for_key[target]]);
                     cx.stop_propagation();
                 } else if matches!(key, "enter" | "space") {
-                    if let Some(ref handler) = on_click_key {
-                        handler(window, cx);
-                    }
-                    if let Some(ref handler) = close_key {
-                        handler(window, cx);
-                    }
+                    activate(window, cx);
                     cx.stop_propagation();
                 } else if key == "escape" {
-                    if let Some(ref handler) = close_key {
-                        handler(window, cx);
-                    }
+                    dismiss_menu(&close_key, &close_key_claimed, window, cx);
                     cx.stop_propagation();
                 }
             })
@@ -427,6 +455,303 @@ fn render_popover_menu_item(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct MenuActionHost {
+        open: bool,
+        closes_on_activation: bool,
+        hide_on_close: bool,
+        activations: Rc<Cell<[usize; 3]>>,
+        closes: Rc<Cell<usize>>,
+    }
+
+    impl Render for MenuActionHost {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            if !self.open {
+                return div().size_full().into_any_element();
+            }
+            let items = ["First", "Second", "Disabled"]
+                .into_iter()
+                .enumerate()
+                .map(|(index, label)| {
+                    let activations = self.activations.clone();
+                    PopoverMenuItem::new(label, label)
+                        .disabled(index == 2)
+                        .on_click(move |_, _| {
+                            let mut counts = activations.get();
+                            counts[index] += 1;
+                            activations.set(counts);
+                        })
+                })
+                .chain([PopoverMenuItem::new("inert", "Inert")])
+                .collect();
+            let menu = PopoverMenu::new(point(px(12.0), px(16.0)), items).id("native-menu");
+            if self.closes_on_activation {
+                let host = cx.weak_entity();
+                menu.on_close(move |_, cx| {
+                    let _ = host.update(cx, |this, cx| {
+                        this.closes.set(this.closes.get() + 1);
+                        if this.hide_on_close {
+                            this.open = false;
+                            cx.notify();
+                        }
+                    });
+                })
+                .into_any_element()
+            } else {
+                menu.into_any_element()
+            }
+        }
+    }
+
+    struct MenuContainer {
+        menu: Option<Entity<MenuActionHost>>,
+    }
+
+    impl Render for MenuContainer {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().children(self.menu.clone())
+        }
+    }
+
+    fn item_ids(window: &Window) -> [AccessibilityId; 4] {
+        let tree = window.accessibility_tree();
+        ["First", "Second", "Disabled", "Inert"].map(|label| {
+            let item = tree
+                .nodes
+                .values()
+                .find(|node| {
+                    node.role == AccessibilityRole::MenuItem && node.label.as_deref() == Some(label)
+                })
+                .expect("menu item should be mounted");
+            let enabled = matches!(label, "First" | "Second");
+            assert_eq!(item.actions.contains(&AccessibilityAction::Click), enabled);
+            assert_eq!(
+                window.has_accessibility_action_handler(item.id, AccessibilityAction::Click),
+                enabled,
+                "advertised native Click must have a handler"
+            );
+            assert_eq!(item.states.contains(AccessibilityState::DISABLED), !enabled);
+            item.id
+        })
+    }
+
+    #[::core::prelude::v1::test]
+    fn native_click_closes_once_across_items_and_retires_handlers() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| crate::theme::install_theme(cx, Theme::astryx_neutral()));
+        let activations = Rc::new(Cell::new([0; 3]));
+        let closes = Rc::new(Cell::new(0));
+        let menu = cx.new({
+            let activations = activations.clone();
+            let closes = closes.clone();
+            move |_| MenuActionHost {
+                open: true,
+                closes_on_activation: true,
+                hide_on_close: true,
+                activations,
+                closes,
+            }
+        });
+        let weak_menu = menu.downgrade();
+        let (container, window) = cx.add_window_view({
+            let menu = menu.clone();
+            move |_, _| MenuContainer { menu: Some(menu) }
+        });
+        let ids = window.update(|window, cx| {
+            window.draw(cx).clear();
+            let ids = item_ids(window);
+            for id in [ids[2], ids[3], ids[0], ids[0], ids[1]] {
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    id,
+                    AccessibilityAction::Click,
+                ));
+            }
+            ids
+        });
+        window.run_until_parked();
+        assert_eq!(activations.get(), [1, 0, 0]);
+        assert_eq!(closes.get(), 1);
+        window.update(|window, cx| {
+            assert!(!menu.read(cx).open);
+            window.draw(cx).clear();
+            for id in ids {
+                assert!(window.accessibility_tree().get(id).is_none());
+                assert!(!window.has_accessibility_action_handler(id, AccessibilityAction::Click));
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    id,
+                    AccessibilityAction::Click,
+                ));
+            }
+            container.update(cx, |container, cx| {
+                container.menu = None;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+        });
+        drop(menu);
+        window.run_until_parked();
+        assert!(
+            weak_menu.upgrade().is_none(),
+            "retired handlers must not retain the menu view"
+        );
+        assert_eq!(activations.get(), [1, 0, 0]);
+        assert_eq!(closes.get(), 1);
+    }
+
+    #[::core::prelude::v1::test]
+    fn persistent_native_menu_allows_repeated_actions() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| crate::theme::install_theme(cx, Theme::astryx_neutral()));
+        let activations = Rc::new(Cell::new([0; 3]));
+        let (_host, window) = cx.add_window_view({
+            let activations = activations.clone();
+            move |_, _| MenuActionHost {
+                open: true,
+                closes_on_activation: false,
+                hide_on_close: true,
+                activations,
+                closes: Rc::new(Cell::new(0)),
+            }
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let ids = item_ids(window);
+            for id in [ids[0], ids[0], ids[1], ids[2], ids[3]] {
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    id,
+                    AccessibilityAction::Click,
+                ));
+            }
+        });
+        window.run_until_parked();
+        assert_eq!(activations.get(), [2, 1, 0]);
+        // Native activation focuses the same item as pointer activation; the
+        // persistent menu keeps that item's ordinary keyboard path usable.
+        window.simulate_keystrokes("enter");
+        assert_eq!(activations.get(), [2, 2, 0]);
+        window.simulate_keystrokes("space");
+        assert_eq!(activations.get(), [2, 3, 0]);
+    }
+
+    #[::core::prelude::v1::test]
+    fn pointer_down_keeps_immediate_activation_and_shares_native_close_guard() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| crate::theme::install_theme(cx, Theme::astryx_neutral()));
+        let activations = Rc::new(Cell::new([0; 3]));
+        let closes = Rc::new(Cell::new(0));
+        let (_host, window) = cx.add_window_view({
+            let activations = activations.clone();
+            let closes = closes.clone();
+            move |_, _| MenuActionHost {
+                open: true,
+                closes_on_activation: true,
+                hide_on_close: true,
+                activations,
+                closes,
+            }
+        });
+        let (first_center, second) = window.update(|window, cx| {
+            window.draw(cx).clear();
+            let ids = item_ids(window);
+            let bounds = window
+                .accessibility_tree()
+                .get(ids[0])
+                .unwrap()
+                .bounds
+                .unwrap();
+            (
+                point(
+                    px((bounds.x + bounds.width / 2.0) as f32),
+                    px((bounds.y + bounds.height / 2.0) as f32),
+                ),
+                ids[1],
+            )
+        });
+        window.simulate_mouse_down(first_center, MouseButton::Left, Modifiers::default());
+        assert_eq!(
+            activations.get(),
+            [1, 0, 0],
+            "pointer activation must precede mouse-up"
+        );
+        assert_eq!(closes.get(), 1);
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                second,
+                AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        assert_eq!(activations.get(), [1, 0, 0]);
+        assert_eq!(closes.get(), 1);
+    }
+
+    fn assert_dismissal_rejects_pending_activation(escape: bool) {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| crate::theme::install_theme(cx, Theme::astryx_neutral()));
+        let activations = Rc::new(Cell::new([0; 3]));
+        let closes = Rc::new(Cell::new(0));
+        let (_host, window) = cx.add_window_view({
+            let activations = activations.clone();
+            let closes = closes.clone();
+            move |_, _| MenuActionHost {
+                open: true,
+                closes_on_activation: true,
+                // A close callback can start an animation or async teardown
+                // before removing its menu. The pending frame remains valid.
+                hide_on_close: false,
+                activations,
+                closes,
+            }
+        });
+        let (first, backdrop) = window.update(|window, cx| {
+            window.draw(cx).clear();
+            let viewport = window.viewport_size();
+            (
+                item_ids(window)[0],
+                point(viewport.width - px(1.0), viewport.height - px(1.0)),
+            )
+        });
+        window.update(|window, cx| {
+            let event = if escape {
+                PlatformInput::KeyDown(KeyDownEvent {
+                    keystroke: Keystroke::parse("escape").unwrap(),
+                    is_held: false,
+                })
+            } else {
+                PlatformInput::MouseDown(MouseDownEvent {
+                    position: backdrop,
+                    button: MouseButton::Left,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                })
+            };
+            window.dispatch_event(event, cx);
+            assert_eq!(activations.get(), [0; 3]);
+            assert_eq!(closes.get(), 1);
+            // Keep the old frame valid to exercise the shared close guard,
+            // rather than relying on a completed repaint to reject the request.
+            assert!(window.accessibility_tree().get(first).is_some());
+            assert!(window.has_accessibility_action_handler(first, AccessibilityAction::Click));
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                first,
+                AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        assert_eq!(activations.get(), [0; 3]);
+        assert_eq!(closes.get(), 1);
+    }
+
+    #[::core::prelude::v1::test]
+    fn escape_dismissal_rejects_queued_native_activation() {
+        assert_dismissal_rejects_pending_activation(true);
+    }
+
+    #[::core::prelude::v1::test]
+    fn backdrop_dismissal_rejects_queued_native_activation() {
+        assert_dismissal_rejects_pending_activation(false);
+    }
 
     #[::core::prelude::v1::test]
     fn menu_positions_are_finite_and_inside_the_viewport_origin() {
