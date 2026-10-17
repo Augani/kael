@@ -50,9 +50,11 @@ def native_identity(node):
     return identity
 
 
-def trace_native_state(node):
+def trace_native_state(node, identity):
     """Compare the retained libatspi proxy with one fresh native wire read."""
-    bus, path = native_identity(node)
+    # Preserve the verified service/path even when a delayed RemoveAccessible
+    # has disposed the retained proxy and cleared its application reference.
+    bus, path = identity
     connection = Gio.DBusConnection.new_for_address_sync(
         os.environ['AT_SPI_BUS_ADDRESS'],
         Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT |
@@ -71,6 +73,7 @@ def trace_native_state(node):
               f'wire_focused={present(Atspi.StateType.FOCUSED)} '
               f'wire_focusable={present(Atspi.StateType.FOCUSABLE)} '
               f'wire_selected={present(Atspi.StateType.SELECTED)} '
+              f'cached_application_missing={node.app is None} '
               f'cached_defunct={cached.contains(Atspi.StateType.DEFUNCT)}', flush=True)
     finally:
         connection.close_sync(None)
@@ -201,7 +204,7 @@ def main():
             wait(selected)
         except Exception:
             try:
-                trace_native_state(last)
+                trace_native_state(last, last_identity)
             except Exception as error:
                 print(f'NATIVE_ATSPI_STATE_DIAGNOSTIC_ERROR: {error}', flush=True)
             raise
