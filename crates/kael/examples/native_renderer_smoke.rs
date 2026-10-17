@@ -84,6 +84,7 @@ mod native {
                 .child(
                     div()
                         .flex_1()
+                        .min_h_0()
                         .flex()
                         .gap(px(18.0))
                         .p(px(24.0))
@@ -135,6 +136,8 @@ mod native {
                         .child(
                             div()
                                 .flex_1()
+                                .min_w_0()
+                                .min_h_0()
                                 .flex()
                                 .flex_col()
                                 .gap(px(16.0))
@@ -163,32 +166,39 @@ mod native {
                                                 .bg(if index % 3 == 0 { secondary } else { accent })
                                         })),
                                 )
-                                .child(div().flex_1().grid().grid_cols(3).gap(px(12.0)).children(
-                                    (0..6).map(|index| {
-                                        let hue = (accent_hue + index as f32 * 0.095) % 1.0;
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .justify_between()
-                                            .p(px(13.0))
-                                            .rounded(px(14.0))
-                                            .border_1()
-                                            .border_color(hsla(hue, 0.56, 0.52, 0.36))
-                                            .bg(hsla(hue, 0.45, 0.19, 1.0))
-                                            .child(
-                                                div()
-                                                    .size(px(18.0))
-                                                    .rounded_full()
-                                                    .bg(hsla(hue, 0.82, 0.62, 1.0)),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(px(12.0))
-                                                    .text_color(rgb(0xd7def4))
-                                                    .child(format!("tile {:02}", index + 1)),
-                                            )
-                                    }),
-                                )),
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .grid()
+                                        .grid_cols(3)
+                                        .grid_rows(2)
+                                        .gap(px(12.0))
+                                        .children((0..6).map(|index| {
+                                            let hue = (accent_hue + index as f32 * 0.095) % 1.0;
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .justify_between()
+                                                .p(px(13.0))
+                                                .rounded(px(14.0))
+                                                .border_1()
+                                                .border_color(hsla(hue, 0.56, 0.52, 0.36))
+                                                .bg(hsla(hue, 0.45, 0.19, 1.0))
+                                                .child(
+                                                    div()
+                                                        .size(px(18.0))
+                                                        .rounded_full()
+                                                        .bg(hsla(hue, 0.82, 0.62, 1.0)),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(12.0))
+                                                        .text_color(rgb(0xd7def4))
+                                                        .child(format!("tile {:02}", index + 1)),
+                                                )
+                                        })),
+                                ),
                         ),
                 )
         }
