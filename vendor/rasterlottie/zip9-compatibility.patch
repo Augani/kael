@@ -685,39 +685,42 @@
  license = "MIT OR Apache-2.0"
 -repository = "https://github.com/neodyland/rasterlottie"
 +repository = "https://github.com/Augani/kael"
-
+ 
  [package.metadata.docs.rs]
  all-features = true
-@@ -79,13 +81,9 @@
+@@ -79,13 +81,13 @@
  name = "rasterlottie"
  path = "src/lib.rs"
-
+ 
 -[[example]]
 -name = "benchmark_render"
 -path = "examples/benchmark_render.rs"
--
++[[test]]
++name = "output_allocation"
++path = "tests/output_allocation.rs"
+ 
 -[[example]]
 -name = "rasterlottie_cli"
 -path = "examples/rasterlottie_cli.rs"
 +[[test]]
 +name = "zip9_compatibility"
 +path = "tests/zip9_compatibility.rs"
-
+ 
  [[test]]
  name = "corpus"
-@@ -144,7 +142,7 @@
+@@ -144,7 +146,7 @@
  optional = true
-
+ 
  [dependencies.zip]
 -version = "8"
 +version = "9"
  features = ["deflate"]
  optional = true
  default-features = false
-@@ -167,51 +165,26 @@
+@@ -167,51 +169,26 @@
      "fmt",
  ]
-
+ 
 +[target.'cfg(target_arch = "wasm32")'.dev-dependencies.wasm-bindgen-test]
 +version = "0.3.72"
 +
@@ -768,13 +771,13 @@
 +todo = "deny"
 +too_many_arguments = "allow"
 +type_complexity = "allow"
-
+ 
 -[lints.clippy.nursery]
 -level = "warn"
 +[lints.clippy.style]
 +level = "allow"
  priority = -1
-
+ 
 -[lints.clippy.pedantic]
 -level = "warn"
 -priority = -1
@@ -1433,7 +1436,7 @@
  use serde::Deserialize;
 -use zip::{ZipArchive, result::ZipError};
 +use zip::{ZipArchive, read::ZipReadOptions, result::ZipError};
-
+ 
  #[cfg(feature = "images")]
  use crate::Asset;
  use crate::{Animation, RasterlottieError};
@@ -1442,13 +1445,13 @@
 +thread_local! {
 +    static ALLOCATION_REQUESTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 +}
-
+ 
  #[derive(Debug, Deserialize)]
  struct DotLottieManifest {
 @@ -33,26 +38,105 @@
      animation: Option<String>,
  }
-
+ 
 +/// Finite admission limits for loading a selected animation from a ZIP container.
 +///
 +/// Byte limits are inclusive. Zero rejects nonempty content. The total counts
@@ -1553,12 +1556,12 @@
 +        detail: format!("archive entry `{path}` exceeds admission limits: {detail}"),
 +    }
  }
-
+ 
  fn select_animation_id(manifest: &DotLottieManifest) -> Result<&str, RasterlottieError> {
 @@ -112,50 +196,100 @@
      candidates
  }
-
+ 
 -fn read_archive_string(
 -    archive: &mut ZipArchive<Cursor<&[u8]>>,
 -    path: &str,
@@ -1587,7 +1590,7 @@
          detail: format!("archive entry `{path}` is not valid UTF-8: {error}"),
      })
  }
-
+ 
 -fn read_archive_bytes_any(
 -    archive: &mut ZipArchive<Cursor<&[u8]>>,
 -    candidates: &[String],
@@ -1652,7 +1655,7 @@
 +        bytes.extend_from_slice(&chunk[..count]);
 +    }
  }
-
+ 
  fn read_archive_bytes_optional(
      archive: &mut ZipArchive<Cursor<&[u8]>>,
      candidates: &[String],
@@ -1690,7 +1693,7 @@
 -
      Ok(None)
  }
-
+ 
 @@ -171,6 +304,8 @@
  fn embed_archive_images(
      archive: &mut ZipArchive<Cursor<&[u8]>>,
@@ -1702,7 +1705,7 @@
          if !asset.is_image_asset() || asset.is_embedded_image_asset() {
 @@ -178,16 +313,22 @@
          }
-
+ 
          let candidates = archive_image_candidates(asset);
 -        let Some((path, bytes)) = read_archive_bytes_optional(archive, &candidates)? else {
 +        let Some((path, bytes)) =
@@ -1726,19 +1729,19 @@
 +        general_purpose::STANDARD.encode_string(bytes, &mut data_url);
 +        asset.path = Some(data_url);
      }
-
+ 
      Ok(())
 @@ -282,13 +423,69 @@
-
+ 
  #[cfg(test)]
  mod tests {
 -    use std::io::{Cursor, Write};
 +    use std::io::{Cursor, Read, Write};
-
+ 
      #[cfg(feature = "images")]
      use image::{ColorType, ImageEncoder, Rgba, RgbaImage, codecs::png::PngEncoder};
      use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
-
+ 
 -    use super::load_animation_from_dotlottie_bytes;
 +    use super::{ALLOCATION_REQUESTS, load_animation_from_dotlottie_bytes, read_bounded};
 +
@@ -1797,7 +1800,7 @@
 +        );
 +        assert_eq!(ALLOCATION_REQUESTS.with(std::cell::Cell::get), 1);
 +    }
-
+ 
      fn archive_from_entries(entries: &[(&str, &[u8])]) -> Vec<u8> {
          let cursor = Cursor::new(Vec::new());
 --- a/src/lib.rs
@@ -1805,7 +1808,7 @@
 @@ -16,6 +16,8 @@
  mod support;
  mod timeline;
-
+ 
 +#[cfg(feature = "dotlottie")]
 +pub use dotlottie::DotLottieLimits;
  pub use error::RasterlottieError;
@@ -1825,7 +1828,7 @@
 +++ b/src/model.rs
 @@ -1,7 +1,9 @@
  use serde_json::Value;
-
+ 
  #[cfg(feature = "dotlottie")]
 -use super::dotlottie::load_animation_from_dotlottie_bytes;
 +use super::dotlottie::{
@@ -1866,7 +1869,7 @@
 +    ) -> Result<Self, RasterlottieError> {
 +        load_animation_from_dotlottie_bytes_with_limits(dotlottie, limits)
      }
-
+ 
      /// Returns the duration in frames.
 --- a/src/render/assets.rs
 +++ b/src/render/assets.rs
@@ -1882,7 +1885,7 @@
 +    cell::{Cell, RefCell},
 +    io::Cursor,
 +};
-
+ 
  #[cfg(feature = "images")]
  use base64::{Engine, engine::general_purpose};
  #[cfg(feature = "images")]
@@ -1897,7 +1900,7 @@
 @@ -15,15 +22,23 @@
  #[cfg(feature = "images")]
  use tiny_skia::{IntSize, Pixmap};
-
+ 
 -use super::renderer::ImageAssetResolver;
 +use super::renderer::{ImageAssetResolver, ImageLimits};
  #[cfg(feature = "images")]
@@ -1909,7 +1912,7 @@
 +    static PIXEL_DECODES: Cell<usize> = const { Cell::new(0) };
 +    static RESIZES: Cell<usize> = const { Cell::new(0) };
 +}
-
+ 
  #[cfg(feature = "images")]
  #[derive(Debug, Default)]
  pub(super) struct ImageAssetStore {
@@ -1917,11 +1920,11 @@
 +    limits: ImageLimits,
 +    decoded_bytes: Cell<u64>,
  }
-
+ 
  #[cfg(not(feature = "images"))]
 @@ -39,6 +54,22 @@
  }
-
+ 
  #[cfg(feature = "images")]
 +struct DecodedReservation<'a> {
 +    total: &'a Cell<u64>,
@@ -1944,7 +1947,7 @@
      EmbeddedDataUrl,
 @@ -56,6 +87,16 @@
  }
-
+ 
  impl ImageAssetStore {
 +    #[cfg(feature = "images")]
 +    pub(super) fn cached_decoded_bytes(&self) -> u64 {
@@ -1962,7 +1965,7 @@
 @@ -71,7 +112,11 @@
              );
          }
-
+ 
 -        Self { entries }
 +        Self {
 +            entries,
@@ -1970,7 +1973,7 @@
 +            decoded_bytes: Cell::new(0),
 +        }
      }
-
+ 
      #[cfg(all(not(feature = "images"), feature = "gif"))]
 @@ -100,6 +145,7 @@
                  detail: "image asset index is out of bounds".to_string(),
@@ -2042,7 +2045,7 @@
 @@ -175,13 +238,18 @@
          );
      }
-
+ 
 -    Ok(ImageAssetStore { entries })
 +    Ok(ImageAssetStore {
 +        entries,
@@ -2050,7 +2053,7 @@
 +        decoded_bytes: Cell::new(0),
 +    })
  }
-
+ 
  #[cfg(not(feature = "images"))]
  pub(super) fn resolve_image_assets(
      animation: &Animation,
@@ -2061,7 +2064,7 @@
          return Err(RasterlottieError::InvalidImageAsset {
 @@ -203,42 +271,171 @@
  }
-
+ 
  #[cfg(feature = "images")]
 -fn decode_image_bytes(asset: &Asset, bytes: &[u8]) -> Result<Pixmap, RasterlottieError> {
 -    let mut rgba = image::load_from_memory(bytes)
@@ -2266,7 +2269,7 @@
 @@ -258,12 +455,41 @@
          });
      }
-
+ 
 -    general_purpose::STANDARD
 -        .decode(payload.trim())
 -        .map_err(|err| RasterlottieError::InvalidImageAsset {
@@ -2308,7 +2311,7 @@
 +    bytes.truncate(count);
 +    Ok(bytes)
  }
-
+ 
  #[cfg(feature = "images")]
 @@ -275,3 +501,289 @@
          pixel[2] = ((pixel[2] as u16 * alpha + 127) / 255) as u8;
@@ -2638,7 +2641,7 @@
 +            image_limits: ImageLimits::DEFAULT,
 +        }
      }
-
+ 
      /// Creates a renderer configured with the default target-corpus support profile.
      #[must_use]
      pub const fn target_corpus() -> Self {
@@ -2652,12 +2655,12 @@
 +        self.image_limits = limits;
 +        self
      }
-
+ 
      /// Analyzes an animation with this renderer's support profile.
 @@ -39,7 +50,7 @@
              return Err(RasterlottieError::UnsupportedFeatures { report });
          }
-
+ 
 -        let image_assets = resolve_image_assets(&resolved, None)?;
 +        let image_assets = resolve_image_assets(&resolved, None, self.image_limits)?;
          let layer_hierarchy_cache = LayerHierarchyCache::from_animation(&resolved);
@@ -2666,7 +2669,7 @@
 @@ -73,7 +84,8 @@
              return Err(RasterlottieError::UnsupportedFeatures { report });
          }
-
+ 
 -        let image_assets = resolve_image_assets(&prepared_animation, Some(resolver))?;
 +        let image_assets =
 +            resolve_image_assets(&prepared_animation, Some(resolver), self.image_limits)?;
@@ -2675,7 +2678,7 @@
          Ok(PreparedAnimation {
 @@ -89,6 +101,18 @@
  }
-
+ 
  impl PreparedAnimation {
 +    /// Returns the cached target RGBA8 image payload bytes for this preparation.
 +    ///
@@ -2713,12 +2716,23 @@
 +        assert_eq!(prepared.cached_decoded_image_bytes(), 0);
 +    }
 +}
+--- a/src/render/renderer/raster.rs
++++ b/src/render/renderer/raster.rs
+@@ -65,7 +65,7 @@
+         Ok(super::RasterFrame {
+             width: pixmap.width(),
+             height: pixmap.height(),
+-            pixels: pixmap.data().to_vec(),
++            pixels: pixmap.take(),
+         })
+     }
+ 
 --- a/src/render/renderer_types.rs
 +++ b/src/render/renderer_types.rs
 @@ -71,10 +71,60 @@
      fn resolve_image_asset(&self, asset: &Asset) -> Result<Option<Vec<u8>>, RasterlottieError>;
  }
-
+ 
 +/// Admission limits for lazily decoded image assets.
 +///
 +/// Limits bound encoded inputs and requested pixel/resize buffers per prepared
@@ -2774,7 +2788,7 @@
      pub(super) profile: SupportProfile,
 +    pub(super) image_limits: ImageLimits,
  }
-
+ 
  /// A preprocessed animation that can be rendered repeatedly.
 --- /dev/null
 +++ b/tests/fixtures/zip9_glyph_text.json
@@ -2820,6 +2834,146 @@
 +                    }
 +                ]
 +            }
+--- /dev/null
++++ b/tests/output_allocation.rs
+@@ -0,0 +1,137 @@
++#![cfg(not(target_arch = "wasm32"))]
++#![forbid(unsafe_op_in_unsafe_fn)]
++
++use rasterlottie::{Animation, RenderConfig, Renderer, Rgba8};
++use std::{
++    alloc::{GlobalAlloc, Layout, System},
++    cell::Cell,
++};
++
++#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
++struct Counts {
++    allocations: usize,
++    frees: usize,
++    reallocations: usize,
++    requested: usize,
++    live: isize,
++    peak: isize,
++}
++thread_local! {
++    static ACTIVE: Cell<bool> = const { Cell::new(false) };
++    static COUNTS: Cell<Counts> = const { Cell::new(Counts {
++        allocations: 0, frees: 0, reallocations: 0, requested: 0, live: 0, peak: 0,
++    }) };
++}
++struct Tracking;
++fn record(allocate: usize, release: usize, realloc: bool) {
++    if ACTIVE.try_with(Cell::get).unwrap_or(false) {
++        let _ = COUNTS.try_with(|slot| {
++            let mut count = slot.get();
++            count.allocations += usize::from(allocate > 0);
++            count.frees += usize::from(release > 0);
++            count.reallocations += usize::from(realloc);
++            count.requested += allocate;
++            count.live += allocate as isize - release as isize;
++            count.peak = count.peak.max(count.live);
++            slot.set(count);
++        });
++    }
++}
++// Delegate allocation and layout ownership unchanged to System. Tracking uses
++// only const-initialized thread-local Cells and does not allocate or hold locks.
++unsafe impl GlobalAlloc for Tracking {
++    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
++        let result = unsafe { System.alloc(layout) };
++        if !result.is_null() {
++            record(layout.size(), 0, false);
++        }
++        result
++    }
++    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
++        let result = unsafe { System.alloc_zeroed(layout) };
++        if !result.is_null() {
++            record(layout.size(), 0, false);
++        }
++        result
++    }
++    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
++        record(0, layout.size(), false);
++        unsafe { System.dealloc(pointer, layout) };
++    }
++    unsafe fn realloc(&self, pointer: *mut u8, old: Layout, size: usize) -> *mut u8 {
++        let result = unsafe { System.realloc(pointer, old, size) };
++        if !result.is_null() {
++            record(size, old.size(), true);
++        }
++        result
++    }
++}
++#[global_allocator]
++static ALLOCATOR: Tracking = Tracking;
++
++struct Watch;
++impl Watch {
++    fn start() -> Self {
++        assert!(!ACTIVE.with(Cell::get), "watch must not be nested");
++        COUNTS.with(|counts| counts.set(Counts::default()));
++        ACTIVE.with(|active| active.set(true));
++        Self
++    }
++}
++impl Drop for Watch {
++    fn drop(&mut self) {
++        // Also disable tracking if rendering unwinds, before the test reports it.
++        ACTIVE.with(|active| active.set(false));
++    }
++}
++
++#[test]
++fn public_prepared_frame_transfers_canvas_without_duplicate_allocation() {
++    let animation = Animation::from_json_str(
++        r#"{"v":"5.7.6","fr":30,"ip":0,"op":10,"w":16,"h":8,"layers":[]}"#,
++    )
++    .unwrap();
++    let renderer = Renderer::target_corpus();
++    let prepared = renderer.prepare(&animation).unwrap();
++    for (background, expected) in [
++        (Rgba8::TRANSPARENT, [0, 0, 0, 0]),
++        (Rgba8::new(0x33, 0x66, 0x99, 255), [0x33, 0x66, 0x99, 255]),
++        (Rgba8::new(255, 0, 0, 128), [128, 0, 0, 128]),
++    ] {
++        let config = RenderConfig::new(background, 1.0);
++        // Preparation and warmup are outside the requested-payload watch.
++        drop(prepared.render_frame(0.0, config).unwrap());
++        let watch = Watch::start();
++        let frame = prepared.render_frame(0.0, config).unwrap();
++        let pixels_match = frame.width == 16
++            && frame.height == 8
++            && frame.pixels.len() == 512
++            && frame.pixels.chunks_exact(4).all(|pixel| pixel == expected);
++        let retained = COUNTS.with(Cell::get);
++        drop(frame);
++        let dropped = COUNTS.with(Cell::get);
++        drop(watch);
++        // All oracles/reporting run with tracking disabled. Returned bytes are
++        // still premultiplied RGBA; this is not allocator overhead or RSS.
++        assert!(pixels_match);
++        assert_eq!(
++            retained,
++            Counts {
++                allocations: 1,
++                frees: 0,
++                reallocations: 0,
++                requested: 512,
++                live: 512,
++                peak: 512,
++            }
++        );
++        assert_eq!(
++            dropped,
++            Counts {
++                frees: 1,
++                live: 0,
++                ..retained
++            }
++        );
++    }
++}
 --- /dev/null
 +++ b/tests/zip9_compatibility.rs
 @@ -0,0 +1,578 @@

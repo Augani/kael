@@ -82,6 +82,10 @@ name = "rasterlottie"
 path = "src/lib.rs"
 
 [[test]]
+name = "output_allocation"
+path = "tests/output_allocation.rs"
+
+[[test]]
 name = "zip9_compatibility"
 path = "tests/zip9_compatibility.rs"
 

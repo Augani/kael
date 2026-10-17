@@ -38,12 +38,14 @@ MODIFIED_RUST_ORIGINALS = frozenset({
     "src/render/mod.rs",
     "src/render/renderer/mod.rs",
     "src/render/renderer/prepare.rs",
+    "src/render/renderer/raster.rs",
     "src/render/renderer_types.rs",
 })
 MODIFIED_ORIGINALS = MODIFIED_RUST_ORIGINALS | {"Cargo.toml", "Cargo.lock"}
 ADDED_FILES = frozenset({
     "UPSTREAM-Cargo.lock", "UPSTREAM-Cargo.toml",
     "tests/zip9_compatibility.rs", "tests/fixtures/zip9_glyph_text.json",
+    "tests/output_allocation.rs",
 })
 FORK_DIRECTORY = Path(__file__).resolve().parents[2] / "vendor/rasterlottie"
 

@@ -7,7 +7,7 @@ library name `rasterlottie`. Existing entrypoints and features remain available;
 the fork adds archive and image admission policies with finite defaults and
 exact cached-image payload statistics.
 Original README, copyright notices, MIT/Apache-2.0 licenses, corpus/golden tests,
-and fixtures are preserved. Eight upstream Rust files have reviewed changes.
+and fixtures are preserved. Nine upstream Rust files have reviewed changes.
 
 ## Distribution and ZIP dependency
 
@@ -127,6 +127,25 @@ scratch, posters, ready/output frames and allocator overhead remain additional.
 They are not a total Lottie, process RSS, or GPU memory limit. The standalone
 fork still has no host-global budget of its own.
 
+### Completed frame ownership
+
+The completed main output pixmap transfers its premultiplied RGBA vector into
+`RasterFrame` through `Pixmap::take`, rather than allocating and copying another
+full canvas before dropping the first. The public frame and borrowed scratch
+APIs keep their existing pixel representation and behavior. This removes a
+transient duplicate output buffer; layer/mask/effect scratch, images, parsed
+models, retained frames and concurrent calls remain additional. It is not a
+new global memory or RSS limit.
+
+The native-only `output_allocation` integration test exercises the public
+prepared-frame renderer with a real 16-by-8 animation and transparent, opaque
+and premultiplied backgrounds. A small thread-local allocation watch checks one
+512-byte output allocation, exact pixels, and balanced release after dropping
+the frame. Preparation, warmup and assertions are outside the watch, which is
+also disabled during unwinding. The counter measures requested Rust allocation
+payloads, not allocator overhead or RSS; portable golden tests independently
+cover pixels without this native allocator watch.
+
 ## Provenance and exact reconstruction
 
 The pinned registry archive is
@@ -156,11 +175,14 @@ The exact intentionally modified original files are:
 - `src/render/renderer/prepare.rs`: renderer policy selection and retention,
   additive prepared-image payload statistics and no-images counter regression.
 - `src/render/renderer_types.rs`: image policy types/defaults and renderer field.
+- `src/render/renderer/raster.rs`: transfer the completed pixmap vector into
+  `RasterFrame` without a duplicate output allocation.
 
 All other original source, standalone tests, fixtures, licenses, and metadata
 must retain their pinned hashes. Added content consists of the original
-manifest/lock copies, `tests/zip9_compatibility.rs`, its glyph fixture copied from
-upstream's `renderer_draws_glyph_text_layers`, and the three provenance files.
+manifest/lock copies, `tests/output_allocation.rs`, `tests/zip9_compatibility.rs`,
+and the latter's glyph fixture copied from upstream's
+`renderer_draws_glyph_text_layers`, plus the three provenance files.
 The verifier requires both the observed modified-original set and additions to
 match their explicit reviewed lists, then compares every reconstructed file
 hash with the checkout. Changing another original file or adding another file

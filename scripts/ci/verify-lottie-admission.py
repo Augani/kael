@@ -29,6 +29,7 @@ PORTABLE_TESTS = (
     "stored_and_deflated_manifest_select_the_initial_animation",
 )
 NATIVE_TESTS = PORTABLE_TESTS + (
+    "public_prepared_frame_transfers_canvas_without_duplicate_allocation",
     "bounded_reader_rejects_headers_without_reading_and_limits_actual_output",
     "admission_checks_encoded_native_rgba_target_and_aggregate_before_pixels",
     "admission_checks_actual_header_and_triangle_cross_aspect_scratch",
@@ -52,7 +53,7 @@ SUMMARY = re.compile(
 def validate_runtime(text, backend):
     """Require executed regressions, including suites that would otherwise pass empty."""
     reports = SUMMARY.findall(text)
-    expected_suites = 5 if backend == "native" else 1
+    expected_suites = 6 if backend == "native" else 1
     if len(reports) != expected_suites:
         raise RuntimeError(
             f"{backend}: expected {expected_suites} successful test summaries, got {len(reports)}"
@@ -64,7 +65,7 @@ def validate_runtime(text, backend):
         raise RuntimeError(f"{backend}: runtime reported skipped tests")
     if any(int(count) for count in re.findall(r"(\d+) filtered out", text)):
         raise RuntimeError(f"{backend}: a filtered test suite is not complete")
-    minimums = (116, 1, 1, 14, 2) if backend == "native" else (15,)
+    minimums = (116, 1, 1, 1, 14, 2) if backend == "native" else (15,)
     if any(passed < minimum for (passed, _, _), minimum in zip(suites, minimums)):
         raise RuntimeError(f"{backend}: expected suite pass counts >= {minimums}, got {suites}")
     required = NATIVE_TESTS if backend == "native" else CHROME_TESTS

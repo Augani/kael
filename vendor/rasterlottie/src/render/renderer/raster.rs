@@ -65,7 +65,7 @@ impl Renderer {
         Ok(super::RasterFrame {
             width: pixmap.width(),
             height: pixmap.height(),
-            pixels: pixmap.data().to_vec(),
+            pixels: pixmap.take(),
         })
     }
 
