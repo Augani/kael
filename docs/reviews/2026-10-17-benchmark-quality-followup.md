@@ -623,3 +623,161 @@ identities, licenses, fork payload and registry-alias checks. The earlier
 ownership archive cohort is preserved before replacement. No package is
 uploaded. Completed diagnostic worktrees are archived recoverably; their source
 inputs, binaries and raw captures remain in the primary workspace artifacts.
+
+The [Secret Service migration](2026-10-17-secret-service5-migration-validation.json)
+updates both existing credential consumers to released 5.2.0 and removes the
+duplicate Zbus 4 dependency family. The consumer Rust call bodies and crypto
+features remain unchanged. Eleven isolated private-bus tests exercise actual
+encrypted Secret Service calls, binary/Unicode replacement, matching labels,
+locked/unlocked selection, prompt outcomes, malformed IVs and error propagation.
+Both session and system addresses point to task-owned dummy services; these
+tests do not access a human keyring. Full default Linux consumer graphs pass
+all-target cross-compilation and strict Clippy. Native portable secret tests
+pass eight cases; the two existing real-login-keychain tests remain opt-in.
+
+At the same clean advisory database revision, known vulnerabilities remain zero
+and denied unmaintained package copies fall from six to three. Strict audit
+still fails on the remaining Zbus 5 family. No advisory ignore is added, and
+Linux desktop/keyring runtime remains separate from private-bus protocol and
+cross-compilation proof.
+
+The [idle animation cache checkpoint](2026-10-17-animation-idle-cache-validation.json)
+caps retained prepared-animation decoded RGBA8 payload at 64 MiB/four entries
+per thread and 256 MiB/16 entries process-wide. Active checkout releases idle
+quota; lazy decoding is reweighed before reinsertion. Oversize or pressured
+preparations still render valid pixels and bypass retention. Reservations stay
+owned until prepared resources drop, without dropping them under the shared
+budget lock or a thread-local borrow. Source identity, local LRU, cancellation
+and reentrant rendering retain their existing behavior.
+
+All 28 focused core cases and 136 native fork tests pass, alongside a separate
+no-images getter test and 16 actual Chrome fork cases. A non-test executable
+using the exact production global/TLS implementation fills 16 idle entries
+across four held threads; a fifth renders without retaining another entry, and
+thread exit returns quota to zero. The Chrome tests exercise fork admission
+and image/getter behavior, not core browser cache ownership. Small-budget
+regressions test byte admission and cancellation without huge allocations.
+These limits count decoded image payload and entries. Active renders, models,
+encoded assets, path/timeline caches, scratch, ready outputs, posters and
+allocator overhead remain additional; this is not a unified R8 memory ceiling.
+
+A separate twelve-process cost control retains the synchronization tradeoff.
+Two million warm cache operations per process add approximately 24–26 ns per
+hit/reinsert in the two tiny fixtures. Actual four-render ranges overlap; the
+experiment establishes no stable application CPU, RSS or latency change.
+Its pinned baseline, final implementation, pixels and raw samples remain
+separate from whole-application benchmarks.
+
+The [compact data storage diagnostic](2026-10-17-compact-data-storage-validation.json)
+first reproduces 54,400,000 fewer requested Rust bytes for two 100,000×8 domain
+datasets when their short values are inline. The same opt-in domain storage is
+then exercised through actual Kael `RemoteSheet`/`VirtualSheetGrid` controls.
+With 16 cached tiles and settled accessibility, retained requested payload is
+107,235,620 bytes for current shared-string records and 53,114,148 bytes for
+compact records, a difference of 54,121,472 bytes (51.61 MiB). Both modes keep
+the same 216 mounted cells, 1,162 accessibility snapshot nodes, full logical
+dimensions, one focused descendant, 85 source calls and 42,752 materialized
+cells. The difference persists through 64 additional tile requests.
+
+The grid probe checks every fixture cell, ordered fingerprints, long Unicode
+Arc sharing, static headers, a deferred write keyed by original business ID,
+query-history reset, cancellation and poisoned stale-response rejection.
+Strong dataset/control ownership releases after executor drain; both runs
+retain the same documented 2,559,632 bytes of reporting/runtime ownership.
+This is headless requested-payload evidence, without native RSS, CPU, physical
+scrolling or framework ranking claims. All fixture values fit the pinned
+23-byte inline capacity; long-value ownership controls do not establish a
+universal saving. `SharedString`, generic `ArcCow` and canonical benchmark
+models remain unchanged. A separate actual empty-default probe finds no
+per-value heap allocation, so that proposed lead is rejected as well.
+
+Combined validation at `738695f` passes 2,194 core tests with the same two
+diagnostic probes opt-in, all 501 UI tests, strict native all-target Clippy,
+browser/Lottie Wasm compilation and formatting. Another fresh isolated
+39-package preflight passes without uploading crates. Independent audit
+matches all 928 included Rust files (23,290,129 bytes) to immutable source;
+compressed archives total 6,032,988 bytes. Earlier archive cohorts remain
+preserved. These checks include the credential migration and idle-cache limit,
+but do not replace remaining native platform acceptance.
+
+The separate [benchmark consumer validation](2026-10-17-benchmark-consumer-validation.json)
+repairs the active comparison lock for Secret Service 5.2 while preserving
+existing common package versions, sources and checksums. All five applications
+compile with `--locked` for both engines and both frame-timing modes: twenty
+actual executable targets across four profiles. Cargo checks supply neither
+release measurement binaries nor new comparative results; those remain a
+separate build and collection step.
+
+The later [physical presentation recovery check](2026-10-17-native-presentation-recovery-validation.json)
+now records actual positive Metal timestamps on the physical M2 Pro. Apple
+MTKView and both direct-layer controls each complete 60 frames with 59 positive
+presentation timestamps; their initial zero-time frames remain recorded.
+At `95ebb78`, Kael passes all 59 mandatory GPU tests with zero ignored cases
+and records 59 unique GPU-completed frames with positive compositor timestamps.
+These correctness checks do not measure comparative latency or controlled power.
+The console and displays are active; the optional lock-status key is absent,
+so that key is explicitly unknown rather than evidence of an unlocked session.
+
+Native inspection also exposes clipping in the small renderer-smoke window.
+The example's flex/grid minimum-size correction at `738695f` keeps all six
+distinct 274×138 tile interiors and the chart inside the captured 1446×920
+framebuffer. Its separate smoke passes with one actual positive presented
+frame. The renderer/library sources are unchanged between these checkpoints;
+the one-frame capture is not reported as another 59-frame run. Earlier locked
+physical and zero-timestamp hosted controls remain preserved as failures.
+
+The [final `e219439` platform result](2026-10-17-platform-e219-final.json)
+completes both Windows native/WebView/MSI jobs, browser and Linux runtime
+successfully. Hosted macOS still fails mandatory presentation and Linux quality
+still fails strict audit on six denied warnings at that older source; the
+aggregate platform job fails. The local credential migration and physical
+presentation recovery do not turn that historical hosted failure into a pass.
+Fresh hosted execution of the later implementation remains required.
+
+The second [complete hosted comparison](2026-10-17-hosted-e219-comparison.json)
+at `e219439` now passes all hundred captures, all original workload/activity
+gates, all 800 geometry boundaries and all 50 cross-engine pairs. This upload
+includes the actual twenty application executables. Their independently
+rehashed bytes match every capture; all 2,944 eligible source hashes match the
+frozen source, and raw/aggregate/phase/quantile metrics are recomputed. The
+earlier `b11ed50` artifact and its missing-executable limitation remain unchanged.
+
+The following general-desktop medians again use five captures per engine with
+optional frame timing disabled. Each cell gives **Kael / GPUI Kit**:
+
+| Contract | Active process CPU | Churn process CPU | Stable sampled peak RSS, MiB |
+| --- | ---: | ---: | ---: |
+| Navigation/detail | 10.24% / 14.85% | 6.26% / 9.55% | 91.69 / 79.28 |
+| Data table | 26.72% / 20.47% | 20.91% / 14.30% | 203.73 / 136.42 |
+| Virtual tree | 52.92% / 14.75% | 27.89% / 10.66% | 832.20 / 654.20 |
+| Docking workspace | 18.89% / 17.35% | 9.10% / 10.27% | 81.03 / 80.22 |
+
+Navigation CPU is lower for Kael in this recorded mode, while data/tree CPU
+and RSS remain substantial targets. Workspace active CPU and RSS are slightly
+higher, with lower churn CPU. The full record retains all instrumented results
+and the existing document contract; these modes are not pooled. CPU is measured
+over phases, without normalization per operation. The tree comparison retains
+Kael's complete logical accessibility versus the competitor's mounted rows.
+All actual windows are equally constrained to 1100×645 at scale 1 on the same
+three-core, 7 GiB M1 virtual runner with no display inventory. This establishes
+neither comparative presentation, controlled power nor an overall ranking.
+
+That comparison uses the frozen package-version 0.7.0 snapshot at `3467e647`,
+which is distinct from the official v0.7.0 tag. The current
+[GPUI Kit site](https://gpui-kit.com/) recommends 0.7.3, whose
+[release notes](https://gpui-kit.com/releases/) describe GPUI pre 0.3.9 and
+additional rebuild/table improvements. A separately resolved exact-tag
+candidate preserves the original workload sources and checks; its compilation
+and runtime acceptance remain separate from these older results.
+
+The [compact records example checkpoint](2026-10-17-compact-records-example-checkpoint.json)
+adds a native-only read-only consumer at `a3add69`, without the editor feature.
+Its two identity/long-Arc tests, strict example lint and formatting pass.
+Actual native pointer/keyboard selection reports stored IDs before and after
+reverse ordering; paging, refresh and a rejected dummy paste are recorded.
+Native inspection also preserves two failures: short variable lists shift away
+from the leading edge, and the fixed table body overlaps the footer in its
+constrained parent. These visual defects require correction before acceptance.
+Another fresh 39-package preflight verifies all 928 included Rust files against
+`a3add69` (23,290,129 bytes; 6,033,157 compressed archive bytes), with no upload.
+Example source is excluded from release archives and has its own compile proof.

@@ -42,14 +42,27 @@ captures. A later isolated native text-cache experiment reduces navigation CPU
 with a small RSS increase and worse CPU submission tails; it establishes no
 overall framework ranking. Shared styled labels, BOM handling and form-control
 focus/actions have fresh complete core/UI and physical Metal correctness proof.
+The later [hundred-capture rerun](2026-10-17-hosted-e219-comparison.json) at
+`e219439` also preserves and independently rehashes every measured application
+executable. Data/tree CPU and RSS remain concrete gaps; its historical competitor
+pin is distinguished from the newer 0.7.3 validation candidate.
 
 The next [animation memory checkpoint](2026-10-17-animation-memory-validation.json)
 bounds archive expansion, image decoding/resize buffers and retained frame batches,
 and adapts prefetch to the admitted byte capacity. It passes native and actual
 Chrome regressions, 2,178 core tests and the complete 39-package archive preflight.
 These scoped limits leave global memory accounting and overlapping tasks open.
-Tree disclosure, rather than ordinary scrolling, is the next code-level profiling
-lead for the general desktop comparison's CPU/RSS gap.
+Later [tree stage measurements](2026-10-17-tree-stage-optimization-validation.json)
+reduce expanded model construction and logical comparison work while retaining
+full accessibility; complete preparation remains expensive. The subsequent
+[idle animation cache](2026-10-17-animation-idle-cache-validation.json) bounds
+process-wide retained decoded-image payload and entry count, with active/model/
+scratch/output budgets still separate. A [general desktop data investigation](2026-10-17-compact-data-storage-validation.json)
+shows 51.61 MiB less requested Rust payload for opt-in compact domain records in
+the same grid. Public string contracts and canonical benchmark fixtures remain
+unchanged; these scoped diagnostics do not establish native RSS or an overall
+framework ranking. Combined validation passes 2,194 core tests, all 501 UI tests
+and fresh builds of all 39 package archives at the recorded checkpoint.
 
 ## Component coverage and gaps
 

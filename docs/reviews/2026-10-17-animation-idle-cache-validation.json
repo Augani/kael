@@ -1,0 +1,343 @@
+{
+  "schema_version": 1,
+  "prepared_at_utc": "2026-10-17T21:54:21.349637+00:00",
+  "scope": "R8 idle prepared-animation decoded-image payload and idle entry admission across threads. Not total animation/application memory, active render/output budget or native performance proof.",
+  "source_commit": "95ebb7878c976fed63536f790fe152de840c757e",
+  "source_files_sha256": {
+    "crates/kael/src/lottie.rs": "4b62bad429503718131a580622fae7164547a702b25676eda6aeeb228a3de7e5",
+    "vendor/rasterlottie/src/render/assets.rs": "09d8939c52700c3d878650ce1ab8cfec7ae3c57e041d2881d7fb8cda69258f10",
+    "vendor/rasterlottie/src/render/renderer/prepare.rs": "240fae5d10be45aa856a3ba8eb60fcaed611cc195130eac3b80bee62091878b5",
+    "vendor/rasterlottie/tests/zip9_compatibility.rs": "2dccbcf224f2922f3fc2766bc7a7c7ed70c6d4894420a26659c57fcc2e11b654",
+    "vendor/rasterlottie/PATCHES.md": "34fdc499360b80d8056046c30428038f6d5564c94b493cf9aa187c2e95659253",
+    "vendor/rasterlottie/zip9-compatibility.patch": "80f23f729ee6c2c7dfa71fa4e52ce506174580ee1a2beba5b7231fe4b87d49ae"
+  },
+  "unchanged_provenance_sha256": {
+    "vendor/rasterlottie/UPSTREAM-SHA256.json": "506ab0a085c8f868ce00275d0f13bffe87f73cdbc9ca5c85b111eb641778d1c0",
+    "scripts/ci/verify-rasterlottie-fork.py": "26cac30c02f94497d7bc007a935ab31ee83acc5dddf4a08495bccb27cffba0f6"
+  },
+  "limits": {
+    "local_idle_entries": 4,
+    "local_idle_decoded_image_payload_bytes": 67108864,
+    "global_idle_entries": 16,
+    "global_idle_decoded_image_payload_bytes": 268435456
+  },
+  "behavior": [
+    "Idle decoded-image RGBA8 payload/count is capped64 MiB/4 entries per thread and 256 MiB/16entries process-wide.",
+    "Weak source identity and local LRU retained; oversize/global pressure renders correctly and bypasses idle retention when quota cannot be obtained.",
+    "Entry owns reservation until prepared resources drop, outside TLS borrow/lock; taking an active preparation releases idle quota, then lazy decodes are reweighed before reinsertion.",
+    "Cancellation retires preparation instead of caching obsolete partial work; nested/reentrant calls do not hold cache borrows across rendering."
+  ],
+  "focused_validation": {
+    "core_lottie_tests": {
+      "passed": 28,
+      "failed": 0,
+      "ignored": 0
+    },
+    "fork_all_features_native": {
+      "unit": 117,
+      "corpus": 1,
+      "golden": 1,
+      "integration": 15,
+      "doctests": 2,
+      "total": 136,
+      "failed": 0,
+      "ignored": 0
+    },
+    "fork_without_images_getter_test": {
+      "passed": 1,
+      "ignored": 0
+    },
+    "actual_headless_chrome_wasm32": {
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0
+    },
+    "strict_clippy": {
+      "native_core_lib_tests": "passed",
+      "fork_all_features_all_targets": "passed"
+    },
+    "compile_checks": {
+      "wasm_core_browser_lottie": "passed",
+      "wasm_fork_without_images": "passed"
+    },
+    "non_test_production_global_probe": {
+      "workers_filled_sequentially": 5,
+      "per_worker_idle_entries": [
+        4,
+        4,
+        4,
+        4,
+        0
+      ],
+      "global_idle_entries": 16,
+      "global_decoded_payload_bytes": 64,
+      "frame_pixels": "passed",
+      "quota_after_thread_exit": 0
+    },
+    "offline_pinned_reconstruction": {
+      "original_files": 74,
+      "reconstructed_files": 80,
+      "reviewed_original_rust_changes": 8,
+      "negative_rejections": 11
+    }
+  },
+  "source_scope_notes": [
+    "Unit default TLS creates isolated budgets under cfg(test); multi-thread races explicitly share an injected production PreparedCacheBudget object. Tests do not mutate production global limits.",
+    "Separate non-test executable extracts exact current production cache/type/helper bodies and runs the actual LazyLock global/default TLS path with unchanged fork actual image rendering. Source SHA and extraction-part hashes are preserved.",
+    "Production-global artifact lock was seeded from the root locked graph, pruned offline, then built --locked --offline; all53 reachable registry tuples/checksums match validation root lock.",
+    "Cache entry field order drops prepared resources before reservation; checked-out active preparations release their idle reservation and are remeasured after lazy decoding.",
+    "Oversize/global-pressure preparations render valid pixels but bypass retention; weak sources and reentrancy remain intact.",
+    "Decoded bytes count target RGBA8 payload lengths, not allocator capacities. Parsed model/path/shape/timeline caches, encoded strings, active preparations/GIF workers, rendering/decoder scratch, source/poster/ready/output owners and allocator overhead remain additional.",
+    "No whole-application performance/RSS benchmark, native GUI or registry publication performed.",
+    "Existing upstream block0.1.6 future-incompatibility notice remains outside source strict-Clippy warnings."
+  ],
+  "validation_lock_before_ss_migration": {
+    "path": ".artifacts/2026-10-17-lottie-prepared-cache/validation-Cargo.lock",
+    "sha256": "b1b84f981fcc7d4c0e7a60a0d08a4f5ea5f66fc5f0ed086fc40eeee6e1a70e64",
+    "scope": "Root locked graph before parent SS migration; no manifest/lock changes made by this task."
+  },
+  "dedicated_red": {
+    "result": "expected failure",
+    "log": "budget-red.log",
+    "source": "baseline exact-production-cache-function extraction + actual 1pixel renders",
+    "observed_local_payload_bytes": 16,
+    "desired_injected_local_budget_bytes": 8,
+    "qualification": "Baseline has no byte-budget API. Assertion demonstrates missing admission; new injected production-helper regression enforces this desired8byte policy with real frames."
+  },
+  "non_test_production_global_qualification": "Five held worker TLS instances use exact extracted cfg(not(test)) LazyLock/default constructor; four workers retain4entries each, fifth bypasses retention while rendering valid pixels. 64 decoded bytes are observed, not a physical 256 MiB stress allocation. Unit small-budget byte/race/lifetime tests cover the same checked admission helpers.",
+  "cost_control": {
+    "evidence": {
+      "path": ".artifacts/2026-10-17-lottie-prepared-cache/cache-cost/evidence.json",
+      "bytes": 13935,
+      "sha256": "20ba257f016c318df3da89c319090f2e7bd7f72d4336eaebc72e7f248c52d413"
+    },
+    "independent_audit": {
+      "path": ".artifacts/2026-10-17-current-evidence-drafts/r8-cache-cost-independent-audit.json",
+      "bytes": 7246,
+      "sha256": "bd2a164e394e3d26c1e14562ffc38da388a603b2106eafc03dd4b7ce87dd0bf0"
+    },
+    "processes": 12,
+    "pairs_per_fixture": 3,
+    "warm_iterations_per_process": 2000000,
+    "image_warm_median_cpu_ns": {
+      "before": 90.1885,
+      "after": 114.1755,
+      "delta": 23.987
+    },
+    "vector_warm_median_cpu_ns": {
+      "before": 88.3545,
+      "after": 114.5635,
+      "delta": 26.209
+    },
+    "four_render_cpu_ns": {
+      "image": {
+        "before_range": [
+          1625,
+          1824
+        ],
+        "after_range": [
+          1712,
+          1922
+        ],
+        "median_delta": 17,
+        "median_percent": 0.9820912767186663
+      },
+      "vector": {
+        "before_range": [
+          77163,
+          80666
+        ],
+        "after_range": [
+          77033,
+          78139
+        ],
+        "median_delta": 282,
+        "median_percent": 0.36475107679174723
+      }
+    },
+    "qualification": [
+      "Measured warm accounting cost is a regression in this isolated control, accepted for bounded idle retention; not a speedup.",
+      "Shared batch wrapper renders frame 0 four times and drops raster outputs. Ranges overlap; no stable full Kael render_batch/prefetch effect is established.",
+      "Cold direct parse/prepare/first-frame function is identical for both labels; its changes are context-only variation.",
+      "Uncontended single-thread tiny-image/vector fixtures in one optimized binary do not cover pressure/repreparation/contention/large images, tail latency, application CPU, power or RSS."
+    ]
+  },
+  "fresh_renderer_readiness": {
+    "source_commit": "95ebb7878c976fed63536f790fe152de840c757e",
+    "positive_completed_and_presented_frames": 59,
+    "mandatory_programmable_gpu_tests_passed": 59,
+    "failed": 0,
+    "ignored": 0,
+    "evidence": {
+      "path": ".artifacts/2026-10-17-native-quality-95ebb78/independent-runtime-validation.json",
+      "bytes": 12843,
+      "sha256": "fbf94751e612522fc44deb0f4fcab576dcd70ae40c2ad3885b0e64213cbdcece"
+    },
+    "raw_smoke_log": {
+      "path": ".artifacts/2026-10-17-native-quality-95ebb78/native-renderer.log",
+      "bytes": 41840,
+      "sha256": "a68b8e7d174ccf6aa7f2194e27324bd4c7dfeb8a8b1e4e040d9c92b2519d35da"
+    },
+    "qualification": "Physical Metal/native renderer readiness only; this does not specifically execute a native animated-Lottie workload or establish comparative timings.",
+    "subsequent_compact_example_only_fix": {
+      "source_commit": "738695fb20db8113b2868a7e3b9fcaeddc66ad70",
+      "only_file": "crates/kael/examples/native_renderer_smoke.rs",
+      "positive_completed_and_presented_frames": 1,
+      "all_six_tiles_visually_verified": true,
+      "visual_review": "Root and independent /root/memory inspection of preserved device-pixel PNG: tile01..tile06 fully visible.",
+      "evidence": {
+        "path": ".artifacts/2026-10-17-native-quality-compact-layout/evidence.json",
+        "bytes": 709,
+        "sha256": "e2e668aca69961d175076f93bccb83570d958e9fddf1c7bb08884bed1cc4adb4"
+      },
+      "screenshot": {
+        "path": ".artifacts/2026-10-17-native-quality-compact-layout/native-renderer.png",
+        "bytes": 128438,
+        "sha256": "45c69fbf05fa7f1ef8e22eef68a86fad0c619f7abafb8821e45405918f8df979"
+      },
+      "qualification": "Separate example-only layout fit;59-frame and mandatory59GPU proof belongs to preceding95ebb78, not relabeled as738 runtime."
+    }
+  },
+  "artifacts": [
+    {
+      "path": ".artifacts/2026-10-17-lottie-prepared-cache/implementation-evidence.json",
+      "bytes": 10163,
+      "sha256": "6fc3d8f2e15ae53bc2b0fc04882621807401e1ee56967eb8cb22f2a7e07dd71f"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-prepared-cache/core-green.log",
+      "bytes": 3190,
+      "sha256": "a1de357ad345920d76cccc4898009ae5691276c3a7e94be30dd5bc21bd651bab"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-prepared-cache/fork-all-features.log",
+      "bytes": 12721,
+      "sha256": "c9f9981c61925b53d5905d56b8544d48eda54d6a1af2403db41a86c8fda90b17"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-prepared-cache/fork-no-images.log",
+      "bytes": 708,
+      "sha256": "6178cbd43e4a369be47b9cf06756fac77f3a601d2153f818e2a34a0cdb1a2ed8"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-prepared-cache/wasm-fork-runtime.log",
+      "bytes": 1873,
+      "sha256": "58d422e2fe7514389ef53895b520941de8e6ce4ff127296cb8bf4c73bee5d010"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-prepared-cache/native-clippy.log",
+      "bytes": 481,
+      "sha256": "728eeb6f18f4a24b7b7a49300e263da3489493089262148f2a8710d48f7cc865"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-prepared-cache/fork-clippy.log",
+      "bytes": 219,
+      "sha256": "6b31aef43aa0a32012c222c599add43da3698a3a8206f40e49644e733f14b4eb"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-prepared-cache/wasm-core-check.log",
+      "bytes": 327,
+      "sha256": "3ec09a0fd16785eec280f880cd27464b5ac1af4f8fd048a29db4c2788ea456c5"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-prepared-cache/wasm-fork-no-images-check.log",
+      "bytes": 702,
+      "sha256": "122602b90de29cfe8d4290bdca93dd0a34ccefcf3785615e6f808fb50c1852b7"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-prepared-cache/production-global/source-proof.json",
+      "bytes": 483,
+      "sha256": "5c91031ee7196bd3f693d85d6ef302d79f17a3667b7e6b08ed97dfcfc6cafa8a"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-prepared-cache/production-global/runtime.log",
+      "bytes": 230,
+      "sha256": "46896b4ef3541d5440f20004e9b86b8cc127c981d57e8cde444158210d0a6cd1"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-prepared-cache/fork-offline-verifier.log",
+      "bytes": 247,
+      "sha256": "e77f74c25e2fdff9d84842236d2b4ce2920c8ab05db52c0a7c5c456a56056b4b"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-prepared-cache/negative-probes.json",
+      "bytes": 2753,
+      "sha256": "1b990873286fff1e0dc861a4f16e7d70cfe5b5d5d1bcb34ab746a28686b98fd8"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-prepared-cache/budget-red.log",
+      "bytes": 576,
+      "sha256": "8c2ba826a76d555b92a6c74b6823bc28d8bd69ae653bbd4aa53c8f02ca597c52"
+    },
+    {
+      "path": ".artifacts/2026-10-17-framework-integration-738695f/integration.json",
+      "bytes": 3810,
+      "sha256": "ef3e83aca73083659eaf84cbcbe8d51d01ee8ce2c73991dc63178eb502a77fbf"
+    },
+    {
+      "path": ".artifacts/2026-10-17-framework-integration-738695f/package-preflight.json",
+      "bytes": 650,
+      "sha256": "31983a587f78ec92aa076f6f82c91c8e01569dbc077082d8e0baff547782052f"
+    },
+    {
+      "path": ".artifacts/2026-10-17-framework-integration-738695f/release-archives.json",
+      "bytes": 351338,
+      "sha256": "a816034e63d577393ce0479cff722db79e209f5ba502bde3b308ec37810596fd"
+    }
+  ],
+  "limitations": [
+    "Decoded-image payload means target RGBA8 lengths, not allocation capacity or allocator/nativeRSS.",
+    "Parsed model/path/shape/timeline caches, encoded strings, source/poster/ready/output owners, active preparations/GIF workers, rendering/decoder scratch and allocator overhead remain additional.",
+    "Other idle threads may hold reservations until their next touch or thread exit; process-wide admission safely bypasses local retention rather than forcibly evicting another TLS.",
+    "Fixed active element worker bound and per-call batch/output limits are prior separate slices; this idle policy is not unified global/application memory closure.",
+    "Source-focused tests precede the passing combined738695f integration and fresh39-package preflight below. Browser ownership-runtime, unified memory policy and latest cross-platform lifecycle acceptance remain open."
+  ],
+  "finalized_at_utc": "2026-10-17T22:00:04.518522+00:00",
+  "combined_integration": {
+    "status": "passed",
+    "source_commit": "738695fb20db8113b2868a7e3b9fcaeddc66ad70",
+    "full_core_tests": {
+      "passed": 2194,
+      "failed": 0,
+      "ignored_existing_opt_in": 2
+    },
+    "full_ui_tests": {
+      "passed": 501,
+      "failed": 0,
+      "ignored": 0
+    },
+    "strict_native_all_target_clippy": "passed",
+    "browser_lottie_ui_wasm_compile": "passed",
+    "formatting": "passed",
+    "source_files_unchanged_during_validation": true,
+    "integration_record": {
+      "path": ".artifacts/2026-10-17-framework-integration-738695f/integration.json",
+      "bytes": 3810,
+      "sha256": "ef3e83aca73083659eaf84cbcbe8d51d01ee8ce2c73991dc63178eb502a77fbf"
+    },
+    "fresh_package_preflight": {
+      "path": ".artifacts/2026-10-17-framework-integration-738695f/package-preflight.json",
+      "bytes": 650,
+      "sha256": "31983a587f78ec92aa076f6f82c91c8e01569dbc077082d8e0baff547782052f"
+    },
+    "release_archive_audit": {
+      "path": ".artifacts/2026-10-17-framework-integration-738695f/release-archives.json",
+      "bytes": 351338,
+      "sha256": "a816034e63d577393ce0479cff722db79e209f5ba502bde3b308ec37810596fd"
+    },
+    "release_archive_count": 39,
+    "included_rust_files": 928,
+    "included_rust_bytes": 23290129,
+    "compressed_archive_bytes": 6032988,
+    "all_included_rust_bytes_match_immutable_source": true,
+    "archived_vcs_metadata_histogram": {
+      "{\"sha1\": \"738695fb20db8113b2868a7e3b9fcaeddc66ad70\"}": 39
+    },
+    "archived_vcs_dirty_field_histogram": {
+      "absent": 39
+    },
+    "registry_upload_performed": false,
+    "qualification": "Exact scoped current-source native checks and package verification. This does not close hosted Metal/advisory failures, all-platform runtime, assistive technology, power or latest-source whole-application comparison requirements."
+  },
+  "browser_scope_qualification": "Sixteen actual Chrome tests exercise fork archive/image policies and decoded-payload getter. Core browser cache helper compiles; this is not a native-to-browser ownership/lifecycle runtime closure."
+}

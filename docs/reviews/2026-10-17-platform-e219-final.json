@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-10-17T22:09:10.440510+00:00",
+  "run_id": 39068240744,
+  "url": "https://github.com/Augani/kael/actions/runs/39068240744",
+  "immutable_head_sha": "e2194399ad5ec09aba1ac5d82df55bf4a5dbfaea",
+  "status": "completed",
+  "conclusion": "failure",
+  "job_conclusions": {
+    "success": 5,
+    "failure": 3,
+    "skipped": 1
+  },
+  "jobs": [
+    {
+      "id": 117500263769,
+      "name": "Classify change",
+      "conclusion": "success",
+      "url": "https://github.com/Augani/kael/actions/runs/39068240744/job/117500263769",
+      "failed_steps": [],
+      "evidence_coverage": "final GitHub run+step metadata; raw log additionally preserved for macOS,Linux quality and Windows2025"
+    },
+    {
+      "id": 117500287751,
+      "name": "Linux Renderer / WebView Runtime",
+      "conclusion": "success",
+      "url": "https://github.com/Augani/kael/actions/runs/39068240744/job/117500287751",
+      "failed_steps": [],
+      "evidence_coverage": "final GitHub run+step metadata; raw log additionally preserved for macOS,Linux quality and Windows2025"
+    },
+    {
+      "id": 117500287767,
+      "name": "Quality / Native (macOS)",
+      "conclusion": "failure",
+      "url": "https://github.com/Augani/kael/actions/runs/39068240744/job/117500287767",
+      "failed_steps": [
+        "Execute Metal retained-scene runtime proof"
+      ],
+      "evidence_coverage": "final GitHub run+step metadata; raw log additionally preserved for macOS,Linux quality and Windows2025"
+    },
+    {
+      "id": 117500287780,
+      "name": "Quality / Native (Linux)",
+      "conclusion": "failure",
+      "url": "https://github.com/Augani/kael/actions/runs/39068240744/job/117500287780",
+      "failed_steps": [
+        "Audit locked dependencies"
+      ],
+      "evidence_coverage": "final GitHub run+step metadata; raw log additionally preserved for macOS,Linux quality and Windows2025"
+    },
+    {
+      "id": 117500287802,
+      "name": "WebAssembly / WebGL2 Browser",
+      "conclusion": "success",
+      "url": "https://github.com/Augani/kael/actions/runs/39068240744/job/117500287802",
+      "failed_steps": [],
+      "evidence_coverage": "final GitHub run+step metadata; raw log additionally preserved for macOS,Linux quality and Windows2025"
+    },
+    {
+      "id": 117500287827,
+      "name": "Windows Native / WebView / MSI (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/Augani/kael/actions/runs/39068240744/job/117500287827",
+      "failed_steps": [],
+      "evidence_coverage": "final GitHub run+step metadata; raw log additionally preserved for macOS,Linux quality and Windows2025"
+    },
+    {
+      "id": 117500287844,
+      "name": "Windows Native / WebView / MSI (windows-2025-vs2026)",
+      "conclusion": "success",
+      "url": "https://github.com/Augani/kael/actions/runs/39068240744/job/117500287844",
+      "failed_steps": [],
+      "evidence_coverage": "final GitHub run+step metadata; raw log additionally preserved for macOS,Linux quality and Windows2025"
+    },
+    {
+      "id": 117500288835,
+      "name": "Focused Linux / GTK4 native accessibility",
+      "conclusion": "skipped",
+      "url": "https://github.com/Augani/kael/actions/runs/39068240744/job/117500288835",
+      "failed_steps": [],
+      "evidence_coverage": "final GitHub run+step metadata; raw log additionally preserved for macOS,Linux quality and Windows2025"
+    },
+    {
+      "id": 117513635111,
+      "name": "Platform readiness",
+      "conclusion": "failure",
+      "url": "https://github.com/Augani/kael/actions/runs/39068240744/job/117513635111",
+      "failed_steps": [
+        "Enforce required build results"
+      ],
+      "evidence_coverage": "final GitHub run+step metadata; raw log additionally preserved for macOS,Linux quality and Windows2025"
+    }
+  ],
+  "raw_verified_failures": {
+    "macOS": "Metal mandatory GPU suite passed; real drawable presentation gate failed within2s. No completion-as-presentation waiver.",
+    "Linux_quality": "Strict dependency audit failed on6deniedunmaintainedwarnings;3advisories across two versions each. This is not the older12-vulnerability graph.",
+    "audit_advisories": [
+      "RUSTSEC-2026-0370",
+      "RUSTSEC-2026-0371",
+      "RUSTSEC-2026-0372"
+    ]
+  },
+  "windows2025_raw_verified": [
+    "D3D11 WARP software=true",
+    "retained native window+readback",
+    "programmable renderer runtime",
+    "native UIA tree actions",
+    "native UIA Unicode TextPattern"
+  ],
+  "files": [
+    {
+      "path": ".artifacts/2026-10-17-platform-e219-final/run.json",
+      "bytes": 30345,
+      "sha256": "144131c2778d389ed39ffc9be11499a6a18c1d69811bf0e96ed587a1fce4b824"
+    },
+    {
+      "path": ".artifacts/2026-10-17-platform-e219-macos.log",
+      "bytes": 725252,
+      "sha256": "602cb6272884ef0f55b19841ef31824bd8b27f8ba1dbe8dbca424fb06fff8517"
+    },
+    {
+      "path": ".artifacts/2026-10-17-platform-e219-linux.log",
+      "bytes": 989275,
+      "sha256": "113dfa7d4f258177f539b356f3614289001ee42409998ce6b3cc0ba8902fcbfd"
+    },
+    {
+      "path": ".artifacts/2026-10-17-platform-e219-final/windows2025.log",
+      "bytes": 331314,
+      "sha256": "3016a510c276b1ae24739c21bcdf745d94e7e725bbd297289a8257d0c1c2bade"
+    }
+  ],
+  "limitations": [
+    "Source e219 only; not current738 source or later SecretService5.2 lock acceptance.",
+    "Local physical awake presentation evidence is separate and does not turn this hosted macOS failure into CI success.",
+    "Job success and successful steps are recorded from the final run snapshot; this summary does not invent raw pixel/test counts for jobs without local raw logs.",
+    "Focused GTK4 job was skipped; Linux runtime job independently contains successful GTK4 protocol steps."
+  ],
+  "assembler": {
+    "path": ".artifacts/2026-10-17-physical-presentation-final/assemble.py",
+    "bytes": 12939,
+    "sha256": "1fcfa57d4736b7fb53eee9120aed46fe75e58c31b352cc7dd1cbe6bc73ebe67c"
+  }
+}

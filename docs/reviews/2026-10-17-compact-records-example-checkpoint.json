@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-10-17T22:26:09.532519+00:00",
+  "scope": "Public read-only compact_records DataTable example, source a3add69. Compile and bounded native interaction checkpoint with actual unresolved visual failures; not visual acceptance, application footprint or performance evidence.",
+  "source_commit": "a3add693ffa88004fa215f3c365f834e72644db9",
+  "source_files": [
+    {
+      "path": "crates/kael_ui/examples/compact_records.rs",
+      "bytes": 11458,
+      "sha256": "c67ff59e333935908342a9e3aac9736bccce227ca9ec9f945344fe9fc83f7585"
+    },
+    {
+      "path": "crates/kael_ui/Cargo.toml",
+      "bytes": 6868,
+      "sha256": "d86657568daf17c2c7bb553b43baabfbfe54584ee0ad546f42f9f21a7ceaac99"
+    },
+    {
+      "path": "crates/kael_ui/README.md",
+      "bytes": 7928,
+      "sha256": "70f7d0fa18a42d4fc65558eb8af8adf38d6e80cdd59ba8d6603551c04b56015d"
+    },
+    {
+      "path": "Cargo.lock",
+      "bytes": 281567,
+      "sha256": "df15e57c90e981bdfd8329be16f6840a68d1980d57a91b1f2c98d6104053d059"
+    }
+  ],
+  "checks": {
+    "example_check": {
+      "path": ".artifacts/2026-10-17-compact-data-grid/example/check.log",
+      "bytes": 1958,
+      "sha256": "59a184e2c99f745c0bdd989be80285ae349b6392602e8f1a5150fd839dc319d8"
+    },
+    "unit_tests_passed": 2,
+    "unit_tests_ignored": 0,
+    "strict_example_clippy": "passed with -D warnings",
+    "all_rustfmt": "passed",
+    "validation": {
+      "path": ".artifacts/2026-10-17-compact-data-grid/example/primary-validation/validation.json",
+      "bytes": 2447,
+      "sha256": "440b15aba4f0890a4754c4d231e62c279c97fec5ae42abb9b6eef27e1676e8ac"
+    },
+    "native_binary": {
+      "path": ".artifacts/2026-10-17-compact-data-grid/example/primary-validation/compact_records",
+      "bytes": 71512832,
+      "sha256": "1c7b1147ec9a2ed17cc87ebeb885dce0a907243a957669a17835adb18661bcff"
+    },
+    "source_identity_and_long_unicode_arc_sharing": "passed actual example tests",
+    "scope": "--no-default-features --features native; no editor feature required"
+  },
+  "native_interaction": {
+    "launch": "Exact locally built executable copied into task-owned QA.app with local Info.plist; native controller bound by exact bundle path. Earlier bare-name lookup failed; earlier locked native inventory remains preserved as historical pending state.",
+    "native_actions": "mcp__cua_repl documented app actions only",
+    "initial_loaded_without_user_repaint": true,
+    "pointer_then_keyboard_selected_original_id": 1000003,
+    "reverse_then_pointer_and_return_selected_original_id": 2699986,
+    "read_only_paste": "Original source value unchanged, no editable text field created, supplied dummy paste absent; controller restores clipboard.",
+    "vertical_scroll": "Native wheel moves viewport from first records to descending row45/record099955.",
+    "refresh": "Retains descending query and current scroll; clears selected status. An initial incorrect top-row expectation was rejected; reset does not promise scroll-to-top.",
+    "quit": "Command-Q followed by controller observation shows a fresh initial-state window; likely controller relaunch, not independently established exit acceptance. No quit pass claimed.",
+    "visual_status": "FAIL_PENDING_CORRECTION",
+    "observed_visual_failures": [
+      "VariableVirtualList computes a positive minimum offset when content fits, shifting the first column away from the leading edge.",
+      "DataTable fixed600px body exceeds constrained parent and overlaps the application footer."
+    ],
+    "native_ui_lock_qualification": "Native inventory initially reported a locked session. Subsequent bound-app UI actions succeeded. No inference that the optional CGSession lock key proves an unlocked state.",
+    "artifacts": [
+      {
+        "path": ".artifacts/2026-10-17-compact-data-grid/example/primary-validation/native-initial.png",
+        "bytes": 382677,
+        "sha256": "1c1b78f30fb5ed8832e32db1ff7821612e2ccc1a69b2f9fc86726801f82990e3"
+      },
+      {
+        "path": ".artifacts/2026-10-17-compact-data-grid/example/primary-validation/native-initial.ax.txt",
+        "bytes": 11118,
+        "sha256": "56f1fe5534717d6f4fbb58b9f9ab6de5649005156f775908fc151fa03524e60d"
+      },
+      {
+        "path": ".artifacts/2026-10-17-compact-data-grid/example/primary-validation/native-pointer-selected.ax.txt",
+        "bytes": 11131,
+        "sha256": "cd15bacd1f56be9d09dcfdb87583c5f9c494a12f90110486c5e33328bceb1957"
+      },
+      {
+        "path": ".artifacts/2026-10-17-compact-data-grid/example/primary-validation/native-reversed.ax.txt",
+        "bytes": 10412,
+        "sha256": "62824d8778deb48733fbc1bd1d78d9d8b6412c39d97085dbd317bb1b31450940"
+      },
+      {
+        "path": ".artifacts/2026-10-17-compact-data-grid/example/primary-validation/native-reversed-selected.ax.txt",
+        "bytes": 10425,
+        "sha256": "68d339f7ed546bf048b46ce44cffd6b2a7146d65010a2999c575dbe74dd84392"
+      },
+      {
+        "path": ".artifacts/2026-10-17-compact-data-grid/example/primary-validation/native-readonly-paste.ax.txt",
+        "bytes": 10425,
+        "sha256": "68d339f7ed546bf048b46ce44cffd6b2a7146d65010a2999c575dbe74dd84392"
+      },
+      {
+        "path": ".artifacts/2026-10-17-compact-data-grid/example/primary-validation/native-scrolled.ax.txt",
+        "bytes": 13737,
+        "sha256": "b891d6f3de4226c4e425fc7296ce78f21410ff245b62ffa2c93250295d4f08d2"
+      },
+      {
+        "path": ".artifacts/2026-10-17-compact-data-grid/example/primary-validation/native-refreshed-settled.ax.txt",
+        "bytes": 13763,
+        "sha256": "311ce31b9d03274f5d92a21c9d87c53af40a30229dd3e14a060fa9186a1707f4"
+      },
+      {
+        "path": ".artifacts/2026-10-17-compact-data-grid/example/primary-validation/native-refreshed-settled.png",
+        "bytes": 386851,
+        "sha256": "9875d8eea5d23e2dabbdca52ba03291f756bfa1d5b94cd166c46214508aa03dc"
+      },
+      {
+        "path": ".artifacts/2026-10-17-compact-data-grid/example/primary-validation/native-after-quit.ax.txt",
+        "bytes": 11241,
+        "sha256": "b887104659e68f306e9ca70780e2e37777d583e45038abfe728015dca0fa1ecc"
+      },
+      {
+        "path": ".artifacts/2026-10-17-compact-data-grid/example/primary-validation/native-qa-pending.json",
+        "bytes": 450,
+        "sha256": "87103d743f02c4ab759e8b55e1ee775bc6d0d55d3f463c12f9f1f820868f7ef0"
+      }
+    ]
+  },
+  "package_preflight": {
+    "source_commit": "a3add693ffa88004fa215f3c365f834e72644db9",
+    "archives": 39,
+    "included_rust_files": 928,
+    "included_rust_bytes": 23290129,
+    "compressed_bytes": 6033157,
+    "all_included_rust_bytes_match": true,
+    "receipt": {
+      "path": ".artifacts/2026-10-17-package-preflight-a3add69/preflight.json",
+      "bytes": 1054,
+      "sha256": "24cc621e2ef93d362820722334fbb53231db4ff3dcb741d2c0ffb9f554f1b792"
+    },
+    "independent_archive_verification": {
+      "path": ".artifacts/2026-10-17-package-preflight-a3add69/release-archives.json",
+      "bytes": 351338,
+      "sha256": "6c4a4c451265181011be86fb37823479d5c6b3c246520542939eeae225ac0a39"
+    },
+    "registry_upload": false,
+    "scope": "Example files are intentionally excluded from kael_ui release archive; example compile proof is separate."
+  },
+  "lock_update": {
+    "record": {
+      "path": ".artifacts/2026-10-17-compact-data-grid/example/primary-validation/lock-delta.json",
+      "bytes": 3151,
+      "sha256": "09c3d4b01c771e22a8ade5feaf487b0bc6372784dc2d46948a4f8b28cd32ce29"
+    },
+    "change": "Native-only development dependency on already-resolved SmolStr0.3.6; optional Borsh1.8.1 plus weak serde edges enter Cargo.lock; no common package version/checksum change.",
+    "audit": {
+      "path": ".artifacts/2026-10-17-compact-data-grid/example/primary-validation/maintained-audit-evidence.json",
+      "bytes": 2194,
+      "sha256": "f2544f273b8ac68f93698c63858444f69dfaae78566d248b6c4ab783c19d2ef2"
+    },
+    "known_vulnerabilities": 0,
+    "strict_audit": "still fails on the same3denied Zbus5 warnings; maintained accepted list unchanged"
+  },
+  "remaining": [
+    "Correct short-list placement and constrained table sizing, then rerun native visuals and interactions on final source.",
+    "Native resizing/horizontal-wheel and close-during-load remain unaccepted at this checkpoint.",
+    "Measured compact Grid probe is a distinct model/control; its byte savings do not measure this one-store Arc<Record> DataTable example.",
+    "No native RSS, frame rate, controlled power or comparative presentation result."
+  ]
+}

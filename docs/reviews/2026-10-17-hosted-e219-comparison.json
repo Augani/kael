@@ -1,0 +1,1329 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-17",
+  "hosted_run": {
+    "conclusion": "success",
+    "createdAt": "2026-10-17T20:48:02Z",
+    "event": "workflow_dispatch",
+    "headSha": "e2194399ad5ec09aba1ac5d82df55bf4a5dbfaea",
+    "name": "Cross-platform Benchmarks",
+    "status": "completed",
+    "updatedAt": "2026-10-17T22:24:15Z",
+    "url": "https://github.com/Augani/kael/actions/runs/39068242775",
+    "workflowName": "Cross-platform Benchmarks"
+  },
+  "scope": "Independent validation and per-contract/per-mode summaries of all 100 preserved hosted native desktop captures; no overall framework ranking.",
+  "binary_source_commit": "e2194399ad5ec09aba1ac5d82df55bf4a5dbfaea",
+  "comparison_revision": "3467e647600290343885b500bd7464057e334d18",
+  "comparison_label": "historical GPUI Kit0.7.0@3467e647, not latest",
+  "actual_uploaded_binary_inventory": {
+    "gpui-kit": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/gpui-kit",
+      "sha256": "10a3aa0c9728b600569c2b6514e669388b5a1a30b2ea7df1755935da83cf89d1",
+      "bytes": 13500992
+    },
+    "gpui-kit-data": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/gpui-kit-data",
+      "sha256": "67bf47b4bf4fd2781e0817f924cec4c8501fc40dfc2478d7262a41b8115865af",
+      "bytes": 13920048
+    },
+    "gpui-kit-data-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/gpui-kit-data-without-frame-timing",
+      "sha256": "3c07e295ca18f54b5225a956d2b05231c1dd40dffb5582c33ca3aecc2b26c4e4",
+      "bytes": 13863376
+    },
+    "gpui-kit-editor": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/gpui-kit-editor",
+      "sha256": "5547e32857770562339ad3896acf2cbdc40e9db856e4653f1fbc02fa69ae583f",
+      "bytes": 16558352
+    },
+    "gpui-kit-editor-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/gpui-kit-editor-without-frame-timing",
+      "sha256": "1f70ef54022ce9a0e22a91adc86fc2cc25738ec07f209325e2e53452d72a8c6d",
+      "bytes": 16502336
+    },
+    "gpui-kit-tree": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/gpui-kit-tree",
+      "sha256": "c30da839b53a104a1008b6064ae0332154dc572b2f18edd11bd5087f4e223f76",
+      "bytes": 13781488
+    },
+    "gpui-kit-tree-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/gpui-kit-tree-without-frame-timing",
+      "sha256": "c8b9675382550541f5c314362f350c092c1243f4dc95228bef0d98b36a2513e0",
+      "bytes": 13724304
+    },
+    "gpui-kit-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/gpui-kit-without-frame-timing",
+      "sha256": "f8ab538cdea5a12a2661d20009205af9cc6b6f42045591222f64befb77099ff2",
+      "bytes": 13443744
+    },
+    "gpui-kit-workspace": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/gpui-kit-workspace",
+      "sha256": "78cdbbbed83d408361c9bee53432dfe07ea200b6cabeb79401abc50051c3301b",
+      "bytes": 14464368
+    },
+    "gpui-kit-workspace-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/gpui-kit-workspace-without-frame-timing",
+      "sha256": "42127553fc9641ca90baf1904cdbc0679728cd3a2b74168593118d4c571e5459",
+      "bytes": 14407776
+    },
+    "kael": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/kael",
+      "sha256": "39de00cbdb750acf3a87957564ccf4b35907940eaddf7f3da70f992236b1c939",
+      "bytes": 11844832
+    },
+    "kael-data": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/kael-data",
+      "sha256": "b610c3e95c8c21bf354d49fb30249a90b95da6dfc00cab4bc55a2b733b89251c",
+      "bytes": 14097968
+    },
+    "kael-data-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/kael-data-without-frame-timing",
+      "sha256": "bfc0657944546abe17a46beac989f9b3dfc91c94446ebd49bcb74adbcd028055",
+      "bytes": 14043680
+    },
+    "kael-editor": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/kael-editor",
+      "sha256": "87e4bce2a76ca754f80cf2d7614bf743bac2d9d7032f27d0c4e9c176cd1b0212",
+      "bytes": 12988352
+    },
+    "kael-editor-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/kael-editor-without-frame-timing",
+      "sha256": "23e909e677846482f255a47ce8cb08c33932387b0ac3b313ea642f29394d1852",
+      "bytes": 12949488
+    },
+    "kael-tree": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/kael-tree",
+      "sha256": "a1776ba5f15b41b3685040cf389ff7e78796c4ae3bd9d99a00fd44154dae9f37",
+      "bytes": 12603616
+    },
+    "kael-tree-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/kael-tree-without-frame-timing",
+      "sha256": "67046f20f031072c7aba5895d94f065d4632c6b000418dc219ab531079c52028",
+      "bytes": 12548720
+    },
+    "kael-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/kael-without-frame-timing",
+      "sha256": "69ae94197e2f562da082c468f6b3d77bd10e3b15b44bfb0cce4d5b2bb2690e0f",
+      "bytes": 11790000
+    },
+    "kael-workspace": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/kael-workspace",
+      "sha256": "a276d0391bee0572001dfe0029629998c2851079a99cd8c88b2e1a233d76bdf0",
+      "bytes": 12826320
+    },
+    "kael-workspace-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/binaries/kael-workspace-without-frame-timing",
+      "sha256": "ff78525ac39b52fbf1c5d0ecdb6634d74f03e1bceb859640a2aa45946893bbcb",
+      "bytes": 12789776
+    }
+  },
+  "frozen_source_archive": {
+    "path": ".artifacts/2026-10-17-hosted-e219-comparison/frozen-source.tar",
+    "sha256": "5a46281c85ab5d75378b17d0e4f9a638950583bdf106f375eb565fb887b05b14"
+  },
+  "frozen_gpui_kit_source_archive": {
+    "path": ".artifacts/2026-10-17-hosted-e219-comparison/frozen-gpui-kit-3467e647-source.tar",
+    "sha256": "3f96ecbdcb8b3b8703d132d04ea487910cb21c1736c7fff46c98d95581deb362"
+  },
+  "frozen_collector_negative_tests": {
+    "path": ".artifacts/2026-10-17-hosted-e219-comparison/frozen-collector-tests.log",
+    "sha256": "bae6f08be899e4e39b71cb4608230ecdfc7fd038d168d7c9e9233eb96c54b2ef"
+  },
+  "frozen_validator_helpers": {
+    "measure.py": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/measure.py",
+      "sha256": "33ac20f340e8ea6ec8fd8a4981779e133fc31eba38e77546037a9e59b6220341"
+    },
+    "workload_validation.py": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/workload_validation.py",
+      "sha256": "c731abdb551a6a48187bf4bd6d8e79f44abe6a1e483e02b4d2b4ceb8ad5232b6"
+    }
+  },
+  "audit_script": {
+    "path": ".artifacts/2026-10-17-hosted-e219-comparison/audit.py",
+    "sha256": "dfb575b274705caabf083a3cb421689e5c25c61d6b39a27ee95b7304018eee1e"
+  },
+  "source_verification": {
+    "clean_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "checkout_source_fingerprint_sha256": "835ff4e1568fed7c80cc11e480f268bec70d7a39d265d6e9eeec4a7f15c4a1a2",
+    "source_file_count": 2944,
+    "all_file_hashes_checked_against_frozen_git_blobs": true,
+    "exact_eligible_frozen_source_file_set": true,
+    "shared_by_all_ten_environments": true,
+    "counter_source_sha256": "7e2d581bb3a4372c9f930318e93ee9e1d2840654b2698ba86f53cf086ddaf3e4",
+    "activation_source_sha256": "5698c302eb2a31b86f40b0107d430f62ff633a691ffaae7dd26f64894f39f49b",
+    "application_binary_bytes_preserved": true,
+    "application_binary_hash_verification": "Every capture collector digest is checked against the actual uploaded executable bytes; exactly20 distinct contract/mode/engine executables are independently rehashed.",
+    "counter_and_activation_binaries_independently_rehashed": true
+  },
+  "environment": {
+    "schema_version": 3,
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "cpu": "Apple M1 (Virtual)",
+    "memory_bytes": 7516192768,
+    "cpu_count": 3,
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: aarch64-apple-darwin\nrelease: 1.97.1\nLLVM version: 22.1.6",
+    "power_source": "Now drawing from 'AC Power'",
+    "displays": {
+      "exit_code": 0,
+      "stdout": "{\n  \"SPDisplaysDataType\" : [\n\n  ]\n}",
+      "stderr": ""
+    },
+    "thermal_conditions": {
+      "exit_code": 0,
+      "stdout": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+      "stderr": ""
+    },
+    "comparison_revision": "3467e647600290343885b500bd7464057e334d18",
+    "counter_scope": "libproc RUSAGE_INFO_V4 per-process; energy fields are raw OS counters, not watts",
+    "cpu_timebase": {
+      "numer": 125,
+      "denom": 3,
+      "raw_units": "Mach absolute ticks",
+      "converted_units": "nanoseconds"
+    },
+    "adapter_source_sha256": "7e2d581bb3a4372c9f930318e93ee9e1d2840654b2698ba86f53cf086ddaf3e4",
+    "activation_source_sha256": "5698c302eb2a31b86f40b0107d430f62ff633a691ffaae7dd26f64894f39f49b",
+    "window_activation_scope": "request foreground for the owned child at active/churn begin; repaint activity remains mandatory",
+    "native_geometry_scope": "actual client viewport and scale at each phase begin/end; stable and equal across all captures required",
+    "timing_scope": "CPU draw and platform submission when enabled; common application callback timing always enabled; no GPU/compositor completion measurement"
+  },
+  "validation": {
+    "all_original_workload_and_active_phase_gates_pass": true,
+    "unchanged_frozen_validator": true,
+    "captures": 100,
+    "contract_mode_groups": 10,
+    "repetitions_per_engine_per_group": 5,
+    "native_geometry_boundaries_checked": 800,
+    "cross_engine_pairs_checked": 50,
+    "paired_boundaries_checked": 400,
+    "all_actual_native_geometry": {
+      "viewport_width_px": 1100.0,
+      "viewport_height_px": 645.0,
+      "scale_factor": 1.0
+    },
+    "raw_log_result_and_phase_markers_match_all_reports": true,
+    "individual_and_aggregate_reports_match": true,
+    "phase_and_quantile_metrics_recomputed": true,
+    "mach_tick_cpu_conversions_checked": true,
+    "cumulative_process_cpu_monotonic": true,
+    "zero_only_counters_across_all_process_samples": {
+      "instructions": true,
+      "cycles": true,
+      "billed_energy_raw": true,
+      "serviced_energy_raw": true
+    },
+    "total_process_samples": 10817,
+    "total_stable_measured_samples": 9285,
+    "owned_active_and_churn_activation_requests_accepted": 200,
+    "reported_binary_hashes": 20,
+    "actual_uploaded_binary_hashes_match_all100captures": true,
+    "failures": []
+  },
+  "derivation": {
+    "sample_selection": "For each run and each of idle-before/active/idle-after/churn, retain the original collector stable samples [1:-1]. Exclude startup, warmup, oracle validation, and phase boundary samples.",
+    "cpu_percent": "Recompute cumulative (user_ns + system_ns) delta / stable elapsed seconds / 1e7 per phase, then report the median of the five per-run percentages. 100% means one CPU core, not all three runner cores.",
+    "stable_sampled_peak_rss_bytes": "Maximum rss_bytes among the retained stable samples across all four measured phases per run, then median across the five captures. A sampled peak, not an exact lifetime RSS high-water mark.",
+    "draw_cpu_us_p99": "Use the exact frozen collector quantile: sorted(draw_cpu_us)[int((n - 1) * .99)], then median of the five per-run p99 values. No pooled or interpolated p99. Timing-disabled results are null.",
+    "submission_cpu_us_p99": "Same per-run quantile then median convention as draw. Platform submission spans exclude GPU/compositor completion."
+  },
+  "limitations": [
+    "Historical hosted source e219439 and declared GPUI Kit0.7.0 revision3467e647; not current Kael HEAD and not the latest comparator release. Later changes are excluded.",
+    "One shared hosted virtual macOS runner. Exact CPU/memory metadata is preserved below. Five alternating repetitions per engine are descriptive within each fixed contract/mode, not an overall framework ranking or controlled bare-metal power comparison.",
+    "Actual phase-boundary geometry is derived below from the raw reports; nominal1100x760 fixture metadata alone is not geometry proof.",
+    "The display inventory is empty. Accepted owned foreground requests and mandatory active/churn repaint gates were verified; this is not independent proof of foreground focus, native monitor presentation, GPU completion, compositor latency, or visible smoothness.",
+    "CPU draw/submission durations are CPU-side wall-clock spans recorded with optional instrumentation, not GPU time or end-to-end latency. Timing-enabled and timing-disabled builds are kept separate.",
+    "Stable sampled RSS excludes startup and oracle validation, and is process RSS rather than retained heap, allocator usage, GPU residency, or an exact high-water mark.",
+    "Startup timings lack matched initial geometry and are not summarized as comparative results.",
+    "Application executable bytes were uploaded and independently rehashed against every capture. This verifies binary identity, not visible compositor presentation or GPU time.",
+    "Unavailable/zero-only counters are reported explicitly from this run and are not converted to watts or used to rank energy efficiency.",
+    "The fixed phase schedule and original operation-coverage gates do not guarantee equal operation counts across captures or engines. Actual per-run counts and native component differences are retained; modes are not a controlled instrumentation-overhead experiment.",
+    "Native component contracts preserve documented differences such as data-header height, tree accessibility metadata scope and dock chrome. Passing the original oracle/geometry gates does not establish pixel-identical rendering or complete feature parity."
+  ],
+  "full_independent_audit": {
+    "path": ".artifacts/2026-10-17-hosted-e219-comparison/summary.json",
+    "bytes": 504955,
+    "sha256": "64fd0e892d168e56a9273882c30e35c4dbd14f2bf9a1e56178b6928d73a4033c",
+    "contents": "All100 raw report/log/phase/aggregate metrics and278extracted file hashes; referenced source/20actual executable byte checks."
+  },
+  "downloaded_artifact": {
+    "github_artifact_metadata": {
+      "id": 12116751833,
+      "node_id": "MDg6QXJ0aWZhY3QxMjExNjc1MTgzMw==",
+      "name": "native-kael-gpui-kit-comparison",
+      "size_in_bytes": 122324172,
+      "url": "https://api.github.com/repos/Augani/kael/actions/artifacts/12116751833",
+      "archive_download_url": "https://api.github.com/repos/Augani/kael/actions/artifacts/12116751833/zip",
+      "expired": false,
+      "digest": "sha256:4255fe0d89d3ff197cb900c0ddd9db65c4a518c05a9a0888764c0c09f158f6a4",
+      "created_at": "2026-10-17T22:23:24Z",
+      "updated_at": "2026-10-17T22:23:24Z",
+      "expires_at": "2027-01-15T20:48:03Z",
+      "workflow_run": {
+        "id": 39068242775,
+        "repository_id": 1239697079,
+        "head_repository_id": 1239697079,
+        "head_branch": "codex/desktop-framework-quality",
+        "head_sha": "e2194399ad5ec09aba1ac5d82df55bf4a5dbfaea"
+      }
+    },
+    "metadata_snapshot": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/artifact-download-metadata.json",
+      "sha256": "ff11bf7e960011130e1c7ee008bc2bf58dabf18e42ad50c7eeadd5f243cf69c6"
+    },
+    "independently_downloaded_archive": {
+      "path": ".artifacts/2026-10-17-hosted-e219-comparison/native-kael-gpui-kit-comparison.zip",
+      "sha256": "4255fe0d89d3ff197cb900c0ddd9db65c4a518c05a9a0888764c0c09f158f6a4"
+    },
+    "archive_digest_matches_github_metadata": true,
+    "extracted_file_count": 278,
+    "all_extracted_files_byte_identical_to_archive": true
+  },
+  "groups": [
+    {
+      "group": "data-table-without-frame-timing",
+      "contract": "native-data-table-v1",
+      "frame_timing_enabled": false,
+      "raw_environment": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/data-table-without-frame-timing/environment.json",
+        "sha256": "9ea273883f72ec68fa8c804bc118c9636d8446a5df60c8c050e23b8301890678"
+      },
+      "raw_runs": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/data-table-without-frame-timing/runs.json",
+        "sha256": "839fb6bb7a6324d71bd50cee9f0a7b44beddb968d810c8473dd4033679c716f8"
+      },
+      "process_counter_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/data-table-without-frame-timing/process-metrics",
+        "sha256": "5c18c789e153c140be2a55087a777a09eb3f3858f06d8b90ed12647c2ef1e322"
+      },
+      "activation_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/data-table-without-frame-timing/activate-native-window",
+        "sha256": "bc6afa330bf5d4503b887efa6d75a9139b13c99cf125b328e0ef5978ffb7eff0"
+      },
+      "collector_command": {
+        "kael": ".artifacts/competition/binaries/kael-data-without-frame-timing",
+        "gpui_kit": ".artifacts/competition/binaries/gpui-kit-data-without-frame-timing",
+        "output": ".artifacts/competition/data-table-without-frame-timing",
+        "repetitions": 5,
+        "without_frame_timing": true,
+        "contract": "native-data-table-v1"
+      },
+      "load_average_at_group_start": [
+        1.80029296875,
+        2.080078125,
+        2.65673828125
+      ],
+      "workload_disclosures": {
+        "kael": {
+          "component": "VirtualSheetGrid",
+          "timing_scope": "shipped native virtual data controls; public selection/navigation/model invalidation APIs; paced separate frames",
+          "input_scope": null,
+          "differences": [
+            "Kael bounded local tile cache16x512cells; GPUI Kit delegate reads immutable dataset directly",
+            "Both header wrappers32px and body rows28px; GPUI Kit native leaf header cells28px",
+            "Kael grid provides native editing; GPUI Kit table delegates editing to apps, so editing excluded",
+            "Navigation targets both horizontal extremes; controls retain their native reveal/clamp semantics"
+          ],
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        },
+        "gpui-kit": {
+          "component": "DataTable",
+          "timing_scope": "shipped native virtual data controls; public selection/navigation/model invalidation APIs; paced separate frames",
+          "input_scope": null,
+          "differences": [
+            "Kael bounded local tile cache16x512cells; GPUI Kit delegate reads immutable dataset directly",
+            "Both header wrappers32px and body rows28px; GPUI Kit native leaf header cells28px",
+            "Kael grid provides native editing; GPUI Kit table delegates editing to apps, so editing excluded",
+            "Navigation targets both horizontal extremes; controls retain their native reveal/clamp semantics"
+          ],
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        }
+      },
+      "actual_native_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "geometry_validation": {
+        "captures": 10,
+        "boundaries_per_capture": 8,
+        "cross_engine_pairs": 5,
+        "paired_boundaries_checked": 40,
+        "stable_within_and_between_captures": true
+      },
+      "medians": {
+        "kael": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "bfc0657944546abe17a46beac989f9b3dfc91c94446ebd49bcb74adbcd028055",
+          "cpu_percent_by_phase": {
+            "idle-before": 0.9401257450247267,
+            "active": 26.71576189343217,
+            "idle-after": 0.00648437441064014,
+            "churn": 20.90575316448794
+          },
+          "stable_sampled_peak_rss_bytes": 213630976,
+          "stable_sampled_peak_rss_range_bytes": [
+            213008384,
+            214482944
+          ],
+          "draw_cpu_us_p99": null,
+          "submission_cpu_us_p99": null
+        },
+        "gpui-kit": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "3c07e295ca18f54b5225a956d2b05231c1dd40dffb5582c33ca3aecc2b26c4e4",
+          "cpu_percent_by_phase": {
+            "idle-before": 1.5938197438498427,
+            "active": 20.466213224563514,
+            "idle-after": 1.451222189707122,
+            "churn": 14.298203941315021
+          },
+          "stable_sampled_peak_rss_bytes": 143048704,
+          "stable_sampled_peak_rss_range_bytes": [
+            142622720,
+            143163392
+          ],
+          "draw_cpu_us_p99": null,
+          "submission_cpu_us_p99": null
+        }
+      }
+    },
+    {
+      "group": "editor-document-without-frame-timing",
+      "contract": "native-editor-document-v1",
+      "frame_timing_enabled": false,
+      "raw_environment": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/editor-document-without-frame-timing/environment.json",
+        "sha256": "11418303991c779c51ee36ebfceead76f0a3708d9bd22c516995e2847717caf5"
+      },
+      "raw_runs": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/editor-document-without-frame-timing/runs.json",
+        "sha256": "3682a5f5de58f7cabde4523d607db453ebd6393f443df8958914411c25a0d3bc"
+      },
+      "process_counter_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/editor-document-without-frame-timing/process-metrics",
+        "sha256": "5c18c789e153c140be2a55087a777a09eb3f3858f06d8b90ed12647c2ef1e322"
+      },
+      "activation_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/editor-document-without-frame-timing/activate-native-window",
+        "sha256": "bc6afa330bf5d4503b887efa6d75a9139b13c99cf125b328e0ef5978ffb7eff0"
+      },
+      "collector_command": {
+        "kael": ".artifacts/competition/binaries/kael-editor-without-frame-timing",
+        "gpui_kit": ".artifacts/competition/binaries/gpui-kit-editor-without-frame-timing",
+        "output": ".artifacts/competition/editor-document-without-frame-timing",
+        "repetitions": 5,
+        "without_frame_timing": true,
+        "contract": "native-editor-document-v1"
+      },
+      "load_average_at_group_start": [
+        1.07177734375,
+        1.537109375,
+        3.33447265625
+      ],
+      "workload_disclosures": {
+        "kael": {
+          "component": null,
+          "timing_scope": "native rendered Editor; public interaction APIs and routed undo/redo; paced separate frames",
+          "input_scope": null,
+          "differences": null,
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        },
+        "gpui-kit": {
+          "component": null,
+          "timing_scope": "native rendered Editor; public interaction APIs and routed undo/redo; paced separate frames",
+          "input_scope": null,
+          "differences": null,
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        }
+      },
+      "actual_native_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "geometry_validation": {
+        "captures": 10,
+        "boundaries_per_capture": 8,
+        "cross_engine_pairs": 5,
+        "paired_boundaries_checked": 40,
+        "stable_within_and_between_captures": true
+      },
+      "medians": {
+        "kael": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "23e909e677846482f255a47ce8cb08c33932387b0ac3b313ea642f29394d1852",
+          "cpu_percent_by_phase": {
+            "idle-before": 0.9816540213245674,
+            "active": 31.25628673553071,
+            "idle-after": 0.010100774616420208,
+            "churn": 21.68178832011903
+          },
+          "stable_sampled_peak_rss_bytes": 90767360,
+          "stable_sampled_peak_rss_range_bytes": [
+            87179264,
+            90963968
+          ],
+          "draw_cpu_us_p99": null,
+          "submission_cpu_us_p99": null
+        },
+        "gpui-kit": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "1f70ef54022ce9a0e22a91adc86fc2cc25738ec07f209325e2e53452d72a8c6d",
+          "cpu_percent_by_phase": {
+            "idle-before": 1.5960490456597336,
+            "active": 8.91862386521202,
+            "idle-after": 0.9204948705689047,
+            "churn": 5.845226021709092
+          },
+          "stable_sampled_peak_rss_bytes": 87457792,
+          "stable_sampled_peak_rss_range_bytes": [
+            87326720,
+            87883776
+          ],
+          "draw_cpu_us_p99": null,
+          "submission_cpu_us_p99": null
+        }
+      }
+    },
+    {
+      "group": "native-data-table",
+      "contract": "native-data-table-v1",
+      "frame_timing_enabled": true,
+      "raw_environment": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-data-table/environment.json",
+        "sha256": "8f8ebe5fe60ba7388e0b3c050624fa79ae8ce77042a6a6af00acc86d646036db"
+      },
+      "raw_runs": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-data-table/runs.json",
+        "sha256": "ddab5987982062752e03e9ce2ff796295ccddea26224f63422b21967bd080a25"
+      },
+      "process_counter_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-data-table/process-metrics",
+        "sha256": "5c18c789e153c140be2a55087a777a09eb3f3858f06d8b90ed12647c2ef1e322"
+      },
+      "activation_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-data-table/activate-native-window",
+        "sha256": "bc6afa330bf5d4503b887efa6d75a9139b13c99cf125b328e0ef5978ffb7eff0"
+      },
+      "collector_command": {
+        "kael": ".artifacts/competition/binaries/kael-data",
+        "gpui_kit": ".artifacts/competition/binaries/gpui-kit-data",
+        "output": ".artifacts/competition/native-data-table",
+        "repetitions": 5,
+        "without_frame_timing": false,
+        "contract": "native-data-table-v1"
+      },
+      "load_average_at_group_start": [
+        1.744140625,
+        1.94140625,
+        2.9091796875
+      ],
+      "workload_disclosures": {
+        "kael": {
+          "component": "VirtualSheetGrid",
+          "timing_scope": "shipped native virtual data controls; public selection/navigation/model invalidation APIs; paced separate frames",
+          "input_scope": null,
+          "differences": [
+            "Kael bounded local tile cache16x512cells; GPUI Kit delegate reads immutable dataset directly",
+            "Both header wrappers32px and body rows28px; GPUI Kit native leaf header cells28px",
+            "Kael grid provides native editing; GPUI Kit table delegates editing to apps, so editing excluded",
+            "Navigation targets both horizontal extremes; controls retain their native reveal/clamp semantics"
+          ],
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        },
+        "gpui-kit": {
+          "component": "DataTable",
+          "timing_scope": "shipped native virtual data controls; public selection/navigation/model invalidation APIs; paced separate frames",
+          "input_scope": null,
+          "differences": [
+            "Kael bounded local tile cache16x512cells; GPUI Kit delegate reads immutable dataset directly",
+            "Both header wrappers32px and body rows28px; GPUI Kit native leaf header cells28px",
+            "Kael grid provides native editing; GPUI Kit table delegates editing to apps, so editing excluded",
+            "Navigation targets both horizontal extremes; controls retain their native reveal/clamp semantics"
+          ],
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        }
+      },
+      "actual_native_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "geometry_validation": {
+        "captures": 10,
+        "boundaries_per_capture": 8,
+        "cross_engine_pairs": 5,
+        "paired_boundaries_checked": 40,
+        "stable_within_and_between_captures": true
+      },
+      "medians": {
+        "kael": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "b610c3e95c8c21bf354d49fb30249a90b95da6dfc00cab4bc55a2b733b89251c",
+          "cpu_percent_by_phase": {
+            "idle-before": 0.912174378606143,
+            "active": 25.91124377540906,
+            "idle-after": 0.007137544386686225,
+            "churn": 20.761961762421073
+          },
+          "stable_sampled_peak_rss_bytes": 214728704,
+          "stable_sampled_peak_rss_range_bytes": [
+            213827584,
+            216055808
+          ],
+          "draw_cpu_us_p99": 16967,
+          "submission_cpu_us_p99": 633
+        },
+        "gpui-kit": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "67bf47b4bf4fd2781e0817f924cec4c8501fc40dfc2478d7262a41b8115865af",
+          "cpu_percent_by_phase": {
+            "idle-before": 1.5754840996780661,
+            "active": 21.084226151449048,
+            "idle-after": 1.3924659335734562,
+            "churn": 13.985590830336523
+          },
+          "stable_sampled_peak_rss_bytes": 148127744,
+          "stable_sampled_peak_rss_range_bytes": [
+            147750912,
+            148193280
+          ],
+          "draw_cpu_us_p99": 21430,
+          "submission_cpu_us_p99": 539
+        }
+      }
+    },
+    {
+      "group": "native-dock-workspace",
+      "contract": "native-dock-workspace-v1",
+      "frame_timing_enabled": true,
+      "raw_environment": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-dock-workspace/environment.json",
+        "sha256": "1deadd2c802751dbdd63aa522e6e19348f1238091dbb6a4ef057252265c69279"
+      },
+      "raw_runs": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-dock-workspace/runs.json",
+        "sha256": "2377d7c12b5d92fd0dae9e208fd32c3a62bea3efeac5f38c9f81360e67c1954b"
+      },
+      "process_counter_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-dock-workspace/process-metrics",
+        "sha256": "5c18c789e153c140be2a55087a777a09eb3f3858f06d8b90ed12647c2ef1e322"
+      },
+      "activation_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-dock-workspace/activate-native-window",
+        "sha256": "bc6afa330bf5d4503b887efa6d75a9139b13c99cf125b328e0ef5978ffb7eff0"
+      },
+      "collector_command": {
+        "kael": ".artifacts/competition/binaries/kael-workspace",
+        "gpui_kit": ".artifacts/competition/binaries/gpui-kit-workspace",
+        "output": ".artifacts/competition/native-dock-workspace",
+        "repetitions": 5,
+        "without_frame_timing": false,
+        "contract": "native-dock-workspace-v1"
+      },
+      "load_average_at_group_start": [
+        1.53271484375,
+        1.91748046875,
+        2.1123046875
+      ],
+      "workload_disclosures": {
+        "kael": {
+          "component": "DockWorkspace",
+          "timing_scope": "native shipped persistent dock controllers; each public layout edit paced separately; JSON encode/decode/native restore included",
+          "input_scope": "paced public component programmatic APIs; no physical pointer, keyboard, AT or IME claim",
+          "differences": [
+            "Kael uses retained application pane closures; GPUI Kit persistence reconstructs registered Panel entities",
+            "Kael binary splits and GPUI Kit normalized n-ary splits are compared by ordered semantic layout with same-axis normalization",
+            "Kael tab strip minimum34px; pinned DockSkin native tab bar30px; retain native chrome and disclose content-height difference",
+            "Native split handle/minimum-size rules differ; common requested root ratio checked within0.005, persistence float tolerance0.01px",
+            "GPUI Kit does not serialize zoom state, so persistence is performed after unzoom; floating panes and edge docks excluded"
+          ],
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        },
+        "gpui-kit": {
+          "component": "DockArea+DockSkin",
+          "timing_scope": "native shipped persistent dock controllers; each public layout edit paced separately; JSON encode/decode/native restore included",
+          "input_scope": "paced public component programmatic APIs; no physical pointer, keyboard, AT or IME claim",
+          "differences": [
+            "Kael uses retained application pane closures; GPUI Kit persistence reconstructs registered Panel entities",
+            "Kael binary splits and GPUI Kit normalized n-ary splits are compared by ordered semantic layout with same-axis normalization",
+            "Kael tab strip minimum34px; pinned DockSkin native tab bar30px; retain native chrome and disclose content-height difference",
+            "Native split handle/minimum-size rules differ; common requested root ratio checked within0.005, persistence float tolerance0.01px",
+            "GPUI Kit does not serialize zoom state, so persistence is performed after unzoom; floating panes and edge docks excluded"
+          ],
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        }
+      },
+      "actual_native_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "geometry_validation": {
+        "captures": 10,
+        "boundaries_per_capture": 8,
+        "cross_engine_pairs": 5,
+        "paired_boundaries_checked": 40,
+        "stable_within_and_between_captures": true
+      },
+      "medians": {
+        "kael": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "a276d0391bee0572001dfe0029629998c2851079a99cd8c88b2e1a233d76bdf0",
+          "cpu_percent_by_phase": {
+            "idle-before": 0.9916686161293207,
+            "active": 18.655633848114,
+            "idle-after": 0.0051145589240606725,
+            "churn": 13.394306026855524
+          },
+          "stable_sampled_peak_rss_bytes": 85786624,
+          "stable_sampled_peak_rss_range_bytes": [
+            85426176,
+            85983232
+          ],
+          "draw_cpu_us_p99": 20022,
+          "submission_cpu_us_p99": 574
+        },
+        "gpui-kit": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "78cdbbbed83d408361c9bee53432dfe07ea200b6cabeb79401abc50051c3301b",
+          "cpu_percent_by_phase": {
+            "idle-before": 1.496019364947826,
+            "active": 17.809310777959656,
+            "idle-after": 0.9014773515800012,
+            "churn": 13.531808775937836
+          },
+          "stable_sampled_peak_rss_bytes": 89882624,
+          "stable_sampled_peak_rss_range_bytes": [
+            89456640,
+            90062848
+          ],
+          "draw_cpu_us_p99": 20705,
+          "submission_cpu_us_p99": 584
+        }
+      }
+    },
+    {
+      "group": "native-dock-workspace-without-frame-timing",
+      "contract": "native-dock-workspace-v1",
+      "frame_timing_enabled": false,
+      "raw_environment": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-dock-workspace-without-frame-timing/environment.json",
+        "sha256": "6cb57d5229cc04bca9072a08d73f360256c2a2d52fa29c3bd09ac0f8dcaaf109"
+      },
+      "raw_runs": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-dock-workspace-without-frame-timing/runs.json",
+        "sha256": "9b86057374b19ac38a9bd074bed967d7c8f5927e645e98ca82c0603831e22508"
+      },
+      "process_counter_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-dock-workspace-without-frame-timing/process-metrics",
+        "sha256": "5c18c789e153c140be2a55087a777a09eb3f3858f06d8b90ed12647c2ef1e322"
+      },
+      "activation_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-dock-workspace-without-frame-timing/activate-native-window",
+        "sha256": "bc6afa330bf5d4503b887efa6d75a9139b13c99cf125b328e0ef5978ffb7eff0"
+      },
+      "collector_command": {
+        "kael": ".artifacts/competition/binaries/kael-workspace-without-frame-timing",
+        "gpui_kit": ".artifacts/competition/binaries/gpui-kit-workspace-without-frame-timing",
+        "output": ".artifacts/competition/native-dock-workspace-without-frame-timing",
+        "repetitions": 5,
+        "without_frame_timing": true,
+        "contract": "native-dock-workspace-v1"
+      },
+      "load_average_at_group_start": [
+        1.6611328125,
+        1.8603515625,
+        1.9873046875
+      ],
+      "workload_disclosures": {
+        "kael": {
+          "component": "DockWorkspace",
+          "timing_scope": "native shipped persistent dock controllers; each public layout edit paced separately; JSON encode/decode/native restore included",
+          "input_scope": "paced public component programmatic APIs; no physical pointer, keyboard, AT or IME claim",
+          "differences": [
+            "Kael uses retained application pane closures; GPUI Kit persistence reconstructs registered Panel entities",
+            "Kael binary splits and GPUI Kit normalized n-ary splits are compared by ordered semantic layout with same-axis normalization",
+            "Kael tab strip minimum34px; pinned DockSkin native tab bar30px; retain native chrome and disclose content-height difference",
+            "Native split handle/minimum-size rules differ; common requested root ratio checked within0.005, persistence float tolerance0.01px",
+            "GPUI Kit does not serialize zoom state, so persistence is performed after unzoom; floating panes and edge docks excluded"
+          ],
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        },
+        "gpui-kit": {
+          "component": "DockArea+DockSkin",
+          "timing_scope": "native shipped persistent dock controllers; each public layout edit paced separately; JSON encode/decode/native restore included",
+          "input_scope": "paced public component programmatic APIs; no physical pointer, keyboard, AT or IME claim",
+          "differences": [
+            "Kael uses retained application pane closures; GPUI Kit persistence reconstructs registered Panel entities",
+            "Kael binary splits and GPUI Kit normalized n-ary splits are compared by ordered semantic layout with same-axis normalization",
+            "Kael tab strip minimum34px; pinned DockSkin native tab bar30px; retain native chrome and disclose content-height difference",
+            "Native split handle/minimum-size rules differ; common requested root ratio checked within0.005, persistence float tolerance0.01px",
+            "GPUI Kit does not serialize zoom state, so persistence is performed after unzoom; floating panes and edge docks excluded"
+          ],
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        }
+      },
+      "actual_native_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "geometry_validation": {
+        "captures": 10,
+        "boundaries_per_capture": 8,
+        "cross_engine_pairs": 5,
+        "paired_boundaries_checked": 40,
+        "stable_within_and_between_captures": true
+      },
+      "medians": {
+        "kael": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "ff78525ac39b52fbf1c5d0ecdb6634d74f03e1bceb859640a2aa45946893bbcb",
+          "cpu_percent_by_phase": {
+            "idle-before": 0.8920938646271345,
+            "active": 18.885751764104143,
+            "idle-after": 0.004668747223410275,
+            "churn": 9.102907544408785
+          },
+          "stable_sampled_peak_rss_bytes": 84967424,
+          "stable_sampled_peak_rss_range_bytes": [
+            84574208,
+            85262336
+          ],
+          "draw_cpu_us_p99": null,
+          "submission_cpu_us_p99": null
+        },
+        "gpui-kit": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "42127553fc9641ca90baf1904cdbc0679728cd3a2b74168593118d4c571e5459",
+          "cpu_percent_by_phase": {
+            "idle-before": 1.8905530451535817,
+            "active": 17.350853120883986,
+            "idle-after": 0.8845043945828941,
+            "churn": 10.274658267744487
+          },
+          "stable_sampled_peak_rss_bytes": 84115456,
+          "stable_sampled_peak_rss_range_bytes": [
+            84082688,
+            84197376
+          ],
+          "draw_cpu_us_p99": null,
+          "submission_cpu_us_p99": null
+        }
+      }
+    },
+    {
+      "group": "native-editor-document",
+      "contract": "native-editor-document-v1",
+      "frame_timing_enabled": true,
+      "raw_environment": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-editor-document/environment.json",
+        "sha256": "b692902addff5b2494d33692a3c2e572d64e607e3ded97d85c6dbac9ba4c33c6"
+      },
+      "raw_runs": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-editor-document/runs.json",
+        "sha256": "80b23ef1f632074cb5d3cfdcb16ce19a8c099a4b2989e9e69589689e1beab619"
+      },
+      "process_counter_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-editor-document/process-metrics",
+        "sha256": "5c18c789e153c140be2a55087a777a09eb3f3858f06d8b90ed12647c2ef1e322"
+      },
+      "activation_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-editor-document/activate-native-window",
+        "sha256": "bc6afa330bf5d4503b887efa6d75a9139b13c99cf125b328e0ef5978ffb7eff0"
+      },
+      "collector_command": {
+        "kael": ".artifacts/competition/binaries/kael-editor",
+        "gpui_kit": ".artifacts/competition/binaries/gpui-kit-editor",
+        "output": ".artifacts/competition/native-editor-document",
+        "repetitions": 5,
+        "without_frame_timing": false,
+        "contract": "native-editor-document-v1"
+      },
+      "load_average_at_group_start": [
+        1.84765625,
+        2.12451171875,
+        4.42919921875
+      ],
+      "workload_disclosures": {
+        "kael": {
+          "component": null,
+          "timing_scope": "native rendered Editor; public interaction APIs and routed undo/redo; paced separate frames",
+          "input_scope": null,
+          "differences": null,
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        },
+        "gpui-kit": {
+          "component": null,
+          "timing_scope": "native rendered Editor; public interaction APIs and routed undo/redo; paced separate frames",
+          "input_scope": null,
+          "differences": null,
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        }
+      },
+      "actual_native_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "geometry_validation": {
+        "captures": 10,
+        "boundaries_per_capture": 8,
+        "cross_engine_pairs": 5,
+        "paired_boundaries_checked": 40,
+        "stable_within_and_between_captures": true
+      },
+      "medians": {
+        "kael": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "87e4bce2a76ca754f80cf2d7614bf743bac2d9d7032f27d0c4e9c176cd1b0212",
+          "cpu_percent_by_phase": {
+            "idle-before": 0.9840935817578312,
+            "active": 32.37877097465852,
+            "idle-after": 0.014489792335830757,
+            "churn": 22.114492848215832
+          },
+          "stable_sampled_peak_rss_bytes": 90259456,
+          "stable_sampled_peak_rss_range_bytes": [
+            87441408,
+            91176960
+          ],
+          "draw_cpu_us_p99": 9500,
+          "submission_cpu_us_p99": 539
+        },
+        "gpui-kit": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "5547e32857770562339ad3896acf2cbdc40e9db856e4653f1fbc02fa69ae583f",
+          "cpu_percent_by_phase": {
+            "idle-before": 1.475111477118924,
+            "active": 8.901945999492193,
+            "idle-after": 0.9588413543294844,
+            "churn": 5.526163400805724
+          },
+          "stable_sampled_peak_rss_bytes": 93061120,
+          "stable_sampled_peak_rss_range_bytes": [
+            92798976,
+            93192192
+          ],
+          "draw_cpu_us_p99": 6056,
+          "submission_cpu_us_p99": 672
+        }
+      }
+    },
+    {
+      "group": "native-navigation-detail",
+      "contract": "native-navigation-detail-v1",
+      "frame_timing_enabled": true,
+      "raw_environment": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-navigation-detail/environment.json",
+        "sha256": "a748cf6932d15039ffb6059d25c00a6dee07a7223a2a0d847dc92858e1785427"
+      },
+      "raw_runs": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-navigation-detail/runs.json",
+        "sha256": "d7efe8c48db46c70ca4e13b813ba29ad222b31f81e29c0f2b312b2626a750c77"
+      },
+      "process_counter_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-navigation-detail/process-metrics",
+        "sha256": "5c18c789e153c140be2a55087a777a09eb3f3858f06d8b90ed12647c2ef1e322"
+      },
+      "activation_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-navigation-detail/activate-native-window",
+        "sha256": "bc6afa330bf5d4503b887efa6d75a9139b13c99cf125b328e0ef5978ffb7eff0"
+      },
+      "collector_command": {
+        "kael": ".artifacts/competition/binaries/kael",
+        "gpui_kit": ".artifacts/competition/binaries/gpui-kit",
+        "output": ".artifacts/competition/native-navigation-detail",
+        "repetitions": 5,
+        "without_frame_timing": false,
+        "contract": "native-navigation-detail-v1"
+      },
+      "load_average_at_group_start": [
+        3.40087890625,
+        5.81982421875,
+        7.88232421875
+      ],
+      "workload_disclosures": {
+        "kael": {
+          "component": null,
+          "timing_scope": "root render callback; intervals include pacing, not GPU duration",
+          "input_scope": null,
+          "differences": null,
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        },
+        "gpui-kit": {
+          "component": null,
+          "timing_scope": "root render callback; intervals include pacing, not GPU duration",
+          "input_scope": null,
+          "differences": null,
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        }
+      },
+      "actual_native_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "geometry_validation": {
+        "captures": 10,
+        "boundaries_per_capture": 8,
+        "cross_engine_pairs": 5,
+        "paired_boundaries_checked": 40,
+        "stable_within_and_between_captures": true
+      },
+      "medians": {
+        "kael": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "39de00cbdb750acf3a87957564ccf4b35907940eaddf7f3da70f992236b1c939",
+          "cpu_percent_by_phase": {
+            "idle-before": 0.931448861813357,
+            "active": 9.518274574489876,
+            "idle-after": 0.00923628527008798,
+            "churn": 7.615656195609718
+          },
+          "stable_sampled_peak_rss_bytes": 96174080,
+          "stable_sampled_peak_rss_range_bytes": [
+            95944704,
+            96649216
+          ],
+          "draw_cpu_us_p99": 7568,
+          "submission_cpu_us_p99": 567
+        },
+        "gpui-kit": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "10a3aa0c9728b600569c2b6514e669388b5a1a30b2ea7df1755935da83cf89d1",
+          "cpu_percent_by_phase": {
+            "idle-before": 1.4143439313443606,
+            "active": 12.95369605754646,
+            "idle-after": 0.8143194953012801,
+            "churn": 10.76822014397689
+          },
+          "stable_sampled_peak_rss_bytes": 87932928,
+          "stable_sampled_peak_rss_range_bytes": [
+            87851008,
+            88047616
+          ],
+          "draw_cpu_us_p99": 12021,
+          "submission_cpu_us_p99": 424
+        }
+      }
+    },
+    {
+      "group": "native-virtual-tree",
+      "contract": "native-virtual-tree-v1",
+      "frame_timing_enabled": true,
+      "raw_environment": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-virtual-tree/environment.json",
+        "sha256": "e0f636d2d77bdb4876343e3ddc1c1eee766e14a3cc881d00a673e40387a252cf"
+      },
+      "raw_runs": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-virtual-tree/runs.json",
+        "sha256": "25a2bae35508cca0cfda7aadc6f2795411fbf29a9203585597bbf79fc7ad4739"
+      },
+      "process_counter_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-virtual-tree/process-metrics",
+        "sha256": "5c18c789e153c140be2a55087a777a09eb3f3858f06d8b90ed12647c2ef1e322"
+      },
+      "activation_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-virtual-tree/activate-native-window",
+        "sha256": "bc6afa330bf5d4503b887efa6d75a9139b13c99cf125b328e0ef5978ffb7eff0"
+      },
+      "collector_command": {
+        "kael": ".artifacts/competition/binaries/kael-tree",
+        "gpui_kit": ".artifacts/competition/binaries/gpui-kit-tree",
+        "output": ".artifacts/competition/native-virtual-tree",
+        "repetitions": 5,
+        "without_frame_timing": false,
+        "contract": "native-virtual-tree-v1"
+      },
+      "load_average_at_group_start": [
+        4.033203125,
+        2.1904296875,
+        2.4169921875
+      ],
+      "workload_disclosures": {
+        "kael": {
+          "component": "VirtualTreeList",
+          "timing_scope": "native shipped virtual tree; public selection/reveal and expansion/model preparation; each update gets a separate paced frame",
+          "input_scope": "paced public component programmatic APIs; no physical pointer, keyboard, AT or IME claim",
+          "differences": [
+            "Kael expansion is a controlled flattened immutable model rebuild; GPUI Kit expansion is its public routed SelectLeft/SelectRight action",
+            "Kael prepares complete logical accessibility metadata; pinned GPUI Kit Tree exposes mounted rows only",
+            "Kael has a disclosure button per row; GPUI Kit ListItem renders an application disclosure glyph inside its native Tree row",
+            "Native selection, scrolling, layout, and repaint remain each shipped control's implementation"
+          ],
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        },
+        "gpui-kit": {
+          "component": "Tree",
+          "timing_scope": "native shipped virtual tree; public selection/reveal and expansion/model preparation; each update gets a separate paced frame",
+          "input_scope": "paced public component programmatic APIs; no physical pointer, keyboard, AT or IME claim",
+          "differences": [
+            "Kael expansion is a controlled flattened immutable model rebuild; GPUI Kit expansion is its public routed SelectLeft/SelectRight action",
+            "Kael prepares complete logical accessibility metadata; pinned GPUI Kit Tree exposes mounted rows only",
+            "Kael has a disclosure button per row; GPUI Kit ListItem renders an application disclosure glyph inside its native Tree row",
+            "Native selection, scrolling, layout, and repaint remain each shipped control's implementation"
+          ],
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        }
+      },
+      "actual_native_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "geometry_validation": {
+        "captures": 10,
+        "boundaries_per_capture": 8,
+        "cross_engine_pairs": 5,
+        "paired_boundaries_checked": 40,
+        "stable_within_and_between_captures": true
+      },
+      "medians": {
+        "kael": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "a1776ba5f15b41b3685040cf389ff7e78796c4ae3bd9d99a00fd44154dae9f37",
+          "cpu_percent_by_phase": {
+            "idle-before": 0.9815734362391826,
+            "active": 57.98699760886153,
+            "idle-after": 0.023506816593932084,
+            "churn": 31.411812714459504
+          },
+          "stable_sampled_peak_rss_bytes": 642531328,
+          "stable_sampled_peak_rss_range_bytes": [
+            577355776,
+            1119485952
+          ],
+          "draw_cpu_us_p99": 6594,
+          "submission_cpu_us_p99": 502
+        },
+        "gpui-kit": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "c30da839b53a104a1008b6064ae0332154dc572b2f18edd11bd5087f4e223f76",
+          "cpu_percent_by_phase": {
+            "idle-before": 1.4581664443963571,
+            "active": 14.906754166992872,
+            "idle-after": 0.9265516773833677,
+            "churn": 9.688186028550685
+          },
+          "stable_sampled_peak_rss_bytes": 690438144,
+          "stable_sampled_peak_rss_range_bytes": [
+            683196416,
+            690896896
+          ],
+          "draw_cpu_us_p99": 8314,
+          "submission_cpu_us_p99": 476
+        }
+      }
+    },
+    {
+      "group": "native-virtual-tree-without-frame-timing",
+      "contract": "native-virtual-tree-v1",
+      "frame_timing_enabled": false,
+      "raw_environment": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-virtual-tree-without-frame-timing/environment.json",
+        "sha256": "dca42c3c008a300046804bacc261d5eb441b7384cd6dffd106021b855444e0bf"
+      },
+      "raw_runs": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-virtual-tree-without-frame-timing/runs.json",
+        "sha256": "51ce2d07720c3fd34d2a11cfacce2a548be74860846aff5a19f31fd24163efad"
+      },
+      "process_counter_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-virtual-tree-without-frame-timing/process-metrics",
+        "sha256": "5c18c789e153c140be2a55087a777a09eb3f3858f06d8b90ed12647c2ef1e322"
+      },
+      "activation_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/native-virtual-tree-without-frame-timing/activate-native-window",
+        "sha256": "bc6afa330bf5d4503b887efa6d75a9139b13c99cf125b328e0ef5978ffb7eff0"
+      },
+      "collector_command": {
+        "kael": ".artifacts/competition/binaries/kael-tree-without-frame-timing",
+        "gpui_kit": ".artifacts/competition/binaries/gpui-kit-tree-without-frame-timing",
+        "output": ".artifacts/competition/native-virtual-tree-without-frame-timing",
+        "repetitions": 5,
+        "without_frame_timing": true,
+        "contract": "native-virtual-tree-v1"
+      },
+      "load_average_at_group_start": [
+        2.0966796875,
+        2.0927734375,
+        2.25390625
+      ],
+      "workload_disclosures": {
+        "kael": {
+          "component": "VirtualTreeList",
+          "timing_scope": "native shipped virtual tree; public selection/reveal and expansion/model preparation; each update gets a separate paced frame",
+          "input_scope": "paced public component programmatic APIs; no physical pointer, keyboard, AT or IME claim",
+          "differences": [
+            "Kael expansion is a controlled flattened immutable model rebuild; GPUI Kit expansion is its public routed SelectLeft/SelectRight action",
+            "Kael prepares complete logical accessibility metadata; pinned GPUI Kit Tree exposes mounted rows only",
+            "Kael has a disclosure button per row; GPUI Kit ListItem renders an application disclosure glyph inside its native Tree row",
+            "Native selection, scrolling, layout, and repaint remain each shipped control's implementation"
+          ],
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        },
+        "gpui-kit": {
+          "component": "Tree",
+          "timing_scope": "native shipped virtual tree; public selection/reveal and expansion/model preparation; each update gets a separate paced frame",
+          "input_scope": "paced public component programmatic APIs; no physical pointer, keyboard, AT or IME claim",
+          "differences": [
+            "Kael expansion is a controlled flattened immutable model rebuild; GPUI Kit expansion is its public routed SelectLeft/SelectRight action",
+            "Kael prepares complete logical accessibility metadata; pinned GPUI Kit Tree exposes mounted rows only",
+            "Kael has a disclosure button per row; GPUI Kit ListItem renders an application disclosure glyph inside its native Tree row",
+            "Native selection, scrolling, layout, and repaint remain each shipped control's implementation"
+          ],
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        }
+      },
+      "actual_native_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "geometry_validation": {
+        "captures": 10,
+        "boundaries_per_capture": 8,
+        "cross_engine_pairs": 5,
+        "paired_boundaries_checked": 40,
+        "stable_within_and_between_captures": true
+      },
+      "medians": {
+        "kael": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "67046f20f031072c7aba5895d94f065d4632c6b000418dc219ab531079c52028",
+          "cpu_percent_by_phase": {
+            "idle-before": 0.9583990452112299,
+            "active": 52.92024070533541,
+            "idle-after": 0.006142700712251016,
+            "churn": 27.889503524400567
+          },
+          "stable_sampled_peak_rss_bytes": 872628224,
+          "stable_sampled_peak_rss_range_bytes": [
+            644448256,
+            1127219200
+          ],
+          "draw_cpu_us_p99": null,
+          "submission_cpu_us_p99": null
+        },
+        "gpui-kit": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "c8b9675382550541f5c314362f350c092c1243f4dc95228bef0d98b36a2513e0",
+          "cpu_percent_by_phase": {
+            "idle-before": 1.6080309991859902,
+            "active": 14.74619025141226,
+            "idle-after": 1.1566493289466555,
+            "churn": 10.657397017084604
+          },
+          "stable_sampled_peak_rss_bytes": 685981696,
+          "stable_sampled_peak_rss_range_bytes": [
+            678871040,
+            690503680
+          ],
+          "draw_cpu_us_p99": null,
+          "submission_cpu_us_p99": null
+        }
+      }
+    },
+    {
+      "group": "navigation-detail-without-frame-timing",
+      "contract": "native-navigation-detail-v1",
+      "frame_timing_enabled": false,
+      "raw_environment": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/navigation-detail-without-frame-timing/environment.json",
+        "sha256": "48db4933284a73d4af98e2b1981277020a32f05b9954c619c651f29aa387a059"
+      },
+      "raw_runs": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/navigation-detail-without-frame-timing/runs.json",
+        "sha256": "090329c2022d02aec36d6daa7b167859017cbf1861b6c5446152531c3e5dfdea"
+      },
+      "process_counter_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/navigation-detail-without-frame-timing/process-metrics",
+        "sha256": "5c18c789e153c140be2a55087a777a09eb3f3858f06d8b90ed12647c2ef1e322"
+      },
+      "activation_helper": {
+        "path": ".artifacts/2026-10-17-hosted-e219-comparison/raw/navigation-detail-without-frame-timing/activate-native-window",
+        "sha256": "bc6afa330bf5d4503b887efa6d75a9139b13c99cf125b328e0ef5978ffb7eff0"
+      },
+      "collector_command": {
+        "kael": ".artifacts/competition/binaries/kael-without-frame-timing",
+        "gpui_kit": ".artifacts/competition/binaries/gpui-kit-without-frame-timing",
+        "output": ".artifacts/competition/navigation-detail-without-frame-timing",
+        "repetitions": 5,
+        "without_frame_timing": true,
+        "contract": "native-navigation-detail-v1"
+      },
+      "load_average_at_group_start": [
+        1.78173828125,
+        3.2333984375,
+        5.912109375
+      ],
+      "workload_disclosures": {
+        "kael": {
+          "component": null,
+          "timing_scope": "root render callback; intervals include pacing, not GPU duration",
+          "input_scope": null,
+          "differences": null,
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        },
+        "gpui-kit": {
+          "component": null,
+          "timing_scope": "root render callback; intervals include pacing, not GPU duration",
+          "input_scope": null,
+          "differences": null,
+          "startup_scope": "diagnostic first render/submission; initial native geometry is not paired"
+        }
+      },
+      "actual_native_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "geometry_validation": {
+        "captures": 10,
+        "boundaries_per_capture": 8,
+        "cross_engine_pairs": 5,
+        "paired_boundaries_checked": 40,
+        "stable_within_and_between_captures": true
+      },
+      "medians": {
+        "kael": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "69ae94197e2f562da082c468f6b3d77bd10e3b15b44bfb0cce4d5b2bb2690e0f",
+          "cpu_percent_by_phase": {
+            "idle-before": 0.854619220099747,
+            "active": 10.241482163292405,
+            "idle-after": 0.00917857336342084,
+            "churn": 6.25525333893861
+          },
+          "stable_sampled_peak_rss_bytes": 96141312,
+          "stable_sampled_peak_rss_range_bytes": [
+            96108544,
+            96632832
+          ],
+          "draw_cpu_us_p99": null,
+          "submission_cpu_us_p99": null
+        },
+        "gpui-kit": {
+          "capture_count": 5,
+          "binary_sha256_recorded_by_collector": "f8ab538cdea5a12a2661d20009205af9cc6b6f42045591222f64befb77099ff2",
+          "cpu_percent_by_phase": {
+            "idle-before": 1.4620233497251949,
+            "active": 14.854208104995084,
+            "idle-after": 0.8321200686184258,
+            "churn": 9.549326006115285
+          },
+          "stable_sampled_peak_rss_bytes": 83132416,
+          "stable_sampled_peak_rss_range_bytes": [
+            82526208,
+            83263488
+          ],
+          "draw_cpu_us_p99": null,
+          "submission_cpu_us_p99": null
+        }
+      }
+    }
+  ]
+}
