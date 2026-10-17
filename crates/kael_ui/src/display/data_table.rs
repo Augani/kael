@@ -878,11 +878,17 @@ impl<T: Clone + 'static> DataTableState<T> {
     }
 
     pub fn sort_by_column(&mut self, column_index: usize, direction: SortDirection) {
-        let Some(column) = self.columns.get(column_index) else {
-            return;
-        };
+        let _ = self.sort_with_remap(column_index, direction);
+    }
+
+    fn sort_with_remap(
+        &mut self,
+        column_index: usize,
+        direction: SortDirection,
+    ) -> Option<HashMap<usize, usize>> {
+        let column = self.columns.get(column_index)?;
         if !column.sortable {
-            return;
+            return None;
         }
         let accessor = column.accessor.clone();
 
@@ -890,7 +896,7 @@ impl<T: Clone + 'static> DataTableState<T> {
         self.sort_direction = direction;
 
         if self.invalidate_virtual_query() {
-            return;
+            return None;
         }
 
         if let DataBacking::InMemory { data } = &mut self.backing {
@@ -917,7 +923,9 @@ impl<T: Clone + 'static> DataTableState<T> {
 
             let sorted_data = indexed_values.into_iter().map(|(_, _, row)| row).collect();
             *data = sorted_data;
+            return Some(old_to_new);
         }
+        None
     }
 
     pub fn toggle_row(&mut self, row_index: usize) {
@@ -1742,17 +1750,26 @@ impl<T: Clone + 'static> DataTable<T> {
         cx.notify();
     }
 
-    pub fn append_data(&mut self, mut new_data: Vec<T>, cx: &mut Context<Self>) {
-        if new_data.is_empty() {
+    fn sort_by_column(&mut self, column_index: usize, direction: SortDirection) {
+        let Some(old_to_new) = self.state.sort_with_remap(column_index, direction) else {
             return;
-        }
+        };
+        self.editing_cell = self
+            .editing_cell
+            .and_then(|(row, column)| old_to_new.get(&row).map(|&new_row| (new_row, column)));
+        self.context_menu = self
+            .context_menu
+            .and_then(|(row, position)| old_to_new.get(&row).map(|&new_row| (new_row, position)));
+    }
+
+    pub fn append_data(&mut self, mut new_data: Vec<T>, cx: &mut Context<Self>) {
+        let appended_rows = !new_data.is_empty();
         if let DataBacking::InMemory { data } = &mut self.state.backing {
             data.append(&mut new_data);
             let new_count = data.len();
             self.state.scroller.set_total_items(new_count);
-            if let Some(column_index) = self.state.sort_column {
-                self.state
-                    .sort_by_column(column_index, self.state.sort_direction);
+            if appended_rows && let Some(column_index) = self.state.sort_column {
+                self.sort_by_column(column_index, self.state.sort_direction);
             }
             self.load_more_triggered = false;
             cx.notify();
@@ -2195,7 +2212,7 @@ impl<T: Clone + 'static> DataTable<T> {
                                         } else {
                                             SortDirection::Ascending
                                         };
-                                        this.state.sort_by_column(col_idx, direction);
+                                        this.sort_by_column(col_idx, direction);
                                         cx.notify();
                                     });
                                 })
@@ -2215,7 +2232,7 @@ impl<T: Clone + 'static> DataTable<T> {
                                                 } else {
                                                     SortDirection::Ascending
                                                 };
-                                            this.state.sort_by_column(col_idx, direction);
+                                            this.sort_by_column(col_idx, direction);
                                             cx.notify();
                                         });
                                         app.stop_propagation();
@@ -2531,6 +2548,170 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn sorted_appends_and_header_sorts_preserve_active_edit_and_menu_records() {
+        for sort_again in [false, true] {
+            let mut cx = TestAppContext::single();
+            cx.update(|cx| {
+                crate::init(cx);
+                crate::theme::install_theme(cx, crate::theme::Theme::dark());
+            });
+            let edits = Rc::new(std::cell::RefCell::new(Vec::new()));
+            let (table, window) = cx.add_window_view({
+                let edits = edits.clone();
+                move |_, cx| {
+                    DataTable::new(
+                        keyed_rows(&[("Bravo", "old-b"), ("Alpha", "old-a"), ("Charlie", "old-c")]),
+                        private_columns(),
+                        cx,
+                    )
+                    .on_cell_edit(
+                        move |index, column, old_value, new_value, _| {
+                            edits
+                                .borrow_mut()
+                                .push((index, column, old_value, new_value));
+                        },
+                    )
+                }
+            });
+            let input = window.update(|window, cx| {
+                table.update(cx, |table, cx| {
+                    table.sort_by_column(0, SortDirection::Ascending);
+                    let input = cx.new(|cx| {
+                        let mut input = InputState::new(cx);
+                        input.set_value("Unsaved Bravo", window, cx);
+                        input
+                    });
+                    table.editing_cell = Some((1, 0));
+                    table.edit_input = Some(input.clone());
+                    table.edit_column_id = "private-name".into();
+                    table.edit_old_value = "Bravo".into();
+                    table.context_menu = Some((0, point(px(40.0), px(80.0))));
+                    input
+                })
+            });
+            let expected_edit_index = if sort_again { 1 } else { 2 };
+            let expected_menu_index = if sort_again { 2 } else { 1 };
+            window.update(|_, cx| {
+                table.update(cx, |table, cx| {
+                    table.append_data(keyed_rows(&[("Aardvark", "new-first")]), cx);
+                    assert_eq!(table.editing_cell, Some((2, 0)));
+                    assert_eq!(table.context_menu.unwrap().0, 1);
+                    // Empty fetch completion preserves the same active state.
+                    table.append_data(Vec::new(), cx);
+                    assert_eq!(table.editing_cell, Some((2, 0)));
+                    assert_eq!(table.context_menu.unwrap().0, 1);
+                    if sort_again {
+                        table.sort_by_column(0, SortDirection::Descending);
+                    }
+
+                    assert_eq!(table.editing_cell, Some((expected_edit_index, 0)));
+                    assert_eq!(table.context_menu.unwrap().0, expected_menu_index);
+                    assert_eq!(table.data()[expected_edit_index].revenue, "old-b");
+                    assert_eq!(table.data()[expected_menu_index].revenue, "old-a");
+                    assert_eq!(table.context_menu.unwrap().1, point(px(40.0), px(80.0)),);
+                    assert_eq!(
+                        table.edit_input.as_ref().unwrap().entity_id(),
+                        input.entity_id()
+                    );
+                    assert_eq!(input.read(cx).content(), "Unsaved Bravo");
+                    assert_eq!(table.edit_column_id, "private-name");
+                    assert_eq!(table.edit_old_value, "Bravo");
+
+                    table.save_edit(cx);
+                    table.save_edit(cx);
+                    assert!(table.editing_cell.is_none());
+                    assert!(table.edit_input.is_none());
+                });
+            });
+            let edits = edits.borrow();
+            assert_eq!(edits.len(), 1);
+            assert_eq!(edits[0].0, expected_edit_index);
+            assert_eq!(edits[0].1, "private-name");
+            assert_eq!(edits[0].2, "Bravo");
+            assert_eq!(edits[0].3, "Unsaved Bravo");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn painted_context_menu_uses_remapped_record_before_redraw_and_ignores_closed_menu() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::dark());
+        });
+        let actions = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let (table, window) = cx.add_window_view({
+            let actions = actions.clone();
+            move |_, cx| {
+                DataTable::new(
+                    keyed_rows(&[("Alpha", "old-a"), ("Bravo", "old-b")]),
+                    private_columns(),
+                    cx,
+                )
+                .row_actions(vec![RowAction::new(
+                    "activate",
+                    "Activate menu",
+                    move |row, _, _| {
+                        actions.borrow_mut().push(row);
+                    },
+                )])
+            }
+        });
+        window.update(|window, cx| {
+            table.update(cx, |table, cx| {
+                table.sort_by_column(0, SortDirection::Ascending);
+                table.context_menu = Some((1, point(px(40.0), px(80.0))));
+                cx.notify();
+            });
+            window.draw(cx).clear();
+        });
+        let menu_center = window
+            .debug_bounds("data-table-context-action-activate")
+            .expect("the active menu action should have painted bounds")
+            .center();
+        window.update(|window, cx| {
+            table.update(cx, |table, cx| {
+                table.append_data(keyed_rows(&[("Aardvark", "new-first")]), cx);
+                assert_eq!(table.context_menu.unwrap().0, 2);
+                assert_eq!(table.data()[2].revenue, "old-b");
+            });
+
+            // Dispatch synchronously, before the test platform can run the
+            // queued frame, against the previously painted menu handlers.
+            let mouse_down = || {
+                PlatformInput::MouseDown(MouseDownEvent {
+                    position: menu_center,
+                    button: MouseButton::Left,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                })
+            };
+            window.dispatch_event(mouse_down(), cx);
+            assert_eq!(actions.borrow().as_slice(), &[2]);
+            let painted_table = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| node.role == AccessibilityRole::Table)
+                .unwrap();
+            assert_eq!(painted_table.row_count, Some(3));
+            window.dispatch_event(
+                PlatformInput::MouseUp(MouseUpEvent {
+                    position: menu_center,
+                    button: MouseButton::Left,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                }),
+                cx,
+            );
+            window.dispatch_event(mouse_down(), cx);
+            assert_eq!(actions.borrow().as_slice(), &[2]);
+            assert!(table.read(cx).context_menu.is_none());
+        });
+    }
+
+    #[::core::prelude::v1::test]
     fn appending_unsorted_data_preserves_insertion_order_and_selection() {
         let cx = TestAppContext::single();
         let table = cx.update(|cx| {
@@ -2565,7 +2746,7 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
-    fn appending_empty_data_does_no_sorting_or_pagination_work() {
+    fn appending_empty_data_completes_pagination_without_sorting() {
         let cx = TestAppContext::single();
         let reads = Rc::new(std::cell::Cell::new(0));
         let table = cx.update(|cx| {
@@ -2581,6 +2762,13 @@ mod tests {
                 )
             })
         });
+        let notifications = Rc::new(std::cell::Cell::new(0));
+        let _observation = cx.update(|cx| {
+            let notifications = notifications.clone();
+            cx.observe(&table, move |_, _| {
+                notifications.set(notifications.get() + 1);
+            })
+        });
         cx.update(|cx| {
             table.update(cx, |table, cx| {
                 table.state.sort_by_column(0, SortDirection::Ascending);
@@ -2591,12 +2779,13 @@ mod tests {
                 table.append_data(Vec::new(), cx);
 
                 assert_eq!(reads.get(), 0);
-                assert!(table.load_more_triggered);
+                assert!(!table.load_more_triggered);
                 assert_eq!(table.selected_rows(), Some(vec![1]));
                 assert_eq!(table.data()[1].revenue, "old-b");
                 assert_eq!(table.state.scroller.total_items, 2);
             });
         });
+        assert_eq!(notifications.get(), 1);
     }
 
     #[::core::prelude::v1::test]
@@ -3791,7 +3980,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
 
         let context_menu_elem = self
             .context_menu
-            .map(|(row_idx, position)| self.render_context_menu(row_idx, position, cx));
+            .map(|(_, position)| self.render_context_menu(position, cx));
 
         div()
             .id(table_id)
@@ -3838,7 +4027,6 @@ impl<T: Clone + 'static> Render for DataTable<T> {
 impl<T: Clone + 'static> DataTable<T> {
     fn render_context_menu(
         &self,
-        row_idx: usize,
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<T> {
@@ -3866,6 +4054,9 @@ impl<T: Clone + 'static> DataTable<T> {
                         .children(self.row_actions.iter().map(|action| {
                             let action = action.clone();
                             div()
+                                .debug_selector(|| {
+                                    format!("data-table-context-action-{}", action.id)
+                                })
                                 .flex()
                                 .items_center()
                                 .gap(px(8.0))
@@ -3884,6 +4075,11 @@ impl<T: Clone + 'static> DataTable<T> {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _event, window, cx| {
+                                        // Sorting can remap this menu before its
+                                        // previously painted handler is replaced.
+                                        let Some((row_idx, _)) = this.context_menu else {
+                                            return;
+                                        };
                                         (action.on_click)(row_idx, window, cx);
                                         this.context_menu = None;
                                         cx.notify();
