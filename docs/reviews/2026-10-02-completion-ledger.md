@@ -162,7 +162,8 @@ frame. A fixed two-worker limit bounds active element work while ready results
 and per-element caches remain additional. All 22 focused regressions and 2,184
 native core tests pass, with the two explicit diagnostic probes opt-in; strict
 native all-target Clippy and the browser/Lottie Wasm compile also pass. The
-record preserves exact source/log hashes and the real geometry RED. This ownership
-checkpoint adds no release-preflight or browser ownership-runtime claim. Unified
-configurable memory accounting and cross-platform R8 lifecycle acceptance remain
-open; the earlier animation validation record stays immutable.
+record preserves exact source/log hashes and the real geometry RED. A separate
+fresh 39-package preflight and archive audit now verify all included Rust bytes
+against `b8aff24`; no package is uploaded. Browser ownership-runtime acceptance,
+unified configurable memory accounting and cross-platform R8 lifecycle acceptance
+remain open; the earlier animation validation record stays immutable.

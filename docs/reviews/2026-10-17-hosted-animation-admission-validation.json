@@ -1,0 +1,136 @@
+{
+  "date": "2026-10-17",
+  "scope": "New mandatory hosted execution of the maintained rasterlottie dependency admission/decoder pixel suite; not Kael element-worker ownership tests or full platform matrix acceptance.",
+  "run_url": "https://github.com/Augani/kael/actions/runs/39068240744",
+  "source_commit": "e2194399ad5ec09aba1ac5d82df55bf4a5dbfaea",
+  "runs": [
+    {
+      "artifact": {
+        "id": 12114048349,
+        "name": "lottie-admission-native-Linux",
+        "size_in_bytes": 3625,
+        "digest": "sha256:0cc1898a95c408593e64bfc81c89f5efc9d31646805e24dbccd4c66ae5da661f"
+      },
+      "result": {
+        "schema_version": 1,
+        "backend": "native",
+        "suite_passes": [
+          116,
+          1,
+          1,
+          14,
+          2
+        ],
+        "runtime_log_sha256": "48425b606ea433b1bda10183fed1dfb9119b4e4acfacf73790c9215ac0e81031",
+        "total_passed": 134
+      },
+      "raw_files": [
+        {
+          "path": ".artifacts/2026-10-17-hosted-lottie/lottie-admission-native-Linux/commands.json",
+          "bytes": 138,
+          "sha256": "ce9ce0f1e4e5201241e3fcbd9f2d02d6f69a489d06c5be3753734f5708e04b45"
+        },
+        {
+          "path": ".artifacts/2026-10-17-hosted-lottie/lottie-admission-native-Linux/native-runtime.log",
+          "bytes": 13670,
+          "sha256": "48425b606ea433b1bda10183fed1dfb9119b4e4acfacf73790c9215ac0e81031"
+        },
+        {
+          "path": ".artifacts/2026-10-17-hosted-lottie/lottie-admission-native-Linux/result.json",
+          "bytes": 226,
+          "sha256": "6cb69ae338406945f446d9a4dcec559a0707ef4ef61aa2c647107cd7874d3df0"
+        }
+      ]
+    },
+    {
+      "artifact": {
+        "id": 12114008593,
+        "name": "lottie-admission-native-macOS",
+        "size_in_bytes": 3630,
+        "digest": "sha256:db0092158df62507f48093ac7064e5bc27ee5cec1af8064fd40127f46e7e9a6b"
+      },
+      "result": {
+        "schema_version": 1,
+        "backend": "native",
+        "suite_passes": [
+          116,
+          1,
+          1,
+          14,
+          2
+        ],
+        "runtime_log_sha256": "543fa062a1daaf0dcea43a51554c79c6934dd113c7de38535d7421f63362d8bd",
+        "total_passed": 134
+      },
+      "raw_files": [
+        {
+          "path": ".artifacts/2026-10-17-hosted-lottie/lottie-admission-native-macOS/commands.json",
+          "bytes": 138,
+          "sha256": "ce9ce0f1e4e5201241e3fcbd9f2d02d6f69a489d06c5be3753734f5708e04b45"
+        },
+        {
+          "path": ".artifacts/2026-10-17-hosted-lottie/lottie-admission-native-macOS/native-runtime.log",
+          "bytes": 13698,
+          "sha256": "543fa062a1daaf0dcea43a51554c79c6934dd113c7de38535d7421f63362d8bd"
+        },
+        {
+          "path": ".artifacts/2026-10-17-hosted-lottie/lottie-admission-native-macOS/result.json",
+          "bytes": 226,
+          "sha256": "a09431bfe9410e4d40ae7de387bb0a60d4200c8d43e3d115e3fe550839227240"
+        }
+      ]
+    },
+    {
+      "artifact": {
+        "id": 12113799132,
+        "name": "lottie-admission-chrome",
+        "size_in_bytes": 9489,
+        "digest": "sha256:f3f6ce8aa85f3e6a14b5d9dbca7c0abcd03f42afd3e13775298776a192459273"
+      },
+      "result": {
+        "schema_version": 1,
+        "backend": "chrome",
+        "wasm_path": "/home/runner/work/kael/kael/target/wasm32-unknown-unknown/debug/deps/zip9_compatibility-1c2bd6c549a0dff3.wasm",
+        "wasm_sha256": "0954b96984a6a781bcdc699f25d9dcf2965007ba474d013dc0c6046555c9d21d",
+        "suite_passes": [
+          15
+        ],
+        "runtime_log_sha256": "c897c29449e3166e214a5752bfb6eb213ceac1631dfb6d14af85b2f21292d0e3",
+        "total_passed": 15
+      },
+      "raw_files": [
+        {
+          "path": ".artifacts/2026-10-17-hosted-lottie/lottie-admission-chrome/browser-build.jsonl",
+          "bytes": 90944,
+          "sha256": "5b5bb54caebf2ce0320f60d733ced65fdfe6f2cca7182c40f38ee4b584515fd2"
+        },
+        {
+          "path": ".artifacts/2026-10-17-hosted-lottie/lottie-admission-chrome/browser-build.log",
+          "bytes": 2050,
+          "sha256": "8673264b3fe8b6c7792148717ab69b2beba8988f02d91426d2462316898cf6f4"
+        },
+        {
+          "path": ".artifacts/2026-10-17-hosted-lottie/lottie-admission-chrome/chrome-runtime.log",
+          "bytes": 2784,
+          "sha256": "c897c29449e3166e214a5752bfb6eb213ceac1631dfb6d14af85b2f21292d0e3"
+        },
+        {
+          "path": ".artifacts/2026-10-17-hosted-lottie/lottie-admission-chrome/commands.json",
+          "bytes": 470,
+          "sha256": "3bed978d458e2bc3023cbd471f24ac4159e00103a79714faf4bc434fc96c45ef"
+        },
+        {
+          "path": ".artifacts/2026-10-17-hosted-lottie/lottie-admission-chrome/result.json",
+          "bytes": 408,
+          "sha256": "2c123aaee7c154f04d1ea29eb3de1369e86aaefb02a02c079fb81e922d43712f"
+        }
+      ]
+    }
+  ],
+  "root_verification": "Each raw runtime log independently hashed and parsed. All suite counts agree, zero failures/ignores. GitHub artifact digests are reported metadata; executable/Wasm payloads were not included for independent byte rehash.",
+  "limitations": [
+    "The overall workflow was still running when these independently completed step artifacts were captured.",
+    "These tests validate the dependency fork at e219439. Later b8aff24 element-task cancellation/worker admission has separate local validation and is not exercised by these dependency tests.",
+    "No unified application memory ceiling, comparative performance or native presentation claim."
+  ]
+}

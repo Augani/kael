@@ -530,3 +530,18 @@ also leaves all three controls without positive timestamps. Display sleep alone
 does not explain these results. A Kael-specific defect or working compositor
 fix is not established. The actual Kael presentation gate remains unchanged;
 this diagnostic supplies neither runtime acceptance nor comparative latency.
+
+The latest platform run independently completes the mandatory dependency
+[animation admission suites](2026-10-17-hosted-animation-admission-validation.json):
+134 tests each on Linux and macOS, plus 15 actual Chrome cases, with no failures
+or ignored tests. Their raw logs and artifact identities are preserved at
+`e219439`. These fork tests do not exercise the later element-owned cancellation
+changes or establish that the still-running complete platform matrix passes.
+
+The ownership checkpoint subsequently passes a separate fresh 39-package
+preflight. Independent archive audit matches all 928 included Rust files
+(23,241,370 bytes) to immutable `b8aff24`, verifies licenses, fork payload and
+registry aliases, and records 6,022,866 compressed archive bytes. The ownership
+validation record links this separate receipt. Earlier verified archives are
+preserved before replacement. No package was uploaded; later tree and
+notification changes require their own validation.

@@ -238,5 +238,50 @@
       "path": ".artifacts/2026-10-17-lottie-memory-admission/task-ownership.patch",
       "sha256": "ea1fd47dc6c8f06798b4bda7f9d7ca3f9ad9901fe34d6521f31233f5f8f4bd87"
     }
-  ]
+  ],
+  "subsequent_independent_release_validation": {
+    "source_commit": "b8aff24a6dc56a93f5725502c0c84dc8a4cea488",
+    "preflight": "All39 package archives built and their extracted consumers verified through fresh isolated staging; no registry upload.",
+    "archive_count": 39,
+    "archive_bytes": 6022866,
+    "rust_file_count": 928,
+    "rust_bytes": 23241370,
+    "all_included_rust_bytes_equal_immutable_source": true,
+    "archived_vcs_metadata_histogram": {
+      "{\"sha1\": \"b8aff24a6dc56a93f5725502c0c84dc8a4cea488\"}": 39
+    },
+    "archived_vcs_dirty_field_histogram": {
+      "absent": 39
+    },
+    "provenance": "Root independently executed the existing v2 archive verifier with explicit --source and --output arguments. No prior verifier/report bytes were overwritten. It rechecks fork payload/provenance, all licenses, package features/registry aliases and every included Rust Git blob.",
+    "initial_environment_failure": "Python SSL default CA path was absent. The first preflight stopped at archive download before packaging. The successful retry explicitly used the existing /etc/ssl/cert.pem trust bundle; certificate verification and pinned archive SHA checking remained enabled.",
+    "historical_archive_preservation": "Before replacement, all39 90743b8 archives were independently hash-verified against their prior report and copied byte-for-byte to .artifacts/2026-10-17-release-archives-90743. Original records remain unchanged.",
+    "evidence": [
+      {
+        "path": ".artifacts/2026-10-17-lottie-ownership-package-preflight.json",
+        "sha256": "5ca4269ffa1134a3149d912bf58832c86acbede154446d491db63ff08f8822ea"
+      },
+      {
+        "path": ".artifacts/2026-10-17-lottie-ownership-package-preflight.log",
+        "sha256": "c1432d3746076673589e8e16a948e570fe7b4bcd2a88bd519a90565fc5662f57"
+      },
+      {
+        "path": ".artifacts/2026-10-17-lottie-ownership-release-archives.json",
+        "sha256": "4e9104025c68a10e035a9a3ef4232a122f6dde0656470596d967890e5b90b113"
+      },
+      {
+        "path": ".artifacts/2026-10-17-lottie-ownership-release-audit.log",
+        "sha256": "e51372e3880d95560cb408c6d9a2fa6b1625901f6e7ceb7eb7f62d4e214534d9"
+      },
+      {
+        "path": ".artifacts/2026-10-17-verify-release-archives-v2.py",
+        "sha256": "e9055d29c2d848f948e7090df3ba08ebc6d0a6a625cad8ba2c80237dacc3dcfb"
+      },
+      {
+        "path": ".artifacts/2026-10-17-lottie-ownership-package-preflight-missing-python-ca.log",
+        "sha256": "93a3e0dc66ac5c280b880a89a8e1b7f7e6baf1108d98c8f02c83612a44975711"
+      }
+    ],
+    "qualification": "This separately executed preflight validates b8aff24 source bytes only. It does not cover later tree/notification edits or imply browser ownership runtime, native presentation, cross-framework performance or a clean archived dirty-state field."
+  }
 }
