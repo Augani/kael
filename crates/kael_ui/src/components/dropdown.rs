@@ -2,7 +2,11 @@ use crate::components::icon::Icon;
 use crate::components::icon_source::IconSource;
 use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
-use std::rc::Rc;
+use std::{
+    cell::Cell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 fn next_enabled_index(
     enabled_indices: &[usize],
@@ -130,7 +134,12 @@ pub struct DropdownState {
     highlighted_index: Option<usize>,
     focus_handle: FocusHandle,
     trigger_bounds: Bounds<Pixels>,
+    menu_bounds: Bounds<Pixels>,
     scroll_handle: ScrollHandle,
+    open_generation: u64,
+    keyboard_press: Option<KeyboardButton>,
+    focus_subscription: Option<(AnyWindowHandle, Subscription)>,
+    item_accessibility_ids: HashMap<SharedString, AccessibilityId>,
 }
 
 impl DropdownState {
@@ -140,7 +149,12 @@ impl DropdownState {
             highlighted_index: None,
             focus_handle: cx.focus_handle(),
             trigger_bounds: Bounds::default(),
+            menu_bounds: Bounds::default(),
             scroll_handle: ScrollHandle::new(),
+            open_generation: 0,
+            keyboard_press: None,
+            focus_subscription: None,
+            item_accessibility_ids: HashMap::new(),
         }
     }
 
@@ -176,14 +190,18 @@ impl DropdownState {
     }
 
     pub fn toggle(&mut self, cx: &mut Context<Self>) {
-        self.open = !self.open;
-        if !self.open {
-            self.highlighted_index = None;
+        if self.open {
+            self.close(cx);
+        } else {
+            self.open(cx);
         }
-        cx.notify();
     }
 
     pub fn open(&mut self, cx: &mut Context<Self>) {
+        if !self.open {
+            self.open_generation = self.open_generation.wrapping_add(1);
+            self.keyboard_press = None;
+        }
         self.open = true;
         cx.notify();
     }
@@ -191,6 +209,8 @@ impl DropdownState {
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.open = false;
         self.highlighted_index = None;
+        self.keyboard_press = None;
+        self.menu_bounds = Bounds::default();
         cx.notify();
     }
 }
@@ -282,9 +302,20 @@ impl Styled for Dropdown {
 impl RenderOnce for Dropdown {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         const GAP: Pixels = px(4.0);
-        let theme = Theme::of(cx);
         let user_style = self.style;
         let state = self.state.clone();
+        let bound_window = window.window_handle();
+        state.update(cx, |state, cx| {
+            if state.focus_subscription.as_ref().map(|(handle, _)| *handle) != Some(bound_window) {
+                state.focus_subscription = Some((
+                    bound_window,
+                    cx.on_blur(&state.focus_handle, window, |state, _, _| {
+                        // Private key arming has no painted state to invalidate.
+                        state.keyboard_press = None;
+                    }),
+                ));
+            }
+        });
         let is_open = state.read(cx).open;
         let highlighted_index = state.read(cx).highlighted_index;
         let trigger_bounds = state.read(cx).trigger_bounds;
@@ -292,8 +323,6 @@ impl RenderOnce for Dropdown {
         let focus_handle = state.read(cx).focus_handle.clone();
         let is_focused = focus_handle.is_focused(window);
         let tracked_focus_handle = focus_handle.clone().tab_index(0).tab_stop(true);
-        let dark = theme.tokens.background.l < 0.5;
-        let overlay_hover = crate::astryx::overlay_hover(dark);
         let align = self.align;
         let min_width = self.min_width;
 
@@ -333,19 +362,116 @@ impl RenderOnce for Dropdown {
         };
         let use_mb = measured && open_up;
         let items = self.items;
-        let keyboard_items = items.clone();
-        let enabled_indices: Vec<usize> = items
-            .iter()
-            .enumerate()
-            .filter_map(|(index, item)| (!item.disabled && !item.is_separator()).then_some(index))
-            .collect();
+        let keyboard_items = Rc::new(items.clone());
+        // Retain authored identities for the latest open item set, without
+        // building an ID worklist while closed. The focused Menu owns them.
+        let item_accessibility_ids = if is_open {
+            state.update(cx, |state, _| {
+                let current: HashSet<_> = items
+                    .iter()
+                    .filter(|item| !item.is_separator())
+                    .map(|item| item.id.clone())
+                    .collect();
+                state
+                    .item_accessibility_ids
+                    .retain(|id, _| current.contains(id));
+                items
+                    .iter()
+                    .map(|item| {
+                        (!item.is_separator()).then(|| {
+                            *state
+                                .item_accessibility_ids
+                                .entry(item.id.clone())
+                                .or_insert_with(AccessibilityId::new)
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+        } else {
+            Vec::new()
+        };
+        let theme = Theme::of(cx);
+        let dark = theme.tokens.background.l < 0.5;
+        let overlay_hover = crate::astryx::overlay_hover(dark);
+        let open_generation = state.read(cx).open_generation;
+        let activation_claim = Rc::new(Cell::new(false));
+        let enabled_indices: Rc<Vec<usize>> = Rc::new(
+            items
+                .iter()
+                .enumerate()
+                .filter_map(|(index, item)| {
+                    (!item.disabled && !item.is_separator()).then_some(index)
+                })
+                .collect(),
+        );
         let first_enabled = enabled_indices.first().copied();
+        let highlighted_index = highlighted_index
+            .filter(|index| enabled_indices.contains(index))
+            .or_else(|| if is_open { first_enabled } else { None });
+        let activate_highlighted = {
+            let state = state.clone();
+            let items = keyboard_items.clone();
+            let claim = activation_claim.clone();
+            let enabled_indices = enabled_indices.clone();
+            Rc::new(move |window: &mut Window, cx: &mut App| {
+                let current = state.read(cx);
+                if !current.open || current.open_generation != open_generation {
+                    return;
+                }
+                let handler = current
+                    .highlighted_index
+                    .filter(|index| enabled_indices.contains(index))
+                    .or(first_enabled)
+                    .and_then(|index| items.get(index))
+                    .filter(|item| !item.disabled && !item.is_separator())
+                    .and_then(|item| item.on_click.clone());
+                if claim.replace(true) {
+                    return;
+                }
+                if let Some(handler) = handler {
+                    handler(window, cx);
+                }
+                state.update(cx, |state, cx| state.close(cx));
+            })
+        };
+        let key_up_handler = {
+            let state = state.clone();
+            let focus_handle = focus_handle.clone();
+            let activate_highlighted = activate_highlighted.clone();
+            Rc::new(
+                move |event: &KeyUpEvent, window: &mut Window, cx: &mut App| {
+                    let button = match event.keystroke.key.as_str() {
+                        "enter" => KeyboardButton::Enter,
+                        "space" => KeyboardButton::Space,
+                        _ => return,
+                    };
+                    let armed =
+                        state.update(cx, |state, _| state.keyboard_press.take() == Some(button));
+                    let valid = armed
+                        && !event.keystroke.modifiers.modified()
+                        && focus_handle.is_focused(window);
+                    if is_open {
+                        if valid {
+                            activate_highlighted(window, cx);
+                        }
+                        // The Menu commits explicitly, never through a second bridge.
+                        cx.stop_propagation();
+                        window.prevent_default();
+                    } else if !valid {
+                        // Preserve ordinary native Click, which is not a KeyUpEvent,
+                        // while rejecting unpaired physical release on the trigger.
+                        cx.stop_propagation();
+                        window.prevent_default();
+                    }
+                },
+            )
+        };
         let mut trigger_state = if is_open {
             AccessibilityState::EXPANDED
         } else {
             AccessibilityState::COLLAPSED
         };
-        if is_focused {
+        if is_focused && !is_open {
             trigger_state |= AccessibilityState::FOCUSED;
         }
         let trigger_accessibility = AccessibilityAttributes::new(AccessibilityRole::Button)
@@ -362,54 +488,64 @@ impl RenderOnce for Dropdown {
             ]);
         let key_handler = {
             let state = state.clone();
-            move |event: &KeyDownEvent, window: &mut Window, cx: &mut App| {
-                if event.keystroke.modifiers.modified() {
-                    return;
-                }
-                let key = event.keystroke.key.as_str();
-                let handled = match key {
-                    "escape" => {
-                        state.update(cx, |s, cx| s.close(cx));
-                        true
+            Rc::new(
+                move |event: &KeyDownEvent, window: &mut Window, cx: &mut App| {
+                    if event.keystroke.modifiers.modified() {
+                        return;
                     }
-                    // Div synthesizes the trigger click on key-up. Do not
-                    // mutate on both halves of a single key press.
-                    "space" | "enter" => true,
-                    "up" | "down" => {
-                        if enabled_indices.is_empty() {
+                    let key = event.keystroke.key.as_str();
+                    let handled = match key {
+                        "escape" => {
+                            state.update(cx, |s, cx| s.close(cx));
                             true
-                        } else {
-                            state.update(cx, |s, cx| {
-                                if !s.open {
-                                    s.open = true;
-                                }
-                                s.highlighted_index = next_enabled_index(
-                                    &enabled_indices,
-                                    s.highlighted_index,
-                                    key == "up",
-                                );
-                                s.scroll_highlighted_into_view();
-                                cx.notify();
+                        }
+                        // Arming survives a redraw between the two halves.
+                        "space" | "enter" => {
+                            state.update(cx, |state, _| {
+                                state.keyboard_press = Some(if key == "enter" {
+                                    KeyboardButton::Enter
+                                } else {
+                                    KeyboardButton::Space
+                                });
                             });
                             true
                         }
+                        "up" | "down" => {
+                            if enabled_indices.is_empty() {
+                                true
+                            } else {
+                                state.update(cx, |s, cx| {
+                                    if !s.open {
+                                        s.open(cx);
+                                    }
+                                    s.highlighted_index = next_enabled_index(
+                                        &enabled_indices,
+                                        s.highlighted_index,
+                                        key == "up",
+                                    );
+                                    s.scroll_highlighted_into_view();
+                                    cx.notify();
+                                });
+                                true
+                            }
+                        }
+                        _ => false,
+                    };
+                    if handled {
+                        cx.stop_propagation();
+                        window.prevent_default();
                     }
-                    _ => false,
-                };
-                if handled {
-                    cx.stop_propagation();
-                    window.prevent_default();
-                }
-            }
+                },
+            )
         };
 
         div()
             .relative()
             .on_mouse_down_out({
                 let state = state.clone();
-                move |_, _, cx| {
+                move |event, _, cx| {
                     state.update(cx, |s, cx| {
-                        if s.open {
+                        if s.open && !s.menu_bounds.contains(&event.position) {
                             s.close(cx);
                         }
                     });
@@ -420,23 +556,60 @@ impl RenderOnce for Dropdown {
                     .id(("dropdown-trigger", entity_id))
                     .relative()
                     .key_context("Dropdown")
-                    .track_focus(&tracked_focus_handle)
-                    .on_key_down(key_handler)
+                    .when(!is_open, |trigger| {
+                        trigger.track_focus(&tracked_focus_handle)
+                    })
+                    .on_key_down({
+                        let key_handler = key_handler.clone();
+                        move |event, window, cx| key_handler(event, window, cx)
+                    })
+                    .capture_key_up({
+                        let key_up_handler = key_up_handler.clone();
+                        move |event, window, cx| key_up_handler(event, window, cx)
+                    })
                     .accessibility(trigger_accessibility)
+                    .on_accessibility_action(AccessibilityAction::Focus, {
+                        let state = state.clone();
+                        let focus_handle = focus_handle.clone();
+                        move |_, window, cx| {
+                            if state.read(cx).open {
+                                state.update(cx, |state, cx| state.close(cx));
+                            }
+                            window.focus(&focus_handle);
+                        }
+                    })
+                    .on_accessibility_action(AccessibilityAction::Expand, {
+                        let state = state.clone();
+                        let focus_handle = focus_handle.clone();
+                        move |_, window, cx| {
+                            window.focus(&focus_handle);
+                            state.update(cx, |state, cx| {
+                                if !state.open {
+                                    state.open(cx);
+                                    state.highlighted_index = first_enabled;
+                                    state.scroll_highlighted_into_view();
+                                }
+                            });
+                        }
+                    })
+                    .on_accessibility_action(AccessibilityAction::Collapse, {
+                        let state = state.clone();
+                        let focus_handle = focus_handle.clone();
+                        move |_, window, cx| {
+                            if state.read(cx).open {
+                                state.update(cx, |state, cx| state.close(cx));
+                            }
+                            window.focus(&focus_handle);
+                        }
+                    })
                     .cursor_pointer()
                     .on_click({
                         let state = state.clone();
+                        let activate_highlighted = activate_highlighted.clone();
                         move |event, window, cx| {
                             window.focus(&focus_handle);
                             if event.is_keyboard() && state.read(cx).open {
-                                let highlighted = state.read(cx).highlighted_index;
-                                let handler = highlighted
-                                    .and_then(|index| keyboard_items.get(index))
-                                    .and_then(|item| item.on_click.clone());
-                                if let Some(handler) = handler {
-                                    handler(window, cx);
-                                }
-                                state.update(cx, |s, cx| s.close(cx));
+                                activate_highlighted(window, cx);
                             } else {
                                 state.update(cx, |s, cx| {
                                     s.toggle(cx);
@@ -473,10 +646,47 @@ impl RenderOnce for Dropdown {
                         anchor.child(
                             div()
                                 .id(("dropdown-menu", entity_id))
-                                .accessibility(
-                                    AccessibilityAttributes::new(AccessibilityRole::Menu)
-                                        .label("Menu"),
-                                )
+                                .relative()
+                                .child({
+                                    let state = state.downgrade();
+                                    canvas_with_prepaint(
+                                        move |bounds, _, cx| {
+                                            _ = state.update(cx, |state, _| {
+                                                state.menu_bounds = bounds;
+                                            });
+                                        },
+                                        |_, _, _, _| {},
+                                    )
+                                    .absolute()
+                                    .inset_0()
+                                })
+                                .accessibility({
+                                    let mut attributes =
+                                        AccessibilityAttributes::new(AccessibilityRole::Menu)
+                                            .label("Menu")
+                                            .states(if is_focused {
+                                                AccessibilityState::FOCUSED
+                                            } else {
+                                                AccessibilityState::NONE
+                                            })
+                                            .actions(vec![AccessibilityAction::Focus]);
+                                    if let Some(id) = highlighted_index
+                                        .and_then(|index| item_accessibility_ids[index])
+                                    {
+                                        attributes = attributes.active_descendant(id);
+                                    }
+                                    attributes
+                                })
+                                .track_focus(&tracked_focus_handle)
+                                .key_context("Dropdown")
+                                .on_key_down({
+                                    let key_handler = key_handler.clone();
+                                    move |event, window, cx| key_handler(event, window, cx)
+                                })
+                                .capture_key_up({
+                                    let key_up_handler = key_up_handler.clone();
+                                    move |event, window, cx| key_up_handler(event, window, cx)
+                                })
                                 .occlude()
                                 .when(use_mb, |d| d.mb(GAP))
                                 .when(!use_mb, |d| d.mt(GAP))
@@ -518,13 +728,11 @@ impl RenderOnce for Dropdown {
                                     let on_click = item.on_click.clone();
                                     let state_for_click = state.clone();
                                     let disabled = item.disabled;
+                                    let activation_claim = activation_claim.clone();
                                     let highlighted = highlighted_index == Some(item_index);
                                     let mut item_state = AccessibilityState::NONE;
                                     if disabled {
                                         item_state |= AccessibilityState::DISABLED;
-                                    }
-                                    if highlighted {
-                                        item_state |= AccessibilityState::FOCUSED;
                                     }
 
                                     div()
@@ -535,6 +743,8 @@ impl RenderOnce for Dropdown {
                                             let mut attributes = AccessibilityAttributes::new(
                                                 AccessibilityRole::MenuItem,
                                             )
+                                            .id(item_accessibility_ids[item_index]
+                                                .expect("non-separator has an identity"))
                                             .label(item.label.to_string())
                                             .states(item_state);
                                             if let Some(description) = item.description.as_ref() {
@@ -564,6 +774,13 @@ impl RenderOnce for Dropdown {
                                         })
                                         .when(!disabled, move |d| {
                                             d.on_click(move |_, window, cx| {
+                                                let current = state_for_click.read(cx);
+                                                if !current.open
+                                                    || current.open_generation != open_generation
+                                                    || activation_claim.replace(true)
+                                                {
+                                                    return;
+                                                }
                                                 if let Some(ref handler) = on_click {
                                                     handler(window, cx);
                                                 }
@@ -756,5 +973,834 @@ mod tests {
         assert!(!window.update(|_, cx| state.read(cx).is_open()));
         assert_eq!(first.get(), 0);
         assert_eq!(second.get(), 1, "the highlighted action must run once");
+    }
+}
+
+#[cfg(test)]
+mod native_contract_tests {
+    use crate::prelude::{Dropdown, DropdownItem, DropdownState};
+    use kael::{
+        AccessibilityAction, AccessibilityActionRequest, AccessibilityId, AccessibilityRole,
+        AccessibilityState, AppContext as _, Context, Entity, IntoElement, KeyUpEvent, Keystroke,
+        Modifiers, ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext,
+        Window, div, point, px,
+    };
+    use std::{cell::Cell, rc::Rc};
+
+    struct Host {
+        state: Entity<DropdownState>,
+        first: Rc<Cell<usize>>,
+        second: Rc<Cell<usize>>,
+        disabled: Rc<Cell<usize>>,
+        disable_first: bool,
+        omit_first: bool,
+        inset: kael::Pixels,
+    }
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let first = self.first.clone();
+            let second = self.second.clone();
+            let state_for_second = self.state.clone();
+            let disabled = self.disabled.clone();
+            div().w(px(300.0)).p(self.inset).child(
+                Dropdown::new(self.state.clone(), div().h(px(36.0)).child("Open actions"))
+                    .accessibility_label("Actions")
+                    .items({
+                        let mut items = vec![
+                            DropdownItem::new("first", "First")
+                                .disabled(self.disable_first)
+                                .on_click(move |_, _| first.set(first.get() + 1)),
+                            DropdownItem::new("disabled", "Disabled")
+                                .disabled(true)
+                                .on_click(move |_, _| disabled.set(disabled.get() + 1)),
+                            DropdownItem::separator(),
+                            DropdownItem::new("second", "Second").on_click(move |_, cx| {
+                                assert!(
+                                    state_for_second.read(cx).is_open(),
+                                    "callback runs before Dropdown's own close"
+                                );
+                                second.set(second.get() + 1);
+                            }),
+                        ];
+                        if self.omit_first {
+                            items.remove(0);
+                        }
+                        items
+                    }),
+            )
+        }
+    }
+    struct Fixture {
+        host: Entity<Host>,
+        state: Entity<DropdownState>,
+        window: VisualTestContext,
+        first: Rc<Cell<usize>>,
+        second: Rc<Cell<usize>>,
+        disabled: Rc<Cell<usize>>,
+    }
+    fn mounted() -> Fixture {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let state = cx.new(DropdownState::new);
+        let first = Rc::new(Cell::new(0));
+        let second = Rc::new(Cell::new(0));
+        let disabled = Rc::new(Cell::new(0));
+        let (host, window) = cx.add_window_view({
+            let state = state.clone();
+            let first = first.clone();
+            let second = second.clone();
+            let disabled = disabled.clone();
+            move |_, _| Host {
+                state,
+                first,
+                second,
+                disabled,
+                disable_first: false,
+                omit_first: false,
+                inset: px(0.0),
+            }
+        });
+        window.update(|w, cx| w.draw(cx).clear());
+        Fixture {
+            host,
+            state,
+            window: window.clone(),
+            first,
+            second,
+            disabled,
+        }
+    }
+    fn node(window: &Window, role: AccessibilityRole, label: &str) -> AccessibilityId {
+        window
+            .accessibility_tree()
+            .nodes
+            .values()
+            .find(|n| n.role == role && n.label.as_deref() == Some(label))
+            .unwrap_or_else(|| panic!("missing {role:?} {label}"))
+            .id
+    }
+    fn trigger(f: &mut Fixture) -> AccessibilityId {
+        f.window
+            .update(|w, _| node(w, AccessibilityRole::Button, "Actions"))
+    }
+    fn dispatch(f: &mut Fixture, id: AccessibilityId, action: AccessibilityAction) {
+        f.window.update(|w, _| {
+            w.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(id, action))
+        });
+        f.window.run_until_parked();
+    }
+    fn draw(f: &mut Fixture) {
+        f.window.update(|w, cx| w.draw(cx).clear());
+    }
+    fn open_pointer(f: &mut Fixture) {
+        let center = f.window.update(|w, _| {
+            let b = w
+                .accessibility_tree()
+                .get(node(w, AccessibilityRole::Button, "Actions"))
+                .unwrap()
+                .bounds
+                .unwrap();
+            point(
+                px((b.x + b.width / 2.0) as f32),
+                px((b.y + b.height / 2.0) as f32),
+            )
+        });
+        f.window.simulate_click(center, Modifiers::default());
+        f.window.run_until_parked();
+        draw(f);
+        assert!(f.window.update(|_, cx| f.state.read(cx).is_open()));
+    }
+    fn open(f: &mut Fixture) -> bool {
+        f.window.update(|_, cx| f.state.read(cx).is_open())
+    }
+
+    #[test]
+    fn native_expand_is_registered_and_idempotently_opens() {
+        let mut f = mounted();
+        let id = trigger(&mut f);
+        f.window.update(|w, _| {
+            assert!(
+                w.accessibility_tree()
+                    .get(id)
+                    .unwrap()
+                    .actions
+                    .contains(&AccessibilityAction::Expand)
+            );
+            eprintln!(
+                "EXPAND_REGISTERED={}",
+                w.has_accessibility_action_handler(id, AccessibilityAction::Expand)
+            );
+            for _ in 0..2 {
+                w.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    id,
+                    AccessibilityAction::Expand,
+                ));
+            }
+        });
+        f.window.run_until_parked();
+        assert!(
+            open(&mut f),
+            "two actual native Expand requests must leave the menu open"
+        );
+        assert_eq!((f.first.get(), f.second.get()), (0, 0));
+    }
+    #[test]
+    fn native_collapse_is_registered_and_idempotently_closes() {
+        let mut f = mounted();
+        open_pointer(&mut f);
+        let id = trigger(&mut f);
+        f.window.update(|w, _| {
+            assert!(
+                w.accessibility_tree()
+                    .get(id)
+                    .unwrap()
+                    .actions
+                    .contains(&AccessibilityAction::Collapse)
+            );
+            eprintln!(
+                "COLLAPSE_REGISTERED={}",
+                w.has_accessibility_action_handler(id, AccessibilityAction::Collapse)
+            );
+            for _ in 0..2 {
+                w.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    id,
+                    AccessibilityAction::Collapse,
+                ));
+            }
+        });
+        f.window.run_until_parked();
+        assert!(
+            !open(&mut f),
+            "two actual native Collapse requests must leave the menu closed"
+        );
+        assert_eq!((f.first.get(), f.second.get()), (0, 0));
+    }
+    #[test]
+    fn opened_menu_has_one_focus_owner_and_valid_active_item() {
+        let mut f = mounted();
+        open_pointer(&mut f);
+        f.window.update(|w, _| {
+            let tree = w.accessibility_tree();
+            eprintln!(
+                "FOCUSED={:?}",
+                tree.nodes
+                    .values()
+                    .filter(|n| n.states.contains(AccessibilityState::FOCUSED))
+                    .map(|n| (n.id, n.role, n.label.clone(), n.parent, n.active_descendant))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                tree.focused_node_count(),
+                1,
+                "only the actual keyboard owner may carry FOCUSED"
+            );
+            let owner = tree.get(tree.focused_node().unwrap()).unwrap();
+            let active = tree
+                .get(
+                    owner
+                        .active_descendant
+                        .expect("focused menu control needs active descendant"),
+                )
+                .unwrap();
+            assert_eq!(active.label.as_deref(), Some("First"));
+            assert_eq!(active.role, AccessibilityRole::MenuItem);
+            assert_eq!(owner.role, AccessibilityRole::Menu);
+            let exported = tree.to_accesskit_tree_update(None, None);
+            let native = exported
+                .nodes
+                .iter()
+                .find(|(id, _)| id.0 == owner.id.0)
+                .unwrap();
+            assert_eq!(native.1.active_descendant().unwrap().0, active.id.0);
+            assert!(native.1.children().iter().any(|id| id.0 == active.id.0));
+
+            assert!(!active.states.contains(AccessibilityState::FOCUSED));
+            let mut parent = active.parent;
+            let mut found = false;
+            while let Some(id) = parent {
+                if id == owner.id {
+                    found = true;
+                    break;
+                }
+                parent = tree.get(id).and_then(|n| n.parent);
+            }
+            assert!(
+                found,
+                "active item must be an actual logical descendant of its focus owner"
+            );
+        });
+    }
+    #[test]
+    fn native_focus_and_click_bridges_open_and_disabled_item_rejects() {
+        let mut f = mounted();
+        let id = trigger(&mut f);
+        dispatch(&mut f, id, AccessibilityAction::Focus);
+        draw(&mut f);
+        f.window
+            .update(|w, _| assert_eq!(w.accessibility_tree().focused_node(), Some(id)));
+        dispatch(&mut f, id, AccessibilityAction::Click);
+        draw(&mut f);
+        assert!(open(&mut f));
+        let disabled = f.window.update(|w, _| {
+            let id = node(w, AccessibilityRole::MenuItem, "Disabled");
+            assert!(
+                w.accessibility_tree()
+                    .get(id)
+                    .unwrap()
+                    .states
+                    .contains(AccessibilityState::DISABLED)
+            );
+            assert!(!w.has_accessibility_action_handler(id, AccessibilityAction::Click));
+            id
+        });
+        dispatch(&mut f, disabled, AccessibilityAction::Click);
+        assert!(open(&mut f));
+        assert_eq!(f.disabled.get(), 0);
+    }
+    #[test]
+    fn duplicate_native_item_clicks_commit_only_once_then_retire() {
+        let mut f = mounted();
+        open_pointer(&mut f);
+        let id = f
+            .window
+            .update(|w, _| node(w, AccessibilityRole::MenuItem, "Second"));
+        f.window.update(|w, _| {
+            for _ in 0..2 {
+                w.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    id,
+                    AccessibilityAction::Click,
+                ));
+            }
+        });
+        f.window.run_until_parked();
+        assert!(!open(&mut f));
+        assert_eq!(
+            f.second.get(),
+            1,
+            "same rendered menu session can commit only once"
+        );
+        draw(&mut f);
+        dispatch(&mut f, id, AccessibilityAction::Click);
+        assert_eq!(f.second.get(), 1);
+        open_pointer(&mut f);
+        let fresh = f
+            .window
+            .update(|w, _| node(w, AccessibilityRole::MenuItem, "Second"));
+        dispatch(&mut f, fresh, AccessibilityAction::Click);
+        assert_eq!(f.second.get(), 2, "fresh reopen permits a fresh action");
+    }
+    #[test]
+    fn queued_item_action_after_public_close_does_not_activate() {
+        let mut f = mounted();
+        open_pointer(&mut f);
+        let id = f
+            .window
+            .update(|w, _| node(w, AccessibilityRole::MenuItem, "First"));
+        f.window.update(|w, cx| {
+            w.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                id,
+                AccessibilityAction::Click,
+            ));
+            f.state.update(cx, |s, cx| s.close(cx));
+            assert!(
+                w.accessibility_tree().get(id).is_some(),
+                "old painted node still present at queueing checkpoint"
+            );
+        });
+        f.window.run_until_parked();
+        assert_eq!(
+            f.first.get(),
+            0,
+            "closed menu session must reject its pending item action"
+        );
+    }
+    #[test]
+    fn dynamic_disabled_repaint_rejects_previously_queued_native_item() {
+        let mut f = mounted();
+        open_pointer(&mut f);
+        let id = f
+            .window
+            .update(|w, _| node(w, AccessibilityRole::MenuItem, "First"));
+        f.window.update(|w, cx| {
+            w.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                id,
+                AccessibilityAction::Click,
+            ));
+            f.host.update(cx, |host, cx| {
+                host.disable_first = true;
+                cx.notify();
+            });
+            w.draw(cx).clear();
+            assert!(
+                w.accessibility_tree()
+                    .get(id)
+                    .unwrap()
+                    .states
+                    .contains(AccessibilityState::DISABLED)
+            );
+        });
+        f.window.run_until_parked();
+        assert_eq!(f.first.get(), 0);
+    }
+    #[test]
+    fn ordinary_pointer_and_keyboard_commit_preserve_callback_counts() {
+        let mut f = mounted();
+        open_pointer(&mut f);
+        f.window.simulate_keystrokes("down enter");
+        assert!(open(&mut f));
+        assert_eq!((f.first.get(), f.second.get()), (0, 0));
+        f.window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").unwrap(),
+        });
+        assert!(!open(&mut f));
+        assert_eq!((f.first.get(), f.second.get(), f.disabled.get()), (0, 1, 0));
+    }
+    #[test]
+    fn queued_old_session_item_does_not_commit_after_close_and_fresh_reopen() {
+        let mut f = mounted();
+        open_pointer(&mut f);
+        let id = f
+            .window
+            .update(|w, _| node(w, AccessibilityRole::MenuItem, "Second"));
+        f.window.update(|w, cx| {
+            w.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                id,
+                AccessibilityAction::Click,
+            ));
+            f.state.update(cx, |s, cx| {
+                s.close(cx);
+                s.open(cx);
+            });
+            assert!(f.state.read(cx).is_open());
+            assert!(
+                w.accessibility_tree().get(id).is_some(),
+                "old painted session still exists at queueing checkpoint"
+            );
+        });
+        f.window.run_until_parked();
+        assert_eq!(
+            f.second.get(),
+            0,
+            "retired session action must not select into fresh public reopen"
+        );
+        assert!(open(&mut f), "fresh reopen must remain available");
+        draw(&mut f);
+        let fresh = f
+            .window
+            .update(|w, _| node(w, AccessibilityRole::MenuItem, "Second"));
+        dispatch(&mut f, fresh, AccessibilityAction::Click);
+        assert_eq!(
+            f.second.get(),
+            1,
+            "fresh visible session still selects exactly once"
+        );
+    }
+    #[test]
+    fn dynamic_disable_revalidates_keyboard_highlight_before_commit() {
+        let mut f = mounted();
+        open_pointer(&mut f);
+        f.host.update(&mut f.window, |host, cx| {
+            host.disable_first = true;
+            cx.notify();
+        });
+        draw(&mut f);
+        f.window.update(|w, _| {
+            let id = node(w, AccessibilityRole::MenuItem, "First");
+            assert!(
+                w.accessibility_tree()
+                    .get(id)
+                    .unwrap()
+                    .states
+                    .contains(AccessibilityState::DISABLED)
+            );
+        });
+        f.window.simulate_keystrokes("enter");
+        assert_eq!(f.first.get(), 0);
+        f.window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").unwrap(),
+        });
+        assert_eq!(
+            f.first.get(),
+            0,
+            "a newly disabled highlighted item must never run its callback"
+        );
+        assert_eq!(
+            f.second.get(),
+            1,
+            "commit must match the effective first enabled highlight"
+        );
+        assert!(!open(&mut f));
+    }
+    #[test]
+    fn unpaired_menu_key_up_never_activates() {
+        let mut f = mounted();
+        open_pointer(&mut f);
+        f.window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").unwrap(),
+        });
+        assert_eq!(
+            (f.first.get(), f.second.get()),
+            (0, 0),
+            "unpaired key release is not an activation"
+        );
+        assert!(open(&mut f));
+    }
+    #[test]
+    fn key_down_rerender_key_up_preserves_exactly_once_activation() {
+        let mut f = mounted();
+        open_pointer(&mut f);
+        f.window.simulate_keystrokes("enter");
+        draw(&mut f);
+        assert_eq!(f.first.get(), 0);
+        f.window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").unwrap(),
+        });
+        assert_eq!(f.first.get(), 1);
+        f.window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").unwrap(),
+        });
+        assert_eq!(f.first.get(), 1);
+    }
+    #[test]
+    fn key_down_cannot_arm_a_later_reopened_menu() {
+        let mut f = mounted();
+        open_pointer(&mut f);
+        f.window.simulate_keystrokes("enter");
+        f.window.update(|_, cx| {
+            f.state.update(cx, |state, cx| {
+                state.close(cx);
+                state.open(cx);
+            })
+        });
+        draw(&mut f);
+        f.window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").unwrap(),
+        });
+        assert_eq!(
+            f.first.get(),
+            0,
+            "old physical press cannot select into reopened session"
+        );
+        assert!(open(&mut f));
+        f.window.simulate_keystrokes("enter");
+        f.window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").unwrap(),
+        });
+        assert_eq!(f.first.get(), 1, "new session remains usable");
+    }
+    #[test]
+    fn key_down_retires_after_actual_focus_loss_and_return() {
+        use kael::Focusable as _;
+        let mut f = mounted();
+        f.window.deactivate_window();
+        f.window.update(|w, _| w.activate_window());
+        f.window.run_until_parked();
+        f.window.update(|w, _| assert!(w.is_window_active()));
+        open_pointer(&mut f);
+        f.window.simulate_keystrokes("enter");
+        f.window.update(|w, cx| {
+            w.blur();
+            w.draw(cx).clear();
+        });
+        f.window.run_until_parked();
+        f.window.update(|w, cx| {
+            w.focus(&f.state.read(cx).focus_handle(cx));
+            w.draw(cx).clear();
+        });
+        f.window.run_until_parked();
+        f.window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").unwrap(),
+        });
+        assert_eq!(f.first.get(), 0, "focus loss must retire key arming");
+        assert!(open(&mut f));
+    }
+    #[test]
+    fn native_trigger_focus_closes_popup_and_restores_truthful_button_owner() {
+        let mut f = mounted();
+        open_pointer(&mut f);
+        let id = trigger(&mut f);
+        dispatch(&mut f, id, AccessibilityAction::Focus);
+        draw(&mut f);
+        assert!(!open(&mut f));
+        f.window.update(|w, _| {
+            assert_eq!(w.accessibility_tree().focused_node_count(), 1);
+            assert_eq!(w.accessibility_tree().focused_node(), Some(id));
+            assert_eq!(
+                w.accessibility_tree().get(id).unwrap().role,
+                AccessibilityRole::Button
+            );
+            assert!(
+                !w.accessibility_tree()
+                    .nodes
+                    .values()
+                    .any(|n| n.role == AccessibilityRole::Menu)
+            );
+        });
+        assert_eq!((f.first.get(), f.second.get()), (0, 0));
+        dispatch(&mut f, id, AccessibilityAction::Click);
+        draw(&mut f);
+        assert!(open(&mut f), "ordinary fresh native Click remains usable");
+    }
+    #[test]
+    fn item_identity_is_stable_across_reopen_and_prunes_removed_items() {
+        let mut f = mounted();
+        open_pointer(&mut f);
+        let first = f
+            .window
+            .update(|w, _| node(w, AccessibilityRole::MenuItem, "First"));
+        let second = f
+            .window
+            .update(|w, _| node(w, AccessibilityRole::MenuItem, "Second"));
+        f.window
+            .update(|_, cx| f.state.update(cx, |s, cx| s.close(cx)));
+        draw(&mut f);
+        open_pointer(&mut f);
+        f.window.update(|w, cx| {
+            assert_eq!(node(w, AccessibilityRole::MenuItem, "First"), first);
+            assert_eq!(node(w, AccessibilityRole::MenuItem, "Second"), second);
+            assert_eq!(f.state.read(cx).item_accessibility_ids.len(), 3);
+        });
+        f.host.update(&mut f.window, |host, cx| {
+            host.omit_first = true;
+            cx.notify();
+        });
+        draw(&mut f);
+        f.window.update(|w, cx| {
+            assert!(w.accessibility_tree().get(first).is_none());
+            assert_eq!(node(w, AccessibilityRole::MenuItem, "Second"), second);
+            assert_eq!(f.state.read(cx).item_accessibility_ids.len(), 2);
+            assert!(
+                !f.state
+                    .read(cx)
+                    .item_accessibility_ids
+                    .contains_key("first")
+            );
+        });
+        f.host.update(&mut f.window, |host, cx| {
+            host.omit_first = false;
+            cx.notify();
+        });
+        draw(&mut f);
+        f.window.update(|w, cx| {
+            assert_ne!(
+                node(w, AccessibilityRole::MenuItem, "First"),
+                first,
+                "retired item identity must not alias a later reintroduced item"
+            );
+            assert_eq!(node(w, AccessibilityRole::MenuItem, "Second"), second);
+            assert_eq!(f.state.read(cx).item_accessibility_ids.len(), 3);
+        });
+    }
+    #[test]
+    fn focus_subscription_and_rendered_actions_do_not_retain_retired_owner() {
+        let mut f = mounted();
+        open_pointer(&mut f);
+        let state = f.state.downgrade();
+        let host = f.host.downgrade();
+        f.window
+            .update(|_, cx| assert!(f.state.read(cx).focus_subscription.is_some()));
+        f.window.update(|w, _| w.remove_window());
+        drop(f.host);
+        drop(f.state);
+        // Entity values are released by App's effect flush, not executor drain.
+        f.window.cx.update(|_| {});
+        f.window.run_until_parked();
+        assert!(
+            state.upgrade().is_none(),
+            "weak blur subscription must not retain state"
+        );
+        assert!(host.upgrade().is_none(), "callbacks must not retain host");
+    }
+    #[test]
+    fn actual_pointer_item_click_invokes_callback_before_closing() {
+        let mut f = mounted();
+        open_pointer(&mut f);
+        let center = f.window.update(|w, _| {
+            let id = node(w, AccessibilityRole::MenuItem, "Second");
+            let bounds = w.accessibility_tree().get(id).unwrap().bounds.unwrap();
+            point(
+                px((bounds.x + bounds.width / 2.0) as f32),
+                px((bounds.y + bounds.height / 2.0) as f32),
+            )
+        });
+        f.window.simulate_click(center, Modifiers::default());
+        f.window.run_until_parked();
+        assert_eq!(
+            f.second.get(),
+            1,
+            "real pointer item activation must survive outside-dismiss routing"
+        );
+        assert_eq!((f.first.get(), f.disabled.get()), (0, 0));
+        assert!(!open(&mut f));
+    }
+    #[test]
+    fn closed_trigger_pairs_enter_and_space_across_redraw_and_escape() {
+        for key in ["enter", "space"] {
+            let mut f = mounted();
+            f.window.simulate_keystrokes("tab");
+            f.window.update(|w, cx| {
+                assert!(f.state.read(cx).focus_handle.is_focused(w));
+                assert!(!f.state.read(cx).is_open());
+            });
+            f.window.simulate_event(KeyUpEvent {
+                keystroke: Keystroke::parse(key).unwrap(),
+            });
+            assert!(!open(&mut f), "unpaired closed {key} release must not open");
+            for repaint in [false, true] {
+                f.window.simulate_keystrokes(key);
+                assert!(!open(&mut f), "{key} key-down must not open early");
+                if repaint {
+                    draw(&mut f);
+                }
+                f.window.simulate_event(KeyUpEvent {
+                    keystroke: Keystroke::parse(key).unwrap(),
+                });
+                assert!(
+                    open(&mut f),
+                    "paired closed {key} must open once (repaint={repaint})"
+                );
+                f.window.simulate_event(KeyUpEvent {
+                    keystroke: Keystroke::parse(key).unwrap(),
+                });
+                assert!(
+                    open(&mut f),
+                    "duplicate {key} release must not commit or close"
+                );
+                assert_eq!((f.first.get(), f.second.get(), f.disabled.get()), (0, 0, 0));
+                f.window.simulate_keystrokes("escape");
+                assert!(
+                    !open(&mut f),
+                    "Escape must close after physical {key} opening"
+                );
+            }
+        }
+    }
+    #[test]
+    fn popup_padding_and_disabled_pointer_item_do_not_dismiss() {
+        let mut f = mounted();
+        open_pointer(&mut f);
+        let (padding, disabled) = f.window.update(|w, cx| {
+            let menu = w
+                .accessibility_tree()
+                .get(node(w, AccessibilityRole::Menu, "Menu"))
+                .unwrap()
+                .bounds
+                .unwrap();
+            let first = w
+                .accessibility_tree()
+                .get(node(w, AccessibilityRole::MenuItem, "First"))
+                .unwrap()
+                .bounds
+                .unwrap();
+            let last = w
+                .accessibility_tree()
+                .get(node(w, AccessibilityRole::MenuItem, "Second"))
+                .unwrap()
+                .bounds
+                .unwrap();
+            let disabled = w
+                .accessibility_tree()
+                .get(node(w, AccessibilityRole::MenuItem, "Disabled"))
+                .unwrap()
+                .bounds
+                .unwrap();
+            let measured = f.state.read(cx).menu_bounds;
+            assert_eq!(measured.origin, point(px(menu.x as f32), px(menu.y as f32)));
+            assert_eq!(
+                measured.size,
+                kael::size(px(menu.width as f32), px(menu.height as f32))
+            );
+            assert!(first.y > menu.y, "fixture exposes actual top padding");
+            assert!(
+                last.y + last.height < menu.y + menu.height,
+                "fixture exposes actual bottom padding"
+            );
+            assert!(first.x > menu.x, "fixture exposes actual left padding");
+            assert!(
+                first.x + first.width < menu.x + menu.width,
+                "fixture exposes actual right padding"
+            );
+            (
+                [
+                    point(
+                        px((menu.x + menu.width / 2.0) as f32),
+                        px(((menu.y + first.y) / 2.0) as f32),
+                    ),
+                    point(
+                        px((menu.x + menu.width / 2.0) as f32),
+                        px(((last.y + last.height + menu.y + menu.height) / 2.0) as f32),
+                    ),
+                    point(
+                        px(((menu.x + first.x) / 2.0) as f32),
+                        px((first.y + first.height / 2.0) as f32),
+                    ),
+                    point(
+                        px(((first.x + first.width + menu.x + menu.width) / 2.0) as f32),
+                        px((first.y + first.height / 2.0) as f32),
+                    ),
+                ],
+                point(
+                    px((disabled.x + disabled.width / 2.0) as f32),
+                    px((disabled.y + disabled.height / 2.0) as f32),
+                ),
+            )
+        });
+        for (edge, point) in padding.into_iter().enumerate() {
+            f.window.simulate_click(point, Modifiers::default());
+            f.window.run_until_parked();
+            assert!(
+                open(&mut f),
+                "popup padding edge {edge} is inside dismissal boundary"
+            );
+        }
+        f.window.simulate_click(disabled, Modifiers::default());
+        f.window.run_until_parked();
+        assert!(
+            open(&mut f),
+            "disabled pointer items do not dismiss or activate"
+        );
+        assert_eq!((f.first.get(), f.second.get(), f.disabled.get()), (0, 0, 0));
+    }
+    #[test]
+    fn actual_pointer_outside_trigger_and_popup_still_dismisses() {
+        let mut f = mounted();
+        // Leave real on-screen space on each side for adjacent outside clicks.
+        let inset = f.window.update(|w, _| {
+            let viewport = w.viewport_size();
+            viewport.width.min(viewport.height) / 10.0
+        });
+        f.host.update(&mut f.window, |host, cx| {
+            host.inset = inset;
+            cx.notify();
+        });
+        draw(&mut f);
+        for edge in 0..4 {
+            open_pointer(&mut f);
+            let outside = f.window.update(|w, cx| {
+                let state = f.state.read(cx);
+                let menu = state.menu_bounds;
+                let center = menu.center();
+                let outside = match edge {
+                    0 => point(center.x, menu.top() - px(1.0)),
+                    1 => point(center.x, menu.bottom() + px(1.0)),
+                    2 => point(menu.left() - px(1.0), center.y),
+                    _ => point(menu.right() + px(1.0), center.y),
+                };
+                assert!(!state.trigger_bounds.contains(&outside));
+                assert!(!menu.contains(&outside));
+                assert!(outside.x >= px(0.0) && outside.y >= px(0.0));
+                assert!(
+                    outside.x < w.viewport_size().width && outside.y < w.viewport_size().height
+                );
+                outside
+            });
+            f.window.simulate_click(outside, Modifiers::default());
+            f.window.run_until_parked();
+            assert!(!open(&mut f), "adjacent outside edge {edge} dismisses");
+            assert_eq!((f.first.get(), f.second.get(), f.disabled.get()), (0, 0, 0));
+        }
     }
 }
