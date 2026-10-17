@@ -147,6 +147,7 @@ pub struct Select<T: Clone + 'static> {
     focus_handle: FocusHandle,
     scroll_handle: ScrollHandle,
     options: Vec<SelectOption<T>>,
+    option_accessibility_ids: Option<AccessibilityIdRange>,
     selected_index: Option<usize>,
     highlighted_index: Option<usize>,
     label: Option<SharedString>,
@@ -177,6 +178,7 @@ impl<T: Clone + 'static> Select<T> {
             focus_handle: cx.focus_handle(),
             scroll_handle: ScrollHandle::new(),
             options: Vec::new(),
+            option_accessibility_ids: None,
             selected_index: None,
             highlighted_index: None,
             label: None,
@@ -203,6 +205,10 @@ impl<T: Clone + 'static> Select<T> {
     }
 
     pub fn options(mut self, options: Vec<SelectOption<T>>) -> Self {
+        self.option_accessibility_ids = (!options.is_empty()).then(|| {
+            AccessibilityId::reserve_range(options.len() as u64)
+                .expect("accessibility identifier space exhausted")
+        });
         self.options = options;
         self
     }
@@ -432,6 +438,9 @@ impl<T: Clone + 'static> Select<T> {
     }
 
     fn clear_selection(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled || self.loading || self.selected_index.is_none() {
+            return;
+        }
         self.selected_index = None;
         self.highlighted_index = None;
 
@@ -440,6 +449,11 @@ impl<T: Clone + 'static> Select<T> {
     }
 
     fn select_option(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        // Native requests may be queued together before the next frame removes
+        // the closed menu's action handlers. Commit only while it is open.
+        if !self.open || self.disabled || self.loading {
+            return;
+        }
         if self
             .options
             .get(index)
@@ -638,6 +652,14 @@ impl<T: Clone + 'static> Render for Select<T> {
                 },
             ]);
         }
+        if open
+            && let Some(active_id) = highlighted_idx.and_then(|index| {
+                self.option_accessibility_ids
+                    .and_then(|ids| ids.get(index as u64))
+            })
+        {
+            accessibility = accessibility.active_descendant(active_id);
+        }
 
         let trigger_focus_handle = self
             .focus_handle
@@ -647,8 +669,6 @@ impl<T: Clone + 'static> Render for Select<T> {
         let trigger = div()
             .id(("select-trigger", entity_id))
             .relative()
-            .track_focus(&trigger_focus_handle)
-            .accessibility(accessibility)
             .flex()
             .items_center()
             .justify_between()
@@ -759,7 +779,11 @@ impl<T: Clone + 'static> Render for Select<T> {
                     }),
             )
             .child(div().flex().items_center().justify_center().child(
-                if self.clearable && self.selected_index.is_some() && !self.disabled {
+                if self.clearable
+                    && self.selected_index.is_some()
+                    && !self.disabled
+                    && !self.loading
+                {
                     div()
                         .size(px(24.0))
                         .flex()
@@ -776,6 +800,12 @@ impl<T: Clone + 'static> Render for Select<T> {
                             cx.listener(|this, _event: &MouseDownEvent, window, cx| {
                                 this.clear_selection(window, cx);
                                 cx.stop_propagation();
+                            }),
+                        )
+                        .on_accessibility_action(
+                            AccessibilityAction::Click,
+                            cx.listener(|this, _, window, cx| {
+                                this.clear_selection(window, cx);
                             }),
                         )
                         .accessibility(
@@ -860,18 +890,41 @@ impl<T: Clone + 'static> Render for Select<T> {
         }
 
         let control = div()
+            .id(("select-control", entity_id))
+            .track_focus(&trigger_focus_handle)
+            .accessibility(accessibility)
             .relative()
             .w_full()
             .key_context("Select")
-            .when(!self.disabled && !self.loading, |this: Div| {
+            .when(!self.disabled && !self.loading, |this: Stateful<Div>| {
                 this.on_action(cx.listener(Select::select_up))
                     .on_action(cx.listener(Select::select_down))
                     .on_action(cx.listener(Select::select_confirm))
+                    .on_accessibility_action(
+                        AccessibilityAction::Click,
+                        cx.listener(|this, _, window, cx| this.toggle_dropdown(window, cx)),
+                    )
+                    .on_accessibility_action(
+                        AccessibilityAction::Expand,
+                        cx.listener(|this, _, window, cx| {
+                            if !this.open {
+                                this.toggle_dropdown(window, cx);
+                            }
+                        }),
+                    )
+                    .on_accessibility_action(
+                        AccessibilityAction::Collapse,
+                        cx.listener(|this, _, _, cx| {
+                            if this.open {
+                                this.close_dropdown(cx);
+                            }
+                        }),
+                    )
             })
-            .when(open && !self.disabled && !self.loading, |this: Div| {
+            .when(open && !self.disabled && !self.loading, |this: Stateful<Div>| {
                 this.on_action(cx.listener(Select::select_cancel))
             })
-            .when(open && searchable, |this: Div| {
+            .when(open && searchable, |this: Stateful<Div>| {
                 this.on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                     if event.keystroke.key == "backspace" {
                         this.search_query.pop();
@@ -1058,12 +1111,12 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                                 .clone()
                                                                                 .unwrap_or_else(|| theme.tokens.font_family.clone());
                                                                             let option_label = option.label.clone();
+                                                                            let option_accessibility_id = self.option_accessibility_ids
+                                                                                .and_then(|ids| ids.get(index as u64))
+                                                                                .expect("each option has a stable accessibility identity");
                                                                             let mut option_state = AccessibilityState::NONE;
                                                                             if is_selected {
                                                                                 option_state |= AccessibilityState::SELECTED;
-                                                                            }
-                                                                            if is_highlighted {
-                                                                                option_state |= AccessibilityState::FOCUSED;
                                                                             }
                                                                             if is_disabled {
                                                                                 option_state |= AccessibilityState::DISABLED;
@@ -1077,6 +1130,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                                     ))
                                                                                     .accessibility({
                                                                                         let mut attributes = AccessibilityAttributes::new(AccessibilityRole::ListItem)
+                                                                                            .id(option_accessibility_id)
                                                                                             .label(option_label.to_string())
                                                                                             .states(option_state);
                                                                                         if !is_disabled {
@@ -1119,6 +1173,9 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                                         this.on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
                                                                                             this.select_option(index, window, cx);
                                                                                         }))
+                                                                                        .on_accessibility_action(AccessibilityAction::Click, cx.listener(move |this, _, window, cx| {
+                                                                                            this.select_option(index, window, cx);
+                                                                                        }))
                                                                                     })
                                                                                     .child(
                                                                                         div()
@@ -1149,7 +1206,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                                                     .overflow_hidden()
                                                                                                     .text_ellipsis()
                                                                                                     .whitespace_nowrap()
-                                                                                                    .child(option_label)
+                                                                                                    .child(StyledText::new(option_label).accessibility_hidden(true))
                                                                                             )
                                                                                     )
                                                                                     .child(
@@ -1237,6 +1294,7 @@ impl<T: Clone + 'static> EventEmitter<SelectEvent> for Select<T> {}
 mod tests {
     use super::{Select, SelectOption, init_select};
     use kael::{
+        AccessibilityAction, AccessibilityActionRequest, AccessibilityRole, AccessibilityState,
         AppContext as _, Context, Entity, Focusable as _, IntoElement, Modifiers, MouseButton,
         ParentElement as _, Render, ScrollDelta, ScrollWheelEvent, Styled as _, TestAppContext,
         Window, div, point, px, size,
@@ -1298,6 +1356,225 @@ mod tests {
                     changes.fetch_add(1, Ordering::Relaxed);
                 })
         })
+    }
+
+    #[kael::test]
+    fn native_select_actions_disclose_and_select_once_with_one_focus(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init_select(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let changes = Arc::new(AtomicUsize::new(0));
+        let select = cx.new({
+            let changes = changes.clone();
+            move |cx| {
+                Select::new(cx)
+                    .options(vec![
+                        SelectOption::new("one", "One"),
+                        SelectOption::new("unavailable", "Unavailable").disabled(true),
+                        SelectOption::new("two", "Two"),
+                    ])
+                    .selected_index(Some(0))
+                    .on_change(move |_, _, _| {
+                        changes.fetch_add(1, Ordering::Relaxed);
+                    })
+            }
+        });
+        let (_host, window) = cx.add_window_view({
+            let select = select.clone();
+            move |_, _| DisabledSelectHost { select }
+        });
+        let trigger = window.update(|window, cx| {
+            window.draw(cx).clear();
+            let trigger = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| node.role == AccessibilityRole::ComboBox)
+                .unwrap();
+            for action in [AccessibilityAction::Click, AccessibilityAction::Expand] {
+                assert!(window.has_accessibility_action_handler(trigger.id, action));
+            }
+            trigger.id
+        });
+
+        // Two requests can arrive before the next paint updates advertised actions.
+        // Disclosure must set the requested state rather than toggle it twice.
+        window.update(|window, _| {
+            for _ in 0..2 {
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    trigger,
+                    AccessibilityAction::Expand,
+                ));
+            }
+        });
+        window.run_until_parked();
+        let two = window.update(|window, cx| {
+            assert!(select.read(cx).open);
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            let trigger_node = tree.get(trigger).unwrap();
+            assert_eq!(tree.focused_node_count(), 1);
+            assert_eq!(tree.focused_node(), Some(trigger));
+            let active = tree.get(trigger_node.active_descendant.unwrap()).unwrap();
+            assert_eq!(active.label.as_deref(), Some("One"));
+            assert_eq!(active.parent, Some(trigger));
+            assert!(trigger_node.children.contains(&active.id));
+            assert!(!active.states.contains(AccessibilityState::FOCUSED));
+            let exported = tree.to_accesskit_tree_update(None, None);
+            let native_trigger = exported
+                .nodes
+                .iter()
+                .find(|(id, _)| id.0 == trigger.0)
+                .unwrap();
+            assert_eq!(native_trigger.1.active_descendant().unwrap().0, active.id.0);
+            assert!(
+                native_trigger
+                    .1
+                    .children()
+                    .iter()
+                    .any(|id| id.0 == active.id.0)
+            );
+            let unavailable = tree
+                .nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some("Unavailable"))
+                .unwrap();
+            assert!(unavailable.states.contains(AccessibilityState::DISABLED));
+            assert!(
+                !window
+                    .has_accessibility_action_handler(unavailable.id, AccessibilityAction::Click,)
+            );
+            let two = tree
+                .nodes
+                .values()
+                .find(|node| {
+                    node.role == AccessibilityRole::ListItem && node.label.as_deref() == Some("Two")
+                })
+                .unwrap();
+            assert!(window.has_accessibility_action_handler(two.id, AccessibilityAction::Click));
+            two.id
+        });
+
+        window.simulate_keystrokes("down");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            assert_eq!(tree.focused_node_count(), 1);
+            assert_eq!(tree.get(trigger).unwrap().active_descendant, Some(two));
+        });
+        window.update(|window, _| {
+            for _ in 0..2 {
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    two,
+                    AccessibilityAction::Click,
+                ));
+            }
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert!(!select.read(cx).open);
+            assert_eq!(select.read(cx).selected_value(), Some(&"two"));
+            window.draw(cx).clear();
+            assert_eq!(
+                window
+                    .accessibility_tree()
+                    .get(trigger)
+                    .unwrap()
+                    .active_descendant,
+                None
+            );
+        });
+        assert_eq!(changes.load(Ordering::Relaxed), 1);
+
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                trigger,
+                AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert!(select.read(cx).open);
+            window.draw(cx).clear();
+            assert_eq!(
+                window
+                    .accessibility_tree()
+                    .get(trigger)
+                    .unwrap()
+                    .active_descendant,
+                Some(two)
+            );
+            for _ in 0..2 {
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    trigger,
+                    AccessibilityAction::Collapse,
+                ));
+            }
+        });
+        window.run_until_parked();
+        window.update(|_, cx| assert!(!select.read(cx).open));
+        assert_eq!(changes.load(Ordering::Relaxed), 1);
+    }
+
+    #[kael::test]
+    fn native_select_clear_works_and_disabled_select_rejects_actions(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral()));
+        let first = cx.new(|cx| {
+            Select::new(cx)
+                .options(vec![SelectOption::new("one", "One")])
+                .selected_index(Some(0))
+                .clearable(true)
+        });
+        let disabled = cx.update(|cx| select(true, Arc::new(AtomicUsize::new(0)), cx));
+        let last = cx.update(|cx| select(false, Arc::new(AtomicUsize::new(0)), cx));
+        let (_host, window) = cx.add_window_view({
+            let first = first.clone();
+            let disabled = disabled.clone();
+            move |_, _| SelectHost {
+                first,
+                disabled,
+                last,
+            }
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            let clear = tree
+                .nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some("Clear selection"))
+                .unwrap();
+            assert!(window.has_accessibility_action_handler(clear.id, AccessibilityAction::Click));
+            let clear_id = clear.id;
+            let disabled = tree
+                .nodes
+                .values()
+                .find(|node| {
+                    node.role == AccessibilityRole::ComboBox
+                        && node.states.contains(AccessibilityState::DISABLED)
+                })
+                .unwrap();
+            let disabled_id = disabled.id;
+            for action in [AccessibilityAction::Click, AccessibilityAction::Expand] {
+                assert!(!window.has_accessibility_action_handler(disabled_id, action));
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    disabled_id,
+                    action,
+                ));
+            }
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                clear_id,
+                AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            assert_eq!(first.read(cx).selected_value(), None);
+            assert!(!first.read(cx).open);
+            assert!(!disabled.read(cx).open);
+            assert_eq!(disabled.read(cx).selected_value(), Some(&"one"));
+        });
     }
 
     #[kael::test]

@@ -260,6 +260,7 @@ impl AccessibilityRole {
                 | AccessibilityRole::Row
                 | AccessibilityRole::Menu
                 | AccessibilityRole::MenuItem
+                | AccessibilityRole::ComboBox
                 | AccessibilityRole::TabPanel
                 | AccessibilityRole::Tree
                 | AccessibilityRole::TreeItem
@@ -3655,6 +3656,9 @@ mod tests {
     fn test_role_is_container() {
         assert!(AccessibilityRole::Window.is_container());
         assert!(AccessibilityRole::List.is_container());
+        // A focused combobox owns its popup options, including the active
+        // descendant used by native selection/focus providers.
+        assert!(AccessibilityRole::ComboBox.is_container());
         assert!(!AccessibilityRole::Button.is_container());
     }
 

@@ -59,7 +59,7 @@ impl Deferred {
 
 impl Element for Deferred {
     type RequestLayoutState = ();
-    type PrepaintState = ();
+    type PrepaintState = crate::window::DeferredAccessibilityState;
 
     fn id(&self) -> Option<crate::ElementId> {
         None
@@ -88,10 +88,10 @@ impl Element for Deferred {
         _request_layout: &mut Self::RequestLayoutState,
         window: &mut Window,
         _cx: &mut App,
-    ) {
+    ) -> Self::PrepaintState {
         let child = self.child.take().unwrap();
         let element_offset = window.element_offset();
-        window.defer_draw(child, element_offset, self.priority)
+        window.defer_draw_with_accessibility(child, element_offset, self.priority)
     }
 
     fn paint(
@@ -100,10 +100,13 @@ impl Element for Deferred {
         _inspector_id: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
-        _prepaint: &mut Self::PrepaintState,
-        _window: &mut Window,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
         _cx: &mut App,
     ) {
+        // Ancestor semantics exist during paint, after this child was queued
+        // during prepaint. Keep only the identity, never its owning view.
+        window.capture_deferred_accessibility_context(prepaint);
     }
 }
 
@@ -127,7 +130,139 @@ impl Deferred {
 #[cfg(test)]
 mod tests {
     use super::deferred;
-    use crate::{ParentElement, div};
+    use crate::{
+        AccessibilityAction, AccessibilityActionRequest, AccessibilityAttributes, AccessibilityId,
+        AccessibilityRole, AnyView, AppContext, Context, Entity, InteractiveElement, IntoElement,
+        ParentElement, Render, StyleRefinement, Styled, TestAppContext, Window, div,
+        prelude::FluentBuilder, px,
+    };
+    use std::{cell::Cell, rc::Rc};
+
+    struct DeferredChild {
+        renders: Rc<Cell<usize>>,
+        actions: Rc<Cell<[usize; 3]>>,
+    }
+
+    impl Render for DeferredChild {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            self.renders.set(self.renders.get() + 1);
+            let actions = [
+                AccessibilityAction::Click,
+                AccessibilityAction::Expand,
+                AccessibilityAction::Collapse,
+            ];
+            let mut popup = div().id("deferred-button").size(px(24.0)).accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Button)
+                    .label("Popup action")
+                    .actions(actions.to_vec()),
+            );
+            for (index, action) in actions.into_iter().enumerate() {
+                popup = popup.on_accessibility_action(
+                    action,
+                    cx.listener(move |this, _, _, _| {
+                        let mut counts = this.actions.get();
+                        counts[index] += 1;
+                        this.actions.set(counts);
+                    }),
+                );
+            }
+            deferred(popup)
+        }
+    }
+
+    struct DeferredHost {
+        child: Entity<DeferredChild>,
+        leading_overlay: bool,
+    }
+
+    impl Render for DeferredHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let mut cached_style = StyleRefinement::default();
+            cached_style.size.width = Some(px(100.0).into());
+            cached_style.size.height = Some(px(100.0).into());
+            div()
+                .when(self.leading_overlay, |this| {
+                    // Shift queue positions when the unchanged child reuses its
+                    // prepaint. Ownership must not depend on the old index.
+                    this.child(deferred(div().absolute().size(px(1.0))))
+                })
+                .child(
+                    div()
+                        .id("popup-owner")
+                        .size(px(100.0))
+                        .accessibility(
+                            AccessibilityAttributes::new(AccessibilityRole::Group)
+                                .label("Popup owner"),
+                        )
+                        .child(AnyView::from(self.child.clone()).cached(cached_style)),
+                )
+        }
+    }
+
+    #[crate::test]
+    fn deferred_semantic_parent_and_nodes_survive_cached_draw_reuse(cx: &mut TestAppContext) {
+        let renders = Rc::new(Cell::new(0));
+        let actions = Rc::new(Cell::new([0; 3]));
+        let child = cx.new({
+            let renders = renders.clone();
+            let actions = actions.clone();
+            move |_| DeferredChild { renders, actions }
+        });
+        let (host, window) = cx.add_window_view(move |_, _| DeferredHost {
+            child,
+            leading_overlay: false,
+        });
+        let mut previous: Option<(AccessibilityId, AccessibilityId)> = None;
+        for frame in 0..3 {
+            let identities = window.update(|window, cx| {
+                if frame > 0 {
+                    host.update(cx, |host, cx| {
+                        host.leading_overlay = frame == 1;
+                        cx.notify();
+                    });
+                }
+                window.draw(cx).clear();
+                let tree = window.accessibility_tree();
+                let owner = tree
+                    .nodes
+                    .values()
+                    .find(|node| node.label.as_deref() == Some("Popup owner"))
+                    .unwrap();
+                let popup = tree
+                    .nodes
+                    .values()
+                    .find(|node| node.label.as_deref() == Some("Popup action"))
+                    .expect("deferred semantics must survive cached scene replay");
+                assert_eq!(popup.parent, Some(owner.id));
+                assert_eq!(owner.children.as_slice(), &[popup.id]);
+                (owner.id, popup.id)
+            });
+            assert_eq!(
+                renders.get(),
+                1,
+                "the popup view must actually reuse its cache"
+            );
+            if let Some(previous) = previous {
+                assert_eq!(identities, previous);
+            }
+            previous = Some(identities);
+        }
+        window.update(|window, _| {
+            for action in [
+                AccessibilityAction::Click,
+                AccessibilityAction::Expand,
+                AccessibilityAction::Collapse,
+            ] {
+                let popup = previous.unwrap().1;
+                assert!(window.has_accessibility_action_handler(popup, action));
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    popup, action,
+                ));
+            }
+        });
+        window.run_until_parked();
+        assert_eq!(actions.get(), [1, 1, 1]);
+    }
 
     #[test]
     fn deferred_summary_is_content_safe() {

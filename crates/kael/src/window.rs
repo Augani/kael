@@ -3150,16 +3150,33 @@ pub(crate) struct TooltipRequest {
     tooltip: AnyTooltip,
 }
 
+pub(crate) type DeferredAccessibilityContext = (
+    Option<crate::AccessibilityId>,
+    Option<crate::AccessibilityId>,
+);
+pub(crate) type DeferredAccessibilityState = Rc<Cell<DeferredAccessibilityContext>>;
+
 pub(crate) struct DeferredDraw {
     current_view: EntityId,
     priority: usize,
     parent_node: DispatchNodeId,
+    accessibility_context: DeferredAccessibilityState,
+    accessibility_nodes: Option<Arc<[crate::AccessibilityNode]>>,
     element_id_stack: SmallVec<[ElementId; 32]>,
     text_style_stack: SmallVec<[TextStyleRefinement; 4]>,
     element: Option<AnyElement>,
     absolute_offset: Point<Pixels>,
     prepaint_range: Range<PrepaintStateIndex>,
     paint_range: Range<PaintIndex>,
+}
+
+struct AccessibilityCacheScope(crate::AccessibilityId);
+
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+struct AnonymousAccessibilityOwner {
+    view: Option<EntityId>,
+    cache: Option<crate::AccessibilityId>,
+    parent: crate::AccessibilityId,
 }
 
 pub(crate) struct Frame {
@@ -3397,8 +3414,9 @@ pub struct Window {
     pub(crate) client_inset: Option<Pixels>,
     pub(crate) accessibility_tree: crate::AccessibilityTree,
     accessibility_parent_stack: SmallVec<[crate::AccessibilityId; 16]>,
-    accessibility_path_ids: FxHashMap<(crate::AccessibilityId, u32), crate::AccessibilityId>,
-    accessibility_child_ordinals: FxHashMap<crate::AccessibilityId, u32>,
+    accessibility_scope: Option<crate::AccessibilityId>,
+    accessibility_path_ids: FxHashMap<(AnonymousAccessibilityOwner, u32), crate::AccessibilityId>,
+    accessibility_child_ordinals: FxHashMap<AnonymousAccessibilityOwner, u32>,
     pub(crate) accessibility_announcements: Vec<String>,
     accessibility_action_router: crate::AccessibilityActionRouter,
     accessibility_snapshots: std::collections::HashMap<
@@ -3900,6 +3918,7 @@ impl Window {
                 crate::AccessibilityRole::Window,
             )),
             accessibility_parent_stack: SmallVec::new(),
+            accessibility_scope: None,
             accessibility_path_ids: FxHashMap::default(),
             accessibility_child_ordinals: FxHashMap::default(),
             accessibility_announcements: Vec::new(),
@@ -4271,8 +4290,15 @@ impl Window {
             .last()
             .copied()
             .unwrap_or(self.accessibility_tree.root);
-        let ordinal = self.accessibility_child_ordinals.entry(parent).or_default();
-        let key = (parent, *ordinal);
+        // Cached output does not consume fresh-node ordinals. Keep each view
+        // and keyed cache boundary independent so replay cannot alias a sibling.
+        let owner = AnonymousAccessibilityOwner {
+            view: self.rendered_entity_stack.last().copied(),
+            cache: self.accessibility_scope,
+            parent,
+        };
+        let ordinal = self.accessibility_child_ordinals.entry(owner).or_default();
+        let key = (owner, *ordinal);
         *ordinal = ordinal.saturating_add(1);
         *self
             .accessibility_path_ids
@@ -4436,6 +4462,8 @@ impl Window {
             }
             tree.set_parent(node.id, node.parent.unwrap_or(root_id));
         }
+        self.accessibility_path_ids
+            .retain(|_, id| tree.nodes.contains_key(id));
         self.accessibility_tree = tree;
     }
 
@@ -4646,6 +4674,22 @@ impl Window {
         let result = f(self);
         self.accessibility_parent_stack.pop();
         result
+    }
+
+    pub(crate) fn with_accessibility_cache_scope<R>(
+        &mut self,
+        global_id: &GlobalElementId,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint();
+        self.with_element_state::<AccessibilityCacheScope, _>(global_id, |scope, window| {
+            let scope =
+                scope.unwrap_or_else(|| AccessibilityCacheScope(crate::AccessibilityId::new()));
+            let previous = mem::replace(&mut window.accessibility_scope, Some(scope.0));
+            let result = f(window);
+            window.accessibility_scope = previous;
+            (result, scope)
+        })
     }
 
     /// Accessor for the text system.
@@ -5557,6 +5601,7 @@ impl Window {
         self.invalidator.set_dirty(false);
         self.requested_autoscroll = None;
         self.accessibility_parent_stack.clear();
+        self.accessibility_scope = None;
         self.accessibility_child_ordinals.clear();
 
         // Restore the previously-used input handler.
@@ -6025,11 +6070,27 @@ impl Window {
 
             let paint_start = self.paint_index();
             if let Some(element) = deferred_draw.element.as_mut() {
-                self.with_rendered_view(deferred_draw.current_view, |window| {
-                    element.paint(window, cx);
-                })
+                let accessibility_start = self.accessibility_node_index();
+                let mut paint = |window: &mut Window| {
+                    window.with_rendered_view(deferred_draw.current_view, |window| {
+                        element.paint(window, cx);
+                    });
+                };
+                let (parent, scope) = deferred_draw.accessibility_context.get();
+                let previous_scope = mem::replace(&mut self.accessibility_scope, scope);
+                if let Some(parent) = parent {
+                    self.with_accessibility_parent(parent, paint);
+                } else {
+                    paint(self);
+                }
+                self.accessibility_scope = previous_scope;
+                let nodes = self.accessibility_nodes_since(accessibility_start);
+                deferred_draw.accessibility_nodes = (!nodes.is_empty()).then(|| nodes.into());
             } else {
                 self.reuse_paint(deferred_draw.paint_range.clone());
+                if let Some(nodes) = deferred_draw.accessibility_nodes.as_ref() {
+                    self.replay_accessibility_nodes(nodes);
+                }
             }
             let paint_end = self.paint_index();
             deferred_draw.paint_range = paint_start..paint_end;
@@ -6103,6 +6164,8 @@ impl Window {
                 .map(|deferred_draw| DeferredDraw {
                     current_view: deferred_draw.current_view,
                     parent_node: reused_subtree.refresh_node_id(deferred_draw.parent_node),
+                    accessibility_context: deferred_draw.accessibility_context.clone(),
+                    accessibility_nodes: deferred_draw.accessibility_nodes.clone(),
                     element_id_stack: deferred_draw.element_id_stack.clone(),
                     text_style_stack: deferred_draw.text_style_stack.clone(),
                     priority: deferred_draw.priority,
@@ -6860,15 +6923,27 @@ impl Window {
         absolute_offset: Point<Pixels>,
         priority: usize,
     ) {
+        self.defer_draw_with_accessibility(element, absolute_offset, priority);
+    }
+
+    pub(crate) fn defer_draw_with_accessibility(
+        &mut self,
+        element: AnyElement,
+        absolute_offset: Point<Pixels>,
+        priority: usize,
+    ) -> DeferredAccessibilityState {
         self.invalidator.debug_assert_prepaint();
         let parent_node = self
             .next_frame
             .dispatch_tree
             .active_node_id()
             .unwrap_or_else(|| panic!("deferred draw requested without an active dispatch node"));
+        let accessibility_context = Rc::new(Cell::new((None, None)));
         self.next_frame.deferred_draws.push(DeferredDraw {
             current_view: self.current_view(),
             parent_node,
+            accessibility_context: accessibility_context.clone(),
+            accessibility_nodes: None,
             element_id_stack: self.element_id_stack.clone(),
             text_style_stack: self.text_style_stack.clone(),
             priority,
@@ -6877,6 +6952,18 @@ impl Window {
             prepaint_range: PrepaintStateIndex::default()..PrepaintStateIndex::default(),
             paint_range: PaintIndex::default()..PaintIndex::default(),
         });
+        accessibility_context
+    }
+
+    pub(crate) fn capture_deferred_accessibility_context(
+        &self,
+        context: &Cell<DeferredAccessibilityContext>,
+    ) {
+        self.invalidator.debug_assert_paint();
+        context.set((
+            self.accessibility_parent_stack.last().copied(),
+            self.accessibility_scope,
+        ));
     }
 
     /// Creates a new painting layer for the specified bounds. A "layer" is a batch
@@ -10332,6 +10419,269 @@ pub fn outline(
         continuous_corners: true,
         transform: TransformationMatrix::unit(),
         blend_mode: BlendMode::Normal,
+    }
+}
+
+#[cfg(test)]
+mod accessibility_cache_tests {
+    use super::*;
+    use crate::{
+        AccessibilityAction, AccessibilityActionRequest, AccessibilityAttributes, AccessibilityId,
+        AccessibilityRole, AnyElement, AnyView, AppContext, Context, Entity, InteractiveElement,
+        IntoElement, ParentElement, Render, StyleRefinement, Styled, TestAppContext, cached,
+        canvas_with_prepaint, deferred, div,
+    };
+
+    #[derive(Clone, Copy)]
+    enum CacheKind {
+        View,
+        Element,
+    }
+
+    fn anonymous_branch(
+        cached_branch: bool,
+        deferred_branch: bool,
+        actions: Rc<Cell<usize>>,
+        paints: Rc<Cell<usize>>,
+    ) -> AnyElement {
+        let (parent, label) = if cached_branch {
+            ("Cached parent", "Cached action")
+        } else {
+            ("Fresh parent", "Fresh action")
+        };
+        let branch = div()
+            .size(px(100.0))
+            .accessibility(AccessibilityAttributes::new(AccessibilityRole::Group).label(parent))
+            .child(
+                div()
+                    .id(("explicit-neighbor", u64::from(cached_branch)))
+                    .accessibility(
+                        AccessibilityAttributes::new(AccessibilityRole::StaticText)
+                            .label("Explicit neighbor"),
+                    ),
+            )
+            .child(
+                div()
+                    .size(px(24.0))
+                    .accessibility(
+                        AccessibilityAttributes::new(AccessibilityRole::Button)
+                            .label(label)
+                            .actions(vec![AccessibilityAction::Click]),
+                    )
+                    .on_accessibility_action(AccessibilityAction::Click, move |_, _, _| {
+                        actions.set(actions.get() + 1);
+                    }),
+            )
+            .child(
+                canvas_with_prepaint(|_, _, _| (), move |_, _, _, _| paints.set(paints.get() + 1))
+                    .size(px(1.0)),
+            );
+        if deferred_branch {
+            deferred(branch).into_any_element()
+        } else {
+            branch.into_any_element()
+        }
+    }
+
+    struct CachedAnonymousView {
+        deferred: bool,
+        actions: Rc<Cell<usize>>,
+        paints: Rc<Cell<usize>>,
+    }
+
+    impl Render for CachedAnonymousView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            anonymous_branch(
+                true,
+                self.deferred,
+                self.actions.clone(),
+                self.paints.clone(),
+            )
+        }
+    }
+
+    struct AnonymousHost {
+        cached_view: Entity<CachedAnonymousView>,
+        kind: CacheKind,
+        deferred: bool,
+        fresh_first: bool,
+        generation: u64,
+        cached_actions: Rc<Cell<usize>>,
+        cached_paints: Rc<Cell<usize>>,
+        fresh_actions: Rc<Cell<usize>>,
+    }
+
+    impl Render for AnonymousHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let mut style = StyleRefinement::default();
+            style.size.width = Some(px(100.0).into());
+            style.size.height = Some(px(100.0).into());
+            let cached = match self.kind {
+                CacheKind::View => AnyView::from(self.cached_view.clone())
+                    .cached(style)
+                    .into_any_element(),
+                CacheKind::Element => cached(anonymous_branch(
+                    true,
+                    self.deferred,
+                    self.cached_actions.clone(),
+                    self.cached_paints.clone(),
+                ))
+                .id("anonymous-cache")
+                .into_any_element(),
+            };
+            let cached = div()
+                .id(("cached-slot", self.generation))
+                .absolute()
+                .top_0()
+                .left_0()
+                .size(px(100.0))
+                .child(cached)
+                .into_any_element();
+            let fresh = div()
+                .id("fresh-slot")
+                .absolute()
+                .top_0()
+                .left(px(100.0))
+                .size(px(100.0))
+                .child(anonymous_branch(
+                    false,
+                    self.deferred,
+                    self.fresh_actions.clone(),
+                    Rc::new(Cell::new(0)),
+                ))
+                .into_any_element();
+            div()
+                .id("shared-parent")
+                .size(px(200.0))
+                .accessibility(
+                    AccessibilityAttributes::new(AccessibilityRole::Group).label("Shared parent"),
+                )
+                .children(if self.fresh_first {
+                    vec![fresh, cached]
+                } else {
+                    vec![cached, fresh]
+                })
+        }
+    }
+
+    fn identities(window: &Window) -> [AccessibilityId; 4] {
+        let tree = window.accessibility_tree();
+        let find = |label| {
+            tree.nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some(label))
+                .unwrap_or_else(|| panic!("missing independent anonymous node {label}"))
+        };
+        let shared = find("Shared parent");
+        let cached_parent = find("Cached parent");
+        let cached_action = find("Cached action");
+        let fresh_parent = find("Fresh parent");
+        let fresh_action = find("Fresh action");
+        assert_eq!(shared.children.len(), 2);
+        for (parent, action) in [(cached_parent, cached_action), (fresh_parent, fresh_action)] {
+            assert_eq!(parent.parent, Some(shared.id));
+            assert_eq!(action.parent, Some(parent.id));
+            assert_eq!(parent.children.len(), 2);
+            assert!(parent.children.contains(&action.id));
+        }
+        assert_ne!(cached_parent.id, fresh_parent.id);
+        assert_ne!(cached_action.id, fresh_action.id);
+        [
+            cached_parent.id,
+            cached_action.id,
+            fresh_parent.id,
+            fresh_action.id,
+        ]
+    }
+
+    #[crate::test]
+    fn anonymous_ids_and_actions_survive_view_and_element_cache_replay(cx: &mut TestAppContext) {
+        for kind in [CacheKind::Element, CacheKind::View] {
+            for deferred in [false, true] {
+                let cached_actions = Rc::new(Cell::new(0));
+                let fresh_actions = Rc::new(Cell::new(0));
+                let paints = Rc::new(Cell::new(0));
+                let cached_view = cx.new({
+                    let actions = cached_actions.clone();
+                    let paints = paints.clone();
+                    move |_| CachedAnonymousView {
+                        deferred,
+                        actions,
+                        paints,
+                    }
+                });
+                let (host, window) = cx.add_window_view({
+                    let cached_actions = cached_actions.clone();
+                    let cached_paints = paints.clone();
+                    let fresh_actions = fresh_actions.clone();
+                    move |_, _| AnonymousHost {
+                        cached_view,
+                        kind,
+                        deferred,
+                        fresh_first: false,
+                        generation: 0,
+                        cached_actions,
+                        cached_paints,
+                        fresh_actions,
+                    }
+                });
+                let mut previous = None;
+                for (round, fresh_first) in [false, true, false].into_iter().enumerate() {
+                    let ids = window.update(|window, cx| {
+                        // Native actions refresh the prior round. Establish a fresh
+                        // baseline, then require an actual cache hit after reordering.
+                        window.draw(cx).clear();
+                        let before = paints.get();
+                        host.update(cx, |host, cx| {
+                            host.fresh_first = fresh_first;
+                            cx.notify();
+                        });
+                        window.draw(cx).clear();
+                        assert_eq!(paints.get(), before, "the cached branch must not repaint");
+                        let ids = identities(window);
+                        assert_eq!(window.accessibility_path_ids.len(), 4);
+                        ids
+                    });
+                    if let Some(previous) = previous {
+                        assert_eq!(
+                            ids, previous,
+                            "ordinary invalidation must preserve identities"
+                        );
+                    }
+                    previous = Some(ids);
+                    window.update(|window, _| {
+                        for id in [ids[1], ids[3]] {
+                            window.dispatch_accessibility_action_for_test(
+                                AccessibilityActionRequest::new(id, AccessibilityAction::Click),
+                            );
+                        }
+                    });
+                    window.run_until_parked();
+                    assert_eq!(cached_actions.get(), round + 1);
+                    assert_eq!(fresh_actions.get(), round + 1);
+                }
+                let mut retired = FxHashSet::default();
+                for generation in 1..=32 {
+                    let id = window.update(|window, cx| {
+                        host.update(cx, |host, cx| {
+                            host.generation = generation;
+                            cx.notify();
+                        });
+                        window.draw(cx).clear();
+                        assert_eq!(
+                            window.accessibility_path_ids.len(),
+                            4,
+                            "retired cache scopes must not accumulate anonymous path metadata"
+                        );
+                        identities(window)[1]
+                    });
+                    assert!(
+                        retired.insert(id),
+                        "retired identities must never be reused"
+                    );
+                }
+            }
+        }
     }
 }
 
