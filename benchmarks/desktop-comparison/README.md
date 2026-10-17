@@ -1,7 +1,7 @@
 # Reproducible desktop comparison
 
-This application pins GPUI Kit 0.7.0 at
-`3467e647600290343885b500bd7464057e334d18` and builds Kael from the local source.
+This application pins GPUI Kit 0.7.3 at
+`67265a36e260ffe03c5aaebdcd8d654dbf892eab` and builds Kael from the local source.
 Both binaries compile the same navigation/detail scene, shared 100,000-row
 model, 1100×760 window, font, row height, selection sequence, scroll positions,
 idle intervals, and sustained model replacements. Both initialize their default

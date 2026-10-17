@@ -375,7 +375,7 @@ def main():
                 'framework_head': command('git', 'rev-parse', 'HEAD'),
                 'framework_diff_sha256': hashlib.sha256(subprocess.check_output(['git', 'diff', '--binary'])).hexdigest(),
                 'checkout_source_fingerprint': source_fingerprint(),
-                'comparison_revision': '3467e647600290343885b500bd7464057e334d18',
+                'comparison_revision': '67265a36e260ffe03c5aaebdcd8d654dbf892eab',
                 'command': vars(args) | {'kael': str(args.kael), 'gpui_kit': str(args.gpui_kit), 'output': str(args.output)},
                 'counter_scope': 'libproc RUSAGE_INFO_V4 per-process; energy fields are raw OS counters, not watts',
                 'cpu_timebase': {'numer': adapter_sample['timebase_numer'], 'denom': adapter_sample['timebase_denom'],
