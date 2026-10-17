@@ -12,5 +12,5 @@ pub(super) use super::renderer_types::{
     ShapeRenderableItem, ShapeRenderableKind, ShapeStyles, StaticPathCache, StrokeStyle, TrimStyle,
 };
 pub use super::renderer_types::{
-    ImageAssetResolver, PreparedAnimation, RasterFrame, RenderConfig, Renderer, Rgba8,
+    ImageAssetResolver, ImageLimits, PreparedAnimation, RasterFrame, RenderConfig, Renderer, Rgba8,
 };

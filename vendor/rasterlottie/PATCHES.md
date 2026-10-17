@@ -1,89 +1,172 @@
 # Kael-maintained rasterlottie fork
 
-This is the published `rasterlottie` **0.2.1** source from
-[neodyland/rasterlottie commit c2cf0560a320776bed01d0942914f1fba258285f](https://github.com/neodyland/rasterlottie/tree/c2cf0560a320776bed01d0942914f1fba258285f),
-distributed as the separate package **`kael_rasterlottie` 0.4.1** with the Rust
-library name `rasterlottie`. This is a maintained fork, not an upstream release.
-The public Rust API, features, implementation, original upstream tests and
-README, copyright notices, and MIT/Apache-2.0 license texts are unchanged.
+This source derives from published `rasterlottie` **0.2.1**, upstream commit
+[c2cf0560a320776bed01d0942914f1fba258285f](https://github.com/neodyland/rasterlottie/tree/c2cf0560a320776bed01d0942914f1fba258285f).
+Kael maintains the separate package **`kael_rasterlottie` 0.4.1**, with the Rust
+library name `rasterlottie`. Existing entrypoints and features remain available;
+the fork adds archive and image admission policies with finite defaults.
+Original README, copyright notices, MIT/Apache-2.0 licenses, corpus/golden tests,
+and fixtures are preserved. Eight upstream Rust files have reviewed changes.
 
-## Changes and distribution
+## Distribution and ZIP dependency
 
-The optional `dotlottie` feature uses **ZIP 9** with default features disabled and
-`deflate` enabled, replacing the upstream ZIP 8 dependency. No extraction API,
-file permissions, symlinks, or filesystem writes are used by the loader. ZIP 9
-compatibility needs no Rust implementation change. This upgrades the actual ZIP
-dependency; it does not suppress an advisory or rename the vulnerable dependency.
+The optional `dotlottie` feature uses ZIP 9, default features disabled, with
+`deflate` enabled. The loader reads entries in memory and uses no filesystem
+extraction, permission, or symlink APIs. Duplicate names and inconsistent local
+and central headers are rejected through ZIP 9's per-read consistency checks.
+Stored/deflated, ZIP64, and archive-comment compatibility are tested.
 
-The package name/version, description, project links, and publication file list
-identify the maintained fork. The maintained manifest explicitly adopts the
-same lint policy as the Kael workspace; the original upstream manifest remains
-unchanged in provenance. A strict original-policy comparison produced the same
-169 library diagnostics in both the original and the ZIP-only candidate,
-including item ordering and pre-existing unwraps. The fork does not claim those
-upstream style rules passed, and it does not rewrite the rendering implementation
-to satisfy them. Upstream examples/benchmark tools remain in the
-checkout and are omitted from the release archive. Source tests, corpus fixtures,
-and golden references remain included. Consumers use the real named dependency
-with `package = "kael_rasterlottie"`, the library alias `rasterlottie`, and a
-version; they do not rely on a root-only `[patch.crates-io]` override. The fork
-must be published before Kael. Publishing is a separate release step; preparing
-this source does not publish it to a registry.
+The maintained manifest identifies the fork and explicitly copies the Kael
+workspace lint policy. Original-policy checks on the historical ZIP-only spike
+produced the same 169 library diagnostics as upstream, including item ordering
+and pre-existing unwraps. That historical comparison does not claim the
+upstream aggressive style rules passed. Source changes here implement admission;
+they do not reorder the rasterizer to satisfy those rules.
 
-## Provenance and reconstruction
+Upstream examples and benchmark tools remain in the checkout and are omitted
+from publication. Source tests, corpus, golden references, licenses, provenance,
+and reconstruction patch are packaged. Consumers depend directly on
+`package = "kael_rasterlottie"` with the `rasterlottie` alias, version, and path.
+Registry publication must upload this named fork before Kael. Preparing the fork
+does not publish it; complete release/consumer archive verification is separate.
 
-The source archive is
+## Admission policies
+
+`Animation::from_dotlottie_bytes` now uses `DotLottieLimits::default()`.
+`Animation::from_dotlottie_bytes_with_limits` accepts an explicit policy. Byte
+limits are inclusive; zero rejects nonempty data.
+
+| Archive resource | Default admission limit |
+| --- | --- |
+| Compressed input before ZIP construction | 16 MiB |
+| Entry count after metadata construction | 4096 |
+| Expanded manifest | 1 MiB |
+| Expanded selected animation JSON | 16 MiB |
+| Expanded encoded image per embedding | 16 MiB |
+| Aggregate bytes materialized from selected entries | 64 MiB |
+
+Declared oversize entries fail before payload reads or output reservations.
+Accepted entries receive one fallible reservation for their bounded declared
+size; the reader still enforces actual bytes and makes a final nonempty EOF read
+for CRC validation. Repeated embeddings of the same path are charged again.
+Missing optional images keep the upstream behavior; an oversize, corrupt, or
+inconsistent required/read entry returns an error. Unselected archive payloads
+are not decompressed. All image assets embedded from the selected animation
+count, including assets whose pixels are never rendered.
+
+`Renderer::new`, `Renderer::default`, and `Renderer::target_corpus` use
+`ImageLimits::default()`. `Renderer::with_image_limits` chooses a different policy
+that is retained by prepared animations and their worker resources.
+
+| Image resource | Default admission limit |
+| --- | --- |
+| Source and declared target width/height | 8192 each |
+| Encoded bytes per image | 16 MiB |
+| Aggregate resolver-returned encoded bytes per preparation | 64 MiB |
+| Native decoder output per image | 256 MiB |
+| RGBA8 source or target per image | 256 MiB each |
+| Decode/conversion/resize working buffers per image | 512 MiB |
+| Decoded target buffers retained per prepared animation | 256 MiB |
+
+Admission checks declared target dimensions, encoded size, actual source header,
+native decoder byte count, RGBA conversion/target sizes, and aggregate retained
+pixels before pixel decoding or resize. Working accounting includes the actual
+Triangle RGBA32F intermediate (`source width * target height * 16`) and
+conservatively rounded sampling-weight capacities, in addition to native decode,
+RGBA conversion, and target buffers. All arithmetic is checked, and buffers must
+fit `isize::MAX` even when callers raise limits on 32-bit WebAssembly.
+
+Decoded-byte reservations roll back when decoding fails. Cache hits reuse the
+same image and consume no extra budget. Unused embedded malformed image data
+remains lazy. Later frames that first use an over-budget asset receive an error;
+earlier cached images remain available. Resolver-returned bytes are checked per
+callback and in aggregate before retention or worker copying, with repeated
+callback results charged again.
+
+These are admission bounds for requested content and buffers, not allocator,
+process RSS, GPU, or global application limits. Important remaining boundaries:
+
+- The compressed-source check precedes ZIP construction, but the entry-count
+  check follows metadata parsing. It does not cap constructor metadata
+  allocations or ZIP 9's search/retry of earlier end-of-directory candidates.
+- Base64 strings can occupy about four thirds of archive image bytes. Parsed
+  model allocations and inline image strings are additional; general JSON
+  parsing outside the archive entrypoint retains upstream behavior.
+- Decoder allocation limits are best effort. Decoder-private storage and
+  allocator overhead are additional to the requested-buffer estimate.
+- Resolver callbacks allocate before returning. Admission bounds accepted bytes,
+  not the callback's own allocations.
+- GIF workers clone admitted external encoded sources and have independent
+  decoded budgets. Concurrent workers and prepared animations multiply memory;
+  a host still needs its own global budget. Kael currently uses the finite
+  defaults; this change adds no custom Kael-level policy API.
+
+## Provenance and exact reconstruction
+
+The pinned registry archive is
 [`rasterlottie-0.2.1.crate`](https://static.crates.io/crates/rasterlottie/rasterlottie-0.2.1.crate),
 SHA-256 `384686130a2b365f82258f5e444c512e57989addcf2b45e9913c4ef6f0e95a24`.
-`UPSTREAM-SHA256.json` records every original registry file hash.
-`zip9-compatibility.patch` contains every source, manifest, test, and lockfile
-change. To reconstruct:
-verify the archive checksum, extract it, and run `patch -p1 -E <
-/path/to/zip9-compatibility.patch` from the extracted package directory. Copy this
-record, the patch, and `UPSTREAM-SHA256.json` alongside the sources, and copy the
-pristine `Cargo.toml.orig` to `UPSTREAM-Cargo.toml`. Original implementation,
-upstream fixture, and license hashes must still match
-the upstream hash list. The new glyph fixture is copied from the original
-`renderer_draws_glyph_text_layers` test; the four new integration tests add ZIP
-container coverage without changing the rendering contract.
+The pristine 74-file `UPSTREAM-SHA256.json` identifies every original byte.
+`zip9-compatibility.patch` contains all source, manifest, test, and historical
+lockfile changes against that archive. Apply it with `patch -p1 -E` in the
+extracted package directory. Copy the pristine `Cargo.toml.orig` to
+`UPSTREAM-Cargo.toml`, and copy this record, the hash index, and patch alongside
+it. The CI verifier performs extraction and reconstruction with checked paths,
+finite file/byte bounds, and zero patch fuzz.
 
-Cargo reserves `Cargo.toml.orig` when constructing an archive. The checkout keeps
-that original file unchanged; the explicit publication list omits it and ships
-its identical copy as `UPSTREAM-Cargo.toml`. Cargo generates the fork's own
-normalized-manifest companion. The original nested `Cargo.lock` is renamed to
-`UPSTREAM-Cargo.lock` and
-excluded from the release archive. It records historical dependencies only; the
-containing workspace resolves ZIP 9 and generates the published fork lockfile.
+The exact intentionally modified original files are:
 
-## Compatibility evidence and limits
+- `Cargo.toml`: named fork, ZIP 9, target-only browser test dependency, publication
+  list, and explicit Kael project lint policy.
+- `Cargo.lock`: renamed without byte changes to `UPSTREAM-Cargo.lock`.
+- `src/dotlottie.rs`: archive limits, bounded reads and reservations, consistency
+  checks, repeated-entry accounting, and focused reader regressions.
+- `src/lib.rs`: public policy exports.
+- `src/model.rs`: additive archive-policy entrypoint and API documentation.
+- `src/render/assets.rs`: lazy image admission, retained reservations, working
+  accounting, resolver guards, worker policy propagation, and regressions.
+- `src/render/mod.rs` and `src/render/renderer/mod.rs`: policy exports.
+- `src/render/renderer/prepare.rs`: renderer policy selection and retention.
+- `src/render/renderer_types.rs`: image policy types/defaults and renderer field.
 
-The ZIP-only 0.2.1 spike passes 98 upstream unit tests, one corpus test, one golden
-image test, and two doctests on native Rust. The named fork additionally passes
-108 upstream unit tests with all features enabled, the corpus/golden/doctests,
-and the four compatibility tests. The tracked `zip9_compatibility` target and
-the original independent spike harness exercise four tests on each platform,
-without ignored tests: stored and deflated
-manifest selection, exact embedded-PNG output, embedded glyph-text foreground
-and background pixels, and malformed/truncated archive rejection. Browser
-execution uses the real WebAssembly package in headless Chrome. These checks
-establish loader/render compatibility; they do not make unsupported Lottie
-features supported or prove general archive memory admission.
+All other original source, standalone tests, fixtures, licenses, and metadata
+must retain their pinned hashes. Added content consists of the original
+manifest/lock copies, `tests/zip9_compatibility.rs`, its glyph fixture copied from
+upstream's `renderer_draws_glyph_text_layers`, and the three provenance files.
+The verifier requires both the observed modified-original set and additions to
+match their explicit reviewed lists, then compares every reconstructed file
+hash with the checkout. Changing another original file or adding another file
+requires a separately reviewed update to those lists.
 
-Archive-entry decompression and image decoding retain upstream behavior. The
-loader's `read_to_end` has no per-entry or aggregate decompressed-byte cap.
-A host's compressed-source limit does not provide such a cap. Bounded archive
-admission is a separate required follow-up, not part of this dependency change.
+Cargo reserves `Cargo.toml.orig` during archive construction. The checkout keeps
+the upstream original unchanged, publishes its identical `UPSTREAM-Cargo.toml`
+copy, and lets Cargo generate the named fork's own manifest companion.
+`UPSTREAM-Cargo.lock` is excluded from publication and is historical evidence;
+the containing workspace resolves ZIP 9 and generates the release lockfile.
 
-The fork keeps these checks runnable without an artifact-only harness:
+## Validation
+
+The source-frozen admission slice passes 116 unit tests, one corpus test, one
+golden test, 14 native integration tests, and two doctests: 134 native passes,
+zero ignored. Actual Chrome WebAssembly runs 15 integration tests, including
+safe rejection of a 2.4 GB target under a raised 32-bit policy. Strict
+all-feature/all-target Clippy and minimal/dotLottie-without-images builds pass.
+These validate requested-buffer admission and compatibility, not hard RSS
+ceilings, every decoder format, or additional Lottie feature support.
+
+The earlier dependency-only
+[checkpoint d40166f](https://github.com/Augani/kael/commit/d40166fb132dd2c24cd93c44017b919daf21339f)
+and its frozen evidence retain their original ZIP-only scope. Their
+all-implementation-unchanged and 119421-byte isolated-package facts are
+historical and are not reused as current admission-source/package claims.
 
 ```sh
-cargo test --locked -p kael_rasterlottie --no-default-features --features dotlottie,images,text
-# With ChromeDriver configured and wasm-bindgen-test-runner installed:
+python3 scripts/ci/verify-rasterlottie-fork.py --archive /path/to/rasterlottie-0.2.1.crate
+cargo test --locked -p kael_rasterlottie --all-features
+cargo clippy --locked -p kael_rasterlottie --all-features --all-targets -- -D warnings
+# Configure ChromeDriver and a matching wasm-bindgen-test-runner first:
 CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
   cargo test --locked -p kael_rasterlottie --no-default-features \
   --features dotlottie,images,text --target wasm32-unknown-unknown \
   --test zip9_compatibility
 ```
-
-The browser test dependency is target-conditional and is not a runtime
-dependency of native Kael or the rasterizer library.

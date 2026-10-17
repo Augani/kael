@@ -16,6 +16,8 @@ mod render;
 mod support;
 mod timeline;
 
+#[cfg(feature = "dotlottie")]
+pub use dotlottie::DotLottieLimits;
 pub use error::RasterlottieError;
 pub use model::{
     AnimatedValue, Animation, Asset, BezierPath, BezierVertex, Font, FontCharacter, Layer,
@@ -25,7 +27,8 @@ pub use model::{
 #[cfg(feature = "gif")]
 pub use render::GifRenderConfig;
 pub use render::{
-    ImageAssetResolver, Pixmap, PreparedAnimation, RasterFrame, RenderConfig, Renderer, Rgba8,
+    ImageAssetResolver, ImageLimits, Pixmap, PreparedAnimation, RasterFrame, RenderConfig,
+    Renderer, Rgba8,
 };
 pub use support::{
     SupportProfile, SupportReport, UnsupportedFeature, UnsupportedKind, analyze_animation,

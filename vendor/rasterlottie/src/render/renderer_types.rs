@@ -71,10 +71,60 @@ pub trait ImageAssetResolver {
     fn resolve_image_asset(&self, asset: &Asset) -> Result<Option<Vec<u8>>, RasterlottieError>;
 }
 
+/// Admission limits for lazily decoded image assets.
+///
+/// Limits bound encoded inputs and requested pixel/resize buffers per prepared
+/// animation. They do not bound parsed model memory, decoder-private allocations,
+/// allocator overhead or process RSS. Decoder allocation limits are best effort.
+/// All byte limits are inclusive; zero rejects nonempty image data.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct ImageLimits {
+    /// Maximum source and target width or height.
+    pub max_dimension: u32,
+    /// Maximum encoded bytes per image, before base64 decoding or byte cloning.
+    pub max_encoded_bytes: u64,
+    /// Maximum total encoded bytes accepted from resolver callbacks during one
+    /// preparation. Repeated callbacks are charged again. The callback owns its
+    /// allocation before it returns; this limit bounds admission, not that allocation.
+    pub max_total_resolved_encoded_bytes: u64,
+    /// Maximum decoder-reported native pixel bytes per image.
+    pub max_decode_bytes: u64,
+    /// Maximum RGBA8 source or target pixel bytes per image.
+    pub max_rgba_bytes: u64,
+    /// Maximum combined native decode, RGBA, target, Triangle intermediate and
+    /// sampling-weight buffer bytes. Weight capacity is conservatively rounded.
+    /// Decoder-private storage and allocator overhead are additional.
+    pub max_working_bytes: u64,
+    /// Maximum sum of decoded target RGBA8 buffers cached by one prepared animation.
+    /// Worker clones have independent budgets; cache hits consume no extra budget.
+    pub max_total_decoded_bytes: u64,
+}
+
+impl ImageLimits {
+    /// Finite default image admission policy.
+    pub const DEFAULT: Self = Self {
+        max_dimension: 8192,
+        max_encoded_bytes: 16 * 1024 * 1024,
+        max_total_resolved_encoded_bytes: 64 * 1024 * 1024,
+        max_decode_bytes: 256 * 1024 * 1024,
+        max_rgba_bytes: 256 * 1024 * 1024,
+        max_working_bytes: 512 * 1024 * 1024,
+        max_total_decoded_bytes: 256 * 1024 * 1024,
+    };
+}
+
+impl Default for ImageLimits {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 /// Stateless entry point for analyzing and rendering animations.
 #[derive(Debug, Clone, Copy)]
 pub struct Renderer {
     pub(super) profile: SupportProfile,
+    pub(super) image_limits: ImageLimits,
 }
 
 /// A preprocessed animation that can be rendered repeatedly.

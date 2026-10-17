@@ -1,7 +1,9 @@
 use serde_json::Value;
 
 #[cfg(feature = "dotlottie")]
-use super::dotlottie::load_animation_from_dotlottie_bytes;
+use super::dotlottie::{
+    load_animation_from_dotlottie_bytes, load_animation_from_dotlottie_bytes_with_limits,
+};
 use super::{
     RasterlottieError,
     model_parse::{color_components_to_rgba, f32_unit_to_u8, parse_bezier_path},
@@ -21,7 +23,9 @@ impl Animation {
     /// Parses the primary animation from a `.lottie` archive.
     ///
     /// The loader prefers the manifest's explicitly selected animation and
-    /// otherwise falls back to the first listed animation entry.
+    /// otherwise falls back to the first listed animation entry. Finite
+    /// [`crate::DotLottieLimits::default`] admission limits apply; use
+    /// [`Self::from_dotlottie_bytes_with_limits`] to choose another policy.
     ///
     /// # Errors
     ///
@@ -31,6 +35,22 @@ impl Animation {
     #[cfg_attr(docsrs, doc(cfg(feature = "dotlottie")))]
     pub fn from_dotlottie_bytes(dotlottie: &[u8]) -> Result<Self, RasterlottieError> {
         load_animation_from_dotlottie_bytes(dotlottie)
+    }
+
+    /// Parses the selected animation with explicit archive admission limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid content or when a compressed source, expanded
+    /// entry or aggregate expanded-byte limit is exceeded. Unselected entries are
+    /// not decompressed. Limits do not bound parsed model or ZIP metadata memory.
+    #[cfg(feature = "dotlottie")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "dotlottie")))]
+    pub fn from_dotlottie_bytes_with_limits(
+        dotlottie: &[u8],
+        limits: crate::DotLottieLimits,
+    ) -> Result<Self, RasterlottieError> {
+        load_animation_from_dotlottie_bytes_with_limits(dotlottie, limits)
     }
 
     /// Returns the duration in frames.

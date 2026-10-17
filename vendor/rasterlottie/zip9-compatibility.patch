@@ -1,150 +1,3 @@
---- a/Cargo.toml
-+++ b/Cargo.toml
-@@ -12,8 +12,8 @@
- [package]
- edition = "2024"
- rust-version = "1.92"
--name = "rasterlottie"
--version = "0.2.1"
-+name = "kael_rasterlottie"
-+version = "0.4.1"
- build = false
- include = [
-     "/CHANGELOG.md",
-@@ -21,10 +21,12 @@
-     "/LICENSE-APACHE",
-     "/LICENSE-MIT",
-     "/README.md",
--    "/examples/**",
-     "/src/**",
-     "/tests/**",
--    "/tools/bench/**",
-+    "/PATCHES.md",
-+    "/UPSTREAM-Cargo.toml",
-+    "/UPSTREAM-SHA256.json",
-+    "/zip9-compatibility.patch",
- ]
- publish = ["crates-io"]
- autolib = false
-@@ -32,9 +34,9 @@
- autoexamples = false
- autotests = false
- autobenches = false
--description = "Pure Rust, headless Lottie rasterizer for deterministic server-side rendering"
--homepage = "https://github.com/neodyland/rasterlottie"
--documentation = "https://docs.rs/rasterlottie"
-+description = "Kael-maintained pure Rust Lottie rasterizer with ZIP 9 dotLottie support"
-+homepage = "https://github.com/Augani/kael"
-+documentation = "https://docs.rs/kael_rasterlottie"
- readme = "README.md"
- keywords = [
-     "lottie",
-@@ -48,7 +50,7 @@
-     "multimedia::images",
- ]
- license = "MIT OR Apache-2.0"
--repository = "https://github.com/neodyland/rasterlottie"
-+repository = "https://github.com/Augani/kael"
- 
- [package.metadata.docs.rs]
- all-features = true
-@@ -79,13 +81,9 @@
- name = "rasterlottie"
- path = "src/lib.rs"
- 
--[[example]]
--name = "benchmark_render"
--path = "examples/benchmark_render.rs"
--
--[[example]]
--name = "rasterlottie_cli"
--path = "examples/rasterlottie_cli.rs"
-+[[test]]
-+name = "zip9_compatibility"
-+path = "tests/zip9_compatibility.rs"
- 
- [[test]]
- name = "corpus"
-@@ -144,7 +142,7 @@
- optional = true
- 
- [dependencies.zip]
--version = "8"
-+version = "9"
- features = ["deflate"]
- optional = true
- default-features = false
-@@ -167,51 +165,26 @@
-     "fmt",
- ]
- 
-+[target.'cfg(target_arch = "wasm32")'.dev-dependencies.wasm-bindgen-test]
-+version = "0.3.72"
-+
- [lints.clippy]
--absolute_paths = "warn"
--allow_attributes = "deny"
--allow_attributes_without_reason = "deny"
--arbitrary_source_item_ordering = "deny"
--cast_lossless = "allow"
--cast_possible_truncation = "allow"
--cast_precision_loss = "allow"
--cast_sign_loss = "allow"
--cfg_not_test = "deny"
--clone_on_ref_ptr = "deny"
--create_dir = "deny"
--dbg_macro = "warn"
--disallowed_script_idents = "deny"
--error_impl_error = "deny"
--exhaustive_enums = "warn"
--exit = "deny"
--filetype_is_file = "deny"
--infinite_loop = "deny"
--panic = "deny"
--panic_in_result_fn = "deny"
--pathbuf_init_then_push = "deny"
--print_stderr = "warn"
--print_stdout = "warn"
--rc_mutex = "deny"
--redundant_test_prefix = "deny"
--redundant_type_annotations = "deny"
--string_slice = "deny"
--struct_excessive_bools = "allow"
--tests_outside_test_module = "deny"
--todo = "warn"
--undocumented_unsafe_blocks = "deny"
--unimplemented = "warn"
--unnecessary_safety_comment = "deny"
--unnecessary_safety_doc = "deny"
--unwrap_used = "warn"
-+dbg_macro = "deny"
-+declare_interior_mutable_const = "deny"
-+disallowed_methods = "deny"
-+large_enum_variant = "allow"
-+let_underscore_future = "allow"
-+nonminimal_bool = "allow"
-+redundant_clone = "deny"
-+single_range_in_vec_init = "allow"
-+todo = "deny"
-+too_many_arguments = "allow"
-+type_complexity = "allow"
- 
--[lints.clippy.nursery]
--level = "warn"
-+[lints.clippy.style]
-+level = "allow"
- priority = -1
- 
--[lints.clippy.pedantic]
--level = "warn"
--priority = -1
--
--[lints.rust]
--missing_debug_implementations = "deny"
--missing_docs = "deny"
-+[lints.rust.unexpected_cfgs]
-+level = "allow"
-+priority = 0
 --- a/Cargo.lock
 +++ /dev/null
 @@ -1,637 +0,0 @@
@@ -785,6 +638,112 @@
 -dependencies = [
 - "zune-core",
 -]
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -15,2 +15,2 @@
+-name = "rasterlottie"
+-version = "0.2.1"
++name = "kael_rasterlottie"
++version = "0.4.1"
+@@ -24 +23,0 @@
+-    "/examples/**",
+@@ -27 +26,4 @@
+-    "/tools/bench/**",
++    "/PATCHES.md",
++    "/UPSTREAM-Cargo.toml",
++    "/UPSTREAM-SHA256.json",
++    "/zip9-compatibility.patch",
+@@ -35,3 +37,3 @@
+-description = "Pure Rust, headless Lottie rasterizer for deterministic server-side rendering"
+-homepage = "https://github.com/neodyland/rasterlottie"
+-documentation = "https://docs.rs/rasterlottie"
++description = "Kael-maintained pure Rust Lottie rasterizer with ZIP 9 dotLottie support"
++homepage = "https://github.com/Augani/kael"
++documentation = "https://docs.rs/kael_rasterlottie"
+@@ -51 +53 @@
+-repository = "https://github.com/neodyland/rasterlottie"
++repository = "https://github.com/Augani/kael"
+@@ -82,7 +84,3 @@
+-[[example]]
+-name = "benchmark_render"
+-path = "examples/benchmark_render.rs"
+-
+-[[example]]
+-name = "rasterlottie_cli"
+-path = "examples/rasterlottie_cli.rs"
++[[test]]
++name = "zip9_compatibility"
++path = "tests/zip9_compatibility.rs"
+@@ -147 +145 @@
+-version = "8"
++version = "9"
+@@ -169,0 +168,3 @@
++[target.'cfg(target_arch = "wasm32")'.dev-dependencies.wasm-bindgen-test]
++version = "0.3.72"
++
+@@ -171,35 +172,11 @@
+-absolute_paths = "warn"
+-allow_attributes = "deny"
+-allow_attributes_without_reason = "deny"
+-arbitrary_source_item_ordering = "deny"
+-cast_lossless = "allow"
+-cast_possible_truncation = "allow"
+-cast_precision_loss = "allow"
+-cast_sign_loss = "allow"
+-cfg_not_test = "deny"
+-clone_on_ref_ptr = "deny"
+-create_dir = "deny"
+-dbg_macro = "warn"
+-disallowed_script_idents = "deny"
+-error_impl_error = "deny"
+-exhaustive_enums = "warn"
+-exit = "deny"
+-filetype_is_file = "deny"
+-infinite_loop = "deny"
+-panic = "deny"
+-panic_in_result_fn = "deny"
+-pathbuf_init_then_push = "deny"
+-print_stderr = "warn"
+-print_stdout = "warn"
+-rc_mutex = "deny"
+-redundant_test_prefix = "deny"
+-redundant_type_annotations = "deny"
+-string_slice = "deny"
+-struct_excessive_bools = "allow"
+-tests_outside_test_module = "deny"
+-todo = "warn"
+-undocumented_unsafe_blocks = "deny"
+-unimplemented = "warn"
+-unnecessary_safety_comment = "deny"
+-unnecessary_safety_doc = "deny"
+-unwrap_used = "warn"
++dbg_macro = "deny"
++declare_interior_mutable_const = "deny"
++disallowed_methods = "deny"
++large_enum_variant = "allow"
++let_underscore_future = "allow"
++nonminimal_bool = "allow"
++redundant_clone = "deny"
++single_range_in_vec_init = "allow"
++todo = "deny"
++too_many_arguments = "allow"
++type_complexity = "allow"
+@@ -207,2 +184,2 @@
+-[lints.clippy.nursery]
+-level = "warn"
++[lints.clippy.style]
++level = "allow"
+@@ -211,7 +188,3 @@
+-[lints.clippy.pedantic]
+-level = "warn"
+-priority = -1
+-
+-[lints.rust]
+-missing_debug_implementations = "deny"
+-missing_docs = "deny"
++[lints.rust.unexpected_cfgs]
++level = "allow"
++priority = 0
 --- /dev/null
 +++ b/UPSTREAM-Cargo.lock
 @@ -0,0 +1,637 @@
@@ -1425,16 +1384,1121 @@
 +dependencies = [
 + "zune-core",
 +]
+--- a/src/dotlottie.rs
++++ b/src/dotlottie.rs
+@@ -9 +9 @@
+-use zip::{ZipArchive, result::ZipError};
++use zip::{ZipArchive, read::ZipReadOptions, result::ZipError};
+@@ -13,0 +14,5 @@
++
++#[cfg(test)]
++thread_local! {
++    static ALLOCATION_REQUESTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
++}
+@@ -35,0 +41,39 @@
++/// Finite admission limits for loading a selected animation from a ZIP container.
++///
++/// Byte limits are inclusive. Zero rejects nonempty content. The total counts
++/// bytes actually read for the manifest, selected JSON and each image embedding,
++/// including repeated reads of the same entry. Base64 strings can occupy about
++/// four thirds of the image bytes; parsed model and ZIP metadata are additional.
++/// These are admission limits, not a process RSS or allocator limit.
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++#[non_exhaustive]
++pub struct DotLottieLimits {
++    /// Maximum compressed source bytes, checked before opening the ZIP archive.
++    pub max_archive_bytes: u64,
++    /// Maximum entry count after ZIP metadata construction. This does not bound
++    /// the constructor's central-directory allocation. Only compressed source
++    /// bytes are bounded before the ZIP constructor runs.
++    pub max_entries: usize,
++    /// Maximum expanded manifest bytes.
++    pub max_manifest_bytes: u64,
++    /// Maximum expanded selected animation JSON bytes.
++    pub max_animation_bytes: u64,
++    /// Maximum expanded encoded image bytes per embedding.
++    pub max_image_bytes: u64,
++    /// Maximum aggregate bytes read from entries actually used by the loader.
++    pub max_total_expanded_bytes: u64,
++}
++
++impl Default for DotLottieLimits {
++    fn default() -> Self {
++        Self {
++            max_archive_bytes: 16 * 1024 * 1024,
++            max_entries: 4096,
++            max_manifest_bytes: 1024 * 1024,
++            max_animation_bytes: 16 * 1024 * 1024,
++            max_image_bytes: 16 * 1024 * 1024,
++            max_total_expanded_bytes: 64 * 1024 * 1024,
++        }
++    }
++}
++
+@@ -38,0 +83,13 @@
++    load_animation_from_dotlottie_bytes_with_limits(dotlottie, DotLottieLimits::default())
++}
++
++pub fn load_animation_from_dotlottie_bytes_with_limits(
++    dotlottie: &[u8],
++    limits: DotLottieLimits,
++) -> Result<Animation, RasterlottieError> {
++    if u64::try_from(dotlottie.len()).unwrap_or(u64::MAX) > limits.max_archive_bytes {
++        return Err(admission_error(
++            "archive",
++            "compressed source limit exceeded",
++        ));
++    }
+@@ -40 +97,13 @@
+-    let manifest_json = read_archive_string(&mut archive, "manifest.json")?;
++    if archive.len() > limits.max_entries {
++        return Err(admission_error(
++            "archive",
++            "ZIP entry count limit exceeded after metadata parsing",
++        ));
++    }
++    let mut remaining = limits.max_total_expanded_bytes;
++    let manifest_json = read_archive_string_any(
++        &mut archive,
++        &["manifest.json".to_string()],
++        limits.max_manifest_bytes,
++        &mut remaining,
++    )?;
+@@ -47,2 +116,6 @@
+-    let animation_json =
+-        read_archive_string_any(&mut archive, &animation_candidate_paths(animation_id))?;
++    let animation_json = read_archive_string_any(
++        &mut archive,
++        &animation_candidate_paths(animation_id),
++        limits.max_animation_bytes,
++        &mut remaining,
++    )?;
+@@ -54 +127,6 @@
+-    embed_archive_images(&mut archive, &mut animation)?;
++    embed_archive_images(
++        &mut archive,
++        &mut animation,
++        limits.max_image_bytes,
++        &mut remaining,
++    )?;
+@@ -55,0 +134,6 @@
++}
++
++fn admission_error(path: &str, detail: &str) -> RasterlottieError {
++    RasterlottieError::InvalidDotLottie {
++        detail: format!("archive entry `{path}` exceeds admission limits: {detail}"),
++    }
+@@ -115,8 +198,0 @@
+-fn read_archive_string(
+-    archive: &mut ZipArchive<Cursor<&[u8]>>,
+-    path: &str,
+-) -> Result<String, RasterlottieError> {
+-    let normalized = normalize_archive_path(path);
+-    read_archive_string_any(archive, &[normalized])
+-}
+-
+@@ -125,0 +202,2 @@
++    per_entry_limit: u64,
++    remaining: &mut u64,
+@@ -127 +205,9 @@
+-    let (path, bytes) = read_archive_bytes_any(archive, candidates)?;
++    let (path, bytes) =
++        read_archive_bytes_optional(archive, candidates, per_entry_limit, remaining)?.ok_or_else(
++            || RasterlottieError::InvalidDotLottie {
++                detail: format!(
++                    "archive is missing required entry; tried {}",
++                    candidates.join(", ")
++                ),
++            },
++        )?;
+@@ -133,12 +219,51 @@
+-fn read_archive_bytes_any(
+-    archive: &mut ZipArchive<Cursor<&[u8]>>,
+-    candidates: &[String],
+-) -> Result<(String, Vec<u8>), RasterlottieError> {
+-    read_archive_bytes_optional(archive, candidates)?.ok_or_else(|| {
+-        RasterlottieError::InvalidDotLottie {
+-            detail: format!(
+-                "archive is missing required entry; tried {}",
+-                candidates.join(", ")
+-            ),
+-        }
+-    })
++/// Reject declared oversize before any payload read or output allocation, then
++/// enforce actual output as well. A forged header never authorizes extra bytes.
++fn read_bounded(
++    reader: &mut impl Read,
++    declared_size: u64,
++    limit: u64,
++    path: &str,
++) -> Result<Vec<u8>, RasterlottieError> {
++    if declared_size > limit || declared_size > isize::MAX as u64 {
++        return Err(admission_error(
++            path,
++            "declared expanded size exceeds remaining budget",
++        ));
++    }
++    let mut bytes = Vec::new();
++    if declared_size > 0 {
++        #[cfg(test)]
++        ALLOCATION_REQUESTS.with(|count| count.set(count.get() + 1));
++        bytes
++            .try_reserve_exact(declared_size as usize)
++            .map_err(|_| admission_error(path, "cannot reserve bounded entry buffer"))?;
++    }
++    let mut chunk = [0; 8192];
++    loop {
++        let available = limit.saturating_sub(bytes.len() as u64);
++        let requested = usize::try_from(available.saturating_add(1))
++            .unwrap_or(usize::MAX)
++            .min(chunk.len());
++        let count = reader.read(&mut chunk[..requested]).map_err(|error| {
++            RasterlottieError::InvalidDotLottie {
++                detail: format!("failed to read archive entry `{path}`: {error}"),
++            }
++        })?;
++        if count == 0 {
++            return Ok(bytes);
++        }
++        if count as u64 > available {
++            return Err(admission_error(
++                path,
++                "actual expanded size exceeds remaining budget",
++            ));
++        }
++        if count > bytes.capacity() - bytes.len() {
++            #[cfg(test)]
++            ALLOCATION_REQUESTS.with(|requests| requests.set(requests.get() + 1));
++            bytes
++                .try_reserve_exact(count)
++                .map_err(|_| admission_error(path, "cannot reserve bounded entry buffer"))?;
++        }
++        bytes.extend_from_slice(&chunk[..count]);
++    }
+@@ -149,0 +275,2 @@
++    per_entry_limit: u64,
++    remaining: &mut u64,
+@@ -152 +279,4 @@
+-        match archive.by_name(candidate) {
++        match archive.by_name_with_options(
++            candidate,
++            ZipReadOptions::new().enforce_header_consistency(true),
++        ) {
+@@ -154,5 +284,9 @@
+-                let mut bytes = Vec::new();
+-                file.read_to_end(&mut bytes).map_err(|error| {
+-                    RasterlottieError::InvalidDotLottie {
+-                        detail: format!("failed to read archive entry `{candidate}`: {error}"),
+-                    }
++                let declared_size = file.size();
++                let bytes = read_bounded(
++                    &mut file,
++                    declared_size,
++                    per_entry_limit.min(*remaining),
++                    candidate,
++                )?;
++                *remaining = remaining.checked_sub(bytes.len() as u64).ok_or_else(|| {
++                    admission_error(candidate, "aggregate expanded size overflow")
+@@ -166 +299,0 @@
+-
+@@ -173,0 +307,2 @@
++    per_image_limit: u64,
++    remaining: &mut u64,
+@@ -181 +316,3 @@
+-        let Some((path, bytes)) = read_archive_bytes_optional(archive, &candidates)? else {
++        let Some((path, bytes)) =
++            read_archive_bytes_optional(archive, &candidates, per_image_limit, remaining)?
++        else {
+@@ -187,4 +324,8 @@
+-        asset.path = Some(format!(
+-            "data:{media_type};base64,{}",
+-            general_purpose::STANDARD.encode(bytes)
+-        ));
++        let mut data_url = format!("data:{media_type};base64,");
++        let encoded_len = base64::encoded_len(bytes.len(), true)
++            .ok_or_else(|| admission_error(&path, "base64 size overflow"))?;
++        data_url
++            .try_reserve_exact(encoded_len)
++            .map_err(|_| admission_error(&path, "cannot reserve bounded base64 buffer"))?;
++        general_purpose::STANDARD.encode_string(bytes, &mut data_url);
++        asset.path = Some(data_url);
+@@ -285 +426 @@
+-    use std::io::{Cursor, Write};
++    use std::io::{Cursor, Read, Write};
+@@ -291 +432,57 @@
+-    use super::load_animation_from_dotlottie_bytes;
++    use super::{ALLOCATION_REQUESTS, load_animation_from_dotlottie_bytes, read_bounded};
++
++    #[test]
++    fn bounded_reader_rejects_headers_without_reading_and_limits_actual_output() {
++        struct CountedReader {
++            remaining: usize,
++            read: usize,
++        }
++        impl Read for CountedReader {
++            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
++                let count = output.len().min(self.remaining);
++                output[..count].fill(b'x');
++                self.remaining -= count;
++                self.read += count;
++                Ok(count)
++            }
++        }
++        let mut reader = CountedReader {
++            remaining: 100_000,
++            read: 0,
++        };
++        ALLOCATION_REQUESTS.with(|count| count.set(0));
++        assert!(read_bounded(&mut reader, 17, 16, "large").is_err());
++        assert_eq!(reader.read, 0);
++        assert_eq!(ALLOCATION_REQUESTS.with(std::cell::Cell::get), 0);
++        assert!(read_bounded(&mut reader, 0, 16, "lying-header").is_err());
++        assert_eq!(reader.read, 17);
++        let mut exact = Cursor::new([b'x'; 16]);
++        assert_eq!(
++            read_bounded(&mut exact, 16, 16, "exact").unwrap(),
++            [b'x'; 16]
++        );
++        let mut zero = CountedReader {
++            remaining: 1,
++            read: 0,
++        };
++        assert!(read_bounded(&mut zero, 0, 0, "zero").is_err());
++        assert_eq!(zero.read, 1);
++        let mut huge = CountedReader {
++            remaining: 1,
++            read: 0,
++        };
++        assert!(read_bounded(&mut huge, u64::MAX, u64::MAX, "huge").is_err());
++        assert_eq!(huge.read, 0);
++        let mut large = CountedReader {
++            remaining: 32 * 1024,
++            read: 0,
++        };
++        ALLOCATION_REQUESTS.with(|count| count.set(0));
++        assert_eq!(
++            read_bounded(&mut large, 32 * 1024, 32 * 1024, "multi-chunk")
++                .unwrap()
++                .len(),
++            32 * 1024
++        );
++        assert_eq!(ALLOCATION_REQUESTS.with(std::cell::Cell::get), 1);
++    }
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -18,0 +19,2 @@
++#[cfg(feature = "dotlottie")]
++pub use dotlottie::DotLottieLimits;
+@@ -28 +30,2 @@
+-    ImageAssetResolver, Pixmap, PreparedAnimation, RasterFrame, RenderConfig, Renderer, Rgba8,
++    ImageAssetResolver, ImageLimits, Pixmap, PreparedAnimation, RasterFrame, RenderConfig,
++    Renderer, Rgba8,
+--- a/src/model.rs
++++ b/src/model.rs
+@@ -4 +4,3 @@
+-use super::dotlottie::load_animation_from_dotlottie_bytes;
++use super::dotlottie::{
++    load_animation_from_dotlottie_bytes, load_animation_from_dotlottie_bytes_with_limits,
++};
+@@ -24 +26,3 @@
+-    /// otherwise falls back to the first listed animation entry.
++    /// otherwise falls back to the first listed animation entry. Finite
++    /// [`crate::DotLottieLimits::default`] admission limits apply; use
++    /// [`Self::from_dotlottie_bytes_with_limits`] to choose another policy.
+@@ -33,0 +38,16 @@
++    }
++
++    /// Parses the selected animation with explicit archive admission limits.
++    ///
++    /// # Errors
++    ///
++    /// Returns an error for invalid content or when a compressed source, expanded
++    /// entry or aggregate expanded-byte limit is exceeded. Unselected entries are
++    /// not decompressed. Limits do not bound parsed model or ZIP metadata memory.
++    #[cfg(feature = "dotlottie")]
++    #[cfg_attr(docsrs, doc(cfg(feature = "dotlottie")))]
++    pub fn from_dotlottie_bytes_with_limits(
++        dotlottie: &[u8],
++        limits: crate::DotLottieLimits,
++    ) -> Result<Self, RasterlottieError> {
++        load_animation_from_dotlottie_bytes_with_limits(dotlottie, limits)
+--- a/src/render/assets.rs
++++ b/src/render/assets.rs
+@@ -1,2 +0,0 @@
+-#[cfg(feature = "images")]
+-use std::cell::RefCell;
+@@ -5,0 +4,6 @@
++#[cfg(feature = "images")]
++use std::{
++    borrow::Cow,
++    cell::{Cell, RefCell},
++    io::Cursor,
++};
+@@ -10 +14,4 @@
+-use image::imageops::{self, FilterType};
++use image::{
++    ImageDecoder as _, ImageReader,
++    imageops::{self, FilterType},
++};
+@@ -18 +25 @@
+-use super::renderer::ImageAssetResolver;
++use super::renderer::{ImageAssetResolver, ImageLimits};
+@@ -21,0 +29,6 @@
++
++#[cfg(all(test, feature = "images"))]
++thread_local! {
++    static PIXEL_DECODES: Cell<usize> = const { Cell::new(0) };
++    static RESIZES: Cell<usize> = const { Cell::new(0) };
++}
+@@ -26,0 +40,2 @@
++    limits: ImageLimits,
++    decoded_bytes: Cell<u64>,
+@@ -38,0 +54,16 @@
++}
++
++#[cfg(feature = "images")]
++struct DecodedReservation<'a> {
++    total: &'a Cell<u64>,
++    bytes: u64,
++    committed: bool,
++}
++
++#[cfg(feature = "images")]
++impl Drop for DecodedReservation<'_> {
++    fn drop(&mut self) {
++        if !self.committed {
++            self.total.set(self.total.get() - self.bytes);
++        }
++    }
+@@ -74 +105,5 @@
+-        Self { entries }
++        Self {
++            entries,
++            limits: self.limits,
++            decoded_bytes: Cell::new(0),
++        }
+@@ -102,0 +138 @@
++        validate_declared_dimensions(asset, self.limits)?;
+@@ -112 +148 @@
+-                decode_data_url_bytes(asset, data_url)?
++                Cow::Owned(decode_data_url_bytes(asset, data_url, self.limits)?)
+@@ -114,3 +150,8 @@
+-            EncodedImageSource::EncodedBytes(bytes) => bytes.clone(),
+-        };
+-        let decoded = Arc::new(decode_image_bytes(asset, &bytes)?);
++            EncodedImageSource::EncodedBytes(bytes) => Cow::Borrowed(bytes.as_slice()),
++        };
++        let decoded = Arc::new(decode_image_bytes(
++            asset,
++            &bytes,
++            self.limits,
++            &self.decoded_bytes,
++        )?);
+@@ -143,0 +185 @@
++    limits: ImageLimits,
+@@ -145,0 +188 @@
++    let mut resolved_bytes = 0u64;
+@@ -154,2 +197,2 @@
+-            EncodedImageSource::EncodedBytes(resolver.resolve_image_asset(asset)?.ok_or_else(
+-                || RasterlottieError::InvalidImageAsset {
++            let bytes = resolver.resolve_image_asset(asset)?.ok_or_else(|| {
++                RasterlottieError::InvalidImageAsset {
+@@ -158,2 +201,12 @@
+-                },
+-            )?)
++                }
++            })?;
++            if bytes.len() as u64 > limits.max_encoded_bytes {
++                return Err(image_limit_error(asset, "resolver encoded image bytes"));
++            }
++            resolved_bytes = resolved_bytes
++                .checked_add(bytes.len() as u64)
++                .filter(|total| *total <= limits.max_total_resolved_encoded_bytes)
++                .ok_or_else(|| {
++                    image_limit_error(asset, "aggregate resolver encoded image bytes")
++                })?;
++            EncodedImageSource::EncodedBytes(bytes)
+@@ -178 +231,5 @@
+-    Ok(ImageAssetStore { entries })
++    Ok(ImageAssetStore {
++        entries,
++        limits,
++        decoded_bytes: Cell::new(0),
++    })
+@@ -184,0 +242 @@
++    _limits: ImageLimits,
+@@ -206,3 +264,65 @@
+-fn decode_image_bytes(asset: &Asset, bytes: &[u8]) -> Result<Pixmap, RasterlottieError> {
+-    let mut rgba = image::load_from_memory(bytes)
+-        .map_err(|err| RasterlottieError::InvalidImageAsset {
++fn image_limit_error(asset: &Asset, detail: &str) -> RasterlottieError {
++    RasterlottieError::InvalidImageAsset {
++        id: asset.id.clone(),
++        detail: format!("image admission limit exceeded: {detail}"),
++    }
++}
++
++#[cfg(feature = "images")]
++fn fits_buffer(len: u64) -> bool {
++    // Vec/ImageBuffer requires isize representability, not merely usize. This
++    // matters on wasm32 even when a caller explicitly raises admission limits.
++    len <= isize::MAX as u64
++}
++
++#[cfg(feature = "images")]
++fn validate_declared_dimensions(
++    asset: &Asset,
++    limits: ImageLimits,
++) -> Result<(), RasterlottieError> {
++    for dimension in [asset.width, asset.height].into_iter().flatten() {
++        if dimension == 0 || dimension > limits.max_dimension {
++            return Err(image_limit_error(asset, "declared target dimension"));
++        }
++    }
++    Ok(())
++}
++
++#[cfg(feature = "images")]
++fn rgba_len(
++    asset: &Asset,
++    width: u32,
++    height: u32,
++    limits: ImageLimits,
++) -> Result<u64, RasterlottieError> {
++    if width == 0 || height == 0 || width > limits.max_dimension || height > limits.max_dimension {
++        return Err(image_limit_error(asset, "source or target dimension"));
++    }
++    let len = u64::from(width)
++        .checked_mul(u64::from(height))
++        .and_then(|len| len.checked_mul(4))
++        .ok_or_else(|| image_limit_error(asset, "RGBA size overflow"))?;
++    if len > limits.max_rgba_bytes || !fits_buffer(len) {
++        return Err(image_limit_error(asset, "source or target RGBA bytes"));
++    }
++    Ok(len)
++}
++
++#[cfg(feature = "images")]
++fn decode_image_bytes(
++    asset: &Asset,
++    bytes: &[u8],
++    limits: ImageLimits,
++    retained_bytes: &Cell<u64>,
++) -> Result<Pixmap, RasterlottieError> {
++    validate_declared_dimensions(asset, limits)?;
++    if bytes.len() as u64 > limits.max_encoded_bytes {
++        return Err(image_limit_error(asset, "encoded image bytes"));
++    }
++    let decode_error = |error| RasterlottieError::InvalidImageAsset {
++        id: asset.id.clone(),
++        detail: format!("failed to decode image bytes: {error}"),
++    };
++    let mut reader = ImageReader::new(Cursor::new(bytes))
++        .with_guessed_format()
++        .map_err(|error| RasterlottieError::InvalidImageAsset {
+@@ -210,14 +330,82 @@
+-            detail: format!("failed to decode image bytes: {err}"),
+-        })?
+-        .to_rgba8();
+-
+-    let target_width = asset.width.unwrap_or_else(|| rgba.width());
+-    let target_height = asset.height.unwrap_or_else(|| rgba.height());
+-    if target_width == 0 || target_height == 0 {
+-        return Err(RasterlottieError::InvalidImageAsset {
+-            id: asset.id.clone(),
+-            detail: "image asset dimensions must be non-zero".to_string(),
+-        });
+-    }
+-
+-    if rgba.width() != target_width || rgba.height() != target_height {
++            detail: error.to_string(),
++        })?;
++    let mut decoder_limits = image::Limits::default();
++    decoder_limits.max_image_width = Some(limits.max_dimension);
++    decoder_limits.max_image_height = Some(limits.max_dimension);
++    decoder_limits.max_alloc = Some(limits.max_working_bytes);
++    reader.limits(decoder_limits);
++    let decoder = reader.into_decoder().map_err(&decode_error)?;
++    let (source_width, source_height) = decoder.dimensions();
++    let source_len = rgba_len(asset, source_width, source_height, limits)?;
++    let target_width = asset.width.unwrap_or(source_width);
++    let target_height = asset.height.unwrap_or(source_height);
++    let target_len = rgba_len(asset, target_width, target_height, limits)?;
++    if retained_bytes
++        .get()
++        .checked_add(target_len)
++        .is_none_or(|len| len > limits.max_total_decoded_bytes)
++    {
++        return Err(image_limit_error(asset, "aggregate decoded image bytes"));
++    }
++    let decoded_len = decoder.total_bytes();
++    if decoded_len > limits.max_decode_bytes || !fits_buffer(decoded_len) {
++        return Err(image_limit_error(asset, "native decoded image bytes"));
++    }
++    let resizing = (source_width, source_height) != (target_width, target_height);
++    // image::imageops::resize(Triangle) first allocates an RGBA32F intermediate
++    // with source width and target height, even when source/target RGBA8 are tiny.
++    let scratch_len = if resizing {
++        u64::from(source_width)
++            .checked_mul(u64::from(target_height))
++            .and_then(|len| len.checked_mul(16))
++            .ok_or_else(|| image_limit_error(asset, "Triangle scratch size overflow"))?
++    } else {
++        0
++    };
++    // Each sampling pass grows a Vec<f32> with at most one weight per source
++    // row/column. Include power-of-two growth (minimum capacity four), and
++    // conservatively charge both vectors even though the passes are sequential.
++    let weights_len = if resizing {
++        [source_width, source_height]
++            .into_iter()
++            .try_fold(0u64, |sum, count| {
++                u64::from(count)
++                    .max(4)
++                    .checked_next_power_of_two()
++                    .and_then(|capacity| capacity.checked_mul(4))
++                    .and_then(|len| sum.checked_add(len))
++            })
++            .ok_or_else(|| image_limit_error(asset, "Triangle weight size overflow"))?
++    } else {
++        0
++    };
++    let working = decoded_len
++        .checked_add(source_len)
++        .and_then(|len| len.checked_add(if resizing { target_len } else { 0 }))
++        .and_then(|len| len.checked_add(scratch_len))
++        .and_then(|len| len.checked_add(weights_len));
++    if working.is_none_or(|len| len > limits.max_working_bytes || !fits_buffer(len)) {
++        return Err(image_limit_error(
++            asset,
++            "decode/conversion/Triangle working bytes",
++        ));
++    }
++    let total = retained_bytes
++        .get()
++        .checked_add(target_len)
++        .filter(|len| *len <= limits.max_total_decoded_bytes)
++        .ok_or_else(|| image_limit_error(asset, "aggregate decoded image bytes"))?;
++    retained_bytes.set(total);
++    let mut reservation = DecodedReservation {
++        total: retained_bytes,
++        bytes: target_len,
++        committed: false,
++    };
++    #[cfg(test)]
++    PIXEL_DECODES.with(|count| count.set(count.get() + 1));
++    let mut rgba = image::DynamicImage::from_decoder(decoder)
++        .map_err(decode_error)?
++        .into_rgba8();
++    if resizing {
++        #[cfg(test)]
++        RESIZES.with(|count| count.set(count.get() + 1));
+@@ -226 +413,0 @@
+-
+@@ -228,14 +415,14 @@
+-    let size = IntSize::from_wh(target_width, target_height).ok_or(
+-        RasterlottieError::InvalidCanvasSize {
+-            width: target_width,
+-            height: target_height,
+-        },
+-    )?;
+-    Pixmap::from_vec(rgba.into_vec(), size).ok_or_else(|| RasterlottieError::InvalidImageAsset {
+-        id: asset.id.clone(),
+-        detail: "failed to create image pixmap".to_string(),
+-    })
+-}
+-
+-#[cfg(feature = "images")]
+-fn decode_data_url_bytes(asset: &Asset, data_url: &str) -> Result<Vec<u8>, RasterlottieError> {
++    let size = IntSize::from_wh(target_width, target_height)
++        .ok_or_else(|| image_limit_error(asset, "invalid target dimensions"))?;
++    let pixmap = Pixmap::from_vec(rgba.into_vec(), size)
++        .ok_or_else(|| image_limit_error(asset, "invalid target buffer"))?;
++    reservation.committed = true;
++    Ok(pixmap)
++}
++
++#[cfg(feature = "images")]
++fn decode_data_url_bytes(
++    asset: &Asset,
++    data_url: &str,
++    limits: ImageLimits,
++) -> Result<Vec<u8>, RasterlottieError> {
+@@ -261,3 +448,30 @@
+-    general_purpose::STANDARD
+-        .decode(payload.trim())
+-        .map_err(|err| RasterlottieError::InvalidImageAsset {
++    let payload = payload.trim();
++    // STANDARD requires padded blocks. Compute the exact valid decoded length
++    // before allocating, so a limit-boundary image is accepted without a +2 guess.
++    if payload.len() % 4 != 0 {
++        return Err(image_limit_error(asset, "invalid base64 block length"));
++    }
++    let padding = payload
++        .as_bytes()
++        .iter()
++        .rev()
++        .take_while(|byte| **byte == b'=')
++        .count();
++    if padding > 2 {
++        return Err(image_limit_error(asset, "invalid base64 padding"));
++    }
++    let decoded_len = (payload.len() / 4)
++        .checked_mul(3)
++        .and_then(|len| len.checked_sub(padding))
++        .ok_or_else(|| image_limit_error(asset, "base64 size overflow"))?;
++    if decoded_len as u64 > limits.max_encoded_bytes || !fits_buffer(decoded_len as u64) {
++        return Err(image_limit_error(asset, "base64 decoded image bytes"));
++    }
++    let mut bytes = Vec::new();
++    bytes
++        .try_reserve_exact(decoded_len)
++        .map_err(|_| image_limit_error(asset, "cannot reserve bounded base64 buffer"))?;
++    bytes.resize(decoded_len, 0);
++    let count = general_purpose::STANDARD
++        .decode_slice(payload, &mut bytes)
++        .map_err(|error| RasterlottieError::InvalidImageAsset {
+@@ -265,2 +479,4 @@
+-            detail: format!("failed to decode base64 image data: {err}"),
+-        })
++            detail: format!("failed to decode base64 image data: {error}"),
++        })?;
++    bytes.truncate(count);
++    Ok(bytes)
+@@ -277,0 +494,286 @@
++
++#[cfg(all(test, feature = "images"))]
++mod tests {
++    use super::*;
++    use image::{ColorType, ImageEncoder as _, codecs::png::PngEncoder};
++
++    fn png(width: u32, height: u32) -> Vec<u8> {
++        let mut bytes = Vec::new();
++        PngEncoder::new(&mut bytes)
++            .write_image(
++                &[255, 0, 0, 255].repeat(width as usize * height as usize),
++                width,
++                height,
++                ColorType::Rgba8.into(),
++            )
++            .unwrap();
++        bytes
++    }
++
++    fn animation() -> Animation {
++        let data = general_purpose::STANDARD.encode(png(1, 1));
++        Animation::from_json_str(&format!(r#"{{"fr":30,"ip":0,"op":1,"w":1,"h":1,
++            "assets":[{{"id":"first","w":1,"h":1,"p":"data:image/png;base64,{data}","e":1}},
++                      {{"id":"second","w":1,"h":1,"p":"data:image/png;base64,{data}","e":1}}],"layers":[]}}"#)).unwrap()
++    }
++
++    fn reset_work() {
++        PIXEL_DECODES.with(|count| count.set(0));
++        RESIZES.with(|count| count.set(0));
++    }
++
++    fn assert_no_work() {
++        assert_eq!(PIXEL_DECODES.with(Cell::get), 0);
++        assert_eq!(RESIZES.with(Cell::get), 0);
++    }
++
++    #[test]
++    fn admission_checks_encoded_native_rgba_target_and_aggregate_before_pixels() {
++        let animation = animation();
++        let asset = &animation.assets[0];
++        let bytes = png(1, 1);
++        for limits in [
++            ImageLimits {
++                max_encoded_bytes: bytes.len() as u64 - 1,
++                ..ImageLimits::default()
++            },
++            ImageLimits {
++                max_decode_bytes: 3,
++                ..ImageLimits::default()
++            },
++            ImageLimits {
++                max_rgba_bytes: 3,
++                ..ImageLimits::default()
++            },
++            ImageLimits {
++                max_total_decoded_bytes: 3,
++                ..ImageLimits::default()
++            },
++            ImageLimits {
++                max_dimension: 0,
++                ..ImageLimits::default()
++            },
++        ] {
++            reset_work();
++            assert!(decode_image_bytes(asset, &bytes, limits, &Cell::new(0)).is_err());
++            assert_no_work();
++        }
++        reset_work();
++        assert!(
++            decode_image_bytes(asset, &bytes, ImageLimits::default(), &Cell::new(u64::MAX))
++                .is_err()
++        );
++        assert_no_work();
++        let mut target = asset.clone();
++        target.width = Some(8193);
++        let error = decode_image_bytes(
++            &target,
++            b"not an image",
++            ImageLimits::default(),
++            &Cell::new(0),
++        )
++        .unwrap_err();
++        assert!(error.to_string().contains("declared target"));
++        assert_no_work();
++        let mut limits = ImageLimits::default();
++        limits.max_encoded_bytes = bytes.len() as u64;
++        limits.max_decode_bytes = 4;
++        limits.max_rgba_bytes = 4;
++        limits.max_total_decoded_bytes = 4;
++        assert_eq!(
++            decode_image_bytes(asset, &bytes, limits, &Cell::new(0))
++                .unwrap()
++                .data(),
++            [255, 0, 0, 255]
++        );
++        assert_eq!(PIXEL_DECODES.with(Cell::get), 1);
++        assert_eq!(RESIZES.with(Cell::get), 0);
++    }
++
++    #[test]
++    fn admission_checks_actual_header_and_triangle_cross_aspect_scratch() {
++        let animation = animation();
++        let mut asset = animation.assets[0].clone();
++        asset.width = Some(1);
++        asset.height = Some(256);
++        let bytes = png(256, 1);
++        let limits = ImageLimits {
++            max_working_bytes: 128 * 1024,
++            ..ImageLimits::default()
++        };
++        reset_work();
++        let error = decode_image_bytes(&asset, &bytes, limits, &Cell::new(0)).unwrap_err();
++        assert!(error.to_string().contains("working bytes"));
++        assert_no_work();
++        asset.width = Some(1);
++        asset.height = Some(1);
++        let limits = ImageLimits {
++            max_dimension: 255,
++            ..ImageLimits::default()
++        };
++        assert!(decode_image_bytes(&asset, &bytes, limits, &Cell::new(0)).is_err());
++        assert_no_work();
++        asset.width = Some(u32::MAX);
++        asset.height = Some(u32::MAX);
++        let limits = ImageLimits {
++            max_dimension: u32::MAX,
++            max_rgba_bytes: u64::MAX,
++            ..ImageLimits::default()
++        };
++        assert!(decode_image_bytes(&asset, &png(1, 1), limits, &Cell::new(0)).is_err());
++        assert_no_work();
++        let cap = isize::MAX as u64;
++        assert!(fits_buffer(cap));
++        assert!(!fits_buffer(cap + 1));
++    }
++
++    #[test]
++    fn admission_includes_triangle_weight_buffers() {
++        let animation = animation();
++        let mut asset = animation.assets[0].clone();
++        asset.width = Some(1);
++        asset.height = Some(1);
++        let mut bytes = Vec::new();
++        PngEncoder::new(&mut bytes)
++            .write_image(&[255; 8192], 1, 8192, ColorType::L8.into())
++            .unwrap();
++        let mut limits = ImageLimits {
++            max_working_bytes: 60 * 1024,
++            ..ImageLimits::default()
++        };
++        reset_work();
++        assert!(decode_image_bytes(&asset, &bytes, limits, &Cell::new(0)).is_err());
++        assert_no_work();
++        limits.max_working_bytes = 128 * 1024;
++        assert_eq!(
++            decode_image_bytes(&asset, &bytes, limits, &Cell::new(0))
++                .unwrap()
++                .data(),
++            [255, 255, 255, 255]
++        );
++        assert_eq!(PIXEL_DECODES.with(Cell::get), 1);
++        assert_eq!(RESIZES.with(Cell::get), 1);
++    }
++
++    #[test]
++    fn admission_cache_hits_and_failures_preserve_exact_retained_accounting() {
++        let mut animation = animation();
++        let limits = ImageLimits {
++            max_total_decoded_bytes: 4,
++            ..ImageLimits::default()
++        };
++        let store = resolve_image_assets(&animation, None, limits).unwrap();
++        reset_work();
++        let first = store.get(&animation, "first").unwrap().unwrap();
++        let hit = store.get(&animation, "first").unwrap().unwrap();
++        assert!(Arc::ptr_eq(&first, &hit));
++        assert_eq!(store.decoded_bytes.get(), 4);
++        assert_eq!(PIXEL_DECODES.with(Cell::get), 1);
++        assert!(store.get(&animation, "second").is_err());
++        assert_eq!(store.decoded_bytes.get(), 4);
++        assert!(store.entries["second"].decoded.borrow().is_none());
++        assert_eq!(PIXEL_DECODES.with(Cell::get), 1);
++        animation.assets[0].path = Some("data:image/png;base64,bm90IHBpeGVscw==".to_string());
++        let store = resolve_image_assets(&animation, None, limits).unwrap();
++        assert!(store.get(&animation, "first").is_err());
++        assert_eq!(store.decoded_bytes.get(), 0);
++        assert!(store.get(&animation, "second").unwrap().is_some());
++        assert_eq!(store.decoded_bytes.get(), 4);
++    }
++
++    #[test]
++    fn admission_rolls_back_after_pixel_decode_failure() {
++        let animation = animation();
++        let mut bytes = png(1, 1);
++        let idat = bytes.windows(4).position(|part| part == b"IDAT").unwrap();
++        bytes[idat + 4] ^= 0x80;
++        let retained = Cell::new(4);
++        let limits = ImageLimits {
++            max_total_decoded_bytes: 8,
++            ..ImageLimits::default()
++        };
++        reset_work();
++        assert!(decode_image_bytes(&animation.assets[0], &bytes, limits, &retained).is_err());
++        assert_eq!(PIXEL_DECODES.with(Cell::get), 1);
++        assert_eq!(retained.get(), 4);
++        assert_eq!(
++            decode_image_bytes(&animation.assets[1], &png(1, 1), limits, &retained)
++                .unwrap()
++                .data(),
++            [255, 0, 0, 255]
++        );
++        assert_eq!(retained.get(), 8);
++    }
++
++    #[test]
++    fn admission_base64_boundary_and_declared_target_precede_decode() {
++        let mut animation = animation();
++        let bytes = png(1, 1);
++        let mut limits = ImageLimits {
++            max_encoded_bytes: bytes.len() as u64,
++            ..ImageLimits::default()
++        };
++        let asset = &animation.assets[0];
++        assert_eq!(
++            decode_data_url_bytes(asset, asset.path.as_deref().unwrap(), limits).unwrap(),
++            bytes
++        );
++        limits.max_encoded_bytes -= 1;
++        assert!(decode_data_url_bytes(asset, asset.path.as_deref().unwrap(), limits).is_err());
++        animation.assets[0].width = Some(8193);
++        animation.assets[0].path = Some("not a data URL".to_string());
++        let store = resolve_image_assets(&animation, None, ImageLimits::default()).unwrap();
++        reset_work();
++        let error = store.get(&animation, "first").unwrap_err();
++        assert!(error.to_string().contains("declared target"));
++        assert_eq!(store.decoded_bytes.get(), 0);
++        assert_no_work();
++    }
++
++    #[test]
++    fn admission_rejects_resolver_bytes_before_retention() {
++        let mut animation = animation();
++        for asset in &mut animation.assets {
++            asset.embedded = None;
++            asset.path = Some("pixel.png".to_string());
++        }
++        let bytes = png(1, 1);
++        let resolver = |_: &Asset| Ok(Some(bytes.clone()));
++        let mut limits = ImageLimits {
++            max_encoded_bytes: bytes.len() as u64 - 1,
++            ..ImageLimits::default()
++        };
++        assert!(
++            resolve_image_assets(&animation, Some(&resolver), limits)
++                .unwrap_err()
++                .to_string()
++                .contains("resolver encoded")
++        );
++        limits.max_encoded_bytes += 1;
++        limits.max_total_resolved_encoded_bytes = bytes.len() as u64 * 2 - 1;
++        assert!(
++            resolve_image_assets(&animation, Some(&resolver), limits)
++                .unwrap_err()
++                .to_string()
++                .contains("aggregate resolver")
++        );
++        limits.max_total_resolved_encoded_bytes += 1;
++        let store = resolve_image_assets(&animation, Some(&resolver), limits).unwrap();
++        assert_eq!(
++            store.get(&animation, "first").unwrap().unwrap().data(),
++            [255, 0, 0, 255]
++        );
++        #[cfg(feature = "gif")]
++        {
++            let worker = store.clone_for_worker();
++            assert_eq!(worker.limits, limits);
++            assert_eq!(worker.decoded_bytes.get(), 0);
++            assert_eq!(
++                worker.get(&animation, "second").unwrap().unwrap().data(),
++                [255, 0, 0, 255]
++            );
++            assert_eq!(worker.decoded_bytes.get(), 4);
++            assert_eq!(store.decoded_bytes.get(), 4);
++        }
++    }
++}
+--- a/src/render/mod.rs
++++ b/src/render/mod.rs
+@@ -30 +30 @@
+-    ImageAssetResolver, PreparedAnimation, RasterFrame, RenderConfig, Renderer, Rgba8,
++    ImageAssetResolver, ImageLimits, PreparedAnimation, RasterFrame, RenderConfig, Renderer, Rgba8,
+--- a/src/render/renderer/mod.rs
++++ b/src/render/renderer/mod.rs
+@@ -15 +15 @@
+-    ImageAssetResolver, PreparedAnimation, RasterFrame, RenderConfig, Renderer, Rgba8,
++    ImageAssetResolver, ImageLimits, PreparedAnimation, RasterFrame, RenderConfig, Renderer, Rgba8,
+--- a/src/render/renderer/prepare.rs
++++ b/src/render/renderer/prepare.rs
+@@ -2 +2 @@
+-    super::assets::resolve_image_assets, ImageAssetResolver, LayerHierarchyCache,
++    super::assets::resolve_image_assets, ImageAssetResolver, ImageLimits, LayerHierarchyCache,
+@@ -14 +14,4 @@
+-        Self { profile }
++        Self {
++            profile,
++            image_limits: ImageLimits::DEFAULT,
++        }
+@@ -20,0 +24,8 @@
++    }
++
++    /// Chooses the policy retained by this renderer and every prepared animation.
++    /// Existing entrypoints use [`ImageLimits::default`].
++    #[must_use]
++    pub const fn with_image_limits(mut self, limits: ImageLimits) -> Self {
++        self.image_limits = limits;
++        self
+@@ -42 +53 @@
+-        let image_assets = resolve_image_assets(&resolved, None)?;
++        let image_assets = resolve_image_assets(&resolved, None, self.image_limits)?;
+@@ -76 +87,2 @@
+-        let image_assets = resolve_image_assets(&prepared_animation, Some(resolver))?;
++        let image_assets =
++            resolve_image_assets(&prepared_animation, Some(resolver), self.image_limits)?;
+--- a/src/render/renderer_types.rs
++++ b/src/render/renderer_types.rs
+@@ -73,0 +74,49 @@
++/// Admission limits for lazily decoded image assets.
++///
++/// Limits bound encoded inputs and requested pixel/resize buffers per prepared
++/// animation. They do not bound parsed model memory, decoder-private allocations,
++/// allocator overhead or process RSS. Decoder allocation limits are best effort.
++/// All byte limits are inclusive; zero rejects nonempty image data.
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++#[non_exhaustive]
++pub struct ImageLimits {
++    /// Maximum source and target width or height.
++    pub max_dimension: u32,
++    /// Maximum encoded bytes per image, before base64 decoding or byte cloning.
++    pub max_encoded_bytes: u64,
++    /// Maximum total encoded bytes accepted from resolver callbacks during one
++    /// preparation. Repeated callbacks are charged again. The callback owns its
++    /// allocation before it returns; this limit bounds admission, not that allocation.
++    pub max_total_resolved_encoded_bytes: u64,
++    /// Maximum decoder-reported native pixel bytes per image.
++    pub max_decode_bytes: u64,
++    /// Maximum RGBA8 source or target pixel bytes per image.
++    pub max_rgba_bytes: u64,
++    /// Maximum combined native decode, RGBA, target, Triangle intermediate and
++    /// sampling-weight buffer bytes. Weight capacity is conservatively rounded.
++    /// Decoder-private storage and allocator overhead are additional.
++    pub max_working_bytes: u64,
++    /// Maximum sum of decoded target RGBA8 buffers cached by one prepared animation.
++    /// Worker clones have independent budgets; cache hits consume no extra budget.
++    pub max_total_decoded_bytes: u64,
++}
++
++impl ImageLimits {
++    /// Finite default image admission policy.
++    pub const DEFAULT: Self = Self {
++        max_dimension: 8192,
++        max_encoded_bytes: 16 * 1024 * 1024,
++        max_total_resolved_encoded_bytes: 64 * 1024 * 1024,
++        max_decode_bytes: 256 * 1024 * 1024,
++        max_rgba_bytes: 256 * 1024 * 1024,
++        max_working_bytes: 512 * 1024 * 1024,
++        max_total_decoded_bytes: 256 * 1024 * 1024,
++    };
++}
++
++impl Default for ImageLimits {
++    fn default() -> Self {
++        Self::DEFAULT
++    }
++}
++
+@@ -77,0 +127 @@
++    pub(super) image_limits: ImageLimits,
+--- /dev/null
++++ b/tests/fixtures/zip9_glyph_text.json
+@@ -0,0 +1,41 @@
++{
++                "v":"5.7.6",
++                "fr":30,
++                "ip":0,
++                "op":60,
++                "w":128,
++                "h":128,
++                "fonts":{"list":[{"fName":"TestFont","fFamily":"Test Family","fStyle":"Regular","ascent":75}]},
++                "chars":[
++                    {
++                        "ch":"A",
++                        "size":100,
++                        "style":"Regular",
++                        "w":60,
++                        "fFamily":"Test Family",
++                        "data":{
++                            "shapes":[
++                                {
++                                    "ty":"gr",
++                                    "it":[
++                                        {"ty":"sh","ks":{"a":0,"k":{"c":true,"i":[[0,0],[0,0],[0,0],[0,0]],"o":[[0,0],[0,0],[0,0],[0,0]],"v":[[0,-80],[60,-80],[60,0],[0,0]]}}}
++                                    ]
++                                }
++                            ]
++                        }
++                    }
++                ],
++                "layers":[
++                    {
++                        "nm":"Text",
++                        "ind":1,
++                        "ty":5,
++                        "t":{
++                            "d":{"k":[{"s":{"s":100,"f":"TestFont","t":"A","j":0,"tr":0,"lh":120,"ls":0,"fc":[1,0,0]},"t":0}]},
++                            "p":{},
++                            "m":{"g":1},
++                            "a":[]
++                        }
++                    }
++                ]
++            }
 --- /dev/null
 +++ b/tests/zip9_compatibility.rs
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,530 @@
 +//! ZIP 9 dotLottie loader/render compatibility on native Rust and in real browsers.
 +#![cfg(all(feature = "dotlottie", feature = "images", feature = "text"))]
 +
 +#[cfg(test)]
 +mod tests {
 +    use image::{ColorType, ImageEncoder, codecs::png::PngEncoder};
-+    use rasterlottie::{Animation, RasterFrame, RenderConfig, Renderer};
++    use rasterlottie::{
++        Animation, DotLottieLimits, ImageLimits, RasterFrame, RenderConfig, Renderer,
++    };
 +    use std::io::{Cursor, Write};
 +    #[cfg(target_arch = "wasm32")]
 +    use wasm_bindgen_test::wasm_bindgen_test;
@@ -1455,6 +2519,416 @@
 +    fn pixel(frame: &RasterFrame, x: usize, y: usize) -> &[u8] {
 +        let offset = (y * frame.width as usize + x) * 4;
 +        &frame.pixels[offset..offset + 4]
++    }
++
++    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
++    #[cfg_attr(not(target_arch = "wasm32"), test)]
++    fn admission_rejects_manifest_expansion_before_parsing() {
++        let mut manifest = br#"{"animations":[{"id":"main"}]}"#.to_vec();
++        manifest.resize(1024 * 1024 + 1, b' ');
++        let bytes = archive(
++            &[
++                ("manifest.json", &manifest),
++                (
++                    "a/main.json",
++                    br#"{"fr":30,"ip":0,"op":1,"w":1,"h":1,"layers":[]}"#,
++                ),
++            ],
++            CompressionMethod::Deflated,
++        );
++        assert!(bytes.len() < 2048);
++        assert!(Animation::from_dotlottie_bytes(&bytes).is_err());
++    }
++
++    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
++    #[cfg_attr(not(target_arch = "wasm32"), test)]
++    fn admission_rejects_oversized_image_target_before_resize() {
++        let mut png = Vec::new();
++        PngEncoder::new(&mut png)
++            .write_image(&[255, 0, 0, 255], 1, 1, ColorType::Rgba8.into())
++            .unwrap();
++        let json = br#"{"fr":30,"ip":0,"op":1,"w":1,"h":1,
++            "assets":[{"id":"image","w":8193,"h":1,"p":"red.png"}],
++            "layers":[{"ty":2,"ind":1,"refId":"image"}]}"#;
++        let bytes = archive(
++            &[
++                ("manifest.json", br#"{"animations":[{"id":"main"}]}"#),
++                ("a/main.json", json),
++                ("red.png", &png),
++            ],
++            CompressionMethod::Deflated,
++        );
++        let animation = Animation::from_dotlottie_bytes(&bytes).unwrap();
++        assert!(
++            Renderer::default()
++                .render_frame(&animation, 0.0, RenderConfig::default())
++                .is_err()
++        );
++        let mut limits = ImageLimits::default();
++        limits.max_dimension = 8193;
++        let frame = Renderer::default()
++            .with_image_limits(limits)
++            .render_frame(&animation, 0.0, RenderConfig::default())
++            .unwrap();
++        assert_eq!(frame.pixels, [255, 0, 0, 255]);
++    }
++
++    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
++    #[cfg_attr(not(target_arch = "wasm32"), test)]
++    fn admission_public_policy_includes_triangle_sampling_weights() {
++        let mut tall_png = Vec::new();
++        PngEncoder::new(&mut tall_png)
++            .write_image(&[255; 8192], 1, 8192, ColorType::L8.into())
++            .unwrap();
++        let tall_json = br#"{"fr":30,"ip":0,"op":1,"w":1,"h":1,
++            "assets":[{"id":"image","w":1,"h":1,"p":"pixel.png"}],
++            "layers":[{"ty":2,"ind":1,"refId":"image"}]}"#;
++        let bytes = archive(
++            &[
++                ("manifest.json", br#"{"animations":[{"id":"main"}]}"#),
++                ("a/main.json", tall_json),
++                ("pixel.png", &tall_png),
++            ],
++            CompressionMethod::Deflated,
++        );
++        let animation = Animation::from_dotlottie_bytes(&bytes).unwrap();
++        let mut limits = ImageLimits::default();
++        limits.max_working_bytes = 60 * 1024;
++        assert!(
++            Renderer::default()
++                .with_image_limits(limits)
++                .render_frame(&animation, 0.0, RenderConfig::default())
++                .unwrap_err()
++                .to_string()
++                .contains("working bytes")
++        );
++        limits.max_working_bytes = 128 * 1024;
++        assert_eq!(
++            Renderer::default()
++                .with_image_limits(limits)
++                .render_frame(&animation, 0.0, RenderConfig::default())
++                .unwrap()
++                .pixels,
++            [255, 255, 255, 255]
++        );
++    }
++
++    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
++    #[cfg_attr(not(target_arch = "wasm32"), test)]
++    fn admission_archive_limits_are_inclusive_and_ignore_unselected_contents() {
++        let manifest = br#"{"animations":[{"id":"main"}]}"#;
++        let json = br#"{"fr":30,"ip":0,"op":1,"w":1,"h":1,"layers":[]}"#;
++        for method in [CompressionMethod::Stored, CompressionMethod::Deflated] {
++            let bytes = archive(
++                &[
++                    ("manifest.json", manifest),
++                    ("a/main.json", json),
++                    ("unused.bin", &[0; 1024]),
++                ],
++                method,
++            );
++            let mut limits = DotLottieLimits::default();
++            limits.max_archive_bytes = bytes.len() as u64;
++            limits.max_manifest_bytes = manifest.len() as u64;
++            limits.max_animation_bytes = json.len() as u64;
++            limits.max_total_expanded_bytes = (manifest.len() + json.len()) as u64;
++            assert_eq!(
++                Animation::from_dotlottie_bytes_with_limits(&bytes, limits)
++                    .unwrap()
++                    .width,
++                1
++            );
++            for field in 0..5 {
++                let mut limited = limits;
++                match field {
++                    0 => limited.max_archive_bytes -= 1,
++                    1 => limited.max_manifest_bytes -= 1,
++                    2 => limited.max_animation_bytes -= 1,
++                    3 => limited.max_entries = 2,
++                    _ => limited.max_total_expanded_bytes -= 1,
++                }
++                assert!(Animation::from_dotlottie_bytes_with_limits(&bytes, limited).is_err());
++            }
++            limits.max_total_expanded_bytes = 0;
++            assert!(Animation::from_dotlottie_bytes_with_limits(&bytes, limits).is_err());
++        }
++    }
++
++    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
++    #[cfg_attr(not(target_arch = "wasm32"), test)]
++    fn admission_charges_each_repeated_image_embedding() {
++        let mut png = Vec::new();
++        PngEncoder::new(&mut png)
++            .write_image(&[255, 0, 0, 255], 1, 1, ColorType::Rgba8.into())
++            .unwrap();
++        let manifest = br#"{"animations":[{"id":"main"}]}"#;
++        let json = br#"{"fr":30,"ip":0,"op":1,"w":1,"h":1,"layers":[],"assets":[
++            {"id":"first","w":1,"h":1,"p":"pixel.png"},
++            {"id":"second","w":1,"h":1,"p":"pixel.png"}]}"#;
++        for method in [CompressionMethod::Stored, CompressionMethod::Deflated] {
++            let bytes = archive(
++                &[
++                    ("manifest.json", manifest),
++                    ("a/main.json", json),
++                    ("pixel.png", &png),
++                ],
++                method,
++            );
++            let mut limits = DotLottieLimits::default();
++            limits.max_image_bytes = png.len() as u64;
++            limits.max_total_expanded_bytes = (manifest.len() + json.len() + png.len() * 2) as u64;
++            let animation = Animation::from_dotlottie_bytes_with_limits(&bytes, limits).unwrap();
++            assert_eq!(animation.assets[0].path, animation.assets[1].path);
++            limits.max_total_expanded_bytes -= 1;
++            let error = Animation::from_dotlottie_bytes_with_limits(&bytes, limits).unwrap_err();
++            assert!(error.to_string().contains("pixel.png"));
++            limits.max_total_expanded_bytes += 1;
++            limits.max_image_bytes -= 1;
++            assert!(Animation::from_dotlottie_bytes_with_limits(&bytes, limits).is_err());
++        }
++    }
++
++    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
++    #[cfg_attr(not(target_arch = "wasm32"), test)]
++    fn admission_preserves_crc_and_forged_size_errors() {
++        let manifest = br#"{"animations":[{"id":"main"}]}"#;
++        let json = br#"{"fr":30,"ip":0,"op":1,"w":1,"h":1,"layers":[]}"#;
++        let bytes = archive(
++            &[("manifest.json", manifest), ("a/main.json", json)],
++            CompressionMethod::Stored,
++        );
++        let mut bad_crc = bytes.clone();
++        let offset = bad_crc
++            .windows(manifest.len())
++            .position(|part| part == manifest)
++            .unwrap();
++        bad_crc[offset + 1] ^= 1;
++        assert!(
++            Animation::from_dotlottie_bytes(&bad_crc)
++                .unwrap_err()
++                .to_string()
++                .contains("failed to read")
++        );
++        let mut bad_size = bytes;
++        let central = bad_size
++            .windows(4)
++            .enumerate()
++            .filter_map(|(offset, part)| (part == b"PK\x01\x02").then_some(offset))
++            .next_back()
++            .unwrap();
++        let local =
++            u32::from_le_bytes(bad_size[central + 42..central + 46].try_into().unwrap()) as usize;
++        bad_size[central + 24..central + 28].copy_from_slice(&8u32.to_le_bytes());
++        bad_size[local + 22..local + 26].copy_from_slice(&8u32.to_le_bytes());
++        assert!(
++            Animation::from_dotlottie_bytes(&bad_size)
++                .unwrap_err()
++                .to_string()
++                .contains("failed to read")
++        );
++    }
++
++    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
++    #[cfg_attr(not(target_arch = "wasm32"), test)]
++    fn admission_rejects_duplicate_central_directory_names() {
++        let manifest = br#"{"animations":[{"id":"main"}]}"#;
++        let json = br#"{"fr":30,"ip":0,"op":1,"w":1,"h":1,"layers":[]}"#;
++        let mut bytes = archive(
++            &[
++                ("manifest.json", manifest),
++                ("a/main.json", json),
++                ("b/main.json", json),
++            ],
++            CompressionMethod::Stored,
++        );
++        let offsets: Vec<_> = bytes
++            .windows(11)
++            .enumerate()
++            .filter_map(|(offset, part)| (part == b"b/main.json").then_some(offset))
++            .collect();
++        assert_eq!(offsets.len(), 2);
++        for offset in offsets {
++            bytes[offset] = b'a';
++        }
++        assert!(Animation::from_dotlottie_bytes(&bytes).is_err());
++    }
++
++    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
++    #[cfg_attr(not(target_arch = "wasm32"), test)]
++    fn admission_preserves_zip64_entry_headers_and_archive_comments() {
++        for method in [CompressionMethod::Stored, CompressionMethod::Deflated] {
++            let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
++            writer
++                .set_comment("A normal dotLottie archive comment")
++                .unwrap();
++            let options = SimpleFileOptions::default()
++                .compression_method(method)
++                .large_file(true);
++            writer.start_file("manifest.json", options).unwrap();
++            writer
++                .write_all(br#"{"animations":[{"id":"main"}]}"#)
++                .unwrap();
++            writer.start_file("a/main.json", options).unwrap();
++            writer
++                .write_all(br#"{"fr":30,"ip":0,"op":1,"w":1,"h":1,"layers":[]}"#)
++                .unwrap();
++            let bytes = writer.finish().unwrap().into_inner();
++            let animation = Animation::from_dotlottie_bytes(&bytes).unwrap();
++            assert_eq!(
++                Renderer::default()
++                    .render_frame(&animation, 0.0, RenderConfig::default())
++                    .unwrap()
++                    .pixels,
++                [0, 0, 0, 0]
++            );
++        }
++    }
++
++    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
++    #[cfg_attr(not(target_arch = "wasm32"), test)]
++    fn admission_prepared_policy_guards_late_images_without_charging_cache_hits() {
++        let mut png = Vec::new();
++        PngEncoder::new(&mut png)
++            .write_image(&[255, 0, 0, 255], 1, 1, ColorType::Rgba8.into())
++            .unwrap();
++        let json = br#"{"fr":30,"ip":0,"op":2,"w":1,"h":1,
++            "assets":[{"id":"first","w":1,"h":1,"p":"pixel.png"},
++                      {"id":"second","w":1,"h":1,"p":"pixel.png"}],
++            "layers":[{"ty":2,"ind":1,"refId":"first","ip":0,"op":1},
++                      {"ty":2,"ind":2,"refId":"second","ip":1,"op":2}]}"#;
++        let bytes = archive(
++            &[
++                ("manifest.json", br#"{"animations":[{"id":"main"}]}"#),
++                ("a/main.json", json),
++                ("pixel.png", &png),
++            ],
++            CompressionMethod::Deflated,
++        );
++        let animation = Animation::from_dotlottie_bytes(&bytes).unwrap();
++        let mut limits = ImageLimits::default();
++        limits.max_total_decoded_bytes = 4;
++        let prepared = Renderer::default()
++            .with_image_limits(limits)
++            .prepare(&animation)
++            .unwrap();
++        for _ in 0..2 {
++            assert_eq!(
++                prepared
++                    .render_frame(0.0, RenderConfig::default())
++                    .unwrap()
++                    .pixels,
++                [255, 0, 0, 255]
++            );
++        }
++        let error = prepared
++            .render_frame(1.0, RenderConfig::default())
++            .unwrap_err();
++        assert!(error.to_string().contains("second"));
++        assert!(error.to_string().contains("aggregate decoded"));
++        assert_eq!(
++            prepared
++                .render_frame(0.0, RenderConfig::default())
++                .unwrap()
++                .pixels,
++            [255, 0, 0, 255]
++        );
++        limits.max_total_decoded_bytes = 8;
++        let prepared = Renderer::default()
++            .with_image_limits(limits)
++            .prepare(&animation)
++            .unwrap();
++        assert_eq!(
++            prepared
++                .render_frame(0.0, RenderConfig::default())
++                .unwrap()
++                .pixels,
++            [255, 0, 0, 255]
++        );
++        assert_eq!(
++            prepared
++                .render_frame(1.0, RenderConfig::default())
++                .unwrap()
++                .pixels,
++            [255, 0, 0, 255]
++        );
++    }
++
++    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
++    #[cfg_attr(not(target_arch = "wasm32"), test)]
++    fn admission_public_policy_bounds_cross_aspect_work_and_preserves_unused_lazy_assets() {
++        let mut png = Vec::new();
++        PngEncoder::new(&mut png)
++            .write_image(
++                &[255, 0, 0, 255].repeat(256),
++                256,
++                1,
++                ColorType::Rgba8.into(),
++            )
++            .unwrap();
++        let json = br#"{"fr":30,"ip":0,"op":1,"w":1,"h":1,
++            "assets":[{"id":"image","w":1,"h":256,"p":"pixel.png"},
++                      {"id":"unused","w":1,"h":1,"e":1,"p":"not-valid-base64"}],
++            "layers":[{"ty":2,"ind":1,"refId":"image"}]}"#;
++        let bytes = archive(
++            &[
++                ("manifest.json", br#"{"animations":[{"id":"main"}]}"#),
++                ("a/main.json", json),
++                ("pixel.png", &png),
++            ],
++            CompressionMethod::Deflated,
++        );
++        let animation = Animation::from_dotlottie_bytes(&bytes).unwrap();
++        let mut limits = ImageLimits::default();
++        limits.max_working_bytes = 128 * 1024;
++        let prepared = Renderer::default()
++            .with_image_limits(limits)
++            .prepare(&animation)
++            .unwrap();
++        assert!(
++            prepared
++                .render_frame(0.0, RenderConfig::default())
++                .unwrap_err()
++                .to_string()
++                .contains("working bytes")
++        );
++        limits.max_working_bytes = 2 * 1024 * 1024;
++        let frame = Renderer::default()
++            .with_image_limits(limits)
++            .render_frame(&animation, 0.0, RenderConfig::default())
++            .unwrap();
++        assert_eq!(frame.pixels, [255, 0, 0, 255]);
++    }
++
++    #[cfg(target_pointer_width = "32")]
++    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
++    #[cfg_attr(not(target_arch = "wasm32"), test)]
++    fn admission_raised_limits_still_reject_unrepresentable_target_buffers() {
++        let mut png = Vec::new();
++        PngEncoder::new(&mut png)
++            .write_image(&[255, 0, 0, 255], 1, 1, ColorType::Rgba8.into())
++            .unwrap();
++        let json = br#"{"fr":30,"ip":0,"op":1,"w":1,"h":1,
++            "assets":[{"id":"image","w":600000000,"h":1,"p":"pixel.png"}],
++            "layers":[{"ty":2,"ind":1,"refId":"image"}]}"#;
++        let bytes = archive(
++            &[
++                ("manifest.json", br#"{"animations":[{"id":"main"}]}"#),
++                ("a/main.json", json),
++                ("pixel.png", &png),
++            ],
++            CompressionMethod::Deflated,
++        );
++        let animation = Animation::from_dotlottie_bytes(&bytes).unwrap();
++        let mut limits = ImageLimits::default();
++        limits.max_dimension = u32::MAX;
++        limits.max_rgba_bytes = u64::MAX;
++        limits.max_working_bytes = u64::MAX;
++        limits.max_total_decoded_bytes = u64::MAX;
++        let error = Renderer::default()
++            .with_image_limits(limits)
++            .render_frame(&animation, 0.0, RenderConfig::default())
++            .unwrap_err();
++        assert!(error.to_string().contains("RGBA bytes"));
 +    }
 +
 +    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
@@ -1546,47 +3020,3 @@
 +        assert!(Animation::from_dotlottie_bytes(&bytes[..bytes.len() / 2]).is_err());
 +    }
 +}
---- /dev/null
-+++ b/tests/fixtures/zip9_glyph_text.json
-@@ -0,0 +1,41 @@
-+{
-+                "v":"5.7.6",
-+                "fr":30,
-+                "ip":0,
-+                "op":60,
-+                "w":128,
-+                "h":128,
-+                "fonts":{"list":[{"fName":"TestFont","fFamily":"Test Family","fStyle":"Regular","ascent":75}]},
-+                "chars":[
-+                    {
-+                        "ch":"A",
-+                        "size":100,
-+                        "style":"Regular",
-+                        "w":60,
-+                        "fFamily":"Test Family",
-+                        "data":{
-+                            "shapes":[
-+                                {
-+                                    "ty":"gr",
-+                                    "it":[
-+                                        {"ty":"sh","ks":{"a":0,"k":{"c":true,"i":[[0,0],[0,0],[0,0],[0,0]],"o":[[0,0],[0,0],[0,0],[0,0]],"v":[[0,-80],[60,-80],[60,0],[0,0]]}}}
-+                                    ]
-+                                }
-+                            ]
-+                        }
-+                    }
-+                ],
-+                "layers":[
-+                    {
-+                        "nm":"Text",
-+                        "ind":1,
-+                        "ty":5,
-+                        "t":{
-+                            "d":{"k":[{"s":{"s":100,"f":"TestFont","t":"A","j":0,"tr":0,"lh":120,"ls":0,"fc":[1,0,0]},"t":0}]},
-+                            "p":{},
-+                            "m":{"g":1},
-+                            "a":[]
-+                        }
-+                    }
-+                ]
-+            }

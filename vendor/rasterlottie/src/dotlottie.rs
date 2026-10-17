@@ -6,11 +6,16 @@ use std::{
 #[cfg(feature = "images")]
 use base64::{Engine, engine::general_purpose};
 use serde::Deserialize;
-use zip::{ZipArchive, result::ZipError};
+use zip::{ZipArchive, read::ZipReadOptions, result::ZipError};
 
 #[cfg(feature = "images")]
 use crate::Asset;
 use crate::{Animation, RasterlottieError};
+
+#[cfg(test)]
+thread_local! {
+    static ALLOCATION_REQUESTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 #[derive(Debug, Deserialize)]
 struct DotLottieManifest {
@@ -33,26 +38,105 @@ struct DotLottieInitial {
     animation: Option<String>,
 }
 
+/// Finite admission limits for loading a selected animation from a ZIP container.
+///
+/// Byte limits are inclusive. Zero rejects nonempty content. The total counts
+/// bytes actually read for the manifest, selected JSON and each image embedding,
+/// including repeated reads of the same entry. Base64 strings can occupy about
+/// four thirds of the image bytes; parsed model and ZIP metadata are additional.
+/// These are admission limits, not a process RSS or allocator limit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct DotLottieLimits {
+    /// Maximum compressed source bytes, checked before opening the ZIP archive.
+    pub max_archive_bytes: u64,
+    /// Maximum entry count after ZIP metadata construction. This does not bound
+    /// the constructor's central-directory allocation. Only compressed source
+    /// bytes are bounded before the ZIP constructor runs.
+    pub max_entries: usize,
+    /// Maximum expanded manifest bytes.
+    pub max_manifest_bytes: u64,
+    /// Maximum expanded selected animation JSON bytes.
+    pub max_animation_bytes: u64,
+    /// Maximum expanded encoded image bytes per embedding.
+    pub max_image_bytes: u64,
+    /// Maximum aggregate bytes read from entries actually used by the loader.
+    pub max_total_expanded_bytes: u64,
+}
+
+impl Default for DotLottieLimits {
+    fn default() -> Self {
+        Self {
+            max_archive_bytes: 16 * 1024 * 1024,
+            max_entries: 4096,
+            max_manifest_bytes: 1024 * 1024,
+            max_animation_bytes: 16 * 1024 * 1024,
+            max_image_bytes: 16 * 1024 * 1024,
+            max_total_expanded_bytes: 64 * 1024 * 1024,
+        }
+    }
+}
+
 pub fn load_animation_from_dotlottie_bytes(
     dotlottie: &[u8],
 ) -> Result<Animation, RasterlottieError> {
+    load_animation_from_dotlottie_bytes_with_limits(dotlottie, DotLottieLimits::default())
+}
+
+pub fn load_animation_from_dotlottie_bytes_with_limits(
+    dotlottie: &[u8],
+    limits: DotLottieLimits,
+) -> Result<Animation, RasterlottieError> {
+    if u64::try_from(dotlottie.len()).unwrap_or(u64::MAX) > limits.max_archive_bytes {
+        return Err(admission_error(
+            "archive",
+            "compressed source limit exceeded",
+        ));
+    }
     let mut archive = ZipArchive::new(Cursor::new(dotlottie))?;
-    let manifest_json = read_archive_string(&mut archive, "manifest.json")?;
+    if archive.len() > limits.max_entries {
+        return Err(admission_error(
+            "archive",
+            "ZIP entry count limit exceeded after metadata parsing",
+        ));
+    }
+    let mut remaining = limits.max_total_expanded_bytes;
+    let manifest_json = read_archive_string_any(
+        &mut archive,
+        &["manifest.json".to_string()],
+        limits.max_manifest_bytes,
+        &mut remaining,
+    )?;
     let manifest = serde_json::from_str::<DotLottieManifest>(&manifest_json).map_err(|error| {
         RasterlottieError::InvalidDotLottie {
             detail: format!("failed to parse manifest.json: {error}"),
         }
     })?;
     let animation_id = select_animation_id(&manifest)?;
-    let animation_json =
-        read_archive_string_any(&mut archive, &animation_candidate_paths(animation_id))?;
+    let animation_json = read_archive_string_any(
+        &mut archive,
+        &animation_candidate_paths(animation_id),
+        limits.max_animation_bytes,
+        &mut remaining,
+    )?;
     #[cfg(feature = "images")]
     let mut animation = Animation::from_json_str(&animation_json)?;
     #[cfg(not(feature = "images"))]
     let animation = Animation::from_json_str(&animation_json)?;
     #[cfg(feature = "images")]
-    embed_archive_images(&mut archive, &mut animation)?;
+    embed_archive_images(
+        &mut archive,
+        &mut animation,
+        limits.max_image_bytes,
+        &mut remaining,
+    )?;
     Ok(animation)
+}
+
+fn admission_error(path: &str, detail: &str) -> RasterlottieError {
+    RasterlottieError::InvalidDotLottie {
+        detail: format!("archive entry `{path}` exceeds admission limits: {detail}"),
+    }
 }
 
 fn select_animation_id(manifest: &DotLottieManifest) -> Result<&str, RasterlottieError> {
@@ -112,50 +196,100 @@ fn animation_candidate_paths(animation_id: &str) -> Vec<String> {
     candidates
 }
 
-fn read_archive_string(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
-    path: &str,
-) -> Result<String, RasterlottieError> {
-    let normalized = normalize_archive_path(path);
-    read_archive_string_any(archive, &[normalized])
-}
-
 fn read_archive_string_any(
     archive: &mut ZipArchive<Cursor<&[u8]>>,
     candidates: &[String],
+    per_entry_limit: u64,
+    remaining: &mut u64,
 ) -> Result<String, RasterlottieError> {
-    let (path, bytes) = read_archive_bytes_any(archive, candidates)?;
+    let (path, bytes) =
+        read_archive_bytes_optional(archive, candidates, per_entry_limit, remaining)?.ok_or_else(
+            || RasterlottieError::InvalidDotLottie {
+                detail: format!(
+                    "archive is missing required entry; tried {}",
+                    candidates.join(", ")
+                ),
+            },
+        )?;
     String::from_utf8(bytes).map_err(|error| RasterlottieError::InvalidDotLottie {
         detail: format!("archive entry `{path}` is not valid UTF-8: {error}"),
     })
 }
 
-fn read_archive_bytes_any(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
-    candidates: &[String],
-) -> Result<(String, Vec<u8>), RasterlottieError> {
-    read_archive_bytes_optional(archive, candidates)?.ok_or_else(|| {
-        RasterlottieError::InvalidDotLottie {
-            detail: format!(
-                "archive is missing required entry; tried {}",
-                candidates.join(", ")
-            ),
+/// Reject declared oversize before any payload read or output allocation, then
+/// enforce actual output as well. A forged header never authorizes extra bytes.
+fn read_bounded(
+    reader: &mut impl Read,
+    declared_size: u64,
+    limit: u64,
+    path: &str,
+) -> Result<Vec<u8>, RasterlottieError> {
+    if declared_size > limit || declared_size > isize::MAX as u64 {
+        return Err(admission_error(
+            path,
+            "declared expanded size exceeds remaining budget",
+        ));
+    }
+    let mut bytes = Vec::new();
+    if declared_size > 0 {
+        #[cfg(test)]
+        ALLOCATION_REQUESTS.with(|count| count.set(count.get() + 1));
+        bytes
+            .try_reserve_exact(declared_size as usize)
+            .map_err(|_| admission_error(path, "cannot reserve bounded entry buffer"))?;
+    }
+    let mut chunk = [0; 8192];
+    loop {
+        let available = limit.saturating_sub(bytes.len() as u64);
+        let requested = usize::try_from(available.saturating_add(1))
+            .unwrap_or(usize::MAX)
+            .min(chunk.len());
+        let count = reader.read(&mut chunk[..requested]).map_err(|error| {
+            RasterlottieError::InvalidDotLottie {
+                detail: format!("failed to read archive entry `{path}`: {error}"),
+            }
+        })?;
+        if count == 0 {
+            return Ok(bytes);
         }
-    })
+        if count as u64 > available {
+            return Err(admission_error(
+                path,
+                "actual expanded size exceeds remaining budget",
+            ));
+        }
+        if count > bytes.capacity() - bytes.len() {
+            #[cfg(test)]
+            ALLOCATION_REQUESTS.with(|requests| requests.set(requests.get() + 1));
+            bytes
+                .try_reserve_exact(count)
+                .map_err(|_| admission_error(path, "cannot reserve bounded entry buffer"))?;
+        }
+        bytes.extend_from_slice(&chunk[..count]);
+    }
 }
 
 fn read_archive_bytes_optional(
     archive: &mut ZipArchive<Cursor<&[u8]>>,
     candidates: &[String],
+    per_entry_limit: u64,
+    remaining: &mut u64,
 ) -> Result<Option<(String, Vec<u8>)>, RasterlottieError> {
     for candidate in candidates {
-        match archive.by_name(candidate) {
+        match archive.by_name_with_options(
+            candidate,
+            ZipReadOptions::new().enforce_header_consistency(true),
+        ) {
             Ok(mut file) => {
-                let mut bytes = Vec::new();
-                file.read_to_end(&mut bytes).map_err(|error| {
-                    RasterlottieError::InvalidDotLottie {
-                        detail: format!("failed to read archive entry `{candidate}`: {error}"),
-                    }
+                let declared_size = file.size();
+                let bytes = read_bounded(
+                    &mut file,
+                    declared_size,
+                    per_entry_limit.min(*remaining),
+                    candidate,
+                )?;
+                *remaining = remaining.checked_sub(bytes.len() as u64).ok_or_else(|| {
+                    admission_error(candidate, "aggregate expanded size overflow")
                 })?;
                 return Ok(Some((candidate.clone(), bytes)));
             }
@@ -163,7 +297,6 @@ fn read_archive_bytes_optional(
             Err(error) => return Err(error.into()),
         }
     }
-
     Ok(None)
 }
 
@@ -171,6 +304,8 @@ fn read_archive_bytes_optional(
 fn embed_archive_images(
     archive: &mut ZipArchive<Cursor<&[u8]>>,
     animation: &mut Animation,
+    per_image_limit: u64,
+    remaining: &mut u64,
 ) -> Result<(), RasterlottieError> {
     for asset in &mut animation.assets {
         if !asset.is_image_asset() || asset.is_embedded_image_asset() {
@@ -178,16 +313,22 @@ fn embed_archive_images(
         }
 
         let candidates = archive_image_candidates(asset);
-        let Some((path, bytes)) = read_archive_bytes_optional(archive, &candidates)? else {
+        let Some((path, bytes)) =
+            read_archive_bytes_optional(archive, &candidates, per_image_limit, remaining)?
+        else {
             continue;
         };
         let media_type = media_type_for_path(&path);
         asset.base_path = None;
         asset.embedded = Some(1);
-        asset.path = Some(format!(
-            "data:{media_type};base64,{}",
-            general_purpose::STANDARD.encode(bytes)
-        ));
+        let mut data_url = format!("data:{media_type};base64,");
+        let encoded_len = base64::encoded_len(bytes.len(), true)
+            .ok_or_else(|| admission_error(&path, "base64 size overflow"))?;
+        data_url
+            .try_reserve_exact(encoded_len)
+            .map_err(|_| admission_error(&path, "cannot reserve bounded base64 buffer"))?;
+        general_purpose::STANDARD.encode_string(bytes, &mut data_url);
+        asset.path = Some(data_url);
     }
 
     Ok(())
@@ -282,13 +423,69 @@ fn push_candidate(candidates: &mut Vec<String>, candidate: String) {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Cursor, Write};
+    use std::io::{Cursor, Read, Write};
 
     #[cfg(feature = "images")]
     use image::{ColorType, ImageEncoder, Rgba, RgbaImage, codecs::png::PngEncoder};
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
-    use super::load_animation_from_dotlottie_bytes;
+    use super::{ALLOCATION_REQUESTS, load_animation_from_dotlottie_bytes, read_bounded};
+
+    #[test]
+    fn bounded_reader_rejects_headers_without_reading_and_limits_actual_output() {
+        struct CountedReader {
+            remaining: usize,
+            read: usize,
+        }
+        impl Read for CountedReader {
+            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                let count = output.len().min(self.remaining);
+                output[..count].fill(b'x');
+                self.remaining -= count;
+                self.read += count;
+                Ok(count)
+            }
+        }
+        let mut reader = CountedReader {
+            remaining: 100_000,
+            read: 0,
+        };
+        ALLOCATION_REQUESTS.with(|count| count.set(0));
+        assert!(read_bounded(&mut reader, 17, 16, "large").is_err());
+        assert_eq!(reader.read, 0);
+        assert_eq!(ALLOCATION_REQUESTS.with(std::cell::Cell::get), 0);
+        assert!(read_bounded(&mut reader, 0, 16, "lying-header").is_err());
+        assert_eq!(reader.read, 17);
+        let mut exact = Cursor::new([b'x'; 16]);
+        assert_eq!(
+            read_bounded(&mut exact, 16, 16, "exact").unwrap(),
+            [b'x'; 16]
+        );
+        let mut zero = CountedReader {
+            remaining: 1,
+            read: 0,
+        };
+        assert!(read_bounded(&mut zero, 0, 0, "zero").is_err());
+        assert_eq!(zero.read, 1);
+        let mut huge = CountedReader {
+            remaining: 1,
+            read: 0,
+        };
+        assert!(read_bounded(&mut huge, u64::MAX, u64::MAX, "huge").is_err());
+        assert_eq!(huge.read, 0);
+        let mut large = CountedReader {
+            remaining: 32 * 1024,
+            read: 0,
+        };
+        ALLOCATION_REQUESTS.with(|count| count.set(0));
+        assert_eq!(
+            read_bounded(&mut large, 32 * 1024, 32 * 1024, "multi-chunk")
+                .unwrap()
+                .len(),
+            32 * 1024
+        );
+        assert_eq!(ALLOCATION_REQUESTS.with(std::cell::Cell::get), 1);
+    }
 
     fn archive_from_entries(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let cursor = Cursor::new(Vec::new());

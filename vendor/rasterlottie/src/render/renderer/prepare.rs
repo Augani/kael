@@ -1,5 +1,5 @@
 use super::{
-    super::assets::resolve_image_assets, ImageAssetResolver, LayerHierarchyCache,
+    super::assets::resolve_image_assets, ImageAssetResolver, ImageLimits, LayerHierarchyCache,
     PreparedAnimation, Renderer, ShapeCaches, ShapePlanCache, StaticPathCache,
 };
 use crate::{
@@ -11,13 +11,24 @@ impl Renderer {
     /// Creates a renderer that uses the provided support profile.
     #[must_use]
     pub const fn new(profile: SupportProfile) -> Self {
-        Self { profile }
+        Self {
+            profile,
+            image_limits: ImageLimits::DEFAULT,
+        }
     }
 
     /// Creates a renderer configured with the default target-corpus support profile.
     #[must_use]
     pub const fn target_corpus() -> Self {
         Self::new(SupportProfile::target_corpus())
+    }
+
+    /// Chooses the policy retained by this renderer and every prepared animation.
+    /// Existing entrypoints use [`ImageLimits::default`].
+    #[must_use]
+    pub const fn with_image_limits(mut self, limits: ImageLimits) -> Self {
+        self.image_limits = limits;
+        self
     }
 
     /// Analyzes an animation with this renderer's support profile.
@@ -39,7 +50,7 @@ impl Renderer {
             return Err(RasterlottieError::UnsupportedFeatures { report });
         }
 
-        let image_assets = resolve_image_assets(&resolved, None)?;
+        let image_assets = resolve_image_assets(&resolved, None, self.image_limits)?;
         let layer_hierarchy_cache = LayerHierarchyCache::from_animation(&resolved);
         let shape_plan_cache = ShapePlanCache::from_animation(&resolved);
         Ok(PreparedAnimation {
@@ -73,7 +84,8 @@ impl Renderer {
             return Err(RasterlottieError::UnsupportedFeatures { report });
         }
 
-        let image_assets = resolve_image_assets(&prepared_animation, Some(resolver))?;
+        let image_assets =
+            resolve_image_assets(&prepared_animation, Some(resolver), self.image_limits)?;
         let layer_hierarchy_cache = LayerHierarchyCache::from_animation(&prepared_animation);
         let shape_plan_cache = ShapePlanCache::from_animation(&prepared_animation);
         Ok(PreparedAnimation {

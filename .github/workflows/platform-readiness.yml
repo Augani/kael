@@ -132,6 +132,21 @@ jobs:
         with:
           cache-on-failure: true
 
+      - name: Execute mandatory native Lottie admission and pixels
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          python3 scripts/ci/verify-lottie-admission.py \
+            --backend native --evidence target/lottie-admission/native
+
+      - name: Preserve native Lottie admission evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lottie-admission-native-${{ matrix.label }}
+          path: target/lottie-admission/native
+          if-no-files-found: error
+
       - name: Verify native workspace
         shell: bash
         run: bash scripts/ci/verify-kael.sh default
@@ -487,6 +502,20 @@ jobs:
 
       - name: Install matching ChromeDriver
         uses: nanasess/setup-chromedriver@e913548694400f275b4070efcd90f47dbbc8914c # v3.0.0
+
+      - name: Execute mandatory Lottie admission in real Chrome
+        timeout-minutes: 15
+        run: |
+          python scripts/ci/verify-lottie-admission.py \
+            --backend chrome --evidence target/lottie-admission/chrome
+
+      - name: Preserve Chrome Lottie admission evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lottie-admission-chrome
+          path: target/lottie-admission/chrome
+          if-no-files-found: error
 
       - name: Execute mandatory WebGL2 shader and context-loss pixels
         timeout-minutes: 25

@@ -27,6 +27,6 @@ mod tests_layers;
 #[cfg(feature = "gif")]
 pub use renderer::GifRenderConfig;
 pub use renderer::{
-    ImageAssetResolver, PreparedAnimation, RasterFrame, RenderConfig, Renderer, Rgba8,
+    ImageAssetResolver, ImageLimits, PreparedAnimation, RasterFrame, RenderConfig, Renderer, Rgba8,
 };
 pub use tiny_skia::Pixmap;

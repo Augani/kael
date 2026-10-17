@@ -28,6 +28,23 @@ MAX_FORK_BYTES = ORIGINAL_BYTES * 2
 SELF_PROVENANCE = frozenset({
     "PATCHES.md", "UPSTREAM-SHA256.json", "zip9-compatibility.patch",
 })
+# Keep the reviewed implementation scope explicit. A matching reconstruction
+# alone must not authorize changes to another upstream source or license file.
+MODIFIED_RUST_ORIGINALS = frozenset({
+    "src/dotlottie.rs",
+    "src/lib.rs",
+    "src/model.rs",
+    "src/render/assets.rs",
+    "src/render/mod.rs",
+    "src/render/renderer/mod.rs",
+    "src/render/renderer/prepare.rs",
+    "src/render/renderer_types.rs",
+})
+MODIFIED_ORIGINALS = MODIFIED_RUST_ORIGINALS | {"Cargo.toml", "Cargo.lock"}
+ADDED_FILES = frozenset({
+    "UPSTREAM-Cargo.lock", "UPSTREAM-Cargo.toml",
+    "tests/zip9_compatibility.rs", "tests/fixtures/zip9_glyph_text.json",
+})
 FORK_DIRECTORY = Path(__file__).resolve().parents[2] / "vendor/rasterlottie"
 
 
@@ -213,6 +230,19 @@ def verify(data, fork_directory):
                 f"reconstruction patch failed:\n{completed.stdout.strip()}")
         shutil.copyfile(reconstructed / "Cargo.toml.orig", reconstructed / "UPSTREAM-Cargo.toml")
         expected = file_hashes(reconstructed)
+        modified_originals = {
+            name for name, original_hash in hashes.items()
+            if expected.get(name) != original_hash
+        }
+        require(modified_originals == MODIFIED_ORIGINALS,
+                "reconstructed original change set differs from reviewed scope; "
+                f"missing: {sorted(MODIFIED_ORIGINALS - modified_originals)}; "
+                f"unexpected: {sorted(modified_originals - MODIFIED_ORIGINALS)}")
+        added_files = expected.keys() - hashes.keys()
+        require(added_files == ADDED_FILES,
+                "reconstructed additions differ from reviewed scope; "
+                f"missing: {sorted(ADDED_FILES - added_files)}; "
+                f"unexpected: {sorted(added_files - ADDED_FILES)}")
         actual = file_hashes(fork_directory)
         require(SELF_PROVENANCE <= actual.keys(), "fork is missing its self-provenance files")
         actual = {name: value for name, value in actual.items() if name not in SELF_PROVENANCE}
@@ -221,10 +251,11 @@ def verify(data, fork_directory):
                 f"unexpected: {sorted(actual.keys() - expected.keys())}")
         for name, expected_hash in expected.items():
             require(actual[name] == expected_hash, f"reconstructed file differs: {name}")
-        # The ZIP migration must not alter upstream Rust, fixtures or licensing.
-        # Only the normalized manifest and historical lock location may differ.
+        # Only the declared admission/API implementation files, normalized
+        # manifest and historical lock location may differ from the registry.
+        # Original tests, fixtures, licenses and all other sources stay intact.
         for name, original_hash in hashes.items():
-            if name not in ("Cargo.toml", "Cargo.lock"):
+            if name not in MODIFIED_ORIGINALS:
                 require(actual.get(name) == original_hash, f"original file was modified or removed: {name}")
         require(actual.get("UPSTREAM-Cargo.lock") == hashes["Cargo.lock"],
                 "UPSTREAM-Cargo.lock does not preserve the original lockfile")
@@ -246,7 +277,8 @@ def main():
         return 1
     print(f"RASTERLOTTIE_FORK_OK: archive_sha256={ARCHIVE_SHA256} "
           f"original_files={ORIGINAL_FILES} original_bytes={ORIGINAL_BYTES} "
-          f"reconstructed_files={count}; original source/tests/licenses unchanged")
+          f"reconstructed_files={count} reviewed_rust_changes={len(MODIFIED_RUST_ORIGINALS)}; "
+          "other original sources/tests/fixtures/licenses unchanged")
     return 0
 
 
