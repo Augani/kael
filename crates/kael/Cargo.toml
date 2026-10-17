@@ -779,7 +779,7 @@ optional = true
 package = "zed-font-kit"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.secret-service]
-version = "4"
+version = "5.2"
 features = ["rt-async-io-crypto-rust"]
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.open]

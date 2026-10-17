@@ -44,7 +44,7 @@ features = [
 ]
 
 [target.'cfg(target_os = "linux")'.dependencies.secret-service]
-version = "4"
+version = "5.2"
 features = ["rt-async-io-crypto-rust"]
 
 [lints]
