@@ -14,7 +14,10 @@ use std::{
     io::Read as _,
     path::{Path, PathBuf},
     str,
-    sync::{Arc, Weak},
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use thiserror::Error;
@@ -324,6 +327,7 @@ impl LottieAnimation {
         self.data.in_point + frame_index.min(self.data.total_frames.saturating_sub(1)) as f32
     }
 
+    #[cfg(test)]
     pub(crate) fn render_batch(
         &self,
         render_size: Size<DevicePixels>,
@@ -370,12 +374,38 @@ impl LottieAnimation {
         })
     }
 
+    pub(crate) fn render_batch_cancellable(
+        &self,
+        render_size: Size<DevicePixels>,
+        frames: &[usize],
+        cancelled: &AtomicBool,
+    ) -> Result<Option<LottieRenderBatch>, LottieError> {
+        self.render_batch_with_control(render_size, frames, MAX_LOTTIE_RENDER_BATCH_BYTES, |_| {
+            !cancelled.load(Ordering::Acquire)
+        })
+    }
+
+    #[cfg(test)]
     pub(crate) fn render_batch_with_budget(
         &self,
         render_size: Size<DevicePixels>,
         frames: &[usize],
         max_bytes: usize,
     ) -> Result<LottieRenderBatch, LottieError> {
+        self.render_batch_with_control(render_size, frames, max_bytes, |_| true)
+            .map(|batch| batch.expect("unconditionally enabled render"))
+    }
+
+    pub(crate) fn render_batch_with_control(
+        &self,
+        render_size: Size<DevicePixels>,
+        frames: &[usize],
+        max_bytes: usize,
+        mut should_continue: impl FnMut(usize) -> bool,
+    ) -> Result<Option<LottieRenderBatch>, LottieError> {
+        if !should_continue(0) {
+            return Ok(None);
+        }
         validate_render_size(render_size)?;
         if frames.len() > MAX_LOTTIE_RENDER_BATCH {
             return Err(anyhow::anyhow!(
@@ -384,10 +414,10 @@ impl LottieAnimation {
             .into());
         }
         if frames.is_empty() {
-            return Ok(LottieRenderBatch {
+            return Ok(Some(LottieRenderBatch {
                 render_size,
                 frames: Vec::new(),
-            });
+            }));
         }
         let plan = self.render_plan(render_size)?;
         // Bound output buffers retained by this call before preparation, renderer
@@ -403,13 +433,25 @@ impl LottieAnimation {
             )
             .into());
         }
+        if !should_continue(0) {
+            return Ok(None);
+        }
         with_prepared_animation(&self.data.bytes, |prepared| {
             let mut rendered_frames = Vec::with_capacity(frames.len());
 
             for &frame_index in frames {
+                if !should_continue(rendered_frames.len()) {
+                    return Ok(None);
+                }
                 #[cfg(test)]
                 RENDERED_FRAME_COUNT.with(|count| count.set(count.get() + 1));
-                let frame = prepared.render_frame(self.timeline_frame(frame_index), plan.config)?;
+                let frame = prepared.render_frame(self.timeline_frame(frame_index), plan.config);
+                // A synchronous frame cannot be interrupted. Retired work releases
+                // its frame and partial batch as soon as that frame returns.
+                if !should_continue(rendered_frames.len() + 1) {
+                    return Ok(None);
+                }
+                let frame = frame?;
                 if (frame.width, frame.height) != (plan.width, plan.height) {
                     return Err(LottieError::InvalidFrameBuffer);
                 }
@@ -419,10 +461,10 @@ impl LottieAnimation {
                 });
             }
 
-            Ok(LottieRenderBatch {
+            Ok(Some(LottieRenderBatch {
                 render_size,
                 frames: rendered_frames,
-            })
+            }))
         })
     }
 
@@ -873,8 +915,8 @@ fn cache_prepared_animation(bytes: &Arc<[u8]>, animation: PreparedAnimation) {
 
 fn with_prepared_animation<T>(
     bytes: &Arc<[u8]>,
-    render: impl FnOnce(&PreparedAnimation) -> Result<T, LottieError>,
-) -> Result<T, LottieError> {
+    render: impl FnOnce(&PreparedAnimation) -> Result<Option<T>, LottieError>,
+) -> Result<Option<T>, LottieError> {
     let entry = if let Some(entry) = take_prepared_animation(bytes) {
         entry
     } else {
@@ -889,7 +931,11 @@ fn with_prepared_animation<T>(
     // borrow, this makes a nested render safe: it can independently miss and
     // prepare instead of panicking on a re-entrant RefCell borrow.
     let result = render(&entry.animation);
-    cache_prepared_animation(bytes, entry.animation);
+    // Cancellation also retires this worker's prepared/decoded assets instead
+    // of keeping obsolete work in its thread-local LRU.
+    if !matches!(result, Ok(None)) {
+        cache_prepared_animation(bytes, entry.animation);
+    }
     result
 }
 
@@ -1084,6 +1130,42 @@ mod tests {
         "h":32,
         "layers":[]
     }"#;
+
+    #[test]
+    fn cancelled_render_skips_preparation_and_retires_partial_batch_assets() {
+        let animation =
+            LottieAnimation::from_json_str(r#"{"fr":30,"ip":0,"op":30,"w":1,"h":1,"layers":[]}"#)
+                .unwrap();
+        let size = size(DevicePixels(1), DevicePixels(1));
+        reset_prepared_animation_cache();
+        assert!(
+            animation
+                .render_batch_cancellable(size, &[0, 1, 2], &AtomicBool::new(true))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(prepared_animation_count(), 0);
+        assert_eq!(RENDERED_FRAME_COUNT.with(std::cell::Cell::get), 0);
+
+        // Finish two genuine frames, then retire both the partial output and
+        // the prepared animation instead of retaining either in the worker LRU.
+        assert!(
+            animation
+                .render_batch_with_control(size, &[0, 1, 2], 12, |completed| completed < 2)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(RENDERED_FRAME_COUNT.with(std::cell::Cell::get), 2);
+        assert_eq!(prepared_animation_count(), 1);
+        assert_eq!(prepared_animation_cache_len(), 0);
+        let resumed = animation.render_batch(size, &[2, 3]).unwrap();
+        assert_eq!(resumed.frames.len(), 2);
+        assert_eq!(resumed.frames[0].frame_index, 2);
+        assert_eq!(resumed.frames[0].image.size(0), size);
+        assert_eq!(prepared_animation_count(), 2);
+        assert_eq!(prepared_animation_cache_len(), 1);
+        reset_prepared_animation_cache();
+    }
 
     #[test]
     fn parses_basic_animation_metadata() {
