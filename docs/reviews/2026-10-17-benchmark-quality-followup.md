@@ -378,3 +378,48 @@ logical pixels, scale 2, wakes from a model-only idle notification and records
 readback retains 6,067 text-probe pixels and the earlier scene fingerprint.
 Concurrent correctness builds were allowed; these are correctness checks and
 do not compare latency or power. Fresh platform execution remains separate.
+
+The `ac7811f` [platform run](https://github.com/Augani/kael/actions/runs/39061136764)
+retains the mandatory hosted Metal failure. Its raw macOS job log records
+completed GPU work and the successful model-only wake, but presentation callbacks
+still have `presented_time=0`. The final window is visible and active at 723×460,
+scale 1; the gate fails with `no drawable presentation callback within two
+seconds`. Physical-Mac passes do not waive this hosted requirement. Linux native
+quality passes its workspace, backend, package and documentation checks, then
+fails strict dependency audit on newly published advisories. The Windows 2022,
+browser and Linux renderer/WebView jobs pass at this checkpoint. Later text,
+forms and dependency fixes are absent from those CI binaries.
+
+The [dependency validation](2026-10-17-dependency-quality-validation.json)
+separately identifies `02e341f` and `d40166f`. Rustls 0.23.46 and Quinn-proto
+0.11.18 replace vulnerable root lockfile releases; the comparison lock retains
+its already newer Quinn-proto 0.11.19 and updates Rustls. Office and the optional
+dotLottie loader both resolve ZIP 9.0.5. Office preserves strict UTF-8/ambiguous
+name checks while adapting ZIP's fallible name getter.
+
+The licensed `kael_rasterlottie` fork keeps all 40 upstream implementation files
+unchanged at this dependency-only checkpoint. It preserves attribution, original
+hashes and a complete reconstruction patch, adds four native/browser compatibility
+tests, and explicitly adopts Kael's existing lint policy. The original upstream
+style policy produces the same 169 library diagnostics before and after the
+ZIP-only change; it is not claimed as passing. Kael depends on the named fork
+through a direct path/version/package alias, so registry consumers receive the
+same dependency after publication. A root-only patch would not provide that.
+No crate has been published.
+
+All 116 fork native tests/doctests and four actual Chrome WebAssembly cases pass
+with zero ignored tests. Eight HTTP and 84 networking tests pass, including local
+WebSocket behavior. All six Office package tests pass. Strict native all-target
+Clippy with Lottie enabled and the Kael/Office Wasm consumer checks pass.
+The isolated fork archive verifies at 119,421 compressed bytes with licenses,
+provenance and fixtures; the complete 39-package preflight remains separate.
+The checked-in reconstruction verifier also rejects tampering, oversized files,
+links, special files and unsafe paths. Its 16 negative probes use copies.
+
+At advisory database `999ec89d`, the new root scan reports zero vulnerabilities.
+Strict audit still fails on six unmaintained warnings: three D-Bus advisories
+across two dependency families. No ignore has been added. Their replacement
+requires coordinated portal, tray, keyring, notifications and native accessibility
+dependencies; changing one direct dependency would leave the other families.
+ZIP compatibility does not establish decompressed archive/image memory admission;
+that is the next independent implementation slice.

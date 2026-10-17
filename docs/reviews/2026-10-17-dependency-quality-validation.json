@@ -1,0 +1,696 @@
+{
+  "date": "2026-10-17",
+  "scope": "Dependency quality checkpoint:02e341f network security locks plus d40166f ZIP9-only Office and licensed rasterlottie fork; later archive/image memory-admission edits are excluded",
+  "source_checkpoints": {
+    "network": {
+      "commit": "02e341f6f2586b68645f15bd98ad14250447a97e",
+      "parent": "f71ab68bd6710d69abc9131e56ee6eb3434e41a2",
+      "files_sha256": {
+        "Cargo.lock": "24d8175f0adacb6e3889afd9cafeae93733b992adb4697ebb39e96d22d581108",
+        "benchmarks/desktop-comparison/Cargo.lock": "6b49d772a3798aefa44b1ff9e4b0f0cb4b3bd8ee78a89157daca9b86a03e5b09"
+      }
+    },
+    "zip_only": {
+      "commit": "d40166fb132dd2c24cd93c44017b919daf21339f",
+      "files_sha256": {
+        "Cargo.lock": "b1b84f981fcc7d4c0e7a60a0d08a4f5ea5f66fc5f0ed086fc40eeee6e1a70e64",
+        "Cargo.toml": "ff54489574d916c2213a0c1fc7ec8c39f677b985d5d42bb7a20c7e970333177a",
+        "crates/kael/Cargo.toml": "1a65bcdcf58fe561a5c935df3ce325a804b638c8baf0fbe3d179ba76d9230af0",
+        "crates/kael_office/Cargo.toml": "31497b01b398d6dfbc359b37319a41649426b377487c6d609b2058124303d731",
+        "crates/kael_office/src/lib.rs": "6eb817b63dcbdad128679389559d100b17317424383d22a0d97b69d4a67d9150",
+        "docs/src/releasing.md": "6518f313951013708bb6eaa0a44f01c08420e1a678f5eabe0f002d3ed77d4e19",
+        "scripts/ci/verify-rasterlottie-fork.py": "9c26c3995b363fb225b8953f17b661e0a56223e9628a654ca9e9cfdb1f7f913c",
+        "scripts/publish-all.sh": "0dd7305b119305802078078622c2d3bd866780c222feaf9d2b4a1a1e6dfe71ed",
+        "vendor/rasterlottie/.cargo_vcs_info.json": "a58ab507625ad7cf2f11bfdebb68484e7707498ebf4b755666e66330b6f42f01",
+        "vendor/rasterlottie/CHANGELOG.md": "9930306e98c244fa2c7d06c96ec6ec8a840d0ff964280b1659080a63056af4a9",
+        "vendor/rasterlottie/Cargo.toml": "69813f43b14e58d04fd8ec336683abab300ad5bc3fed0709919da4ab67be69a4",
+        "vendor/rasterlottie/Cargo.toml.orig": "d424a705c1dc8751ecc4274173fb2e8a8c4ce7d9fb9a9ce2d9ddf1ae7ce2a796",
+        "vendor/rasterlottie/LICENSE-APACHE": "7ab0c9e6952273543efe57a911c16140eb431c838ac34d32268fc8c773b9f892",
+        "vendor/rasterlottie/LICENSE-MIT": "4b41420cbb308d33022de3bcefc155091f562784ef5bf985b067929e918c03df",
+        "vendor/rasterlottie/PATCHES.md": "8ddef051ee39444d01447ab8fb21a85b9ff6d0ac8195931aa50bb1fbc0bd9d9e",
+        "vendor/rasterlottie/README.md": "04bef8e34969e89a8be31cf8bf61b2eff2cb6fc69ca90503edeb0245124b50a9",
+        "vendor/rasterlottie/UPSTREAM-Cargo.lock": "6382b05794b1cbb6f46f0dce99dcb4020fae9c67748b45547e2b7d031fa394f2",
+        "vendor/rasterlottie/UPSTREAM-Cargo.toml": "d424a705c1dc8751ecc4274173fb2e8a8c4ce7d9fb9a9ce2d9ddf1ae7ce2a796",
+        "vendor/rasterlottie/UPSTREAM-SHA256.json": "506ab0a085c8f868ce00275d0f13bffe87f73cdbc9ca5c85b111eb641778d1c0",
+        "vendor/rasterlottie/examples/benchmark_render.rs": "923f960bd334e9ef0d8011cf268e7b7d79e5195d9731172002a00633f3250554",
+        "vendor/rasterlottie/examples/rasterlottie_cli.rs": "27b3018cacf160b72c776554ba72086ea1eefed2110a717e5d1d950a039f386e",
+        "vendor/rasterlottie/src/dotlottie.rs": "9b5bd41cc1001765b010dd98f57fc35250435379f367100b98e5124f1608a8f1",
+        "vendor/rasterlottie/src/effects.rs": "53d524295bc395b24511eca6b8df07e0a0ac60a00c885f2c08356e8343beae17",
+        "vendor/rasterlottie/src/error.rs": "761959399cb91d9d5f9a4bbba66a177ee684972f59b41b6a8574efd2037c2277",
+        "vendor/rasterlottie/src/expression.rs": "e297da1944747c088c75f7657d6fd7db96485876fe77dcbf56c107f175bca468",
+        "vendor/rasterlottie/src/lib.rs": "af759c50464468f9cff4e0278d861723c275db13ce3ff07bbf94aefc6cac03f1",
+        "vendor/rasterlottie/src/model.rs": "803de07a7c4fc5dbdceab56eb0bd2ecdef5c584d6680b1d1216ddfd1ad629efe",
+        "vendor/rasterlottie/src/model_parse.rs": "2cf096b840d770ac5808bbfdc2a053c8589345bedb7c1df29ea9b2c2f9c2f73b",
+        "vendor/rasterlottie/src/model_types.rs": "561fa0acabc10de992b0a654f6a4b11787cbfc73d53d14d0a48244b26363170f",
+        "vendor/rasterlottie/src/render/assets.rs": "f372edd0dd27dc3746199ea5fee5d2dbf96e1d99124aa04518cfc04666ecc54e",
+        "vendor/rasterlottie/src/render/composition.rs": "cef6e19c8aa011ef045819695e3a86166aa3a1a4c1265e509ea3a72942523a75",
+        "vendor/rasterlottie/src/render/drawing.rs": "0a41b62cbd20ce01cc8fdda77efcd0a2e2a0066e33d70179d2a2f16c4649185b",
+        "vendor/rasterlottie/src/render/drawing_paths.rs": "4de0fa151eacb1dc62820a0c183be25b8588249af13535726df34eb14234702b",
+        "vendor/rasterlottie/src/render/gif_encode.rs": "f54b2cf45e1b9b16557ce3331437b589ee7a987c2b26707f42bf55c43b0877c6",
+        "vendor/rasterlottie/src/render/layer_effects.rs": "836cea2ecf59e02b31e9bbb18acdcf40bf5e2f1c757ed9b4fa742de305e6c3dc",
+        "vendor/rasterlottie/src/render/mod.rs": "6e761731974e42eb77ff9921d32c70249b12b98412893f23124b25861e26cacb",
+        "vendor/rasterlottie/src/render/renderer/gif.rs": "b4824bdc0103a1f9de94602bbe4690384af30b11eea631650bf428bee200b55c",
+        "vendor/rasterlottie/src/render/renderer/mod.rs": "78bd3d57887d0bea14f9a93de7137f369475a68a0d60c3b2cf805ea4eb66c7d0",
+        "vendor/rasterlottie/src/render/renderer/prepare.rs": "e5ee17a552e151100810861bd2f6c50aae1afe97a87c0048aff4c61c7a31e1a4",
+        "vendor/rasterlottie/src/render/renderer/raster.rs": "eb37a7e3502b97f3290bf300075b9f7b451b8c84f6ba07c2d15fe45007da1f10",
+        "vendor/rasterlottie/src/render/renderer_cache.rs": "f007804c9c9af21c18b183310cc8ff40e474a592792864826059373fd96ee5fb",
+        "vendor/rasterlottie/src/render/renderer_types.rs": "5775e762a34c4e44040b29913b1287015a1d3ae43d3d26d790d26da36beda30b",
+        "vendor/rasterlottie/src/render/sample_cache.rs": "d3660ab29f065091995e94be873654f9335865e74fa34a97839ebbc554e94000",
+        "vendor/rasterlottie/src/render/scene.rs": "508831a70a1abd8f6563a1f92708dc53549467e9c5234d2af76f88844431233a",
+        "vendor/rasterlottie/src/render/tests.rs": "e4303072a2d5ea33166c7abdaeaf1e7bb63f9422f86196f0cc5799fa313073d1",
+        "vendor/rasterlottie/src/render/tests_advanced/fixtures.rs": "15e084f2c805a86a96bf1f999639198bb59cd9779e393295206d6e934d276884",
+        "vendor/rasterlottie/src/render/tests_advanced/gif.rs": "380b19c7cd6e46617e530fac0051b358feb8dfde4662a52e419d129bc6ecb55c",
+        "vendor/rasterlottie/src/render/tests_advanced/mod.rs": "e011c6e775b31a1cc070d2d0c2ce12498aa68130bc9c6470f63f40ac3e14ccb6",
+        "vendor/rasterlottie/src/render/tests_advanced/rendering.rs": "ae3584027812bcd362c4699acb00f96c9791ce9b1d2bc08b1342244cfa3299fa",
+        "vendor/rasterlottie/src/render/tests_advanced_effects.rs": "5a8aa66a6e5dae51424452c2049adcdc791f017cca3a01738493c99fe53689d6",
+        "vendor/rasterlottie/src/render/tests_layers.rs": "84bbe39a6cd5ee69187ca87e4ed2d319dc14b841d3c3f722c031ac67607029f4",
+        "vendor/rasterlottie/src/render/text.rs": "9427e8c896cda32eb39e6364a827597fcb33fa5c5c82eea730a477bcbfd27cef",
+        "vendor/rasterlottie/src/render/values.rs": "f2639083ecc8cd92d04f24ab6651a52fb34064c5ea12a5507169172ff1d30a6c",
+        "vendor/rasterlottie/src/support/analyzer.rs": "4fa267dcd9d70829044327b9fefb2532d908f0ad71457c06ab7a8f7817126b3f",
+        "vendor/rasterlottie/src/support/analyzer_shapes.rs": "264657dfaff9ed81de1c7a84f62ef2cfa92bb999edb909086ffb5f470cd39c4d",
+        "vendor/rasterlottie/src/support/analyzer_text.rs": "852e9584c63f12ff2cca910e95dfc665615283898a33b931cb5f9e4138560371",
+        "vendor/rasterlottie/src/support/mod.rs": "fb5f5cee142099d842c51e2bffdaa412b6f42c5c75e795b92500bae981902468",
+        "vendor/rasterlottie/src/support/tests.rs": "9f6aba77d3f93c1c72a906f90c4bad0d7842b5b3429d2e8f126c14d2a3c3a2cb",
+        "vendor/rasterlottie/src/support/tests_advanced.rs": "e527f3f63a49d94545cf99bc345786704b2a1bb77bef137351b5da00a4e3e6fa",
+        "vendor/rasterlottie/src/timeline.rs": "d2a21e40d42c80027e980aee7ccde338c5d20df4462787a709c6600cbe597235",
+        "vendor/rasterlottie/src/trace_macros.rs": "fcf293ce335cc425e5ee73615f0173cd1a173497b811c2f8fd8603b33f1f9d37",
+        "vendor/rasterlottie/tests/corpus.rs": "f8c7c6e835a87454fd2760b5daa9380242e67d56d81e215511a6362230d7d626",
+        "vendor/rasterlottie/tests/corpus/manifest.json": "34e8ad4c607000f25e9be31c2a7ca9857ded4f0524267bcdcffcb4af12d162dc",
+        "vendor/rasterlottie/tests/corpus/masking.json": "148058ba208cc76a3b3fb420756d05b260395619dae324291144e5ae1e7e14ae",
+        "vendor/rasterlottie/tests/corpus/polystar.json": "54b5a5d4929d3aa27fa3a96429580ded8d7b10853cecf0e97a26e49b3fe354d8",
+        "vendor/rasterlottie/tests/corpus/stroke_dash.json": "b9b8d88aa32736a5666d5cbc5363e0c7ded30b2f2df4d93eb4b95b173ea51212",
+        "vendor/rasterlottie/tests/fixtures/gradient_linear_opacity_stops.json": "302d2dbb45b07b1c8531f4bdcd5fa6650027afda84632bb28818ca6a1d3d42b1",
+        "vendor/rasterlottie/tests/fixtures/gradient_radial_highlight_angle.json": "97f08658be86c2271574cefdda43556887d0a9c9a47a22490d16f0a16940a320",
+        "vendor/rasterlottie/tests/fixtures/layer_parenting_basic.json": "bdac877511c0c1615a83af67e20298f9b29fed081eaeb7ff11582d1a9923868a",
+        "vendor/rasterlottie/tests/fixtures/mask_subtract_hole.json": "792006e183ce754de14dafb2222f0c6046dd54cab9b602d943fbbf8f44eadd1d",
+        "vendor/rasterlottie/tests/fixtures/polystar_basic.json": "fbd0d9c8de064de1df3505ec37194158c8560306a10a4914d9921a31e12ac5cf",
+        "vendor/rasterlottie/tests/fixtures/repeater_basic.json": "16fb0ddbc32b817b94073f7239c8f0032c4d172a9d079d66ac248bc3255024b1",
+        "vendor/rasterlottie/tests/fixtures/stroke_dash_basic.json": "c9e49c9a8d32cad4f368a9508254d895c37b396e6fda22b25819571e4eee13d4",
+        "vendor/rasterlottie/tests/fixtures/track_matte_parent_redirect.json": "172af06d907a4d1b09e9929266990be8e60574c241212d5054a538cccee83043",
+        "vendor/rasterlottie/tests/fixtures/trim_path_basic.json": "5859509566de0ba9546b7f278fc33d9c9cb11714a18f8876f11dd3045248c294",
+        "vendor/rasterlottie/tests/fixtures/zip9_glyph_text.json": "bb0caa3e53af91f053e688d9287858e2045e83da6cb89f9b939ed91abfa3f983",
+        "vendor/rasterlottie/tests/image_diff.rs": "0515c3a52c10b856a3077349b291c74157fd86a5e6b6c0d0a4af71697bf328e0",
+        "vendor/rasterlottie/tests/reference/README.md": "c79fab05f172e28f2eb9942735a56ca600acb44f9692457fb44ee6eee62535a9",
+        "vendor/rasterlottie/tests/reference/layer_parenting_basic.png": "35ef74cac00dfe58b2d9a3c830b52f29f986914f43ddf1b0c8b390b3debfa58a",
+        "vendor/rasterlottie/tests/reference/polystar_basic.png": "a03d7ea6b9a7dbd0bcdfed45618c21674567f5b6082ed9b2c4e61871a442174c",
+        "vendor/rasterlottie/tests/reference/render_fixture.html": "13cfa99387ab5ca1e5d6385b24fe18f4025f040da48899b9f0bfc6779e0cdfac",
+        "vendor/rasterlottie/tests/reference/repeater_basic.png": "2a70b750ba588fdf2b8a6ca72093c113f208d7e9614e76859e9ca716253d451d",
+        "vendor/rasterlottie/tests/reference/stroke_dash_basic.png": "8dfab7ef3d0e9aad3c33f3aabe1af77927e2b7c94c765f1da11303c0b2797bb2",
+        "vendor/rasterlottie/tests/reference/trim_path_basic.png": "aaf2b30ddca3a8bdd43c052197ba77125429806829684dcd41e946f8abc1a328",
+        "vendor/rasterlottie/tests/zip9_compatibility.rs": "a793aaefd023edbc0c7860f69cc81981867111273db6d4393d0d2f44e2172caa",
+        "vendor/rasterlottie/tools/bench/compare-with-rlottie-docker.ps1": "523fcb1fd0d2c56177a1c55eb0b73bd4eda4b5971258afd0269d887499560674",
+        "vendor/rasterlottie/tools/bench/rlottie_bench.cpp": "792dce3c1b8e20e20efd09b06933cd28a2ed5cdba1fe9fd5aff4e93921de53e5",
+        "vendor/rasterlottie/zip9-compatibility.patch": "09b29b7ddfff232ceb62e550916aa22d2e89cbdccdacafcdc0d3b5b18a8a86b5"
+      }
+    },
+    "hash_method": "SHA-256 of raw git show <immutable-commit>:<path> bytes, including binary fixtures; working-tree files are not used for source hashes",
+    "frozen_candidate_matches_committed_vendor": {
+      "checked_files": 80,
+      "result": "All 80 frozen candidate file hashes match d40166f Git blobs."
+    }
+  },
+  "resolved_security_dependencies": {
+    "root_before": [
+      {
+        "name": "quinn-proto",
+        "version": "0.11.15",
+        "checksum": "4fcb935c5bec503c2f0e306bdd3e58bb9029dcb14fa8d9ac76e3a5256ac0763e"
+      },
+      {
+        "name": "rasterlottie",
+        "version": "0.2.1",
+        "checksum": "384686130a2b365f82258f5e444c512e57989addcf2b45e9913c4ef6f0e95a24"
+      },
+      {
+        "name": "rustls",
+        "version": "0.23.45",
+        "checksum": "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+      },
+      {
+        "name": "zip",
+        "version": "8.6.0",
+        "checksum": "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+      }
+    ],
+    "root_after_network": [
+      {
+        "name": "quinn-proto",
+        "version": "0.11.18",
+        "checksum": "a9746dbde176634f4f2f1faf2404e30a31b2bc1e9cafb5329c95d8177a18c9fc"
+      },
+      {
+        "name": "rasterlottie",
+        "version": "0.2.1",
+        "checksum": "384686130a2b365f82258f5e444c512e57989addcf2b45e9913c4ef6f0e95a24"
+      },
+      {
+        "name": "rustls",
+        "version": "0.23.46",
+        "checksum": "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
+      },
+      {
+        "name": "zip",
+        "version": "8.6.0",
+        "checksum": "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+      }
+    ],
+    "root_after_zip": [
+      {
+        "name": "kael_rasterlottie",
+        "version": "0.4.1",
+        "checksum": null
+      },
+      {
+        "name": "quinn-proto",
+        "version": "0.11.18",
+        "checksum": "a9746dbde176634f4f2f1faf2404e30a31b2bc1e9cafb5329c95d8177a18c9fc"
+      },
+      {
+        "name": "rustls",
+        "version": "0.23.46",
+        "checksum": "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
+      },
+      {
+        "name": "zip",
+        "version": "9.0.5",
+        "checksum": "6e04976da629d3b04204ba8105b396a193af8ad2583b2c79bfb3ab8af580a11e"
+      }
+    ],
+    "benchmark_before": [
+      {
+        "name": "quinn-proto",
+        "version": "0.11.19",
+        "checksum": "0e750cca55fe4f0439a15d0bb529da9651e79993e8e72c61a899a36d462befbe"
+      },
+      {
+        "name": "rustls",
+        "version": "0.23.45",
+        "checksum": "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+      }
+    ],
+    "benchmark_after_network": [
+      {
+        "name": "quinn-proto",
+        "version": "0.11.19",
+        "checksum": "0e750cca55fe4f0439a15d0bb529da9651e79993e8e72c61a899a36d462befbe"
+      },
+      {
+        "name": "rustls",
+        "version": "0.23.46",
+        "checksum": "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
+      }
+    ],
+    "benchmark_scope": "Existing quinn-proto0.11.19 was preserved; rustls0.23.45 was updated to0.23.46. The disabled-Lottie benchmark graph has no rasterlottie/ZIP dependency."
+  },
+  "execution": {
+    "host": "aarch64-apple-darwin",
+    "shared_cargo_target_dir": "/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target",
+    "root_invocation_provenance": "Exact root commands supplied by the coordinator; compiler/test logs do not embed command lines. Artifact-only fork commands are recorded in commands.json.",
+    "environment": {
+      "path": ".artifacts/2026-10-17-rasterlottie-zip9-spike/environment.json",
+      "sha256": "cb12546755e9123439ff328b601c71bc926564f81c8be67fbd7614d12bb42515",
+      "bytes": 1548
+    },
+    "toolchain": {
+      "rustc": "1.97.1 (8bab26f4f 2026-07-14)",
+      "cargo": "1.97.1 (c980f4866 2026-06-30)",
+      "wasm_bindgen_test_runner": "0.2.122",
+      "wasm_bindgen_test": "0.3.72",
+      "chrome": "155.0.8059.82",
+      "chromedriver": "154.0.8037.92"
+    },
+    "frozen_spike_result": {
+      "path": ".artifacts/2026-10-17-rasterlottie-zip9-spike/result.json",
+      "sha256": "5b979b8073ee2cfc9d3c648b10428f93a142b729b6f99442b0b8c139fb67ae0b",
+      "bytes": 3991
+    },
+    "frozen_evidence_manifest": {
+      "path": ".artifacts/2026-10-17-rasterlottie-zip9-spike/evidence-hashes.json",
+      "sha256": "99561c01e601fc7a7695267406b4c5fbbb8b2791b08100c9c4440235db8d3e26",
+      "bytes": 2971
+    },
+    "all_frozen_evidence_hashes_reverified": true
+  },
+  "native_validation": {
+    "http_and_net": {
+      "path": ".artifacts/2026-10-17-network-patched-tests.log",
+      "sha256": "2bb4326df058c55a9e29c49fb2d77f6761de733904b4c3c71b6e992b20673a38",
+      "bytes": 8241,
+      "command": "cargo test --locked -p kael_http_client -p kael_net --lib",
+      "result": "pass",
+      "packages": [
+        {
+          "package": "kael_http_client",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "package": "kael_net",
+          "passed": 84,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    "network_strict_clippy": {
+      "path": ".artifacts/2026-10-17-network-patched-clippy.log",
+      "sha256": "63ada54b7a8a8dc44d24f9faff96804e548da8b084aee58e55bb693c83eab7a6",
+      "bytes": 1828,
+      "command": "cargo clippy --locked -p kael_http_client -p kael_net --all-targets -- -D warnings",
+      "result": "pass"
+    },
+    "office": {
+      "path": ".artifacts/2026-10-17-zip9-office-tests-green.log",
+      "sha256": "997bf37ce058653c05e1aadcf8e6eceabe5498c554eff9b672ce559a2c594c53",
+      "bytes": 903,
+      "command": "cargo test --locked -p kael_office --lib",
+      "result": "pass",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    "fork_all_features": {
+      "path": ".artifacts/2026-10-17-rasterlottie-zip9-spike/fork-native-final.log",
+      "sha256": "e85dbd190ef668ec7f1fb7bd38e0e299998d8197f8fe46796d5e9a3d6ef82700",
+      "bytes": 11006,
+      "command": "CARGO_TARGET_DIR=/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target cargo test --locked --manifest-path .artifacts/2026-10-17-rasterlottie-zip9-spike/fork-check/Cargo.toml -p kael_rasterlottie --all-features",
+      "result": "pass",
+      "unit_tests": 108,
+      "corpus_tests": 1,
+      "image_golden_tests": 1,
+      "compatibility_tests": 4,
+      "doctests": 2,
+      "passed": 116,
+      "failed": 0,
+      "ignored": 0,
+      "scope": "Isolated exact fork snapshot; all80files match committed d40166f fork"
+    },
+    "strict_native_with_lottie": {
+      "path": ".artifacts/2026-10-17-zip9-native-clippy.log",
+      "sha256": "da7614067cc14022ad8d9c46ffc616fc0594c44e1b4557e74b6bf902794a28b3",
+      "bytes": 3021,
+      "command": "cargo clippy --locked -p kael -p kael_ui -p kael_office -p kael_rasterlottie --all-targets --features kael/lottie -- -D warnings",
+      "result": "pass",
+      "existing_future_incompatibility_notice": "Cargo notes block0.1.6 future Rust incompatibility; no current compile/lint error"
+    },
+    "fork_project_policy_strict_clippy": {
+      "path": ".artifacts/2026-10-17-rasterlottie-zip9-spike/fork-project-policy-clippy.log",
+      "sha256": "e2fd4ace708d5ad47f4dda608db4f387e14edc9b581b5c0eef99270617e1c305",
+      "bytes": 215,
+      "command": "CARGO_TARGET_DIR=/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target cargo clippy --locked --manifest-path .artifacts/2026-10-17-rasterlottie-zip9-spike/fork-check/Cargo.toml -p kael_rasterlottie --all-targets --all-features -- -D warnings",
+      "result": "pass",
+      "policy": "Explicit exact Kael workspace lint policy; not a claim of passing original upstream item-ordering/pedantic/unwrap rules"
+    }
+  },
+  "browser_and_wasm_validation": {
+    "fork_actual_chrome": {
+      "path": ".artifacts/2026-10-17-rasterlottie-zip9-spike/fork-browser-final.log",
+      "sha256": "c6259f7988ee605fe5c08fc239790981992b1ba59317059ff6d3a501d24e9d5b",
+      "bytes": 1011,
+      "command": "env CHROMEDRIVER=/Users/augustusotu/Projects/kael/.artifacts/browser-tools/chromedriver WASM_BINDGEN_TEST_WEBDRIVER_JSON=/Users/augustusotu/Projects/kael/.artifacts/browser-tools/webdriver.json CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner WASM_BINDGEN_TEST_TIMEOUT=60 CARGO_TARGET_DIR=/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target cargo test --locked --manifest-path .artifacts/2026-10-17-rasterlottie-zip9-spike/fork-check/Cargo.toml -p kael_rasterlottie --no-default-features --features dotlottie,images,text --target wasm32-unknown-unknown --test zip9_compatibility",
+      "result": "pass",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "contracts": [
+        "Stored and Deflated initial-manifest animation selection",
+        "Stored and Deflated archivePNG exact raster pixels",
+        "Stored and Deflated embedded glyph-text foreground/background raster pixels",
+        "Malformed and truncated archive errors"
+      ],
+      "scope": "Actual headless Chrome WebAssembly execution; CPU rasterizer pixels, not GPU renderer proof"
+    },
+    "kael_lottie_consumer": {
+      "path": ".artifacts/2026-10-17-zip9-wasm-kael-consumer.log",
+      "sha256": "e9542dfe1b4180bcfbe03d2f64531ba6e9cda55852743a3f3c70a7415e06b221",
+      "bytes": 10883,
+      "command": "cargo check --locked -p kael --target wasm32-unknown-unknown --no-default-features --features browser,lottie",
+      "result": "pass",
+      "scope": "Compile-only actual Kael dependency alias and Lottie consumer"
+    },
+    "office_consumer": {
+      "path": ".artifacts/2026-10-17-zip9-wasm-office-consumer.log",
+      "sha256": "f21765980a27418df497d20640581a7a651a3e7dc27ca9e44c54f009297f5744",
+      "bytes": 390,
+      "command": "cargo check --locked -p kael_office --target wasm32-unknown-unknown",
+      "result": "pass",
+      "scope": "Compile-only; no new Office ZIP9 browser runtime acceptance claimed"
+    }
+  },
+  "consumer_and_provenance": {
+    "all_feature_metadata": {
+      "path": ".artifacts/2026-10-17-zip9-all-feature-metadata.json",
+      "sha256": "e39e71ff797b5d8b8367b6ce5f2a1b2b4b4a21f02022f90d4393231a0a85a773",
+      "bytes": 5451288,
+      "command": "cargo metadata --locked --format-version 1 --all-features",
+      "result": "pass",
+      "actual_dependency_edges": [
+        {
+          "from": "kael",
+          "package": "kael_rasterlottie",
+          "alias": "rasterlottie",
+          "requirement": "^0.4.1",
+          "optional": true,
+          "default_features": false,
+          "features": [
+            "dotlottie",
+            "images",
+            "text"
+          ],
+          "path": "vendor/rasterlottie"
+        },
+        {
+          "from": "kael_office",
+          "package": "zip",
+          "alias": null,
+          "requirement": "^9",
+          "optional": false,
+          "default_features": false,
+          "features": [
+            "deflate-flate2"
+          ],
+          "path": null
+        },
+        {
+          "from": "kael_rasterlottie",
+          "package": "zip",
+          "alias": null,
+          "requirement": "^9",
+          "optional": true,
+          "default_features": false,
+          "features": [
+            "deflate"
+          ],
+          "path": null
+        }
+      ],
+      "resolved_zip_versions": [
+        "9.0.5"
+      ],
+      "source_reference": "d40166fb132dd2c24cd93c44017b919daf21339f"
+    },
+    "reconstruction_verifier": {
+      "path": ".artifacts/2026-10-17-rasterlottie-fork-verifier-root.log",
+      "sha256": "fe2fc4946801b8f84591937190221831c7ae495b889aaa9e8aa8162c7fba0270",
+      "bytes": 207,
+      "command": "python3 scripts/ci/verify-rasterlottie-fork.py --archive .artifacts/2026-10-17-rasterlottie-zip9-spike/rasterlottie-0.2.1.crate",
+      "result": "pass",
+      "upstream_archive_sha256": "384686130a2b365f82258f5e444c512e57989addcf2b45e9913c4ef6f0e95a24",
+      "original_files": 74,
+      "original_bytes": 665043,
+      "reconstructed_files": 80,
+      "unchanged_rust_implementation_files": 40
+    },
+    "benchmark_consumer": {
+      "path": ".artifacts/2026-10-17-zip9-benchmark-consumer.log",
+      "sha256": "54810ffbaa3919411cac04264937791bcd0e17c53f5e7248abcbb45f6ca837a2",
+      "bytes": 907,
+      "command": "cargo check --locked --manifest-path benchmarks/desktop-comparison/Cargo.toml --no-default-features --features kael-engine",
+      "result": "pass",
+      "scope": "Disabled Lottie graph; establishes network/Kael compile compatibility, not ZIP feature execution"
+    },
+    "isolated_fork_package": {
+      "path": ".artifacts/2026-10-17-rasterlottie-zip9-spike/fork-package-final.log",
+      "sha256": "61b447cce9eb12b21486995cd824c06c854e3dbf4678081b9aabb339defe9161",
+      "bytes": 638,
+      "command": "CARGO_TARGET_DIR=/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target cargo package --locked --allow-dirty --all-features --manifest-path .artifacts/2026-10-17-rasterlottie-zip9-spike/fork-check/Cargo.toml -p kael_rasterlottie",
+      "result": "pass",
+      "scope": "Isolated fork package and extracted-library build only; not full Kael consumer archive preflight",
+      "archive_sha256": "ead6cabb2fe82ad0f758df741a60aeed41989ec154025799bca225685dae1bbe",
+      "archive_bytes": 119421,
+      "archive_file_count": 75,
+      "source_bytes": 686267,
+      "required_provenance_licenses_tests_present": true,
+      "examples_benchmarks_and_historical_lock_absent": true,
+      "packaged_zip_versions": [
+        "9.0.5"
+      ],
+      "actual_package": "kael_rasterlottie",
+      "actual_version": "0.4.1",
+      "actual_library": "rasterlottie"
+    },
+    "isolated_archive": {
+      "path": ".artifacts/2026-10-17-rasterlottie-zip9-spike/kael_rasterlottie-0.4.1.crate",
+      "sha256": "ead6cabb2fe82ad0f758df741a60aeed41989ec154025799bca225685dae1bbe",
+      "bytes": 119421
+    },
+    "full_release_preflight": {
+      "result": "not_performed_for_this_checkpoint",
+      "selected_packages": 39,
+      "fork_precedes_kael": true,
+      "pending_command": "bash scripts/publish-all.sh --preflight",
+      "reason": "Deferred until separate memory-admission source is frozen; frozen ZIP-only evidence does not claim39-package archive/consumer acceptance"
+    },
+    "registry_upload": {
+      "performed": false,
+      "required_release_order": "kael_rasterlottie before kael; actual source/consumer metadata declares a direct package/path/version alias. Full Kael consumer archive normalization and verification remain pending."
+    }
+  },
+  "audit": {
+    "raw": {
+      "path": ".artifacts/2026-10-17-zip9-audit.json",
+      "sha256": "187846916913456e74a7fb15cfda44a80ecfbf591a4dfd40057cd80efe58d116",
+      "bytes": 17943,
+      "command": "cargo audit --json",
+      "vulnerabilities_found": false,
+      "vulnerability_count": 0,
+      "dependency_count": 1105,
+      "database": {
+        "advisory-count": 1338,
+        "last-commit": "999ec89d5d3f10f20be14750ec8c2d8b44e0ac9b",
+        "last-updated": "2026-10-17T17:23:59+02:00"
+      },
+      "raw_warning_counts": {
+        "unmaintained": 9,
+        "unsound": 1
+      },
+      "raw_warnings": [
+        {
+          "kind": "unmaintained",
+          "crate": "paste",
+          "version": "1.0.15",
+          "advisory": "RUSTSEC-2024-0436"
+        },
+        {
+          "kind": "unmaintained",
+          "crate": "proc-macro-error",
+          "version": "1.0.4",
+          "advisory": "RUSTSEC-2024-0370"
+        },
+        {
+          "kind": "unmaintained",
+          "crate": "ttf-parser",
+          "version": "0.25.1",
+          "advisory": "RUSTSEC-2026-0192"
+        },
+        {
+          "kind": "unmaintained",
+          "crate": "zbus_names",
+          "version": "3.0.0",
+          "advisory": "RUSTSEC-2026-0371"
+        },
+        {
+          "kind": "unmaintained",
+          "crate": "zbus_names",
+          "version": "4.3.4",
+          "advisory": "RUSTSEC-2026-0371"
+        },
+        {
+          "kind": "unmaintained",
+          "crate": "zvariant",
+          "version": "4.2.0",
+          "advisory": "RUSTSEC-2026-0370"
+        },
+        {
+          "kind": "unmaintained",
+          "crate": "zvariant",
+          "version": "5.13.1",
+          "advisory": "RUSTSEC-2026-0370"
+        },
+        {
+          "kind": "unmaintained",
+          "crate": "zvariant_derive",
+          "version": "4.2.0",
+          "advisory": "RUSTSEC-2026-0372"
+        },
+        {
+          "kind": "unmaintained",
+          "crate": "zvariant_derive",
+          "version": "5.13.1",
+          "advisory": "RUSTSEC-2026-0372"
+        },
+        {
+          "kind": "unsound",
+          "crate": "glib",
+          "version": "0.18.5",
+          "advisory": "RUSTSEC-2024-0429"
+        }
+      ],
+      "settings": {
+        "target_arch": [],
+        "target_os": [],
+        "severity": null,
+        "ignore": [],
+        "informational_warnings": [
+          "unmaintained",
+          "unsound",
+          "notice"
+        ]
+      }
+    },
+    "strict_gate": {
+      "path": ".artifacts/2026-10-17-zip9-strict-audit.log",
+      "sha256": "739ee618801a8d2661fbbfae5df9c22ac82801663a88ad37cf777d4214407740",
+      "bytes": 1599,
+      "command": "bash scripts/ci/audit-dependencies.sh",
+      "result": "fail",
+      "exit_code": 1,
+      "denied_warning_count": 6,
+      "unique_advisories": 3,
+      "major_dependency_families": 2,
+      "remaining_warnings": [
+        {
+          "kind": "unmaintained",
+          "crate": "zbus_names",
+          "version": "3.0.0",
+          "advisory": "RUSTSEC-2026-0371"
+        },
+        {
+          "kind": "unmaintained",
+          "crate": "zbus_names",
+          "version": "4.3.4",
+          "advisory": "RUSTSEC-2026-0371"
+        },
+        {
+          "kind": "unmaintained",
+          "crate": "zvariant",
+          "version": "4.2.0",
+          "advisory": "RUSTSEC-2026-0370"
+        },
+        {
+          "kind": "unmaintained",
+          "crate": "zvariant",
+          "version": "5.13.1",
+          "advisory": "RUSTSEC-2026-0370"
+        },
+        {
+          "kind": "unmaintained",
+          "crate": "zvariant_derive",
+          "version": "4.2.0",
+          "advisory": "RUSTSEC-2026-0372"
+        },
+        {
+          "kind": "unmaintained",
+          "crate": "zvariant_derive",
+          "version": "5.13.1",
+          "advisory": "RUSTSEC-2026-0372"
+        }
+      ]
+    },
+    "ignore_policy": {
+      "source_path": "scripts/ci/audit-dependencies.sh",
+      "source_sha256": "ca1bf53da798371be8570f8494c478cbf86a2dcba6567c808c9589d8ac87b786",
+      "source_commit": "d40166fb132dd2c24cd93c44017b919daf21339f",
+      "existing_accepted_advisories": [
+        "RUSTSEC-2024-0412",
+        "RUSTSEC-2024-0413",
+        "RUSTSEC-2024-0414",
+        "RUSTSEC-2024-0415",
+        "RUSTSEC-2024-0416",
+        "RUSTSEC-2024-0417",
+        "RUSTSEC-2024-0418",
+        "RUSTSEC-2024-0419",
+        "RUSTSEC-2024-0420",
+        "RUSTSEC-2024-0429",
+        "RUSTSEC-2024-0436",
+        "RUSTSEC-2024-0370",
+        "RUSTSEC-2026-0192"
+      ],
+      "new_ignores_added": 0,
+      "unchanged_from_pre_network_checkpoint": "f71ab68bd6710d69abc9131e56ee6eb3434e41a2"
+    },
+    "status": "Zero reported vulnerabilities in the audited root lock at database999ec89d5d3f10f20be14750ec8c2d8b44e0ac9b; strict audit remains red on six unmaintained D-Bus warnings. This is not a fully green audit.",
+    "remaining_work": "Coordinated zbus6/parent and AccessKit-fork migration with Linux portal/tray/secret-service/AT-SPI runtime validation; outside ZIP-only checkpoint"
+  },
+  "diagnostic_only_and_superseded_failures": {
+    "optional_quinn_direct": {
+      "path": ".artifacts/2026-10-17-patched-quinn-check.log",
+      "sha256": "98d0040caaefc0031463085d05f37f1afef6dd157c5e0de1eb556fc429646ace",
+      "bytes": 118844,
+      "command": "cargo check --locked -p quinn-proto",
+      "result": "Cargo resolver panic",
+      "scope": "Optional dependency direct package selection diagnostic; not counted as product test acceptance"
+    },
+    "standalone_quinn_consumer": {
+      "path": ".artifacts/2026-10-17-patched-quinn-consumer.log",
+      "sha256": "8c05d059be49df7b3a1322065e9f9179512aa1fb0fe8428039b29c3be96c91b5",
+      "bytes": 1351,
+      "command": "cargo check --manifest-path .artifacts/2026-10-17-patched-quinn-consumer/Cargo.toml",
+      "result": "pass",
+      "scope": "Separate standalone compile check, not Kael product runtime. Default rustls AWS-LC features differ from root ring graph.",
+      "manifest": {
+        "path": ".artifacts/2026-10-17-patched-quinn-consumer/Cargo.toml",
+        "sha256": "70a6b8247dff2b8462d2735cc6d921637296b720eb0f0081cd06b59092a52613",
+        "bytes": 172
+      },
+      "source": {
+        "path": ".artifacts/2026-10-17-patched-quinn-consumer/src/main.rs",
+        "sha256": "d66c7fb89580a3c77fad3bec06b0392f589340b90fe30a6318b96ac40e357d7f",
+        "bytes": 103
+      },
+      "lock": {
+        "path": ".artifacts/2026-10-17-patched-quinn-consumer/Cargo.lock",
+        "sha256": "cc3e1faf84680782bb0c4e23248d216414428c16b9d4a982721c2feceb548a8d",
+        "bytes": 24731
+      }
+    },
+    "office_zip9_api_transition": {
+      "path": ".artifacts/2026-10-17-zip9-office-tests.log",
+      "sha256": "f8dc0932bcc1ebe9935a5f089752440e5ad1146b15bdde21d4ae86c5ef719e8c",
+      "bytes": 1157,
+      "command": "cargo test --locked -p kael_office --lib",
+      "result": "initialcompilefailure",
+      "reason": "ZIP9 entry.name() returns Result<Cow<str>>; committed Office getter handles errors with context before comparison; superseded by six green native tests"
+    },
+    "fork_original_lint_policy": {
+      "path": ".artifacts/2026-10-17-rasterlottie-zip9-spike/clippy-baseline-comparison.json",
+      "sha256": "eb2231c1e372c277887cc8db85e03f8a34f263b1138fec50e6639a8f26074466",
+      "bytes": 329,
+      "result": "169 identical upstream/candidate library diagnostics; policy adoption recorded in fork manifest/provenance"
+    },
+    "initial_browser_runner_mismatch": {
+      "path": ".artifacts/2026-10-17-rasterlottie-zip9-spike/fork-browser.log",
+      "sha256": "0f59b219fc498367843dfb344ab05dfbd4b92f21c61a56838b80fee8c2cb7c1a",
+      "bytes": 3350,
+      "result": "toolchain mismatch before execution",
+      "reason": "Fresh artifact resolution selected wasm-bindgen0.2.129 but installed runner was0.2.122; artifact lock aligned to root0.2.122/test0.3.72 and all four real browser tests rerun successfully"
+    }
+  },
+  "other_checks": {
+    "format": {
+      "path": ".artifacts/2026-10-17-zip9-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "command": "cargo fmt --all -- --check",
+      "result": "pass"
+    },
+    "documentation": {
+      "path": ".artifacts/2026-10-17-zip9-docs.log",
+      "sha256": "0fb87ecae09e05f755df5b77bb290e1636d51926a57bb5e2361c5a19dddcce3f",
+      "bytes": 104,
+      "command": "bash scripts/ci/verify-docs.sh",
+      "result": "pass",
+      "pages": 46
+    }
+  },
+  "limitations": [
+    "Counts are per graph and overlap:8HTTP,84net,6Office,116fork and4Chrome are not a unique aggregate test count.",
+    "Evidence is tied to immutable network02e341f and ZIP-onlyd40166f sources; subsequent dotLottie archive/image memory guards are outside this record.",
+    "All40fork implementation files are unchanged from upstream0.2.1 here. ZIP9 remediation does not provide decompressed-entry, decoded-image, resize-scratch, or aggregate retained-memory admission.",
+    "The 119421-byte,75-file package is the isolated fork only; the 39-package consumer archive preflight is pending and no registry upload occurred.",
+    "Native/wasm compile checks do not establish Windows/Linux runtime, real QUIC network interoperability, Office browser runtime, GPU output, or application performance improvement.",
+    "Zero vulnerabilities is scoped to the root lock and recorded advisory database. Raw informational warnings remain; strict audit denies six warnings and no new ignore was added.",
+    "Frozen native font-cache/navigation performance evidence predates these dependency changes; no performance attribution is made for this security checkpoint."
+  ]
+}

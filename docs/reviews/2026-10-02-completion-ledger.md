@@ -122,3 +122,13 @@ A separate three-pair navigation experiment isolates a bounded 128-handle
 CoreText font cache: active/churn CPU medians fall 17.4%/30.5%, sampled peak RSS
 rises 0.80 MiB, draw p99 falls 5.0% and CPU submission p99 rises 194→624 µs.
 This is a workload-specific tradeoff, with no overall or display-latency ranking.
+
+The next dependency checkpoints (`02e341f`, `d40166f`) replace vulnerable
+TLS/QUIC/ZIP releases, route published Kael consumers through the licensed
+`kael_rasterlottie` fork, and retain Office name/admission checks. Native fork,
+browser compatibility, networking, Office, lint and Wasm consumer evidence is
+linked in the October 17 follow-up. The recorded root scan has zero known
+vulnerabilities, while strict audit still denies six unmaintained D-Bus warnings;
+no new ignore is added. The new 39-package preflight and latest platform matrix
+remain required. ZIP dependency compatibility does not close the newly identified
+archive expansion, image resize/scratch and retained-image admission gaps.
