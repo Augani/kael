@@ -4555,7 +4555,7 @@ mod mounted_parent_layout_regression_tests {
             crate::init(cx);
             crate::theme::install_theme(cx, crate::theme::Theme::dark());
         });
-        let (host, mut window) = app.add_window_view(|_, cx| Host {
+        let (host, window) = app.add_window_view(|_, cx| Host {
             table: cx.new(|cx| {
                 let columns = [200.0, 120.0, 104.0, 80.0, 104.0, 144.0, 112.0, 200.0]
                     .into_iter()
@@ -4584,7 +4584,7 @@ mod mounted_parent_layout_regression_tests {
             }),
             parent_wheel_events: Rc::default(),
         });
-        draw_at(&mut window, 1100.0, 792.0);
+        draw_at(window, 1100.0, 792.0);
         window.update(|_, cx| {
             assert_eq!(host.read(cx).table.read(cx).cached_row_count(), 0);
             assert_eq!(
@@ -4597,7 +4597,7 @@ mod mounted_parent_layout_regression_tests {
                 px(0.0)
             );
         });
-        draw_at(&mut window, 950.0, 792.0);
+        draw_at(window, 950.0, 792.0);
 
         for phase in ["skeleton", "cached-short", "cached-long"] {
             if phase == "cached-short" {
@@ -4619,7 +4619,7 @@ mod mounted_parent_layout_regression_tests {
                     });
                 });
             }
-            draw_at(&mut window, 950.0, 792.0);
+            draw_at(window, 950.0, 792.0);
             let (position, previous_y, first_header_x) = window.update(|window, cx| {
                 let table = host.read(cx).table.read(cx);
                 let body = table.scroll_handle.bounds();
@@ -4661,13 +4661,13 @@ mod mounted_parent_layout_regression_tests {
             }
         }
         // Shrink the scroll range back to zero, then grow it without replacing the table.
-        draw_at(&mut window, 1100.0, 792.0);
+        draw_at(window, 1100.0, 792.0);
         window.update(|_, cx| {
             let table = host.read(cx).table.read(cx);
             assert_eq!(table.horizontal_scroll_handle.max_offset().width, px(0.0));
             assert_eq!(table.horizontal_scroll_handle.offset().x, px(0.0));
         });
-        draw_at(&mut window, 950.0, 792.0);
+        draw_at(window, 950.0, 792.0);
         let position = window.update(|_, cx| {
             host.read(cx).table.read(cx).scroll_handle.bounds().origin + point(px(24.0), px(24.0))
         });
