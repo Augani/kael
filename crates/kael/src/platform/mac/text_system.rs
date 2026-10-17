@@ -48,7 +48,7 @@ use pathfinder_geometry::{
     vector::{Vector2F, Vector2I},
 };
 use smallvec::SmallVec;
-use std::{borrow::Cow, char, convert::TryFrom, ops::Range, sync::Arc};
+use std::{borrow::Cow, char, collections::VecDeque, convert::TryFrom, ops::Range, sync::Arc};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::open_type::apply_features_and_fallbacks;
@@ -70,6 +70,94 @@ const SYSTEM_DISPLAY_REPRESENTATIVE_SIZE: f64 = 24.0;
 /// so it matches what AppKit ships at body sizes (11-19pt).
 const SYSTEM_TEXT_REPRESENTATIVE_SIZE: f64 = 14.0;
 
+// Bound native font handles independently of the text/layout caches. CoreText
+// owns the fonts' internal allocations, so this is a handle count, not a byte cap.
+const SIZED_FONT_CACHE_CAPACITY: usize = 128;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct SizedFontKey {
+    font_id: FontId,
+    size_bits: u32,
+}
+
+struct SizedFontEntry<T> {
+    font: T,
+    recently_used: bool,
+}
+
+struct SizedFontCache<T = CTFont> {
+    fonts: HashMap<SizedFontKey, SizedFontEntry<T>>,
+    clock: VecDeque<SizedFontKey>,
+    #[cfg(test)]
+    disabled: bool,
+    #[cfg(test)]
+    creations: usize,
+}
+
+impl<T> Default for SizedFontCache<T> {
+    fn default() -> Self {
+        Self {
+            fonts: HashMap::default(),
+            clock: VecDeque::new(),
+            #[cfg(test)]
+            disabled: false,
+            #[cfg(test)]
+            creations: 0,
+        }
+    }
+}
+
+impl<T: Clone> SizedFontCache<T> {
+    fn font(&mut self, font_id: FontId, size: Pixels, create: impl FnOnce() -> T) -> T {
+        let size = f32::from(size);
+        let cacheable = size.is_finite() && size > 0.0;
+        #[cfg(test)]
+        let cacheable = cacheable && !self.disabled;
+        let key = SizedFontKey {
+            font_id,
+            size_bits: size.to_bits(),
+        };
+
+        if cacheable && let Some(entry) = self.fonts.get_mut(&key) {
+            entry.recently_used = true;
+            return entry.font.clone();
+        }
+
+        #[cfg(test)]
+        {
+            self.creations += 1;
+        }
+        let font = create();
+        if !cacheable {
+            return font;
+        }
+
+        if self.fonts.len() == SIZED_FONT_CACHE_CAPACITY {
+            // One queue slot per entry; a second chance takes at most two
+            // revolutions and never allocates or sorts an eviction worklist.
+            loop {
+                let oldest = self.clock.pop_front().expect("nonempty sized font cache");
+                let entry = self.fonts.get_mut(&oldest).expect("sized font clock key");
+                if std::mem::take(&mut entry.recently_used) {
+                    self.clock.push_back(oldest);
+                } else {
+                    self.fonts.remove(&oldest);
+                    break;
+                }
+            }
+        }
+        self.clock.push_back(key);
+        self.fonts.insert(
+            key,
+            SizedFontEntry {
+                font: font.clone(),
+                recently_used: false,
+            },
+        );
+        font
+    }
+}
+
 pub(crate) struct MacTextSystem(RwLock<MacTextSystemState>);
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -83,6 +171,7 @@ struct MacTextSystemState {
     memory_source: MemSource,
     system_source: SystemSource,
     fonts: Vec<FontKitFont>,
+    sized_fonts: SizedFontCache,
     font_selections: HashMap<Font, FontId>,
     font_ids_by_postscript_name: HashMap<String, FontId>,
     font_ids_by_font_key: HashMap<FontKey, SmallVec<[FontId; 4]>>,
@@ -100,6 +189,7 @@ impl MacTextSystem {
             memory_source: MemSource::empty(),
             system_source: SystemSource::new(),
             fonts: Vec::new(),
+            sized_fonts: SizedFontCache::default(),
             font_selections: HashMap::default(),
             font_ids_by_postscript_name: HashMap::default(),
             font_ids_by_font_key: HashMap::default(),
@@ -731,12 +821,15 @@ impl MacTextSystemState {
                 max_ascent = max_ascent.max(font_metrics.ascent * font_scale);
                 max_descent = max_descent.max(-font_metrics.descent * font_scale);
 
+                // The effective ID already includes the optical substitution
+                // above and the loaded font's features/fallback descriptor.
+                // Reuse only that immutable font at this exact requested size;
+                // string content and explicit run/ligature boundaries stay intact.
+                let native_font = self.sized_fonts.font(run.font_id, font_size, || {
+                    font.native_font().clone_with_font_size(font_size.into())
+                });
                 unsafe {
-                    string.set_attribute(
-                        cf_range,
-                        kCTFontAttributeName,
-                        &font.native_font().clone_with_font_size(font_size.into()),
-                    );
+                    string.set_attribute(cf_range, kCTFontAttributeName, &native_font);
                 }
             }
         }
@@ -1135,11 +1228,33 @@ mod lenient_font_attributes {
 
 #[cfg(test)]
 mod tests {
+    use super::{SIZED_FONT_CACHE_CAPACITY, SizedFontCache, SizedFontKey};
     use crate::{
-        FontRun, GlyphId, GlyphRasterMode, MacTextSystem, PlatformTextSystem, RenderGlyphParams,
-        font, point, px,
+        FontFallbacks, FontFeatures, FontId, FontRun, GlyphId, GlyphRasterMode, LineLayout,
+        MacTextSystem, PlatformTextSystem, RenderGlyphParams, font, point, px,
     };
+    use core_foundation::base::TCFType;
+    use std::{hint::black_box, sync::Arc, time::Instant};
     use unicode_segmentation::UnicodeSegmentation;
+
+    fn assert_same_shaping(actual: &LineLayout, expected: &LineLayout) {
+        assert_eq!(actual.font_size, expected.font_size);
+        assert_eq!(actual.width, expected.width);
+        assert_eq!(actual.ascent, expected.ascent);
+        assert_eq!(actual.descent, expected.descent);
+        assert_eq!(actual.len, expected.len);
+        assert_eq!(actual.runs.len(), expected.runs.len());
+        for (actual, expected) in actual.runs.iter().zip(&expected.runs) {
+            assert_eq!(actual.font_id, expected.font_id);
+            assert_eq!(actual.glyphs.len(), expected.glyphs.len());
+            for (actual, expected) in actual.glyphs.iter().zip(&expected.glyphs) {
+                assert_eq!(actual.id, expected.id);
+                assert_eq!(actual.position, expected.position);
+                assert_eq!(actual.index, expected.index);
+                assert_eq!(actual.is_emoji, expected.is_emoji);
+            }
+        }
+    }
 
     #[test]
     fn uncached_native_bom_split_run_reproducer() {
@@ -1154,6 +1269,7 @@ mod tests {
             native.char_len()
         );
         let mut state = fonts.0.write();
+        state.sized_fonts.disabled = true;
         let line = state.layout_line(
             text,
             px(13.0),
@@ -1187,7 +1303,8 @@ mod tests {
                         len: text.len() - split,
                     },
                 ];
-                for _ in 0..2 {
+                for disabled in [true, false] {
+                    state.sized_fonts.disabled = disabled;
                     let line = state.layout_line(text, px(13.0), &runs);
                     assert_eq!(line.len, text.len());
                     for run in &line.runs {
@@ -1206,6 +1323,294 @@ mod tests {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn sized_native_fonts_reuse_exact_handles_for_distinct_labels() {
+        let fonts = MacTextSystem::new();
+        let font_id = fonts.font_id(&font("Helvetica")).unwrap();
+        let mut state = fonts.0.write();
+        for index in 0..256 {
+            let text = format!("Reports {index} · 日本語 العربية 👩🏽‍💻 café");
+            state.layout_line(
+                &text,
+                px(14.0),
+                &[FontRun {
+                    font_id,
+                    len: text.len(),
+                }],
+            );
+        }
+        assert_eq!(state.sized_fonts.creations, 1);
+        assert_eq!(state.sized_fonts.fonts.len(), 1);
+        let native = state
+            .sized_fonts
+            .fonts
+            .values()
+            .next()
+            .unwrap()
+            .font
+            .clone();
+        let key = SizedFontKey {
+            font_id,
+            size_bits: 14.0f32.to_bits(),
+        };
+        let hit = state
+            .sized_fonts
+            .font(font_id, px(14.0), || panic!("cached native font"));
+        assert_eq!(native.as_concrete_TypeRef(), hit.as_concrete_TypeRef());
+        assert_eq!(state.sized_fonts.clock.front(), Some(&key));
+    }
+
+    #[test]
+    fn sized_native_font_cache_bounds_and_releases_owners() {
+        // The same generic owner path drops exactly one retained handle per
+        // eviction. An active caller's independent owner remains valid.
+        let mut cache = SizedFontCache::default();
+        let retained = cache.font(FontId(0), px(14.0), || Arc::new(()));
+        let weak = Arc::downgrade(&retained);
+        for id in 1..=SIZED_FONT_CACHE_CAPACITY * 4 {
+            cache.font(FontId(id), px(14.0), || Arc::new(()));
+            assert!(cache.fonts.len() <= SIZED_FONT_CACHE_CAPACITY);
+            assert_eq!(cache.clock.len(), cache.fonts.len());
+        }
+        assert_eq!(Arc::strong_count(&retained), 1);
+        drop(retained);
+        assert!(weak.upgrade().is_none());
+        let survivors: Vec<_> = cache
+            .fonts
+            .values()
+            .map(|entry| Arc::downgrade(&entry.font))
+            .collect();
+        drop(cache);
+        assert!(survivors.iter().all(|owner| owner.upgrade().is_none()));
+
+        let fonts = MacTextSystem::new();
+        let font_id = fonts.font_id(&font("Helvetica")).unwrap();
+        let base = fonts.0.read().fonts[font_id.0].native_font();
+        let mut cache = SizedFontCache::default();
+        let retained = cache.font(font_id, px(14.0), || base.clone_with_font_size(14.0));
+        let retained_pointer = retained.as_concrete_TypeRef();
+        for index in 0..SIZED_FONT_CACHE_CAPACITY {
+            let size = 30.0 + index as f32;
+            cache.font(font_id, px(size), || base.clone_with_font_size(size.into()));
+        }
+        assert!(!cache.fonts.contains_key(&SizedFontKey {
+            font_id,
+            size_bits: 14.0f32.to_bits()
+        }));
+        assert_eq!(retained.as_concrete_TypeRef(), retained_pointer);
+        assert_eq!(retained.pt_size(), 14.0);
+        assert_eq!(retained.postscript_name(), base.postscript_name());
+    }
+
+    #[test]
+    fn sized_native_font_cache_preserves_exact_keys_and_invalid_size_behavior() {
+        let mut cache = SizedFontCache::default();
+        assert_eq!(cache.font(FontId(1), px(14.0), || 1), 1);
+        assert_eq!(cache.font(FontId(1), px(14.0), || 9), 1);
+        assert_eq!(cache.font(FontId(2), px(14.0), || 2), 2);
+        let adjacent = f32::from_bits(14.0f32.to_bits() + 1);
+        assert_eq!(cache.font(FontId(1), px(adjacent), || 3), 3);
+        assert_eq!(cache.fonts.len(), 3);
+        for invalid in [0.0, -0.0, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            // The factory still receives the original caller's value; only
+            // retention is bypassed. Do not invoke CoreText with invalid sizes.
+            assert_eq!(cache.font(FontId(1), px(invalid), || 4), 4);
+            assert_eq!(cache.font(FontId(1), px(invalid), || 5), 5);
+            assert_eq!(cache.fonts.len(), 3);
+        }
+        assert_eq!(cache.clock.len(), 3);
+    }
+
+    #[test]
+    fn sized_native_fonts_preserve_unicode_shaping_and_geometry() {
+        let fonts = MacTextSystem::new();
+        let mut featured = font("Helvetica");
+        featured.features = FontFeatures(Arc::new(vec![("liga".into(), 0)]));
+        let ids = [
+            fonts.font_id(&font("Helvetica")).unwrap(),
+            fonts.font_id(&featured).unwrap(),
+            fonts.font_id(&font(".SystemUIFont")).unwrap(),
+        ];
+        let mut state = fonts.0.write();
+        for font_id in ids {
+            let mut geometry_cases = 0;
+            for size in [13.0, 19.5, 20.0, 24.0] {
+                for text in [
+                    "Navigation — Reports 2026 · Inbox",
+                    "العربية עברית Latin 123 日本語 नमस्ते 👩🏽‍💻 café ffi",
+                    "עברית العربية فارسی · हिन्दी क्षि · office ffi",
+                    "\u{feff}café A\u{0308} 日本語 🏳️‍🌈 👨‍👩‍👧‍👦",
+                ] {
+                    // Adjacent same-font runs intentionally break ligatures;
+                    // cache reuse must preserve their existing ZWNJ contract.
+                    let split = text.find(' ').unwrap();
+                    let runs = [
+                        FontRun {
+                            font_id,
+                            len: split,
+                        },
+                        FontRun {
+                            font_id,
+                            len: text.len() - split,
+                        },
+                    ];
+                    state.sized_fonts.disabled = true;
+                    let (expected, expected_geometry) =
+                        state.layout_line_impl(text, px(size), &runs, Some(&[0..text.len()]));
+                    geometry_cases += usize::from(expected_geometry.is_some());
+                    state.sized_fonts.disabled = false;
+                    for _ in 0..2 {
+                        let (actual, actual_geometry) =
+                            state.layout_line_impl(text, px(size), &runs, Some(&[0..text.len()]));
+                        assert_same_shaping(&actual, &expected);
+                        // Preserve an unavailable native geometry result too;
+                        // some mixed-script/font combinations have ambiguous
+                        // native cluster edges rejected by the existing adapter.
+                        assert_eq!(
+                            actual_geometry
+                                .as_ref()
+                                .map(|geometry| (&geometry.clusters, geometry.end_caret)),
+                            expected_geometry
+                                .as_ref()
+                                .map(|geometry| (&geometry.clusters, geometry.end_caret)),
+                            "font={font_id:?} size={size} text={text:?}",
+                        );
+                    }
+                }
+            }
+            assert!(
+                geometry_cases > 0,
+                "native geometry was never exercised for {font_id:?}"
+            );
+            println!(
+                "NATIVE_SIZED_FONT_PARITY font={font_id:?} shaping_cases=16 geometry_cases={geometry_cases}"
+            );
+        }
+    }
+
+    #[test]
+    fn sized_native_fonts_separate_features_fallbacks_and_optical_variants() {
+        let fonts = MacTextSystem::new();
+        let normal = fonts.font_id(&font("Helvetica")).unwrap();
+        let mut featured = font("Helvetica");
+        featured.features = FontFeatures(Arc::new(vec![("liga".into(), 0)]));
+        let featured = fonts.font_id(&featured).unwrap();
+        let mut fallback = font("Helvetica");
+        fallback.fallbacks = Some(FontFallbacks::from_fonts(vec!["Times".into()]));
+        let fallback = fonts.font_id(&fallback).unwrap();
+        assert_ne!(normal, featured);
+        assert_ne!(normal, fallback);
+        let system = fonts.font_id(&font(".SystemUIFont")).unwrap();
+        let mut state = fonts.0.write();
+        for font_id in [normal, featured, fallback, system] {
+            for size in [14.0, 19.5, 20.0, 24.0] {
+                let text = "Reports 日本語 ffi";
+                state.layout_line(
+                    text,
+                    px(size),
+                    &[FontRun {
+                        font_id,
+                        len: text.len(),
+                    }],
+                );
+                let effective = if size >= super::SYSTEM_FONT_DISPLAY_OPTICAL_THRESHOLD {
+                    state
+                        .system_display_variants
+                        .get(&font_id)
+                        .copied()
+                        .unwrap_or(font_id)
+                } else {
+                    font_id
+                };
+                assert!(state.sized_fonts.fonts.contains_key(&SizedFontKey {
+                    font_id: effective,
+                    size_bits: size.to_bits()
+                }));
+            }
+        }
+        assert_eq!(state.sized_fonts.fonts.len(), 16);
+        assert_eq!(state.sized_fonts.creations, 16);
+    }
+
+    /// Reproduce with `cargo test -p kael --lib --no-default-features --features
+    /// test-support,font-kit native_sized_font_shaping_diagnostic -- --ignored
+    /// --nocapture --test-threads=1`. This measures native shaping of new labels,
+    /// bypassing line/layout caches; it is not a framework benchmark.
+    #[test]
+    #[ignore = "explicit native shaping timing diagnostic"]
+    fn native_sized_font_shaping_diagnostic() {
+        let fonts = MacTextSystem::new();
+        let font_id = fonts.font_id(&font(".SystemUIFont")).unwrap();
+        let labels: Vec<_> = (0..512)
+            .map(|index| match index % 4 {
+                0 => format!("Reports {index} — Inbox · unread"),
+                1 => format!("日本語 {index} 👩🏽‍💻 café"),
+                2 => format!("العربية {index} עברית dashboard"),
+                _ => format!("नमस्ते {index} क्षि · office ffi"),
+            })
+            .collect();
+        let mut state = fonts.0.write();
+        // Warm system font lookup and every fallback script for both modes.
+        for disabled in [true, false] {
+            state.sized_fonts.disabled = disabled;
+            for label in labels.iter().take(4) {
+                state.layout_line(
+                    label,
+                    px(14.0),
+                    &[FontRun {
+                        font_id,
+                        len: label.len(),
+                    }],
+                );
+            }
+        }
+        let mut expected = None;
+        for round in 0..6 {
+            for disabled in if round % 2 == 0 {
+                [true, false]
+            } else {
+                [false, true]
+            } {
+                state.sized_fonts.disabled = disabled;
+                let creations = state.sized_fonts.creations;
+                let started = Instant::now();
+                let mut signature = 0u64;
+                for label in &labels {
+                    let layout = state.layout_line(
+                        black_box(label),
+                        px(14.0),
+                        &[FontRun {
+                            font_id,
+                            len: label.len(),
+                        }],
+                    );
+                    signature =
+                        signature.wrapping_add(u64::from(f32::from(layout.width).to_bits()));
+                    for run in &layout.runs {
+                        for glyph in &run.glyphs {
+                            signature = signature.wrapping_add(
+                                u64::from(glyph.id.0)
+                                    + glyph.index as u64
+                                    + u64::from(f32::from(glyph.position.x).to_bits()),
+                            );
+                        }
+                    }
+                    black_box(layout);
+                }
+                let elapsed = started.elapsed();
+                let native_creations = state.sized_fonts.creations - creations;
+                assert_eq!(native_creations, if disabled { labels.len() } else { 0 });
+                assert_eq!(*expected.get_or_insert(signature), signature);
+                println!(
+                    "NATIVE_SHAPING_DIAGNOSTIC round={round} cached={} labels={} native_creations={native_creations} elapsed_ns={} checksum={signature}",
+                    !disabled,
+                    labels.len(),
+                    elapsed.as_nanos()
+                );
             }
         }
     }
