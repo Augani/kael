@@ -538,8 +538,8 @@ fn render_menu_item(
                 .unwrap_or_else(|| item.is_checked());
             let has_submenu = matches!(item.kind, MenuItemKind::Submenu);
             let has_children = has_submenu && !item.children.is_empty();
-            let is_expanded = has_children && is_expanded;
             let enabled = menu_item_enabled(&item);
+            let is_expanded = enabled && has_children && is_expanded;
             let mut state = AccessibilityState::NONE;
             if item.disabled || !enabled {
                 state |= AccessibilityState::DISABLED;
@@ -561,7 +561,9 @@ fn render_menu_item(
                 accessibility = accessibility
                     .actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]);
             }
-            let activation: Option<Rc<dyn Fn(&mut Window, &mut App)>> = if has_children {
+            let activation: Option<Rc<dyn Fn(&mut Window, &mut App)>> = if !enabled {
+                None
+            } else if has_children {
                 let expanded = expanded.clone();
                 Some(Rc::new(move |_, cx| {
                     expanded.update(cx, |open, cx| {
@@ -595,21 +597,88 @@ fn render_menu_item(
             };
             let children = item.children;
             let submenu_id = ElementId::NamedChild(Box::new(id.clone()), "submenu".into());
+            let hit_row_id = ElementId::NamedChild(Box::new(id.clone()), "hit-row".into());
             let focus_handle = focus_handles[index].clone();
             let focus_on_mouse = focus_handle.clone();
+            let focus_for_key = focus_handle.clone();
             let handles_for_key = focus_handles.clone();
             let indices_for_key = interactive_indices.clone();
             let activation_for_key = activation.clone();
+            let activation_for_accessibility = activation.clone();
             let expanded_for_key = expanded.clone();
             let close_for_key = on_close.clone();
             let is_focused = focus_handle.is_focused(window);
 
             div()
+                .id(id)
+                .accessibility(accessibility)
                 .relative()
+                .rounded(theme.tokens.radius_md)
+                .transition(theme.tokens.transition_fast)
+                .when(!enabled, |div| div.opacity(0.5))
+                .when(enabled, |div| {
+                    div.track_focus(
+                        &focus_handle
+                            .tab_index(if interactive_indices.first() == Some(&index) {
+                                0
+                            } else {
+                                -1
+                            })
+                            .tab_stop(interactive_indices.first() == Some(&index)),
+                    )
+                    .hover(move |style| style.bg(overlay_hover))
+                    .focus_visible(move |style| style.bg(overlay_hover))
+                    .when_some(activation_for_accessibility, |div, handler| {
+                        div.on_accessibility_action(
+                            AccessibilityAction::Click,
+                            move |_, window, cx| {
+                                handler(window, cx);
+                            },
+                        )
+                    })
+                    .on_key_down(move |event, window, cx| {
+                        // Child menus are semantic descendants, but their keys
+                        // must not activate this item's disclosure handler.
+                        if !focus_for_key.is_focused(window) {
+                            return;
+                        }
+                        let key = event.keystroke.key.as_str();
+                        if let Some(target) =
+                            menu_navigation_target(key, index, indices_for_key.as_slice())
+                        {
+                            window.focus(&handles_for_key[target]);
+                        } else if matches!(key, "enter" | "space") {
+                            if let Some(handler) = activation_for_key.as_ref() {
+                                handler(window, cx);
+                            }
+                        } else if matches!(key, "right" | "arrowright") && has_children {
+                            if !is_expanded {
+                                expanded_for_key.update(cx, |open, cx| {
+                                    *open = true;
+                                    cx.notify();
+                                });
+                            }
+                        } else if matches!(key, "left" | "arrowleft") && is_expanded {
+                            expanded_for_key.update(cx, |open, cx| {
+                                *open = false;
+                                cx.notify();
+                            });
+                        } else if key == "escape" {
+                            if let Some(handler) = close_for_key.as_ref() {
+                                handler(window, cx);
+                            }
+                        } else {
+                            return;
+                        }
+                        cx.stop_propagation();
+                        window.prevent_default();
+                    })
+                })
+                .when(is_focused, |div| div.bg(overlay_hover))
                 .child(
                     div()
-                        .id(id)
-                        .accessibility(accessibility)
+                        .id(hit_row_id)
+                        .debug_selector(|| format!("navigation-menu-hit-row-{}", item.id))
                         .flex()
                         .items_center()
                         .gap(px(8.0))
@@ -624,64 +693,14 @@ fn render_menu_item(
                         } else {
                             CursorStyle::Arrow
                         })
-                        .when(!enabled, |div| div.opacity(0.5))
                         .when(enabled, |div| {
-                            div.track_focus(
-                                &focus_handle
-                                    .tab_index(if interactive_indices.first() == Some(&index) {
-                                        0
-                                    } else {
-                                        -1
-                                    })
-                                    .tab_stop(interactive_indices.first() == Some(&index)),
-                            )
-                            .hover(move |style| style.bg(overlay_hover))
-                            .focus_visible(move |style| style.bg(overlay_hover))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                move |_, window, _| {
-                                    window.focus(&focus_on_mouse);
-                                },
-                            )
+                            div.on_mouse_down(MouseButton::Left, move |_, window, _| {
+                                window.focus(&focus_on_mouse);
+                            })
                         })
-                        .when(is_focused, |div| div.bg(overlay_hover))
                         .when_some(activation, |div, handler| {
                             div.on_click(move |_, window, cx| {
                                 handler(window, cx);
-                            })
-                        })
-                        .when(enabled, |div| {
-                            div.on_key_down(move |event, window, cx| {
-                                let key = event.keystroke.key.as_str();
-                                if let Some(target) =
-                                    menu_navigation_target(key, index, indices_for_key.as_slice())
-                                {
-                                    window.focus(&handles_for_key[target]);
-                                } else if matches!(key, "enter" | "space") {
-                                    if let Some(handler) = activation_for_key.as_ref() {
-                                        handler(window, cx);
-                                    }
-                                } else if matches!(key, "right" | "arrowright") && has_children {
-                                    if !is_expanded {
-                                        expanded_for_key.update(cx, |open, cx| {
-                                            *open = true;
-                                            cx.notify();
-                                        });
-                                    }
-                                } else if matches!(key, "left" | "arrowleft") && is_expanded {
-                                    expanded_for_key.update(cx, |open, cx| {
-                                        *open = false;
-                                        cx.notify();
-                                    });
-                                } else if key == "escape" {
-                                    if let Some(handler) = close_for_key.as_ref() {
-                                        handler(window, cx);
-                                    }
-                                } else {
-                                    return;
-                                }
-                                cx.stop_propagation();
-                                window.prevent_default();
                             })
                         })
                         .child(
@@ -1313,6 +1332,348 @@ impl RenderOnce for ContextMenu {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+
+    struct MenuHost {
+        items: Vec<MenuItem>,
+    }
+
+    impl Render for MenuHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w(px(240.0))
+                .child(Menu::new(self.items.clone()).id("navigation-menu-test"))
+        }
+    }
+
+    fn menu_item<'a>(window: &'a Window, label: &str) -> &'a AccessibilityNode {
+        window
+            .accessibility_tree()
+            .nodes
+            .values()
+            .find(|node| {
+                node.role == AccessibilityRole::MenuItem && node.label.as_deref() == Some(label)
+            })
+            .expect("menu item should be exposed")
+    }
+
+    fn menu_item_center(window: &Window, label: &str) -> Point<Pixels> {
+        let bounds = menu_item(window, label)
+            .bounds
+            .as_ref()
+            .expect("menu item should have measured bounds");
+        point(
+            px((bounds.x + bounds.width / 2.0) as f32),
+            px((bounds.y + bounds.height / 2.0) as f32),
+        )
+    }
+
+    fn init_test_theme(cx: &TestAppContext) {
+        cx.update(|cx| {
+            crate::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::dark());
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn disabled_submenu_rejects_pointer_and_native_disclosure() {
+        let mut cx = TestAppContext::single();
+        init_test_theme(&cx);
+        let activations = Rc::new(Cell::new(0));
+        let (_host, window) = cx.add_window_view({
+            let activations = activations.clone();
+            move |_, _| MenuHost {
+                items: vec![
+                    MenuItem::submenu("disabled-submenu", "Disabled submenu")
+                        .disabled(true)
+                        .with_children(vec![
+                            MenuItem::new("disabled-child", "Disabled child")
+                                .on_click(move |_, _| activations.set(activations.get() + 1)),
+                        ]),
+                ],
+            }
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let item = menu_item(window, "Disabled submenu");
+            assert!(item.states.contains(AccessibilityState::DISABLED));
+            assert!(item.states.contains(AccessibilityState::COLLAPSED));
+            assert!(item.actions.is_empty());
+            let id = item.id;
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                id,
+                AccessibilityAction::Focus,
+            ));
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                id,
+                AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        let center = window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(
+                menu_item(window, "Disabled submenu")
+                    .states
+                    .contains(AccessibilityState::COLLAPSED)
+            );
+            menu_item_center(window, "Disabled submenu")
+        });
+
+        window.simulate_click(center, Modifiers::default());
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let item = menu_item(window, "Disabled submenu");
+            assert!(item.states.contains(AccessibilityState::COLLAPSED));
+            assert!(!item.states.contains(AccessibilityState::EXPANDED));
+            assert!(
+                !window
+                    .accessibility_tree()
+                    .nodes
+                    .values()
+                    .any(|node| node.label.as_deref() == Some("Disabled child"))
+            );
+        });
+        assert_eq!(activations.get(), 0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn enabled_submenu_keeps_pointer_and_native_disclosure_and_child_activation() {
+        let mut cx = TestAppContext::single();
+        init_test_theme(&cx);
+        let activations = Rc::new(Cell::new(0));
+        let (_host, window) = cx.add_window_view({
+            let activations = activations.clone();
+            move |_, _| MenuHost {
+                items: vec![
+                    MenuItem::submenu("enabled-submenu", "Enabled submenu").with_children(vec![
+                        MenuItem::new("enabled-child", "Enabled child")
+                            .on_click(move |_, _| activations.set(activations.get() + 1)),
+                    ]),
+                ],
+            }
+        });
+        let (center, collapsed_bounds) = window.update(|window, cx| {
+            window.draw(cx).clear();
+            (
+                menu_item_center(window, "Enabled submenu"),
+                menu_item(window, "Enabled submenu").bounds.unwrap(),
+            )
+        });
+        let hit_bounds = window
+            .debug_bounds("navigation-menu-hit-row-enabled-submenu")
+            .unwrap();
+        assert_eq!(collapsed_bounds, AccessibilityRect::from_bounds(hit_bounds));
+        window.simulate_click(center, Modifiers::default());
+        let (parent_id, child_center) = window.update(|window, cx| {
+            window.draw(cx).clear();
+            let parent = menu_item(window, "Enabled submenu");
+            assert!(parent.states.contains(AccessibilityState::EXPANDED));
+            assert_eq!(parent.bounds, Some(collapsed_bounds));
+            let parent_id = parent.id;
+            assert!(
+                menu_item(window, "Enabled child")
+                    .actions
+                    .contains(&AccessibilityAction::Click)
+            );
+            let tree = window.accessibility_tree();
+            let child = menu_item(window, "Enabled child");
+            let submenu = tree.nodes.get(&child.parent.unwrap()).unwrap();
+            assert_eq!(submenu.role, AccessibilityRole::Menu);
+            let owner = tree.nodes.get(&submenu.parent.unwrap()).unwrap();
+            assert_eq!(owner.role, AccessibilityRole::MenuItem);
+            assert_eq!(owner.id, parent_id);
+            assert!(owner.children.contains(&submenu.id));
+            assert!(child.states.contains(AccessibilityState::FOCUSED));
+            eprintln!(
+                "navigation_submenu_relation: parent_role={:?} directly_owned_by_item={}",
+                owner.role,
+                owner.id == parent_id,
+            );
+            (parent_id, menu_item_center(window, "Enabled child"))
+        });
+        // An unhandled child key must not run the parent disclosure handler.
+        window.simulate_keystrokes("left");
+        window.simulate_keystrokes("enter");
+        assert_eq!(activations.get(), 1);
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(
+                menu_item(window, "Enabled submenu")
+                    .states
+                    .contains(AccessibilityState::EXPANDED)
+            );
+        });
+        window.simulate_click(child_center, Modifiers::default());
+        assert_eq!(activations.get(), 2);
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(
+                menu_item(window, "Enabled submenu")
+                    .states
+                    .contains(AccessibilityState::EXPANDED)
+            );
+        });
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                parent_id,
+                AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(
+                menu_item(window, "Enabled submenu")
+                    .states
+                    .contains(AccessibilityState::COLLAPSED)
+            );
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                parent_id,
+                AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let child_id = menu_item(window, "Enabled child").id;
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                child_id,
+                AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        assert_eq!(activations.get(), 3);
+    }
+
+    #[::core::prelude::v1::test]
+    fn disabling_expanded_submenu_unmounts_children_and_preserves_stored_disclosure() {
+        let mut cx = TestAppContext::single();
+        init_test_theme(&cx);
+        let activations = Rc::new(Cell::new(0));
+        let (host, window) = cx.add_window_view({
+            let activations = activations.clone();
+            move |_, _| MenuHost {
+                items: vec![
+                    MenuItem::submenu("dynamic-submenu", "Dynamic submenu").with_children(vec![
+                        MenuItem::new("dynamic-child", "Dynamic child")
+                            .on_click(move |_, _| activations.set(activations.get() + 1)),
+                    ]),
+                ],
+            }
+        });
+        let center = window.update(|window, cx| {
+            window.draw(cx).clear();
+            menu_item_center(window, "Dynamic submenu")
+        });
+        window.simulate_click(center, Modifiers::default());
+        let child_id = window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(
+                menu_item(window, "Dynamic submenu")
+                    .states
+                    .contains(AccessibilityState::EXPANDED)
+            );
+            let child_id = menu_item(window, "Dynamic child").id;
+            host.update(cx, |host, cx| {
+                host.items[0].disabled = true;
+                cx.notify();
+            });
+            child_id
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let parent = menu_item(window, "Dynamic submenu");
+            assert!(parent.states.contains(AccessibilityState::DISABLED));
+            assert!(parent.states.contains(AccessibilityState::COLLAPSED));
+            assert!(parent.actions.is_empty());
+            assert!(!window.accessibility_tree().nodes.contains_key(&child_id));
+            assert!(!window.has_accessibility_action_handler(child_id, AccessibilityAction::Click));
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                child_id,
+                AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        assert_eq!(activations.get(), 0);
+        window.update(|window, cx| {
+            host.update(cx, |host, cx| {
+                host.items[0].disabled = false;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            assert!(
+                menu_item(window, "Dynamic submenu")
+                    .states
+                    .contains(AccessibilityState::EXPANDED)
+            );
+            let child_id = menu_item(window, "Dynamic child").id;
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                child_id,
+                AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        assert_eq!(activations.get(), 1);
+    }
+
+    #[::core::prelude::v1::test]
+    fn leaf_menu_items_preserve_keyboard_native_and_pointer_activation_rules() {
+        let mut cx = TestAppContext::single();
+        init_test_theme(&cx);
+        let enabled_calls = Rc::new(Cell::new(0));
+        let disabled_calls = Rc::new(Cell::new(0));
+        let (_host, window) = cx.add_window_view({
+            let enabled_calls = enabled_calls.clone();
+            let disabled_calls = disabled_calls.clone();
+            move |_, _| MenuHost {
+                items: vec![
+                    MenuItem::new("enabled-action", "Enabled action")
+                        .on_click(move |_, _| enabled_calls.set(enabled_calls.get() + 1)),
+                    MenuItem::new("disabled-action", "Disabled action")
+                        .disabled(true)
+                        .on_click(move |_, _| disabled_calls.set(disabled_calls.get() + 1)),
+                ],
+            }
+        });
+        let (enabled_id, enabled_center, disabled_id, disabled_center) =
+            window.update(|window, cx| {
+                window.draw(cx).clear();
+                let enabled_id = menu_item(window, "Enabled action").id;
+                let disabled = menu_item(window, "Disabled action");
+                assert!(disabled.states.contains(AccessibilityState::DISABLED));
+                assert!(disabled.actions.is_empty());
+                let disabled_id = disabled.id;
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    enabled_id,
+                    AccessibilityAction::Focus,
+                ));
+                (
+                    enabled_id,
+                    menu_item_center(window, "Enabled action"),
+                    disabled_id,
+                    menu_item_center(window, "Disabled action"),
+                )
+            });
+        window.run_until_parked();
+        window.simulate_keystrokes("enter");
+        assert_eq!(enabled_calls.get(), 1);
+        window.update(|window, _| {
+            for id in [enabled_id, disabled_id] {
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    id,
+                    AccessibilityAction::Click,
+                ));
+            }
+        });
+        window.run_until_parked();
+        assert_eq!(enabled_calls.get(), 2);
+        assert_eq!(disabled_calls.get(), 0);
+        window.simulate_click(enabled_center, Modifiers::default());
+        window.simulate_click(disabled_center, Modifiers::default());
+        assert_eq!(enabled_calls.get(), 3);
+        assert_eq!(disabled_calls.get(), 0);
+    }
 
     #[::core::prelude::v1::test]
     fn menu_item_summary_is_content_safe() {
