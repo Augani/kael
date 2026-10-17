@@ -188,6 +188,16 @@ directory makes it read only. The workspace demonstrates nested docking,
 pointer/keyboard floating panes, background JSON save/restore, live typed editing
 and pane state retained across tab changes.
 
+The read-only records browser prepares 100,000 compact domain records on a
+worker and supplies bounded pages to `DataTable<Arc<Record>>`. It demonstrates
+stored record identity across order changes, generation-safe completion and
+converting mounted values to UI strings without requiring UI types throughout
+the business model. It runs with the native feature alone:
+
+```bash
+cargo run --release -p kael_ui --no-default-features --features native --example compact_records
+```
+
 The document/data workbench combines the existing Markdown source editor and
 worker-parsed rich preview with a real loopback HTTP record source. Its 100,000
 logical records support frozen panes, query cancellation, editing, clipboard,

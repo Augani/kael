@@ -245,6 +245,75 @@ those tasks in the data source when a limit across queries is required. Prefer
 the generation-safe callback above for asynchronous sources; legacy
 `on_fetch_page`/`set_page_data` callbacks cannot identify stale query results.
 
+### Keep business records independent from UI text
+
+`DataTable<T>` can retain an application's own record type instead of converting
+an entire dataset to UI strings. The `compact_records` example uses
+`DataTable<Arc<Record>>` with the optional application dependency
+`smol_str = "=0.3.6"`:
+
+```sh
+cargo run --release -p kael_ui --no-default-features --features native --example compact_records
+```
+
+It prepares 100,000 records on a worker, retaining eight compact fields and an
+explicit stable ID per record. The table receives at most 64 row Arcs per page,
+keeps at most 16 pages, and admits four pending pages in the current query. Column
+accessors convert only mounted cell values to the existing UI string:
+
+```rust,ignore
+let arc: std::sync::Arc<str> = record.fields[column].clone().into();
+SharedString::new(arc)
+```
+
+Short `SmolStr` values can stay inline in business records, then acquire owned Arc
+storage when displayed. Long heap values share their existing Arc through this
+adapter. Converting static application text through `SmolStr` into an Arc can
+still allocate; use `SharedString::new_static` directly for known static UI
+headers. Other applications can use typed fields, database records or ordinary
+strings. Kael's public `SharedString`, `ArcCow` and conversion APIs remain unchanged.
+
+The example is read-only: columns are explicitly non-editable, and built-in
+search/sort controls are disabled in favor of the application's ordering controls.
+Selecting a row reads its stored ID from the record rather than interpreting its
+displayed position as an ID. Refresh and order changes reset the virtual query;
+page completion passes the original `DataTablePageRequest` to
+`set_page_data_for`, which rejects stale generations.
+
+The in-memory source clones only the requested row Arcs and defers completion.
+A network/database source must additionally cancel its own old tasks: the table's
+pending-page limit covers the current generation rather than all historical work.
+The example's initial model construction runs synchronously on a worker until it
+returns; it does not offer preemptible cancellation of that construction loop.
+
+The related retained-payload measurement covers two immutable 100,000x8 fixtures
+and actual `RemoteSheetState<Query>` / `VirtualSheetGrid` tile and accessibility
+storage. This example instead retains one store with explicit IDs and per-record
+Arcs, using the read-only `DataTable` control. Those results do not measure this
+example's exact footprint, native presentation or throughput, and are not a
+universal memory ratio. The matched desktop comparison's model is unchanged.
+
+#### Writes and query identity
+
+For writable sources, `RemoteSheetEvent::Edited` captures the query/generation at
+edit time. Resolve the original business ID from that captured query if a later
+query changes displayed positions. Generation checks prevent an old tile response
+from replacing current data; they do not implement application persistence.
+
+A writer needs a bounded admission and recovery policy. Retain failed values and
+their stable IDs while retries remain possible, or prevent query changes from
+retiring pending edits. A failed-ID set or error message does not preserve the
+failed value. Do not promise Undo recovery after the original query's positional
+history has already been retired. A bounded write queue also needs explicit
+backpressure before it accepts more values.
+
+`RemoteSheetState::set_query` retires positional edits/history and semantic IDs;
+`refresh` retries the same records while preserving local history. Different
+logical dimensions require constructing a new grid/controller. Successful-write,
+query-identity and cancellation checks do not prove a failed-persistence recovery
+workflow. The read-only example implements no writable-cell or persistence-queue
+promise.
+
 ### Data table with uniform_list
 
 ```rust
