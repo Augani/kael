@@ -96,10 +96,6 @@ impl DataRange {
             }
         }
 
-        if (max - min).abs() < f64::EPSILON {
-            max = min + 1.0;
-        }
-
         Self {
             min,
             max,
@@ -109,7 +105,50 @@ impl DataRange {
     }
 
     fn normalize(&self, value: f64) -> f32 {
-        ((value - self.min) / (self.max - self.min)) as f32
+        if self.max <= self.min {
+            return 0.0;
+        }
+        let span = self.max - self.min;
+        let normalized = if span.is_finite() {
+            (value - self.min) / span
+        } else {
+            // Opposite finite extremes can overflow their difference. Halving
+            // first preserves the ratio without creating infinite coordinates.
+            (value * 0.5 - self.min * 0.5) / (self.max * 0.5 - self.min * 0.5)
+        };
+        normalized.clamp(0.0, 1.0) as f32
+    }
+}
+
+struct BarLayout {
+    width: f64,
+    gap: f64,
+}
+
+impl BarLayout {
+    fn fit(available_width: f32, count: usize, preferred_gap: f32) -> Option<Self> {
+        if count == 0 || !available_width.is_finite() || available_width <= 0.0 {
+            return None;
+        }
+        let available = f64::from(available_width);
+        let count = count as f64;
+        // Keep ordinary one-pixel bars where possible. Dense series use
+        // subpixel bars with no gaps instead of extending beyond the canvas.
+        let minimum_bars_width = count.min(available);
+        let gap = if count > 1.0 {
+            f64::from(preferred_gap.max(0.0))
+                .min(((available - minimum_bars_width) / (count - 1.0)).max(0.0))
+        } else {
+            0.0
+        };
+        Some(Self {
+            width: (available - gap * (count - 1.0)) / count,
+            gap,
+        })
+    }
+
+    fn offset(&self, index: usize) -> f32 {
+        ((self.width + self.gap) * index as f64) as f32
     }
 }
 
@@ -140,6 +179,7 @@ fn trend_label(trend: SparklineTrend) -> &'static str {
 
 struct SparklinePaintData {
     data: Vec<f64>,
+    range: DataRange,
     variant: SparklineVariant,
     line_color: Hsla,
     fill_color: Hsla,
@@ -289,10 +329,10 @@ impl RenderOnce for Sparkline {
             None
         };
 
+        let range = DataRange::from_data(&self.data);
         let mut description = if self.data.is_empty() {
             "Sparkline. No data".to_string()
         } else {
-            let range = DataRange::from_data(&self.data);
             format!(
                 "Sparkline with {} points. Minimum {:.2}, maximum {:.2}",
                 self.data.len(),
@@ -306,6 +346,7 @@ impl RenderOnce for Sparkline {
 
         let paint_data = SparklinePaintData {
             data: self.data,
+            range,
             variant: self.variant,
             line_color: effective_line_color,
             fill_color: effective_fill_color,
@@ -371,7 +412,7 @@ fn paint_sparkline(bounds: Bounds<Pixels>, data: &SparklinePaintData, window: &m
 }
 
 fn paint_line_sparkline(bounds: Bounds<Pixels>, data: &SparklinePaintData, window: &mut Window) {
-    let range = DataRange::from_data(&data.data);
+    let range = &data.range;
     let point_count = data.data.len();
 
     if point_count < 2 {
@@ -429,7 +470,7 @@ fn paint_line_sparkline(bounds: Bounds<Pixels>, data: &SparklinePaintData, windo
 }
 
 fn paint_area_sparkline(bounds: Bounds<Pixels>, data: &SparklinePaintData, window: &mut Window) {
-    let range = DataRange::from_data(&data.data);
+    let range = &data.range;
     let point_count = data.data.len();
 
     if point_count < 2 {
@@ -500,7 +541,7 @@ fn paint_area_sparkline(bounds: Bounds<Pixels>, data: &SparklinePaintData, windo
 }
 
 fn paint_bar_sparkline(bounds: Bounds<Pixels>, data: &SparklinePaintData, window: &mut Window) {
-    let range = DataRange::from_data(&data.data);
+    let range = &data.range;
     let point_count = data.data.len();
 
     if point_count == 0 {
@@ -519,13 +560,14 @@ fn paint_bar_sparkline(bounds: Bounds<Pixels>, data: &SparklinePaintData, window
         return;
     }
 
-    let gap = data.size.bar_gap();
-    let total_gap = gap * (point_count.saturating_sub(1)) as f32;
-    let bar_width_f32 = ((chart_width - px(total_gap)) / point_count as f32).max(px(1.0));
-    let bar_width = bar_width_f32;
+    let Some(layout) = BarLayout::fit(f32::from(chart_width), point_count, data.size.bar_gap())
+    else {
+        return;
+    };
 
     for (i, &value) in data.data.iter().enumerate() {
-        let x = chart_left + bar_width * i as f32 + px(gap * i as f32);
+        let x = chart_left + px(layout.offset(i));
+        let bar_width = px(layout.width as f32).min((chart_right - x).max(px(0.0)));
         let height_ratio = range.normalize(value);
         let bar_height = chart_height * height_ratio;
         let y = chart_bottom - bar_height;
@@ -546,6 +588,50 @@ fn paint_bar_sparkline(bounds: Bounds<Pixels>, data: &SparklinePaintData, window
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[::core::prelude::v1::test]
+    fn bar_series_fit_their_canvas_at_sparse_dense_and_fractional_widths() {
+        for width in [0.25, 1.0, 20.0, 60.0, 100.0, 150.5] {
+            for count in [1, 2, 6, 50, 100, 1000, 10_000] {
+                for gap in [0.0, 1.0, 2.0, 3.0] {
+                    let layout = BarLayout::fit(width, count, gap).unwrap();
+                    assert!(layout.width > 0.0);
+                    assert!(layout.gap >= 0.0 && layout.gap <= f64::from(gap));
+                    let tolerance = width * f32::EPSILON * 2.0;
+                    for index in 0..count {
+                        let left = layout.offset(index);
+                        let right = left + layout.width as f32;
+                        assert!(left >= 0.0 && right <= width + tolerance);
+                    }
+                    let last_right = layout.offset(count - 1) + layout.width as f32;
+                    assert!((last_right - width).abs() <= tolerance);
+                }
+            }
+        }
+        let ordinary = BarLayout::fit(100.0, 6, 2.0).unwrap();
+        assert_eq!(ordinary.width, 15.0);
+        assert_eq!(ordinary.gap, 2.0);
+        for width in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert!(BarLayout::fit(width, 6, 2.0).is_none());
+        }
+        assert!(BarLayout::fit(100.0, 0, 2.0).is_none());
+    }
+
+    #[::core::prelude::v1::test]
+    fn sparkline_normalization_handles_finite_extremes_and_constant_series() {
+        let range = DataRange::from_data(&[-f64::MAX, 0.0, f64::MAX]);
+        assert_eq!(range.normalize(-f64::MAX), 0.0);
+        assert_eq!(range.normalize(0.0), 0.5);
+        assert_eq!(range.normalize(f64::MAX), 1.0);
+        for value in [-f64::MAX, -5.0, 0.0, 5.0, f64::MAX] {
+            let constant = DataRange::from_data(&[value, value]);
+            assert_eq!(constant.min, value);
+            assert_eq!(constant.max, value);
+            assert_eq!(constant.normalize(value), 0.0);
+        }
+        let tiny = DataRange::from_data(&[0.0, f64::MIN_POSITIVE]);
+        assert_eq!(tiny.normalize(f64::MIN_POSITIVE), 1.0);
+    }
 
     #[::core::prelude::v1::test]
     fn trend_labels_match_the_visual_direction() {
