@@ -2750,6 +2750,9 @@ impl Element for Div {
             *handle.last_origin.borrow_mut() = bounds.origin - window.element_offset();
         }
         let content_size = if request_layout.child_layout_ids.is_empty() {
+            if let Some(handle) = self.interactivity.tracked_scroll_handle.as_ref() {
+                handle.0.borrow_mut().child_bounds.clear();
+            }
             bounds.size
         } else if let Some(scroll_handle) = self.interactivity.tracked_scroll_handle.as_ref() {
             let mut state = scroll_handle.0.borrow_mut();
@@ -2773,10 +2776,6 @@ impl Element for Div {
             }
             (child_max - child_min).into()
         };
-
-        if let Some(scroll_handle) = self.interactivity.tracked_scroll_handle.as_ref() {
-            scroll_handle.scroll_to_active_item();
-        }
 
         let tracked_scroll_handle = self.interactivity.tracked_scroll_handle.clone();
         self.interactivity.prepaint(
@@ -3384,16 +3383,6 @@ impl Interactivity {
         }
 
         if let Some(scroll_offset) = self.scroll_offset.as_ref() {
-            let mut scroll_to_bottom = false;
-            let mut tracked_scroll_handle = self
-                .tracked_scroll_handle
-                .as_ref()
-                .map(|handle| handle.0.borrow_mut());
-            if let Some(mut scroll_handle_state) = tracked_scroll_handle.as_deref_mut() {
-                scroll_handle_state.overflow = style.overflow;
-                scroll_to_bottom = mem::take(&mut scroll_handle_state.scroll_to_bottom);
-            }
-
             let padding = window.ui_definite_edges_in_pixels(style.padding, bounds.size);
             let padding_size = size(padding.left + padding.right, padding.top + padding.bottom);
             // The floating point values produced by Taffy and ours often vary
@@ -3406,6 +3395,28 @@ impl Interactivity {
             let scroll_max = (padded_content_size - bounds.size)
                 .map(round_to_two_decimals)
                 .max(&Default::default());
+            let scroll_to_bottom = if let Some(handle) = self.tracked_scroll_handle.as_ref() {
+                let mut state = handle.0.borrow_mut();
+                state.overflow = style.overflow;
+                state.max_offset = scroll_max;
+                state.bounds = bounds;
+                state.content_bounds = Bounds::from_corners(
+                    point(bounds.left() + padding.left, bounds.top() + padding.top),
+                    point(
+                        bounds.right() - padding.right,
+                        bounds.bottom() - padding.bottom,
+                    ),
+                );
+                let scroll_to_bottom = mem::take(&mut state.scroll_to_bottom);
+                drop(state);
+                // Child bounds and viewport metrics must belong to the same
+                // layout. In particular a newly mounted handle has no previous
+                // overflow/viewport against which it can resolve an item.
+                handle.scroll_to_active_item();
+                scroll_to_bottom
+            } else {
+                false
+            };
             // Clamp scroll offset in case scroll max is smaller now (e.g., if children
             // were removed or the bounds became larger).
             let mut scroll_offset = scroll_offset.borrow_mut();
@@ -3454,18 +3465,6 @@ impl Interactivity {
                         window.request_animation_frame();
                     }
                 }
-            }
-
-            if let Some(mut scroll_handle_state) = tracked_scroll_handle {
-                scroll_handle_state.max_offset = scroll_max;
-                scroll_handle_state.bounds = bounds;
-                scroll_handle_state.content_bounds = Bounds::from_corners(
-                    point(bounds.left() + padding.left, bounds.top() + padding.top),
-                    point(
-                        bounds.right() - padding.right,
-                        bounds.bottom() - padding.bottom,
-                    ),
-                );
             }
 
             display_offset
@@ -6854,6 +6853,88 @@ mod test {
         let item = handle.bounds_for_item(0).expect("tracked child bounds");
         let content_bottom = handle.0.borrow().content_bounds.bottom();
         assert_eq!(item.bottom() + handle.offset().y, content_bottom);
+    }
+
+    #[kael::test]
+    fn scroll_to_item_uses_current_viewport_on_first_paint_and_resize(cx: &mut TestAppContext) {
+        struct RevealView {
+            scroll: ScrollHandle,
+            height: crate::Pixels,
+            child_count: usize,
+        }
+        impl Render for RevealView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div()
+                    .id("measured-item-reveal")
+                    .w(px(100.0))
+                    .h(self.height)
+                    .p(px(4.0))
+                    .overflow_scroll()
+                    .track_scroll(&self.scroll)
+                    .children((0..self.child_count).map(|_| div().w(px(160.0)).h(px(40.0))))
+            }
+        }
+        let scroll = ScrollHandle::new();
+        scroll.scroll_to_item(7);
+        let (view, window) = cx.add_window_view({
+            let scroll = scroll.clone();
+            move |_, _| RevealView {
+                scroll,
+                height: px(120.0),
+                child_count: 10,
+            }
+        });
+        let assert_visible = || {
+            let state = scroll.0.borrow();
+            let item = state.child_bounds[7];
+            let offset = *state.offset.borrow();
+            assert!(
+                offset.y < px(0.0),
+                "first-paint reveal must not be discarded"
+            );
+            assert!(item.top() + offset.y >= state.content_bounds.top());
+            assert!(item.bottom() + offset.y <= state.content_bounds.bottom());
+            // A wider-than-viewport item can only reveal one of its edges.
+            assert!(
+                item.right() + offset.x == state.content_bounds.right()
+                    || item.left() + offset.x == state.content_bounds.left()
+            );
+            assert!(state.active_item.is_none());
+        };
+        assert_visible();
+        window.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.height = px(80.0);
+                view.scroll.scroll_to_item(7);
+                cx.notify();
+            });
+            window.draw(cx).clear();
+        });
+        assert_visible();
+
+        window.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.child_count = 0;
+                view.scroll.scroll_to_item(7);
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            assert!(scroll.bounds_for_item(7).is_none());
+            assert_eq!(scroll.0.borrow().active_item.unwrap().index, 7);
+            view.update(cx, |view, cx| {
+                view.child_count = 10;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+        });
+        assert_visible();
+
+        // The explicit bottom request retains precedence over item reveal.
+        scroll.scroll_to_item(0);
+        scroll.scroll_to_bottom();
+        window.update(|window, cx| window.draw(cx).clear());
+        let state = scroll.0.borrow();
+        assert_eq!(scroll.offset().y, -state.max_offset.height);
     }
 
     #[kael::test]

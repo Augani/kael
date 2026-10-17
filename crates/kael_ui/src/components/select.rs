@@ -150,6 +150,7 @@ pub struct Select<T: Clone + 'static> {
     option_accessibility_ids: Option<AccessibilityIdRange>,
     selected_index: Option<usize>,
     highlighted_index: Option<usize>,
+    pending_highlight_reveal: bool,
     label: Option<SharedString>,
     label_hidden: bool,
     description: Option<SharedString>,
@@ -181,6 +182,7 @@ impl<T: Clone + 'static> Select<T> {
             option_accessibility_ids: None,
             selected_index: None,
             highlighted_index: None,
+            pending_highlight_reveal: false,
             label: None,
             label_hidden: false,
             description: None,
@@ -388,51 +390,24 @@ impl<T: Clone + 'static> Select<T> {
                             .into_iter()
                             .find_map(|(index, option)| (!option.disabled).then_some(index))
                     });
-                self.scroll_highlighted_into_view();
+                self.request_highlight_reveal();
             }
             cx.notify();
         }
     }
 
-    /// Keep the highlighted option inside the visible rows of the dropdown
-    /// viewport. Row geometry mirrors the render budget: 28px rows with 4px
-    /// top padding, at most 12 visible rows; a negative y offset means the
-    /// menu is scrolled down.
-    fn scroll_highlighted_into_view(&mut self) {
-        const ROW_HEIGHT: f32 = 28.0;
-        const TOP_PADDING: f32 = 4.0;
-
-        let Some(highlighted) = self.highlighted_index else {
-            return;
-        };
-        let filtered = self.filtered_options();
-        let Some(position) = filtered.iter().position(|(index, _)| *index == highlighted) else {
-            return;
-        };
-
-        let visible_rows = filtered.len().min(12);
-        let viewport_height = (visible_rows as f32)
-            .mul_add(ROW_HEIGHT, 8.0)
-            .clamp(48.0, 300.0);
-        let row_top = TOP_PADDING + position as f32 * ROW_HEIGHT;
-        let row_bottom = row_top + ROW_HEIGHT;
-        let scrolled = -f32::from(self.scroll_handle.offset().y);
-
-        let new_scrolled = if row_top < scrolled {
-            (row_top - TOP_PADDING).max(0.0)
-        } else if row_bottom > scrolled + viewport_height {
-            row_bottom - viewport_height
-        } else {
-            return;
-        };
-        self.scroll_handle
-            .set_offset(point(px(0.0), px(-new_scrolled.max(0.0))));
+    /// Resolve the final highlighted option against this frame's measured
+    /// children. Group headings, wrapping and inherited typography determine
+    /// their natural heights; a wheel-only redraw must not request a reveal.
+    fn request_highlight_reveal(&mut self) {
+        self.pending_highlight_reveal = true;
     }
 
     fn close_dropdown(&mut self, cx: &mut Context<Self>) {
         self.open = false;
         self.dropdown_bounds = Bounds::default();
         self.highlighted_index = self.selected_index;
+        self.pending_highlight_reveal = false;
         self.search_query.clear();
         cx.notify();
     }
@@ -500,7 +475,7 @@ impl<T: Clone + 'static> Select<T> {
         };
 
         self.highlighted_index = Some(filtered[new_pos].0);
-        self.scroll_highlighted_into_view();
+        self.request_highlight_reveal();
         cx.notify();
     }
 
@@ -530,7 +505,7 @@ impl<T: Clone + 'static> Select<T> {
         };
 
         self.highlighted_index = Some(filtered[new_pos].0);
-        self.scroll_highlighted_into_view();
+        self.request_highlight_reveal();
         cx.notify();
     }
 
@@ -572,6 +547,7 @@ impl<T: Clone + 'static> Render for Select<T> {
 
         let open = self.open;
         let highlighted_idx = self.highlighted_index;
+        let reveal_highlight = open && std::mem::take(&mut self.pending_highlight_reveal);
         let bounds = self.bounds;
         let entity_id = cx.entity().entity_id().as_u64();
         let is_focused = self.focus_handle.is_focused(window);
@@ -929,6 +905,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                     if event.keystroke.key == "backspace" {
                         this.search_query.pop();
                         this.scroll_handle.set_offset(point(px(0.0), px(0.0)));
+                        this.request_highlight_reveal();
                         cx.notify();
                     }
                     else if event.keystroke.key.len() == 1 && !event.keystroke.modifiers.control && !event.keystroke.modifiers.platform {
@@ -938,6 +915,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                         this.highlighted_index = filtered
                             .into_iter()
                             .find_map(|(index, option)| (!option.disabled).then_some(index));
+                        this.request_highlight_reveal();
                         cx.notify();
                     }
                 }))
@@ -1031,7 +1009,8 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                     .size_full()
                                                                     .overflow_y_scroll()
                                                                     .track_scroll(&self.scroll_handle)
-                                                                    .child({
+                                                                    .py(px(4.0))
+                                                                    .map(|this| {
                                                                 let filtered = self.filtered_options();
                                                                 let loading = self.loading;
                                                                 let (item_padding_x, item_padding_y) = match self.size {
@@ -1040,8 +1019,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                     InputSize::Lg => (px(8.0), px(8.0)),
                                                                 };
 
-                                                                div()
-                                                                    .py(px(4.0))
+                                                                this
                                                                     .when(loading, |this| {
                                                                     this.child(
                                                                         div()
@@ -1079,6 +1057,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                 })
                                                                 .when(!loading && !filtered.is_empty(), |this| {
                                                                     let mut current_group: Option<SharedString> = None;
+                                                                    let mut child_index = 0;
                                                                     this.children(
                                                                         filtered.iter().flat_map(|(index, option)| {
                                                                             let mut elements = Vec::new();
@@ -1098,11 +1077,16 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                                             .child(group_name.clone())
                                                                                             .into_any_element()
                                                                                     );
+                                                                                    child_index += 1;
                                                                                 }
                                                                             }
 
                                                                             let is_selected = self.selected_index == Some(*index);
                                                                             let is_highlighted = highlighted_idx == Some(*index);
+                                                                            if reveal_highlight && is_highlighted {
+                                                                                self.scroll_handle.scroll_to_item(child_index);
+                                                                            }
+                                                                            child_index += 1;
                                                                             let is_disabled = option.disabled;
                                                                             let index = *index;
                                                                             let option_icon = option.icon.clone();
@@ -1293,6 +1277,7 @@ impl<T: Clone + 'static> EventEmitter<SelectEvent> for Select<T> {}
 #[cfg(test)]
 mod tests {
     use super::{Select, SelectOption, init_select};
+    use crate::components::input::InputSize;
     use kael::{
         AccessibilityAction, AccessibilityActionRequest, AccessibilityRole, AccessibilityState,
         AppContext as _, Context, Entity, Focusable as _, IntoElement, Modifiers, MouseButton,
@@ -1337,6 +1322,42 @@ mod tests {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             div().w(px(220.0)).child(self.select.clone())
         }
+    }
+
+    fn assert_highlighted_row_is_visible(
+        select: &Entity<Select<usize>>,
+        window: &Window,
+        cx: &kael::App,
+    ) -> kael::AccessibilityId {
+        let select = select.read(cx);
+        let index = select.highlighted_index.expect("highlighted option");
+        let id = select
+            .option_accessibility_ids
+            .unwrap()
+            .get(index as u64)
+            .unwrap();
+        let tree = window.accessibility_tree();
+        let option = tree.get(id).unwrap_or_else(|| {
+            panic!(
+                "highlighted option {index} must be mounted, offset {:?}",
+                select.scroll_handle.offset()
+            )
+        });
+        let bounds = option.bounds.expect("painted option bounds");
+        let viewport = select.scroll_handle.bounds();
+        assert!(
+            bounds.y >= f64::from(f32::from(viewport.top())) - 0.5
+                && bounds.y + bounds.height <= f64::from(f32::from(viewport.bottom())) + 0.5,
+            "actual highlighted option {index} bounds {bounds:?} must fit actual viewport {viewport:?}",
+        );
+        assert_eq!(tree.focused_node_count(), 1);
+        let focused = tree
+            .get(tree.focused_node().expect("focused control"))
+            .unwrap();
+        assert_eq!(focused.role, AccessibilityRole::ComboBox);
+        assert_eq!(focused.active_descendant, Some(id));
+        assert_eq!(option.parent, Some(focused.id));
+        id
     }
 
     fn select(
@@ -1701,10 +1722,22 @@ mod tests {
         });
         window.update(|window, cx| window.draw(cx).clear());
 
-        window.update(|_, cx| {
+        let wheel_offset = window.update(|_, cx| {
             assert!(
                 select.read(cx).scroll_handle.offset().y < px(0.0),
                 "a wheel gesture over a long Select menu must scroll its retained viewport"
+            );
+            assert_eq!(select.read(cx).highlighted_index, Some(0));
+            let offset = select.read(cx).scroll_handle.offset();
+            select.update(cx, |_, cx| cx.notify());
+            offset
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(
+                select.read(cx).scroll_handle.offset(),
+                wheel_offset,
+                "a redraw with the same highlight must preserve independent wheel scrolling"
             );
         });
     }
@@ -1784,35 +1817,21 @@ mod tests {
             );
         });
 
-        // Arrow past the 12th visible row: the viewport must follow the
-        // highlight instead of leaving it clipped below the fold.
+        // Arrow below the viewport: measured natural row heights determine
+        // visibility, rather than a fixed number of assumed-height rows.
         for _ in 0..13 {
             window.simulate_keystrokes("down");
         }
         window.update(|window, cx| {
             window.draw(cx).clear();
         });
-        window.update(|_, cx| {
+        window.update(|window, cx| {
             let offset = f32::from(select.read(cx).scroll_handle.offset().y);
             assert!(
                 offset < 0.0,
                 "arrowing past the visible rows must scroll the highlight into view, got {offset}"
             );
-            let scrolled = -offset;
-            let highlighted_position = select
-                .read(cx)
-                .highlighted_index
-                .expect("a highlight must exist after arrowing")
-                as f32;
-            let row_top = 4.0 + highlighted_position * 28.0;
-            let row_bottom = row_top + 28.0;
-            let visible_rows = 12;
-            let viewport_height = (visible_rows as f32).mul_add(28.0, 8.0).clamp(48.0, 300.0);
-            assert!(
-                row_top >= scrolled - 0.5 && row_bottom <= scrolled + viewport_height + 0.5,
-                "highlighted row [{row_top},{row_bottom}] must be visible in [{scrolled},{}]",
-                scrolled + viewport_height
-            );
+            assert_highlighted_row_is_visible(&select, window, cx);
         });
 
         // Arrow back up to the first row: the viewport must return to the top.
@@ -1829,6 +1848,81 @@ mod tests {
                 "arrowing back to the top must scroll the viewport back to the top"
             );
         });
+    }
+
+    #[kael::test]
+    fn measured_select_reveal_handles_sizes_wrapped_groups_and_search(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init_select(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        for input_size in [InputSize::Sm, InputSize::Md, InputSize::Lg] {
+            let select = cx.new(|cx| {
+                Select::new(cx)
+                    .options((0..80).map(|index| {
+                        SelectOption::new(index, format!("Choice {index:02}"))
+                            .with_group(format!("Section {} with a very long descriptive group heading that wraps across several lines", index / 8))
+                    }).collect())
+                    .selected_index(Some(79))
+                    .size(input_size)
+                    .searchable(true)
+            });
+            let (_host, window) = cx.add_window_view({
+                let select = select.clone();
+                move |_, _| ScrollableSelectHost { select }
+            });
+            window.simulate_resize(size(px(500.0), px(600.0)));
+            window.update(|window, cx| {
+                window.draw(cx).clear();
+                window.focus(&select.read(cx).focus_handle(cx));
+            });
+            window.simulate_keystrokes("enter");
+            let last_id = window.update(|window, cx| {
+                window.draw(cx).clear();
+                assert!(
+                    select
+                        .read(cx)
+                        .scroll_handle
+                        .bounds_for_item(0)
+                        .unwrap()
+                        .size
+                        .height
+                        > px(40.0),
+                    "the group header fixture must actually wrap"
+                );
+                assert_highlighted_row_is_visible(&select, window, cx)
+            });
+
+            // All keys arrive before the final draw; reveal must use the final
+            // highlight and the current filtered/header layout.
+            window.update(|window, cx| {
+                for _ in 0..35 {
+                    window.dispatch_keystroke(kael::Keystroke::parse("up").unwrap(), cx);
+                }
+                window.draw(cx).clear();
+                assert_eq!(select.read(cx).highlighted_index, Some(44));
+                assert_highlighted_row_is_visible(&select, window, cx);
+            });
+            window.simulate_keystrokes("7 up");
+            window.update(|window, cx| {
+                window.draw(cx).clear();
+                assert_eq!(select.read(cx).highlighted_index, Some(79));
+                assert_eq!(
+                    assert_highlighted_row_is_visible(&select, window, cx),
+                    last_id
+                );
+            });
+            // Widening the query retains the same logical highlight and must
+            // reveal it in its new, much later measured position.
+            window.simulate_keystrokes("backspace");
+            window.update(|window, cx| {
+                window.draw(cx).clear();
+                assert_eq!(
+                    assert_highlighted_row_is_visible(&select, window, cx),
+                    last_id
+                );
+            });
+        }
     }
 
     #[kael::test]
