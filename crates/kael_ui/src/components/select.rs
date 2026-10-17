@@ -145,6 +145,7 @@ impl SelectorSection {
 
 pub struct Select<T: Clone + 'static> {
     focus_handle: FocusHandle,
+    focus_subscription: Option<(AnyWindowHandle, Subscription)>,
     scroll_handle: ScrollHandle,
     options: Vec<SelectOption<T>>,
     option_accessibility_ids: Option<AccessibilityIdRange>,
@@ -171,12 +172,15 @@ pub struct Select<T: Clone + 'static> {
     dropdown_bounds: Bounds<Pixels>,
     leading_icon: Option<IconSource>,
     style: StyleRefinement,
+    #[cfg(test)]
+    filtered_options_calls: std::cell::Cell<usize>,
 }
 
 impl<T: Clone + 'static> Select<T> {
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
+            focus_subscription: None,
             scroll_handle: ScrollHandle::new(),
             options: Vec::new(),
             option_accessibility_ids: None,
@@ -203,6 +207,8 @@ impl<T: Clone + 'static> Select<T> {
             dropdown_bounds: Bounds::default(),
             leading_icon: None,
             style: StyleRefinement::default(),
+            #[cfg(test)]
+            filtered_options_calls: std::cell::Cell::new(0),
         }
     }
 
@@ -360,6 +366,9 @@ impl<T: Clone + 'static> Select<T> {
     }
 
     fn filtered_options(&self) -> Vec<(usize, &SelectOption<T>)> {
+        #[cfg(test)]
+        self.filtered_options_calls
+            .set(self.filtered_options_calls.get().saturating_add(1));
         if self.search_query.is_empty() {
             self.options.iter().enumerate().collect()
         } else {
@@ -373,27 +382,31 @@ impl<T: Clone + 'static> Select<T> {
     }
 
     fn toggle_dropdown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.disabled && !self.loading {
-            self.open = !self.open;
-            if self.open {
-                self.scroll_handle.set_offset(point(px(0.0), px(0.0)));
-                window.focus(&self.focus_handle);
-                self.highlighted_index = self
-                    .selected_index
-                    .filter(|index| {
-                        self.options
-                            .get(*index)
-                            .is_some_and(|option| !option.disabled)
-                    })
-                    .or_else(|| {
-                        self.filtered_options()
-                            .into_iter()
-                            .find_map(|(index, option)| (!option.disabled).then_some(index))
-                    });
-                self.request_highlight_reveal();
-            }
-            cx.notify();
+        if self.disabled || self.loading {
+            return;
         }
+        if self.open {
+            self.close_dropdown(cx);
+            return;
+        }
+        self.open = true;
+        self.scroll_handle.set_offset(point(px(0.0), px(0.0)));
+        window.focus(&self.focus_handle);
+        self.highlight_matching_option(self.selected_index);
+        cx.notify();
+    }
+
+    /// Preserve the preferred option only while it is enabled and matches the
+    /// current query. A search that regains results must regain a highlight.
+    fn highlight_matching_option(&mut self, preferred: Option<usize>) {
+        let query = self.search_query.to_lowercase();
+        let matches = |option: &SelectOption<T>| {
+            !option.disabled && (query.is_empty() || option.label.to_lowercase().contains(&query))
+        };
+        self.highlighted_index = preferred
+            .filter(|&index| self.options.get(index).is_some_and(matches))
+            .or_else(|| self.options.iter().position(matches));
+        self.request_highlight_reveal();
     }
 
     /// Resolve the final highlighted option against this frame's measured
@@ -403,12 +416,16 @@ impl<T: Clone + 'static> Select<T> {
         self.pending_highlight_reveal = true;
     }
 
-    fn close_dropdown(&mut self, cx: &mut Context<Self>) {
+    fn close_dropdown_state(&mut self) {
         self.open = false;
         self.dropdown_bounds = Bounds::default();
         self.highlighted_index = self.selected_index;
         self.pending_highlight_reveal = false;
         self.search_query.clear();
+    }
+
+    fn close_dropdown(&mut self, cx: &mut Context<Self>) {
+        self.close_dropdown_state();
         cx.notify();
     }
 
@@ -429,14 +446,12 @@ impl<T: Clone + 'static> Select<T> {
         if !self.open || self.disabled || self.loading {
             return;
         }
-        if self
-            .options
-            .get(index)
-            .is_some_and(|option| !option.disabled)
-        {
+        let query = self.search_query.to_lowercase();
+        if self.options.get(index).is_some_and(|option| {
+            !option.disabled && (query.is_empty() || option.label.to_lowercase().contains(&query))
+        }) {
             self.selected_index = Some(index);
-            self.highlighted_index = Some(index);
-            self.open = false;
+            self.close_dropdown_state();
 
             cx.emit(SelectEvent::Change);
             cx.notify();
@@ -450,6 +465,9 @@ impl<T: Clone + 'static> Select<T> {
     }
 
     fn select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled || self.loading {
+            return;
+        }
         if !self.open {
             self.toggle_dropdown(window, cx);
             return;
@@ -480,6 +498,9 @@ impl<T: Clone + 'static> Select<T> {
     }
 
     fn select_down(&mut self, _: &SelectDown, window: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled || self.loading {
+            return;
+        }
         if !self.open {
             self.toggle_dropdown(window, cx);
             return;
@@ -510,6 +531,9 @@ impl<T: Clone + 'static> Select<T> {
     }
 
     fn select_confirm(&mut self, _: &SelectConfirm, window: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled || self.loading {
+            return;
+        }
         if self.open {
             if let Some(idx) = self.highlighted_index {
                 self.select_option(idx, window, cx);
@@ -520,6 +544,9 @@ impl<T: Clone + 'static> Select<T> {
     }
 
     fn select_cancel(&mut self, _: &SelectCancel, _: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled || self.loading {
+            return;
+        }
         if self.open {
             self.close_dropdown(cx);
         }
@@ -534,6 +561,38 @@ impl<T: Clone + 'static> Styled for Select<T> {
 
 impl<T: Clone + 'static> Render for Select<T> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let window_handle = window.window_handle();
+        if self.focus_subscription.as_ref().map(|(handle, _)| *handle) != Some(window_handle) {
+            self.focus_subscription = Some((
+                window_handle,
+                cx.on_blur(&self.focus_handle, window, |this, window, cx| {
+                    if this.open {
+                        // Focus listeners run after painting. Notify after that
+                        // phase so closing also retires the painted popup and
+                        // its native actions on the next ordinary frame.
+                        let entity = cx.weak_entity();
+                        let bound_window = window.window_handle();
+                        window.defer(cx, move |window, cx| {
+                            _ = entity.update(cx, |this, cx| {
+                                if this.focus_subscription.as_ref().map(|(handle, _)| *handle)
+                                    == Some(bound_window)
+                                    && this.open
+                                    && !this.focus_handle.is_focused(window)
+                                {
+                                    this.close_dropdown(cx);
+                                }
+                            });
+                        });
+                    }
+                }),
+            ));
+        }
+        if self.disabled || self.loading {
+            self.close_dropdown_state();
+        }
+        if self.disabled && self.focus_handle.is_focused(window) {
+            window.blur();
+        }
         let theme = Theme::of(cx);
         let user_style = self.style.clone();
 
@@ -617,16 +676,19 @@ impl<T: Clone + 'static> Render for Select<T> {
         if self.selected_index.is_some() {
             accessibility = accessibility.value(AccessibilityValue::Text(display_text.to_string()));
         }
-        if !self.disabled && !self.loading {
-            accessibility = accessibility.actions(vec![
-                AccessibilityAction::Focus,
-                AccessibilityAction::Click,
-                if open {
-                    AccessibilityAction::Collapse
-                } else {
-                    AccessibilityAction::Expand
-                },
-            ]);
+        if !self.disabled {
+            let mut actions = vec![AccessibilityAction::Focus];
+            if !self.loading {
+                actions.extend([
+                    AccessibilityAction::Click,
+                    if open {
+                        AccessibilityAction::Collapse
+                    } else {
+                        AccessibilityAction::Expand
+                    },
+                ]);
+            }
+            accessibility = accessibility.actions(actions);
         }
         if open
             && let Some(active_id) = highlighted_idx.and_then(|index| {
@@ -691,6 +753,11 @@ impl<T: Clone + 'static> Render for Select<T> {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
+                    if this.disabled {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        return;
+                    }
                     this.toggle_dropdown(window, cx);
                 }),
             )
@@ -846,11 +913,15 @@ impl<T: Clone + 'static> Render for Select<T> {
 
         let searchable = self.searchable;
         let search_query: SharedString = self.search_query.clone().into();
-        let visible_option_rows =
-            u16::try_from(self.filtered_options().len().min(12)).unwrap_or(12);
-        let option_viewport_height = f32::from(visible_option_rows)
-            .mul_add(28.0, 8.0)
-            .clamp(48.0, 300.0);
+        let option_viewport_height = if open {
+            let visible_option_rows =
+                u16::try_from(self.filtered_options().len().min(12)).unwrap_or(12);
+            f32::from(visible_option_rows)
+                .mul_add(28.0, 8.0)
+                .clamp(48.0, 300.0)
+        } else {
+            0.0
+        };
         let dropdown_width = bounds
             .size
             .width
@@ -867,7 +938,17 @@ impl<T: Clone + 'static> Render for Select<T> {
 
         let control = div()
             .id(("select-control", entity_id))
-            .track_focus(&trigger_focus_handle)
+            .when(!self.disabled, |this| {
+                this.track_focus(&trigger_focus_handle)
+                    .on_accessibility_action(
+                        AccessibilityAction::Focus,
+                        cx.listener(|this, _, window, _| {
+                            if !this.disabled {
+                                window.focus(&this.focus_handle);
+                            }
+                        }),
+                    )
+            })
             .accessibility(accessibility)
             .relative()
             .w_full()
@@ -891,7 +972,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                     .on_accessibility_action(
                         AccessibilityAction::Collapse,
                         cx.listener(|this, _, _, cx| {
-                            if this.open {
+                            if !this.disabled && !this.loading && this.open {
                                 this.close_dropdown(cx);
                             }
                         }),
@@ -901,27 +982,26 @@ impl<T: Clone + 'static> Render for Select<T> {
                 this.on_action(cx.listener(Select::select_cancel))
             })
             .when(open && searchable, |this: Stateful<Div>| {
-                this.on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                this.on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if this.disabled || this.loading || !this.open || !this.focus_handle.is_focused(window) {
+                        return;
+                    }
                     if event.keystroke.key == "backspace" {
                         this.search_query.pop();
                         this.scroll_handle.set_offset(point(px(0.0), px(0.0)));
-                        this.request_highlight_reveal();
+                        this.highlight_matching_option(this.highlighted_index);
                         cx.notify();
                     }
                     else if event.keystroke.key.len() == 1 && !event.keystroke.modifiers.control && !event.keystroke.modifiers.platform {
                         this.search_query.push_str(&event.keystroke.key);
                         this.scroll_handle.set_offset(point(px(0.0), px(0.0)));
-                        let filtered = this.filtered_options();
-                        this.highlighted_index = filtered
-                            .into_iter()
-                            .find_map(|(index, option)| (!option.disabled).then_some(index));
-                        this.request_highlight_reveal();
+                        this.highlight_matching_option(None);
                         cx.notify();
                     }
                 }))
             })
             .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                if this.open && !this.dropdown_bounds.contains(&event.position) {
+                if !this.disabled && !this.loading && this.open && !this.dropdown_bounds.contains(&event.position) {
                     this.close_dropdown(cx);
                 }
             }))
@@ -1012,7 +1092,6 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                     .py(px(4.0))
                                                                     .map(|this| {
                                                                 let filtered = self.filtered_options();
-                                                                let loading = self.loading;
                                                                 let (item_padding_x, item_padding_y) = match self.size {
                                                                     InputSize::Sm => (px(8.0), px(4.0)),
                                                                     InputSize::Md => (px(8.0), px(6.0)),
@@ -1020,28 +1099,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                 };
 
                                                                 this
-                                                                    .when(loading, |this| {
-                                                                    this.child(
-                                                                        div()
-                                                                            .px(px(12.0))
-                                                                            .py(px(16.0))
-                                                                            .flex()
-                                                                            .items_center()
-                                                                            .justify_center()
-                                                                            .gap(px(8.0))
-                                                                            .text_size(px(13.0))
-                                                                            .font_family(theme.tokens.font_family.clone())
-                                                                            .text_color(theme.tokens.muted_foreground)
-                                                                            .child(
-                                                                                div()
-                                                                                    .text_size(px(18.0))
-                                                                                    .text_color(theme.tokens.primary)
-                                                                                    .child("⟳")
-                                                                            )
-                                                                            .child("Loading options...")
-                                                                    )
-                                                                })
-                                                                .when(!loading && filtered.is_empty(), |this| {
+                                                                .when(filtered.is_empty(), |this| {
                                                                     this.child(
                                                                         div()
                                                                             .px(px(12.0))
@@ -1055,7 +1113,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                             .child("No results found")
                                                                     )
                                                                 })
-                                                                .when(!loading && !filtered.is_empty(), |this| {
+                                                                .when(!filtered.is_empty(), |this| {
                                                                     let mut current_group: Option<SharedString> = None;
                                                                     let mut child_index = 0;
                                                                     this.children(
@@ -1276,13 +1334,13 @@ impl<T: Clone + 'static> EventEmitter<SelectEvent> for Select<T> {}
 
 #[cfg(test)]
 mod tests {
-    use super::{Select, SelectOption, init_select};
-    use crate::components::input::InputSize;
+    use super::{Select, SelectEvent, SelectOption, init_select};
+    use crate::components::input::{Input, InputSize, InputState};
     use kael::{
         AccessibilityAction, AccessibilityActionRequest, AccessibilityRole, AccessibilityState,
-        AppContext as _, Context, Entity, Focusable as _, IntoElement, Modifiers, MouseButton,
-        ParentElement as _, Render, ScrollDelta, ScrollWheelEvent, Styled as _, TestAppContext,
-        Window, div, point, px, size,
+        AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
+        Modifiers, MouseButton, ParentElement as _, Render, ScrollDelta, ScrollWheelEvent,
+        Styled as _, TestAppContext, Window, div, point, px, size,
     };
     use std::sync::{
         Arc,
@@ -1303,6 +1361,11 @@ mod tests {
         select: Entity<Select<usize>>,
     }
 
+    struct SelectFormHost {
+        select: Entity<Select<usize>>,
+        next: Entity<InputState>,
+    }
+
     impl Render for SelectHost {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             div()
@@ -1321,6 +1384,16 @@ mod tests {
     impl Render for ScrollableSelectHost {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             div().w(px(220.0)).child(self.select.clone())
+        }
+    }
+
+    impl Render for SelectFormHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w(px(220.0))
+                .tab_group()
+                .child(self.select.clone())
+                .child(Input::new(&self.next).aria_label("Next field"))
         }
     }
 
@@ -1357,7 +1430,709 @@ mod tests {
         assert_eq!(focused.role, AccessibilityRole::ComboBox);
         assert_eq!(focused.active_descendant, Some(id));
         assert_eq!(option.parent, Some(focused.id));
+        let exported = tree.to_accesskit_tree_update(None, None);
+        let native_control = exported
+            .nodes
+            .iter()
+            .find(|(id, _)| id.0 == focused.id.0)
+            .unwrap();
+        assert_eq!(native_control.1.active_descendant().unwrap().0, id.0);
         id
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum SearchClosePath {
+        TriggerPointer,
+        NativeClick,
+        Commit,
+    }
+
+    fn assert_search_close_reopens_with_valid_highlight(
+        cx: &mut TestAppContext,
+        close_path: SearchClosePath,
+    ) {
+        cx.update(|cx| {
+            init_select(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let callbacks = Arc::new(AtomicUsize::new(0));
+        let events = Arc::new(AtomicUsize::new(0));
+        let select = cx.new({
+            let callbacks = callbacks.clone();
+            move |cx| {
+                Select::new(cx)
+                    .options(
+                        (0..40)
+                            .map(|index| {
+                                SelectOption::new(index, format!("Choice {index:02}"))
+                                    .disabled(index == 7)
+                            })
+                            .collect(),
+                    )
+                    .selected_index(Some(0))
+                    .searchable(true)
+                    .on_change(move |_, _, _| {
+                        callbacks.fetch_add(1, Ordering::Relaxed);
+                    })
+            }
+        });
+        let _subscription = cx.update(|cx| {
+            let events = events.clone();
+            cx.subscribe(&select, move |_, _: &SelectEvent, _| {
+                events.fetch_add(1, Ordering::Relaxed);
+            })
+        });
+        let (_host, window) = cx.add_window_view({
+            let select = select.clone();
+            move |_, _| ScrollableSelectHost { select }
+        });
+        let trigger = window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.focus(&select.read(cx).focus_handle(cx));
+            window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| node.role == AccessibilityRole::ComboBox)
+                .unwrap()
+                .id
+        });
+        window.simulate_keystrokes("enter 7");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(
+                select.read(cx).highlighted_index,
+                Some(17),
+                "skip the disabled matching option"
+            );
+            assert_highlighted_row_is_visible(&select, window, cx);
+        });
+        match close_path {
+            SearchClosePath::TriggerPointer => {
+                let center = window.update(|_, cx| select.read(cx).bounds.center());
+                window.simulate_click(center, Modifiers::default());
+            }
+            SearchClosePath::NativeClick => {
+                window.update(|window, _| {
+                    window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                        trigger,
+                        AccessibilityAction::Click,
+                    ))
+                });
+                window.run_until_parked();
+            }
+            SearchClosePath::Commit => window.simulate_keystrokes("enter"),
+        }
+        let committed = matches!(close_path, SearchClosePath::Commit);
+        let expected_changes = usize::from(committed);
+        window.update(|window, cx| {
+            assert!(!select.read(cx).open, "{close_path:?} must close");
+            assert!(
+                select.read(cx).search_query.is_empty(),
+                "{close_path:?} must finish the search session"
+            );
+            assert_eq!(
+                select.read(cx).selected_value(),
+                Some(&if committed { 17 } else { 0 })
+            );
+            window.draw(cx).clear();
+            assert_eq!(
+                window
+                    .accessibility_tree()
+                    .get(trigger)
+                    .unwrap()
+                    .active_descendant,
+                None
+            );
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                trigger,
+                AccessibilityAction::Expand,
+            ));
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(select.read(cx).filtered_options().len(), 40);
+            assert_eq!(
+                select.read(cx).highlighted_index,
+                Some(if committed { 17 } else { 0 })
+            );
+            assert_highlighted_row_is_visible(&select, window, cx);
+        });
+        assert_eq!(callbacks.load(Ordering::Relaxed), expected_changes);
+        assert_eq!(events.load(Ordering::Relaxed), expected_changes);
+    }
+
+    #[kael::test]
+    fn trigger_close_finishes_search_before_reopening(cx: &mut TestAppContext) {
+        assert_search_close_reopens_with_valid_highlight(cx, SearchClosePath::TriggerPointer);
+    }
+
+    #[kael::test]
+    fn native_click_close_finishes_search_before_reopening(cx: &mut TestAppContext) {
+        assert_search_close_reopens_with_valid_highlight(cx, SearchClosePath::NativeClick);
+    }
+
+    #[kael::test]
+    fn selection_commit_finishes_search_before_reopening(cx: &mut TestAppContext) {
+        assert_search_close_reopens_with_valid_highlight(cx, SearchClosePath::Commit);
+    }
+
+    #[kael::test]
+    fn backspace_recovers_enabled_highlight_after_zero_search_results(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init_select(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let callbacks = Arc::new(AtomicUsize::new(0));
+        let events = Arc::new(AtomicUsize::new(0));
+        let select = cx.new({
+            let callbacks = callbacks.clone();
+            move |cx| {
+                Select::new(cx)
+                    .options(
+                        ["Selected disabled", "Cat", "Car", "Dog"]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, label)| {
+                                SelectOption::new(index, label).disabled(index < 2)
+                            })
+                            .collect(),
+                    )
+                    .selected_index(Some(0))
+                    .searchable(true)
+                    .on_change(move |_, _, _| {
+                        callbacks.fetch_add(1, Ordering::Relaxed);
+                    })
+            }
+        });
+        let _subscription = cx.update(|cx| {
+            let events = events.clone();
+            cx.subscribe(&select, move |_, _: &SelectEvent, _| {
+                events.fetch_add(1, Ordering::Relaxed);
+            })
+        });
+        let (_host, window) = cx.add_window_view({
+            let select = select.clone();
+            move |_, _| ScrollableSelectHost { select }
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.focus(&select.read(cx).focus_handle(cx));
+        });
+        window.simulate_keystrokes("enter");
+        let active = window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(select.read(cx).highlighted_index, Some(2));
+            assert_highlighted_row_is_visible(&select, window, cx)
+        });
+        for query_keys in ["z", "c z"] {
+            window.simulate_keystrokes(query_keys);
+            window.update(|window, cx| {
+                window.draw(cx).clear();
+                assert!(select.read(cx).filtered_options().is_empty());
+                assert_eq!(select.read(cx).highlighted_index, None);
+                assert_eq!(window.accessibility_tree().focused_node_count(), 1);
+            });
+            window.simulate_keystrokes("backspace");
+            window.update(|window, cx| {
+                window.draw(cx).clear();
+                assert_eq!(
+                    select.read(cx).highlighted_index,
+                    Some(2),
+                    "return to the first enabled matching option"
+                );
+                assert_eq!(
+                    assert_highlighted_row_is_visible(&select, window, cx),
+                    active
+                );
+                assert_eq!(select.read(cx).selected_value(), Some(&0));
+            });
+        }
+        assert_eq!(callbacks.load(Ordering::Relaxed), 0);
+        assert_eq!(events.load(Ordering::Relaxed), 0);
+        window.simulate_keystrokes("enter");
+        window.update(|_, cx| assert_eq!(select.read(cx).selected_value(), Some(&2)));
+        assert_eq!(callbacks.load(Ordering::Relaxed), 1);
+        assert_eq!(events.load(Ordering::Relaxed), 1);
+    }
+
+    #[kael::test]
+    fn queued_option_click_rechecks_query_before_committing(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init_select(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let changes = Arc::new(AtomicUsize::new(0));
+        let events = Arc::new(AtomicUsize::new(0));
+        let select = cx.new({
+            let changes = changes.clone();
+            move |cx| {
+                Select::new(cx)
+                    .options(vec![
+                        SelectOption::new(0, "Initial"),
+                        SelectOption::new(1, "Alpha"),
+                        SelectOption::new(2, "Beta"),
+                    ])
+                    .selected_index(Some(0))
+                    .searchable(true)
+                    .on_change(move |_, _, _| {
+                        changes.fetch_add(1, Ordering::Relaxed);
+                    })
+            }
+        });
+        let _subscription = cx.update(|cx| {
+            let events = events.clone();
+            cx.subscribe(&select, move |_, _: &SelectEvent, _| {
+                events.fetch_add(1, Ordering::Relaxed);
+            })
+        });
+        let (_host, window) = cx.add_window_view({
+            let select = select.clone();
+            move |_, _| ScrollableSelectHost { select }
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            select.update(cx, |this, cx| this.toggle_dropdown(window, cx));
+            window.draw(cx).clear();
+            let alpha = select
+                .read(cx)
+                .option_accessibility_ids
+                .unwrap()
+                .get(1)
+                .unwrap();
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                alpha,
+                AccessibilityAction::Click,
+            ));
+            // Change the live query before the queued handler runs, leaving
+            // the previously exported Alpha action intact until its callback.
+            select.update(cx, |this, _| {
+                this.search_query = "Beta".to_owned();
+                this.highlight_matching_option(None);
+            });
+            assert_eq!(
+                window
+                    .accessibility_tree()
+                    .get(alpha)
+                    .unwrap()
+                    .label
+                    .as_deref(),
+                Some("Alpha")
+            );
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert_eq!(select.read(cx).selected_value(), Some(&0));
+            assert!(select.read(cx).open);
+            assert_eq!(select.read(cx).search_query, "Beta");
+            assert_eq!(changes.load(Ordering::Relaxed), 0);
+            assert_eq!(events.load(Ordering::Relaxed), 0);
+            let beta = assert_highlighted_row_is_visible(&select, window, cx);
+            for _ in 0..2 {
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    beta,
+                    AccessibilityAction::Click,
+                ));
+            }
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            assert_eq!(select.read(cx).selected_value(), Some(&2));
+            assert!(!select.read(cx).open);
+            assert!(select.read(cx).search_query.is_empty());
+        });
+        assert_eq!(changes.load(Ordering::Relaxed), 1);
+        assert_eq!(events.load(Ordering::Relaxed), 1);
+    }
+
+    #[kael::test]
+    fn tab_closes_search_without_changing_selection_and_retires_popup_actions(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            init_select(cx);
+            crate::components::input::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let callbacks = Arc::new(AtomicUsize::new(0));
+        let events = Arc::new(AtomicUsize::new(0));
+        let select = cx.new({
+            let callbacks = callbacks.clone();
+            move |cx| {
+                Select::new(cx)
+                    .options(
+                        (0..30)
+                            .map(|index| SelectOption::new(index, format!("Choice {index:02}")))
+                            .collect(),
+                    )
+                    .selected_index(Some(0))
+                    .searchable(true)
+                    .on_change(move |_, _, _| {
+                        callbacks.fetch_add(1, Ordering::Relaxed);
+                    })
+            }
+        });
+        let next = cx.new(InputState::new);
+        let _subscription = cx.update(|cx| {
+            let events = events.clone();
+            cx.subscribe(&select, move |_, _: &SelectEvent, _| {
+                events.fetch_add(1, Ordering::Relaxed);
+            })
+        });
+        let (_host, window) = cx.add_window_view({
+            let select = select.clone();
+            let next = next.clone();
+            move |_, _| SelectFormHost { select, next }
+        });
+        // TestPlatform initially records the newly opened window as active,
+        // while TestWindow reports inactive. Deliver a real activation change.
+        window.deactivate_window();
+        window.update(|window, _| window.activate_window());
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert!(window.is_window_active());
+            window.draw(cx).clear();
+            window.focus(&select.read(cx).focus_handle(cx));
+        });
+        window.simulate_keystrokes("enter 7");
+        let (control, option) = window.update(|window, cx| {
+            window.draw(cx).clear();
+            let option = assert_highlighted_row_is_visible(&select, window, cx);
+            let tree = window.accessibility_tree();
+            let control = tree.focused_node().unwrap();
+            assert!(
+                !tree
+                    .get(option)
+                    .unwrap()
+                    .actions
+                    .contains(&AccessibilityAction::Focus)
+            );
+            assert!(!window.has_accessibility_action_handler(option, AccessibilityAction::Focus));
+            // Unsupported option Focus must not steal the owner's keyboard
+            // focus or cause a blur dismissal.
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                option,
+                AccessibilityAction::Focus,
+            ));
+            (control, option)
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(select.read(cx).open);
+            assert!(select.read(cx).focus_handle(cx).is_focused(window));
+            assert_eq!(
+                assert_highlighted_row_is_visible(&select, window, cx),
+                option
+            );
+        });
+        window.simulate_keystrokes("tab");
+        window.simulate_platform_frame();
+        window.simulate_platform_frame();
+        window.update(|window, cx| {
+            assert!(
+                next.read(cx).focus_handle(cx).is_focused(window),
+                "Tab must reach the adjacent form control once"
+            );
+            eprintln!(
+                "Select blur after two platform frames: open={}, popup={}, action={}",
+                select.read(cx).open,
+                window.accessibility_tree().get(option).is_some(),
+                window.has_accessibility_action_handler(option, AccessibilityAction::Click),
+            );
+            assert!(
+                !select.read(cx).open,
+                "leaving the owner must dismiss its popup"
+            );
+            assert!(select.read(cx).search_query.is_empty());
+            assert_eq!(select.read(cx).selected_value(), Some(&0));
+            let tree = window.accessibility_tree();
+            assert_eq!(tree.focused_node_count(), 1);
+            assert_eq!(tree.get(control).unwrap().active_descendant, None);
+            assert!(tree.get(option).is_none());
+            assert!(!window.has_accessibility_action_handler(option, AccessibilityAction::Click));
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                option,
+                AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        window.simulate_keystrokes("shift-tab");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(select.read(cx).focus_handle(cx).is_focused(window));
+        });
+        window.simulate_keystrokes("enter");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(select.read(cx).highlighted_index, Some(0));
+            assert_eq!(select.read(cx).filtered_options().len(), 30);
+            assert_highlighted_row_is_visible(&select, window, cx);
+        });
+        assert_eq!(callbacks.load(Ordering::Relaxed), 0);
+        assert_eq!(events.load(Ordering::Relaxed), 0);
+    }
+
+    #[kael::test]
+    fn disabled_select_rejects_stale_pointer_and_native_focus_before_repaint(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            init_select(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let select = cx.new(|cx| {
+            Select::new(cx)
+                .options(vec![SelectOption::new(0, "One")])
+                .selected_index(Some(0))
+        });
+        let next = cx.new(InputState::new);
+        let (_host, window) = cx.add_window_view({
+            let select = select.clone();
+            let next = next.clone();
+            move |_, _| SelectFormHost { select, next }
+        });
+        let control = window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.focus(&next.read(cx).focus_handle(cx));
+            window.draw(cx).clear();
+            let control = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| node.role == AccessibilityRole::ComboBox)
+                .unwrap()
+                .id;
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                control,
+                AccessibilityAction::Focus,
+            ));
+            select.update(cx, |this, _| {
+                this.disabled = true;
+            });
+            assert!(
+                !window
+                    .accessibility_tree()
+                    .get(control)
+                    .unwrap()
+                    .states
+                    .contains(AccessibilityState::DISABLED),
+                "queue against the previously enabled semantic tree"
+            );
+            let point = select.read(cx).bounds.center();
+            window.dispatch_event(
+                kael::PlatformInput::MouseDown(kael::MouseDownEvent {
+                    position: point,
+                    button: MouseButton::Left,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                cx,
+            );
+            assert!(
+                next.read(cx).focus_handle(cx).is_focused(window),
+                "an old enabled hitbox must not focus a now-disabled Select"
+            );
+            control
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert!(
+                next.read(cx).focus_handle(cx).is_focused(window),
+                "queued owner Focus must recheck disabled state"
+            );
+            select.update(cx, |_, cx| cx.notify());
+        });
+        window.simulate_platform_frame();
+        let center = window.update(|window, cx| {
+            let node = window.accessibility_tree().get(control).unwrap();
+            assert!(node.states.contains(AccessibilityState::DISABLED));
+            assert!(!node.actions.contains(&AccessibilityAction::Focus));
+            select.read(cx).bounds.center()
+        });
+        window.simulate_click(center, Modifiers::default());
+        window.update(|window, cx| {
+            assert!(!select.read(cx).focus_handle(cx).is_focused(window));
+            assert!(!select.read(cx).open);
+            assert_eq!(select.read(cx).selected_value(), Some(&0));
+        });
+    }
+
+    #[kael::test]
+    fn disabled_and_loading_select_retire_sessions_and_guard_queued_input(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init_select(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        for loading in [false, true] {
+            let changes = Arc::new(AtomicUsize::new(0));
+            let events = Arc::new(AtomicUsize::new(0));
+            let notifications = Arc::new(AtomicUsize::new(0));
+            let select = cx.new({
+                let changes = changes.clone();
+                move |cx| {
+                    Select::new(cx)
+                        .options(
+                            (0..20)
+                                .map(|index| SelectOption::new(index, format!("Choice {index:02}")))
+                                .collect(),
+                        )
+                        .selected_index(Some(0))
+                        .searchable(true)
+                        .on_change(move |_, _, _| {
+                            changes.fetch_add(1, Ordering::Relaxed);
+                        })
+                }
+            });
+            let _subscription = cx.update(|cx| {
+                let events = events.clone();
+                cx.subscribe(&select, move |_, _: &SelectEvent, _| {
+                    events.fetch_add(1, Ordering::Relaxed);
+                })
+            });
+            let _observer = cx.update(|cx| {
+                let notifications = notifications.clone();
+                cx.observe(&select, move |_, _| {
+                    notifications.fetch_add(1, Ordering::Relaxed);
+                })
+            });
+            let (_host, window) = cx.add_window_view({
+                let select = select.clone();
+                move |_, _| ScrollableSelectHost { select }
+            });
+            window.update(|window, cx| {
+                window.draw(cx).clear();
+                window.focus(&select.read(cx).focus_handle(cx));
+            });
+            window.simulate_keystrokes("enter 7");
+            notifications.store(0, Ordering::Relaxed);
+            let (control, option) = window.update(|window, cx| {
+                window.draw(cx).clear();
+                let option = assert_highlighted_row_is_visible(&select, window, cx);
+                let control = window.accessibility_tree().focused_node().unwrap();
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    control,
+                    AccessibilityAction::Collapse,
+                ));
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    option,
+                    AccessibilityAction::Click,
+                ));
+                select.update(cx, |this, _| {
+                    this.disabled = !loading;
+                    this.loading = loading;
+                });
+                assert!(
+                    window
+                        .accessibility_tree()
+                        .get(control)
+                        .unwrap()
+                        .states
+                        .contains(AccessibilityState::EXPANDED),
+                    "queue against the previously open semantic tree"
+                );
+                window.dispatch_keystroke(kael::Keystroke::parse("down").unwrap(), cx);
+                window.dispatch_keystroke(kael::Keystroke::parse("a").unwrap(), cx);
+                assert_eq!(
+                    select.read(cx).search_query,
+                    "7",
+                    "old search listener must reject unavailable state"
+                );
+                assert_eq!(select.read(cx).highlighted_index, Some(7));
+                (control, option)
+            });
+            window.run_until_parked();
+            assert_eq!(
+                notifications.load(Ordering::Relaxed),
+                0,
+                "queued Collapse and search must not mutate/notify an unavailable Select"
+            );
+            window.update(|_, cx| {
+                assert_eq!(select.read(cx).selected_value(), Some(&0));
+                select.update(cx, |_, cx| cx.notify());
+            });
+            window.simulate_platform_frame();
+            window.simulate_platform_frame();
+            window.update(|window, cx| {
+                assert!(!select.read(cx).open);
+                assert!(select.read(cx).search_query.is_empty());
+                assert_eq!(select.read(cx).selected_value(), Some(&0));
+                let tree = window.accessibility_tree();
+                let control = tree.get(control).unwrap();
+                assert!(control.states.contains(AccessibilityState::COLLAPSED));
+                assert_eq!(control.active_descendant, None);
+                assert!(tree.get(option).is_none());
+                assert!(
+                    !window.has_accessibility_action_handler(option, AccessibilityAction::Click)
+                );
+                assert_eq!(
+                    select.read(cx).focus_handle(cx).is_focused(window),
+                    loading,
+                    "busy stays focusable; disabled relinquishes focus"
+                );
+                assert_eq!(
+                    control.actions.contains(&AccessibilityAction::Focus),
+                    loading
+                );
+                assert_eq!(control.states.contains(AccessibilityState::BUSY), loading);
+                assert!(!control.actions.contains(&AccessibilityAction::Click));
+                let control_id = control.id;
+                if loading {
+                    window.blur();
+                    window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                        control_id,
+                        AccessibilityAction::Focus,
+                    ));
+                }
+            });
+            window.run_until_parked();
+            window.simulate_keystrokes("down a enter");
+            window.update(|window, cx| {
+                assert_eq!(select.read(cx).focus_handle(cx).is_focused(window), loading);
+                assert!(!select.read(cx).open);
+                assert!(select.read(cx).search_query.is_empty());
+                assert_eq!(select.read(cx).selected_value(), Some(&0));
+            });
+            assert_eq!(changes.load(Ordering::Relaxed), 0);
+            assert_eq!(events.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[kael::test]
+    fn closed_large_select_does_not_enumerate_options_on_redraw(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral()));
+        let select = cx.new(|cx| {
+            Select::new(cx)
+                .options(
+                    (0..100_000)
+                        .map(|index| SelectOption::new(index, "Shared option label"))
+                        .collect(),
+                )
+                .selected_index(Some(99_999))
+        });
+        let (_host, window) = cx.add_window_view({
+            let select = select.clone();
+            move |_, _| ScrollableSelectHost { select }
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(
+                select.read(cx).filtered_options_calls.get(),
+                0,
+                "closed render must not allocate a filtered collection for an absent popup"
+            );
+        });
+        for _ in 0..3 {
+            window.update(|_, cx| select.update(cx, |_, cx| cx.notify()));
+            window.simulate_platform_frame();
+        }
+        window.update(|_, cx| {
+            assert!(!select.read(cx).open);
+            assert_eq!(select.read(cx).selected_value(), Some(&99_999));
+            assert_eq!(select.read(cx).filtered_options_calls.get(), 0);
+        });
     }
 
     fn select(
