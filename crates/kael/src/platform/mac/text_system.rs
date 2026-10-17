@@ -8,9 +8,9 @@ use anyhow::anyhow;
 use collections::HashMap;
 use core_foundation::{
     attributed_string::CFMutableAttributedString,
-    base::{CFRange, TCFType},
+    base::{CFRange, TCFType, kCFAllocatorDefault},
     number::CFNumber,
-    string::CFString,
+    string::{CFString, CFStringCreateWithCharacters},
 };
 use core_graphics::base::CGFloat;
 use core_graphics::{
@@ -685,10 +685,27 @@ impl MacTextSystemState {
                     log::error!("macOS text layout exceeds CoreText range limits");
                     break;
                 };
-                string.replace_str(
-                    &CFString::new(run_text),
-                    CFRange::init(utf16_start_native, 0),
-                );
+                // The UTF-8 CFString constructor consumes a leading BOM even
+                // when it is an interior source character at a run boundary.
+                // Keep that UTF-16 code unit: the converter and subsequent
+                // attributed-string insertion ranges still account for it.
+                let run_string = if run_text.starts_with('\u{feff}') {
+                    let utf16: SmallVec<[u16; 128]> = run_text.encode_utf16().collect();
+                    let Ok(len) = isize::try_from(utf16.len()) else {
+                        log::error!("macOS text run exceeds CoreText string limits");
+                        break;
+                    };
+                    unsafe {
+                        CFString::wrap_under_create_rule(CFStringCreateWithCharacters(
+                            kCFAllocatorDefault,
+                            utf16.as_ptr(),
+                            len,
+                        ))
+                    }
+                } else {
+                    CFString::new(run_text)
+                };
+                string.replace_str(&run_string, CFRange::init(utf16_start_native, 0));
                 if needs_zwnj {
                     let zwnjs_pos = string.char_len();
                     self.zwnjs_scratch_space.push((n_zwnjs, zwnjs_pos as usize));
@@ -786,12 +803,20 @@ impl MacTextSystemState {
                     ix_converter = StringIndexConverter::new(text);
                 }
                 ix_converter.advance_to_utf16_ix(glyph_utf16_ix);
+                // Keep BOMs in the native string for exact character/range
+                // accounting, but preserve their existing non-painting behavior.
+                if text[ix_converter.utf8_ix..].starts_with('\u{feff}') {
+                    continue;
+                }
                 glyphs.push(ShapedGlyph {
                     id: GlyphId(glyph_id as u32),
                     position: point(position.x as f32, -position.y as f32).map(px),
                     index: ix_converter.utf8_ix,
                     is_emoji: self.is_emoji(font_id),
                 });
+            }
+            if glyphs.is_empty() {
+                runs.pop();
             }
         }
         let typographic_bounds = line.get_typographic_bounds();
@@ -1115,6 +1140,75 @@ mod tests {
         font, point, px,
     };
     use unicode_segmentation::UnicodeSegmentation;
+
+    #[test]
+    fn uncached_native_bom_split_run_reproducer() {
+        let fonts = MacTextSystem::new();
+        let font_id = fonts.font_id(&font("Helvetica")).unwrap();
+        let text = "\u{feff}a b";
+        let split = "\u{feff}a".len();
+        let native = core_foundation::string::CFString::new(&text[..split]);
+        eprintln!(
+            "NATIVE_BOM_RUN rust_utf16={} native_utf16={}",
+            text[..split].encode_utf16().count(),
+            native.char_len()
+        );
+        let mut state = fonts.0.write();
+        let line = state.layout_line(
+            text,
+            px(13.0),
+            &[
+                FontRun {
+                    font_id,
+                    len: split,
+                },
+                FontRun {
+                    font_id,
+                    len: text.len() - split,
+                },
+            ],
+        );
+        assert_eq!(line.len, text.len());
+        for text in [
+            "\u{feff}a b",
+            "a\u{feff}b",
+            "\u{feff}a\u{feff}b",
+            "a\0b",
+            "\u{feff}\0café 日本語 👩🏽‍💻 café",
+        ] {
+            for split in text.char_indices().map(|(index, _)| index).skip(1) {
+                let runs = [
+                    FontRun {
+                        font_id,
+                        len: split,
+                    },
+                    FontRun {
+                        font_id,
+                        len: text.len() - split,
+                    },
+                ];
+                for _ in 0..2 {
+                    let line = state.layout_line(text, px(13.0), &runs);
+                    assert_eq!(line.len, text.len());
+                    for run in &line.runs {
+                        for glyph in &run.glyphs {
+                            assert!(glyph.index < text.len() && text.is_char_boundary(glyph.index));
+                            if run.font_id == font_id {
+                                for ch in ['a', 'b', 'c', 'f'] {
+                                    if Some(glyph.id) == state.glyph_for_char(font_id, ch) {
+                                        assert!(
+                                            text[glyph.index..].starts_with(ch),
+                                            "incorrect source byte for {ch:?}: {text:?} split={split}"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn glyph_coverage_is_display_independent() {
