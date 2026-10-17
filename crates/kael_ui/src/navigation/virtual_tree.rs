@@ -86,7 +86,18 @@ impl<T: Clone + Eq + Hash + 'static> VirtualTreeModel<T> {
         expanded_ids: &HashSet<T>,
     ) -> Result<Self, VirtualTreeModelError> {
         let mut model = Self::from_rows(flatten_tree(nodes, expanded_ids, 0), expanded_ids, false)?;
-        model.set_accessibility_catalog_ids(source_ids(nodes))?;
+        // Every hidden source node has a collapsed displayed ancestor. If all
+        // displayed branches are expanded, the validated rows already cover
+        // the source catalog and its index can be shared without another pass.
+        if model
+            .data
+            .rows
+            .iter()
+            .zip(&model.data.expanded)
+            .any(|(row, expanded)| row.has_children && !*expanded)
+        {
+            model.set_accessibility_catalog_ids(source_ids(nodes))?;
+        }
         Ok(model)
     }
 
@@ -162,36 +173,8 @@ impl<T: Clone + Eq + Hash + 'static> VirtualTreeModel<T> {
         let data = Arc::get_mut(&mut self.data)
             .filter(|data| data.accessibility.is_none())
             .ok_or(VirtualTreeModelError::SharedPreparation)?;
-        let mut ids = ids.into_iter().enumerate();
-        let mut matched = 0;
-        let (index, id) = loop {
-            match ids.next() {
-                Some((index, id)) if data.rows.get(index).is_some_and(|row| row.node_id == id) => {
-                    matched += 1;
-                }
-                Some(mismatch) => break mismatch,
-                None => {
-                    if matched != data.rows.len() {
-                        return Err(VirtualTreeModelError::IncompleteCatalog);
-                    }
-                    // The visible index already validated this complete ordered
-                    // catalog. Avoid building and discarding a second large map.
-                    data.catalog_indices = data.indices.clone();
-                    return Ok(());
-                }
-            }
-        };
         let mut catalog = HashMap::new();
-        // Preserve the verified prefix when hidden IDs or a different order
-        // require the general path. All following IDs still need duplicate and
-        // coverage checks, including duplicates against this prefix.
-        catalog.extend(
-            data.rows[..matched]
-                .iter()
-                .enumerate()
-                .map(|(index, row)| (row.node_id.clone(), index)),
-        );
-        for (index, id) in std::iter::once((index, id)).chain(ids) {
+        for (index, id) in ids.into_iter().enumerate() {
             if catalog.insert(id, index).is_some() {
                 return Err(VirtualTreeModelError::DuplicateId);
             }
@@ -1289,6 +1272,26 @@ mod tests {
         assert_eq!(model.level_at(3), Some(2));
         assert_eq!(model.id_at(7), None);
         assert_eq!(model.index_of(&99), None);
+        assert!(Arc::ptr_eq(
+            &model.data.catalog_indices,
+            &model.data.indices
+        ));
+
+        let collapsed = VirtualTreeModel::new(&nodes, &HashSet::new()).unwrap();
+        assert_eq!(collapsed.len(), 3);
+        assert_eq!(collapsed.data.catalog_indices.len(), 7);
+        assert!(!Arc::ptr_eq(
+            &collapsed.data.catalog_indices,
+            &collapsed.data.indices
+        ));
+        let lazy = VirtualTreeModel::new(
+            &[TreeNode::new(99, "lazy").with_lazy_children(true)],
+            &HashSet::new(),
+        )
+        .unwrap();
+        assert!(lazy.data.rows[0].has_children);
+        assert!(!lazy.data.expanded[0]);
+        assert_eq!(lazy.data.catalog_indices.len(), 1);
 
         let duplicate = vec![TreeNode::new(1, "a"), TreeNode::new(1, "b")];
         assert!(matches!(
@@ -1298,12 +1301,19 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
-    fn ordered_fully_displayed_catalog_reuses_index_without_hashing() {
+    fn fully_displayed_factory_reuses_validated_index_without_recloning_catalog() {
         thread_local! {
             static HASH_CALLS: Cell<usize> = const { Cell::new(0) };
+            static CLONE_CALLS: Cell<usize> = const { Cell::new(0) };
         }
-        #[derive(Clone, Debug, PartialEq, Eq)]
+        #[derive(Debug, PartialEq, Eq)]
         struct CountedId(usize);
+        impl Clone for CountedId {
+            fn clone(&self) -> Self {
+                CLONE_CALLS.with(|calls| calls.set(calls.get() + 1));
+                Self(self.0)
+            }
+        }
         impl Hash for CountedId {
             fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
                 HASH_CALLS.with(|calls| calls.set(calls.get() + 1));
@@ -1311,23 +1321,35 @@ mod tests {
             }
         }
 
-        let nodes: Vec<_> = (0..100_025)
-            .map(|index| TreeNode::new(CountedId(index), "row"))
+        const ROOTS: usize = 25;
+        const CHILDREN: usize = 4_000;
+        const ITEMS: usize = ROOTS * (CHILDREN + 1);
+        let nodes: Vec<_> = (0..ROOTS)
+            .map(|root| {
+                let base = root * (CHILDREN + 1);
+                TreeNode::new(CountedId(base), "root").with_children(
+                    (1..=CHILDREN)
+                        .map(|child| TreeNode::new(CountedId(base + child), "file"))
+                        .collect(),
+                )
+            })
             .collect();
-        let mut model = VirtualTreeModel::from_rows(
-            flatten_tree(&nodes, &HashSet::new(), 0),
-            &HashSet::new(),
-            false,
-        )
-        .unwrap();
+        let expanded = (0..ROOTS)
+            .map(|root| CountedId(root * (CHILDREN + 1)))
+            .collect();
         HASH_CALLS.with(|calls| calls.set(0));
-        model
-            .set_accessibility_catalog_ids(nodes.iter().map(|node| node.id.clone()))
-            .unwrap();
+        CLONE_CALLS.with(|calls| calls.set(0));
+        let model = VirtualTreeModel::new(&nodes, &expanded).unwrap();
+        assert_eq!(model.len(), ITEMS);
+        assert_eq!(
+            CLONE_CALLS.with(Cell::get),
+            ITEMS * 2,
+            "only flattening rows and indexing rows should clone IDs"
+        );
         assert_eq!(
             HASH_CALLS.with(Cell::get),
-            0,
-            "ordered visible IDs already have a validated index"
+            ITEMS * 2 + ROOTS,
+            "only row indexing, expansion lookup, and nonempty source branches should hash IDs"
         );
         assert!(Arc::ptr_eq(
             &model.data.catalog_indices,
