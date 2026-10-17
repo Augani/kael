@@ -64,6 +64,19 @@ unchanged; these scoped diagnostics do not establish native RSS or an overall
 framework ranking. Combined validation passes 2,194 core tests, all 501 UI tests
 and fresh builds of all 39 package archives at the recorded checkpoint.
 
+The later [shared-control checkpoint](2026-10-17-shared-control-validation.json)
+fixes bounded table layouts, variable-list origins, independent wheel axes,
+Dropdown session/focus/pointer handling and native scrollbar action handlers.
+The general records example has fresh native selection, read-only paste and
+paging proof. Combined validation at `d766b5d` passes 2,198 core tests, all 537
+UI tests and another isolated 39-package preflight, with every included Rust
+file independently matched to Git. A separate [output ownership regression](2026-10-17-animation-output-ownership-validation.json)
+removes a completed animation canvas copy: a real 16×8 frame requests 512 bytes
+in one allocation rather than 1,024 in two, with identical pixels and balanced
+release. Primary fork validation passes 137 native tests and 16 actual Chrome
+cases. Native OS action-client limitations, unified memory accounting and fresh
+latest-competitor/platform execution remain explicit open scopes.
+
 ## Component coverage and gaps
 
 The library already contains most common controls, so component count alone is

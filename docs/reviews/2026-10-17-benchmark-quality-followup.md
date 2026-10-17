@@ -781,3 +781,48 @@ constrained parent. These visual defects require correction before acceptance.
 Another fresh 39-package preflight verifies all 928 included Rust files against
 `a3add69` (23,290,129 bytes; 6,033,157 compressed archive bytes), with no upload.
 Example source is excluded from release archives and has its own compile proof.
+
+The later [shared-control checkpoint](2026-10-17-shared-control-validation.json)
+corrects those initial leading-edge/footer defects. Variable lists clamp their
+active axis before positioning, and `DataTable.fill_parent(true)` fits a bounded
+parent while retaining existing default sizing. Header, skeleton, cached-row
+and vertical-body scrolling use their intended axes. Dropdown now implements
+its declared disclosure actions with one focus owner, live disabled/session
+checks, paired key handling and measured popup pointer bounds. Scrollbars
+register Focus/Increment/Decrement/numeric SetValue handlers, use live ranges,
+preserve the other axis and retire actions when a keyed handle/axis changes.
+
+At `d766b5d`, all 2,198 core tests and 537 UI tests pass, together with strict
+native all-target lint, Wasm, two records tests/build, all twenty benchmark
+compile targets, formatting and docs. The same two core diagnostics remain
+opt-in in the broad suite. A separate actual display-link invocation passes
+128 stop/resume cycles with one retained native object; it performs no
+comparative CPU, power or presentation measurement. Another isolated
+39-package preflight builds every archive. Independent audit matches all 929
+included Rust files (23,392,950 bytes) to Git; compressed archives total
+6,052,424 bytes. All earlier cohorts and failed attempts remain preserved, and
+no crates are uploaded.
+
+The exact current records binary has fresh native stored-ID selection before
+and after reversal, read-only paste rejection with clipboard restoration,
+vertical paging and refresh proof. A separate consumer changes only the initial
+window request to 900×600 logical pixels. Its actual track click moves the
+horizontal range from zero to 198; Left decrements by 40 to 158, and vertical
+scrolling preserves that offset with header/cell alignment and footer clearance.
+These are native pointer/keyboard controls. The available client does not expose
+secondary scrollbar actions and its string setter is not numeric-NSNumber
+acceptance proof. Nonzero native horizontal wheel delivery and current native
+resize acceptance remain unproven. The fixed 160-pixel default scrollbar track
+is a separate next quality target; its sizing proposal has not changed the
+frozen source.
+
+The [output ownership checkpoint](2026-10-17-animation-output-ownership-validation.json)
+removes the completed animation canvas copy. A real 16×8 frame requests 512
+bytes in one allocation rather than 1,024 bytes in two, preserving exact pixels
+and balanced release. Actual primary fork validation passes 137 native tests,
+strict all-target lint and 16 actual Chrome cases. Model, layer/effect/image
+scratch and active/ready ownership remain additional; this is not native RSS
+or a unified memory limit. The current exact GPUI Kit 0.7.3 pin compiles all five
+unchanged workloads in both instrumentation modes. Release-byte freezing,
+fresh hosted collection and complete latest-source platform acceptance remain
+separate from this compilation and the historical hundred-capture results.

@@ -1,0 +1,423 @@
+{
+  "schema_version": 1,
+  "scope": "R8 completed main animation output ownership; removes a transient duplicate pixelcanvas, not unified animation/application memory or RSS closure.",
+  "implementation_commit": "8488473ad6d6f77c4e9c71baa7171732b3fd3558",
+  "primary_validation_commit": "66a07dcb5bbb56eca27def21d9ecf75cfeb5295b",
+  "mode_followup": "66a07dc preserves provenancechecker executablemode; production/testcontent already in8488473.",
+  "source_files_sha256": {
+    "vendor/rasterlottie/Cargo.toml": "32656a1775cfd0a2df3687b754d81371fd4103c32bdd5266bcae7642dca633f3",
+    "vendor/rasterlottie/PATCHES.md": "33b696402a70e94e4abe59247fb04b52ed952e7edbbad2597dbf43aee2129323",
+    "vendor/rasterlottie/zip9-compatibility.patch": "971163b1585f225919d7a6640005f45e45b742f1df343c7c8e024edb685c6339",
+    "vendor/rasterlottie/src/render/renderer/raster.rs": "e6b9ad87585104f367cef5cbb746b3abcbdc2052459d2df5caeab10932982e30",
+    "vendor/rasterlottie/tests/output_allocation.rs": "eb8e94189d05d27d84ee5f68d5a63ec82fa8a8d5095ba5b49626f8649a960ba9",
+    "scripts/ci/verify-rasterlottie-fork.py": "9384fd649d0dba43db4c53a102ed14be75520680f2bf3e4bf39be41d5f579743",
+    "scripts/ci/verify-lottie-admission.py": "6342b278c9883c2d59e1127f2769160535ec157b57eec388dfea2bd1de91c2b7",
+    "Cargo.lock": "df15e57c90e981bdfd8329be16f6840a68d1980d57a91b1f2c98d6104053d059",
+    "vendor/rasterlottie/UPSTREAM-SHA256.json": "506ab0a085c8f868ce00275d0f13bffe87f73cdbc9ca5c85b111eb641778d1c0"
+  },
+  "behavior": [
+    "The completed tiny-skia Pixmap transfers its owned premultiplied RGBA Vec into RasterFrame with take(), preserving the public frame and borrowed render-into-pixmap behavior.",
+    "Kael swaps RGBA/BGRA channels in the returned Vec in place. Existing per-frame/batch admission and worker/cache policies remain separate."
+  ],
+  "requested_payload_oracle": {
+    "canvas": [
+      16,
+      8
+    ],
+    "bytes_per_canvas": 512,
+    "profile": "Rust1.97.1 defaultdev/test profile; synchronous publicPreparedAnimation::render_frame; preparation/warmup/report/assertions outside the watch.",
+    "before": {
+      "allocation_events": 2,
+      "requested_bytes": 1024,
+      "peak_live_requested_bytes": 1024,
+      "returned_payload_bytes": 512,
+      "live_after_drop": 0
+    },
+    "after": {
+      "allocation_events": 1,
+      "requested_bytes": 512,
+      "peak_live_requested_bytes": 512,
+      "returned_payload_bytes": 512,
+      "live_after_drop": 0
+    },
+    "earlier_artifact_samples_per_mode": 24,
+    "earlier_cases": [
+      "transparent",
+      "opaque",
+      "premultiplied"
+    ],
+    "maintained_test_cases": 3,
+    "maintained_test_baseline": "1executed0passed1genuinefailure, exactsameoracle",
+    "maintained_test_candidate": "1executed1passed0failed; exactpixels andbalancedrelease percase",
+    "watch": "Native-only nonallocatingTLSCells overSystem GlobalAlloc, withRAIIunwind disable; requested Rust payload, not allocator overhead/resident memory."
+  },
+  "actual_primary_validation": {
+    "native_suite_passes": [
+      117,
+      1,
+      1,
+      1,
+      15,
+      2
+    ],
+    "native_total_passed": 137,
+    "native_failed": 0,
+    "native_ignored": 0,
+    "chrome_total_passed": 16,
+    "chrome_failed": 0,
+    "chrome_ignored": 0,
+    "actual_chrome_confirmation": true,
+    "strict_all_features_all_targets_clippy": "passed",
+    "source_unchanged": true,
+    "record_path": ".artifacts/2026-10-17-lottie-output-primary/validation.json",
+    "record_sha256": "9598d8e5230487509f28732e8a6084b44bfd190bbffcc4c99958b8ccf6e5f84b",
+    "native_raw_log_sha256": "e422de3ff64b59fa8ea4f853e8891e085ad293323be4fd0bc1a5ceda018593d2",
+    "chrome_raw_log_sha256": "e1c8275db90eefbe44a690b4d54e51b745fbb6347f5f014d3b65f5f493a1a0b2"
+  },
+  "provenance": {
+    "original_index_files": 74,
+    "original_index_unchanged": true,
+    "reviewed_modified_original_Rust_paths": 9,
+    "reconstructed_files": 81,
+    "reconstruction_patch_bytes": 120241,
+    "unchanged_patch_gate_bytes": 131072,
+    "negative_cases_passed": 18,
+    "adoption_record_sha256": "99573e3f488c9b09f1d20c4e905fec595092d0a91137ae44ac52457e609726fd"
+  },
+  "remaining_boundaries": [
+    "Layer/mask/effect/image scratch, models/paths/timelines and encoded sources remain additional.",
+    "Ready/poster/frame caches and concurrent directcallers are not unified by this change.",
+    "Two active elementworkers and prior256MiB batch outputlimits remain separateadmission; a running frame remains nonpreemptible.",
+    "No CPU/latency/nativeRSS/totalprocessmemory or framework ranking improvement is established by the allocation fixture.",
+    "R8 unified configurable active/model/scratch/ready-output accounting and crossplatform lifecycleacceptance remain open."
+  ],
+  "dependency_audit_status": {
+    "current_checkpoint": "docs/reviews/2026-10-17-secret-service5-migration-validation.json",
+    "record_sha256": "f45036b280e9600e19ba5212e3c93112fed33d577fb0db9c66681f532fd85e4b",
+    "remaining_denied_unmaintained_package_copies": [
+      [
+        "RUSTSEC-2026-0370",
+        "zvariant",
+        "5.13.1"
+      ],
+      [
+        "RUSTSEC-2026-0371",
+        "zbus_names",
+        "4.3.4"
+      ],
+      [
+        "RUSTSEC-2026-0372",
+        "zvariant_derive",
+        "5.13.1"
+      ]
+    ],
+    "strict_gate_still_fails": true,
+    "new_ignores_added": false,
+    "qualification": "Carries the existing same-database SecretService migration advisory checkpoint; thisoutputslice changes no dependencylock and doesnot claim a fresh audit run."
+  },
+  "final_integration": {
+    "status": "PASS",
+    "source_commit": "d766b5dc1c3f061944fbf6b0c24fc00cb49f8621",
+    "checks": [
+      {
+        "name": "clippy",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "kael",
+          "-p",
+          "kael_ui",
+          "--all-targets",
+          "--features",
+          "kael/lottie",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "log_sha256": "6ba6e63ee050f6cc97e52571338d80d4853a570fc15f8e3017217211a8ca4dc4"
+      },
+      {
+        "name": "core",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "kael",
+          "--lib",
+          "--no-default-features",
+          "--features",
+          "font-kit,test-support,lottie",
+          "--",
+          "--test-threads=1"
+        ],
+        "log_sha256": "af9b52dc38345dc97608c90056296afd85d40fcc12f477cb82dfd9f1b5aeea10"
+      },
+      {
+        "name": "ui",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "kael_ui",
+          "--lib",
+          "--features",
+          "kael/lottie",
+          "--",
+          "--test-threads=1"
+        ],
+        "log_sha256": "b13888e80283b8aa144fc277a6b7071cf1beb2bb87b99320c41316ba2ca62a86"
+      },
+      {
+        "name": "wasm",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "check",
+          "--locked",
+          "-p",
+          "kael_ui",
+          "--target",
+          "wasm32-unknown-unknown",
+          "--no-default-features",
+          "--features",
+          "kael/browser,kael/lottie"
+        ],
+        "log_sha256": "252ef3660cfbcedf6731d0969127d8b10a530a5d73b5389bbb03749dea1fad8b"
+      },
+      {
+        "name": "example-tests",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "kael_ui",
+          "--example",
+          "compact_records",
+          "--no-default-features",
+          "--features",
+          "native"
+        ],
+        "log_sha256": "4aa87f7b4ab3b409894136ac5b65c3388e8df783798c0f4a7029e1ffe7f9aaa5"
+      },
+      {
+        "name": "example-build",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "build",
+          "--locked",
+          "-p",
+          "kael_ui",
+          "--example",
+          "compact_records",
+          "--no-default-features",
+          "--features",
+          "native",
+          "--message-format=json"
+        ],
+        "log_sha256": "80bc87be9274c43ac1e2e3c917b896f48d4265cdcb8437bc2ddc9748ef0d5bb2"
+      },
+      {
+        "name": "benchmark-kael-timing",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "check",
+          "--locked",
+          "--manifest-path",
+          "benchmarks/desktop-comparison/Cargo.toml",
+          "--bins",
+          "--no-default-features",
+          "--features",
+          "kael-engine,frame-timing"
+        ],
+        "log_sha256": "076c86eed6fd606f2804479e1038c814ac37a62ab16b7c0fc21bf29b85ffb8fa"
+      },
+      {
+        "name": "benchmark-gpui-timing",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "check",
+          "--locked",
+          "--manifest-path",
+          "benchmarks/desktop-comparison/Cargo.toml",
+          "--bins",
+          "--no-default-features",
+          "--features",
+          "gpui-kit-engine,frame-timing"
+        ],
+        "log_sha256": "8065132db3a265756202b5ffbcb570c8bf40ad8079ac4ace13a303c168856fc6"
+      },
+      {
+        "name": "benchmark-kael-no-timing",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "check",
+          "--locked",
+          "--manifest-path",
+          "benchmarks/desktop-comparison/Cargo.toml",
+          "--bins",
+          "--no-default-features",
+          "--features",
+          "kael-engine"
+        ],
+        "log_sha256": "a737b2aea2b8d7fa96f7bf8d8a3f0fe9b53d3fca923fe2bf3e195f268e7e344a"
+      },
+      {
+        "name": "benchmark-gpui-no-timing",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "check",
+          "--locked",
+          "--manifest-path",
+          "benchmarks/desktop-comparison/Cargo.toml",
+          "--bins",
+          "--no-default-features",
+          "--features",
+          "gpui-kit-engine"
+        ],
+        "log_sha256": "dfcb424ea9f84a4463ef1a01e09e0a0aa9c659d698f9703cd9568be064ae69b1"
+      },
+      {
+        "name": "fmt",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "docs",
+        "exit_code": 0,
+        "argv": [
+          "bash",
+          "scripts/ci/verify-docs.sh"
+        ],
+        "log_sha256": "0fb87ecae09e05f755df5b77bb290e1636d51926a57bb5e2361c5a19dddcce3f"
+      }
+    ],
+    "core": {
+      "passed": 2198,
+      "failed": 0,
+      "ignored": 2,
+      "note": "Existing opt-in native display-link and shaping diagnostic tests; no new ignore."
+    },
+    "ui": {
+      "passed": 537,
+      "failed": 0,
+      "ignored": 0
+    },
+    "example_tests": {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "inputs_unchanged": true,
+    "record": {
+      "path": ".artifacts/2026-10-17-shared-controls-final-v3/integration.json",
+      "bytes": 6579,
+      "sha256": "555f40d74f7e53349aed689278f4a6e05d8403c887fc76435eb4fa7eb25ead22"
+    },
+    "source_before": {
+      "path": ".artifacts/2026-10-17-shared-controls-final-v3/source-before.json",
+      "bytes": 346599,
+      "sha256": "e4ffca9dc72eac38e09542f295555dacceff3a1dda4bb8309efc1505c2c4448e"
+    },
+    "source_after": {
+      "path": ".artifacts/2026-10-17-shared-controls-final-v3/source-after.json",
+      "bytes": 346599,
+      "sha256": "e4ffca9dc72eac38e09542f295555dacceff3a1dda4bb8309efc1505c2c4448e"
+    },
+    "separate_explicit_native_display_link_probe": {
+      "path": ".artifacts/2026-10-17-display-link-current/result.json",
+      "bytes": 749,
+      "sha256": "7a12f2e479cad354bca45ce05a32666be86311cf84fd182df84e5989a56b484e",
+      "passed": 1,
+      "ignored": 0,
+      "cycles": 128,
+      "native_constructions": 1,
+      "other_display_retargets": 0,
+      "scope": "Native reuse/stop/resume correctness, not CPU/power/presentation/multi-monitor proof."
+    }
+  },
+  "evidence_references": [
+    {
+      "path": ".artifacts/2026-10-17-lottie-output-transfer/evidence.json",
+      "sha256": "999222b848727da13b2b398ce3c7026c1fbc714dde376bab187724951f64b33b"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-output-adoption/evidence.json",
+      "sha256": "99573e3f488c9b09f1d20c4e905fec595092d0a91137ae44ac52457e609726fd"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-output-adoption/adoption-manifest.json",
+      "sha256": "bef6be71598d5183f79e694b056b6b2481a0e480178fcb4a28bdb9a1c9d8cd0a"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-output-primary/validation.json",
+      "sha256": "9598d8e5230487509f28732e8a6084b44bfd190bbffcc4c99958b8ccf6e5f84b"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-output-primary/native/result.json",
+      "sha256": "54948acba02c9940a47786745c85440f5ba0c9760d923d6ecf40ae7d89ad80b7"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-output-primary/chrome/result.json",
+      "sha256": "917a13598ebca2d286cd63a031a869e592046cc203820e2c884bf4518274314c"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-output-primary/native/native-runtime.log",
+      "sha256": "e422de3ff64b59fa8ea4f853e8891e085ad293323be4fd0bc1a5ceda018593d2"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-output-primary/chrome/chrome-runtime.log",
+      "sha256": "e1c8275db90eefbe44a690b4d54e51b745fbb6347f5f014d3b65f5f493a1a0b2"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-output-primary/clippy.log",
+      "sha256": "9d892c5778d0c975f64a671e66ea5a753502353da3addd1dfdf3825225e406a2"
+    }
+  ],
+  "status": "SOURCE_SCOPED_VALIDATED",
+  "packaging": {
+    "status": "PASS",
+    "source_commit": "d766b5dc1c3f061944fbf6b0c24fc00cb49f8621",
+    "archives": 39,
+    "included_rust_files": 929,
+    "included_rust_bytes": 23392950,
+    "compressed_bytes": 6052424,
+    "all_included_rust_bytes_match_git": true,
+    "registry_upload": false,
+    "preflight": {
+      "path": ".artifacts/2026-10-17-package-preflight-d766b5d/preflight.json",
+      "bytes": 620,
+      "sha256": "c42b286570d27dd2a8028faf01441acda325113ea9c765bb5f79e31dc8e14263"
+    },
+    "independent_archive_audit": {
+      "path": ".artifacts/2026-10-17-package-preflight-d766b5d/release-archives.json",
+      "bytes": 351663,
+      "sha256": "29773d71521b12e2b22338e59b8929ded48807800579a7b306b1aa9d9baadadc"
+    },
+    "preserved_archives": {
+      "path": ".artifacts/2026-10-17-release-archives-d766b5d/preserved.json",
+      "bytes": 6527,
+      "sha256": "5e5cc7d779beddc184aeb6c1c5545ceb538af863a157bf9f92f6a4bd54039ea3"
+    }
+  }
+}

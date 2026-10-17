@@ -1,0 +1,347 @@
+{
+  "schema_version": 1,
+  "scope": "General desktop shared-control correctness and bounded-parent composition; no comparative performance claim.",
+  "source_commit": "d766b5dc1c3f061944fbf6b0c24fc00cb49f8621",
+  "source_files_sha256": {
+    "crates/kael/src/elements/div.rs": "32d9dad6f1e12ef0a90a9f77e16182d97f20e722b6999da6af492891115bdd1e",
+    "crates/kael/src/elements/scroll_bar.rs": "a7f2c13b018689f5bf7f27d2d6c47b1de3c7b87008b889f1fd192e1c31395207",
+    "crates/kael_ui/src/components/dropdown.rs": "a3a2cb37fdfda02aeb7486c9f7eee7e8fc718703a36a0431c94523567bddc53f",
+    "crates/kael_ui/src/virtual_list.rs": "065d61e73da086c602a975471c28cc4eccdf60fc8f8472643387a80ad277a0b4",
+    "crates/kael_ui/src/display/data_table.rs": "7be5f2948edadf66cde606e3f120a37aec9d02ed2da515a319263b1687857a6a",
+    "crates/kael_ui/examples/compact_records.rs": "aa1b10edfa7e825d23356f9b6e29d3c59b41454dcad9502218ccb8208bca0cfb"
+  },
+  "behavior": [
+    "Variable virtual lists clamp against their actual viewport before item positioning, including short/equal content and resize.",
+    "DataTable.fill_parent(true) fits a bounded parent with natural controls and an external footer; default sizing is preserved. Header, skeleton, cached rows and vertical body restrict scrolling to their intended axis.",
+    "Dropdown actions and focus reflect the live menu session; queued, duplicate, disabled and unpaired-key actions are rejected. Pointer actions use actual popup bounds and retired owners release.",
+    "ScrollBar exports working Focus/Increment/Decrement/numeric SetValue handlers. IDs bind keyed handle identity and axis; rebind retires old actions/drag. Actions use current ranges, finite values and the current step, preserving the other axis."
+  ],
+  "focused_unique_coverage": {
+    "dropdown": 25,
+    "table_and_list": 15,
+    "core_scrollbar": 9,
+    "total": 49,
+    "ignored": 0,
+    "qualification": "UI2 is included within table/list15. Baseline/intermediate runs are retained separately and not added as unique final coverage."
+  },
+  "evidence": [
+    {
+      "path": ".artifacts/2026-10-17-control-validation-draft.json",
+      "bytes": 18680,
+      "sha256": "1bc5820c57cdab5f6356efaf5cd715911ff2b70701109785cf81026826356e41"
+    },
+    {
+      "path": ".artifacts/2026-10-17-control-validation-audit.json",
+      "bytes": 15467,
+      "sha256": "3fff9b33993ab428748bfb6645922448bea8bf8fe597c822796ffd9ca00521b3"
+    },
+    {
+      "path": ".artifacts/2026-10-17-scrollbar-native-actions/validation.json",
+      "bytes": 10740,
+      "sha256": "ad03284e5da566beb113149caedb0f9ff58b133fb3fad7a5d041bb2ea24578ea"
+    },
+    {
+      "path": ".artifacts/2026-10-17-scrollbar-native-actions/manifest.json",
+      "bytes": 5262,
+      "sha256": "e176be09b53b847eecc70dea661c44e3ab9b58f51ca8b69a709d7834f0701270"
+    },
+    {
+      "path": ".artifacts/2026-10-17-scrollbar-native-actions-independent-audit.json",
+      "bytes": 858,
+      "sha256": "4d16301d66e5f030449e48fe946c550811bc0d8df59b25c1368d87b18441e1da"
+    },
+    {
+      "path": ".artifacts/2026-10-17-controls-final-integration-v2/native-checkpoint.json",
+      "bytes": 8544,
+      "sha256": "05973253eb947da2dd821af0b9640abbf70f15b357d9ec6fdb8947595595f6d9"
+    }
+  ],
+  "post_focused_cleanup": [
+    "Dropdown .or_else closure replaced by .or in41cf145 for strict lint.",
+    "Five redundant mounted-test borrows and their mut binding removed in d766b5d; scrollbar production bytes unchanged."
+  ],
+  "integration": {
+    "status": "PASS",
+    "source_commit": "d766b5dc1c3f061944fbf6b0c24fc00cb49f8621",
+    "checks": [
+      {
+        "name": "clippy",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "kael",
+          "-p",
+          "kael_ui",
+          "--all-targets",
+          "--features",
+          "kael/lottie",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "log_sha256": "6ba6e63ee050f6cc97e52571338d80d4853a570fc15f8e3017217211a8ca4dc4"
+      },
+      {
+        "name": "core",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "kael",
+          "--lib",
+          "--no-default-features",
+          "--features",
+          "font-kit,test-support,lottie",
+          "--",
+          "--test-threads=1"
+        ],
+        "log_sha256": "af9b52dc38345dc97608c90056296afd85d40fcc12f477cb82dfd9f1b5aeea10"
+      },
+      {
+        "name": "ui",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "kael_ui",
+          "--lib",
+          "--features",
+          "kael/lottie",
+          "--",
+          "--test-threads=1"
+        ],
+        "log_sha256": "b13888e80283b8aa144fc277a6b7071cf1beb2bb87b99320c41316ba2ca62a86"
+      },
+      {
+        "name": "wasm",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "check",
+          "--locked",
+          "-p",
+          "kael_ui",
+          "--target",
+          "wasm32-unknown-unknown",
+          "--no-default-features",
+          "--features",
+          "kael/browser,kael/lottie"
+        ],
+        "log_sha256": "252ef3660cfbcedf6731d0969127d8b10a530a5d73b5389bbb03749dea1fad8b"
+      },
+      {
+        "name": "example-tests",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "kael_ui",
+          "--example",
+          "compact_records",
+          "--no-default-features",
+          "--features",
+          "native"
+        ],
+        "log_sha256": "4aa87f7b4ab3b409894136ac5b65c3388e8df783798c0f4a7029e1ffe7f9aaa5"
+      },
+      {
+        "name": "example-build",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "build",
+          "--locked",
+          "-p",
+          "kael_ui",
+          "--example",
+          "compact_records",
+          "--no-default-features",
+          "--features",
+          "native",
+          "--message-format=json"
+        ],
+        "log_sha256": "80bc87be9274c43ac1e2e3c917b896f48d4265cdcb8437bc2ddc9748ef0d5bb2"
+      },
+      {
+        "name": "benchmark-kael-timing",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "check",
+          "--locked",
+          "--manifest-path",
+          "benchmarks/desktop-comparison/Cargo.toml",
+          "--bins",
+          "--no-default-features",
+          "--features",
+          "kael-engine,frame-timing"
+        ],
+        "log_sha256": "076c86eed6fd606f2804479e1038c814ac37a62ab16b7c0fc21bf29b85ffb8fa"
+      },
+      {
+        "name": "benchmark-gpui-timing",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "check",
+          "--locked",
+          "--manifest-path",
+          "benchmarks/desktop-comparison/Cargo.toml",
+          "--bins",
+          "--no-default-features",
+          "--features",
+          "gpui-kit-engine,frame-timing"
+        ],
+        "log_sha256": "8065132db3a265756202b5ffbcb570c8bf40ad8079ac4ace13a303c168856fc6"
+      },
+      {
+        "name": "benchmark-kael-no-timing",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "check",
+          "--locked",
+          "--manifest-path",
+          "benchmarks/desktop-comparison/Cargo.toml",
+          "--bins",
+          "--no-default-features",
+          "--features",
+          "kael-engine"
+        ],
+        "log_sha256": "a737b2aea2b8d7fa96f7bf8d8a3f0fe9b53d3fca923fe2bf3e195f268e7e344a"
+      },
+      {
+        "name": "benchmark-gpui-no-timing",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "check",
+          "--locked",
+          "--manifest-path",
+          "benchmarks/desktop-comparison/Cargo.toml",
+          "--bins",
+          "--no-default-features",
+          "--features",
+          "gpui-kit-engine"
+        ],
+        "log_sha256": "dfcb424ea9f84a4463ef1a01e09e0a0aa9c659d698f9703cd9568be064ae69b1"
+      },
+      {
+        "name": "fmt",
+        "exit_code": 0,
+        "argv": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "docs",
+        "exit_code": 0,
+        "argv": [
+          "bash",
+          "scripts/ci/verify-docs.sh"
+        ],
+        "log_sha256": "0fb87ecae09e05f755df5b77bb290e1636d51926a57bb5e2361c5a19dddcce3f"
+      }
+    ],
+    "core": {
+      "passed": 2198,
+      "failed": 0,
+      "ignored": 2,
+      "note": "Existing opt-in native display-link and shaping diagnostic tests; no new ignore."
+    },
+    "ui": {
+      "passed": 537,
+      "failed": 0,
+      "ignored": 0
+    },
+    "example_tests": {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "inputs_unchanged": true,
+    "record": {
+      "path": ".artifacts/2026-10-17-shared-controls-final-v3/integration.json",
+      "bytes": 6579,
+      "sha256": "555f40d74f7e53349aed689278f4a6e05d8403c887fc76435eb4fa7eb25ead22"
+    },
+    "source_before": {
+      "path": ".artifacts/2026-10-17-shared-controls-final-v3/source-before.json",
+      "bytes": 346599,
+      "sha256": "e4ffca9dc72eac38e09542f295555dacceff3a1dda4bb8309efc1505c2c4448e"
+    },
+    "source_after": {
+      "path": ".artifacts/2026-10-17-shared-controls-final-v3/source-after.json",
+      "bytes": 346599,
+      "sha256": "e4ffca9dc72eac38e09542f295555dacceff3a1dda4bb8309efc1505c2c4448e"
+    },
+    "separate_explicit_native_display_link_probe": {
+      "path": ".artifacts/2026-10-17-display-link-current/result.json",
+      "bytes": 749,
+      "sha256": "7a12f2e479cad354bca45ce05a32666be86311cf84fd182df84e5989a56b484e",
+      "passed": 1,
+      "ignored": 0,
+      "cycles": 128,
+      "native_constructions": 1,
+      "other_display_retargets": 0,
+      "scope": "Native reuse/stop/resume correctness, not CPU/power/presentation/multi-monitor proof."
+    }
+  },
+  "packaging": {
+    "status": "PASS",
+    "source_commit": "d766b5dc1c3f061944fbf6b0c24fc00cb49f8621",
+    "archives": 39,
+    "included_rust_files": 929,
+    "included_rust_bytes": 23392950,
+    "compressed_bytes": 6052424,
+    "all_included_rust_bytes_match_git": true,
+    "registry_upload": false,
+    "preflight": {
+      "path": ".artifacts/2026-10-17-package-preflight-d766b5d/preflight.json",
+      "bytes": 620,
+      "sha256": "c42b286570d27dd2a8028faf01441acda325113ea9c765bb5f79e31dc8e14263"
+    },
+    "independent_archive_audit": {
+      "path": ".artifacts/2026-10-17-package-preflight-d766b5d/release-archives.json",
+      "bytes": 351663,
+      "sha256": "29773d71521b12e2b22338e59b8929ded48807800579a7b306b1aa9d9baadadc"
+    },
+    "preserved_archives": {
+      "path": ".artifacts/2026-10-17-release-archives-d766b5d/preserved.json",
+      "bytes": 6527,
+      "sha256": "5e5cc7d779beddc184aeb6c1c5545ceb538af863a157bf9f92f6a4bd54039ea3"
+    }
+  },
+  "latest_native_scrollbar_actions": {
+    "status": "Pointer/keyboard and independent-axis behavior verified; OS numeric/action protocol still unproven through the available CUA client.",
+    "record": {
+      "path": ".artifacts/2026-10-17-shared-controls-final-v3/native-checkpoint.json",
+      "bytes": 12498,
+      "sha256": "242f7abf0c489fe1fc60f4263bde72c170accaa726892fbc34322459c766ae21"
+    }
+  },
+  "remaining_limits": [
+    "Mounted tests use TestPlatform, not physical screen-reader exploration.",
+    "Native nonzero horizontal wheel delivery and height resizing remain unproven; prior native width/vertical/pointer/keyboard/read-only checks have their own source-scoped record.",
+    "No GPU, latency, CPU, RSS, power or framework ranking follows from these control checks."
+  ],
+  "retained_failed_attempts": [
+    ".artifacts/2026-10-17-shared-controls-final/aborted-attempt.json",
+    ".artifacts/2026-10-17-shared-controls-final-v2/integration.json"
+  ],
+  "status": "VALIDATED_WITH_EXPLICIT_NATIVE_LIMITS"
+}
