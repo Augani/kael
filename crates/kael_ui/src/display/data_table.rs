@@ -1743,10 +1743,17 @@ impl<T: Clone + 'static> DataTable<T> {
     }
 
     pub fn append_data(&mut self, mut new_data: Vec<T>, cx: &mut Context<Self>) {
+        if new_data.is_empty() {
+            return;
+        }
         if let DataBacking::InMemory { data } = &mut self.state.backing {
             data.append(&mut new_data);
             let new_count = data.len();
             self.state.scroller.set_total_items(new_count);
+            if let Some(column_index) = self.state.sort_column {
+                self.state
+                    .sort_by_column(column_index, self.state.sort_direction);
+            }
             self.load_more_triggered = false;
             cx.notify();
         }
@@ -2301,6 +2308,15 @@ mod tests {
             .collect()
     }
 
+    fn keyed_rows(rows: &[(&'static str, &'static str)]) -> Vec<PrivateRow> {
+        rows.iter()
+            .map(|&(name, revenue)| PrivateRow {
+                name: name.into(),
+                revenue: revenue.into(),
+            })
+            .collect()
+    }
+
     #[::core::prelude::v1::test]
     fn data_table_column_and_action_summary_is_content_safe() {
         let column = ColumnDef::new("private-customer", "Secret Customer", |row: &PrivateRow| {
@@ -2411,6 +2427,218 @@ mod tests {
         assert_eq!(state.sort_column_index(), Some(0));
         state.sort_by_column(99, SortDirection::Descending);
         assert_eq!(state.sort_column_index(), Some(0));
+    }
+
+    #[::core::prelude::v1::test]
+    fn appending_data_preserves_active_sort_equal_keys_and_selected_records() {
+        let cx = TestAppContext::single();
+        for (direction, expected_ids, selected_index) in [
+            (
+                SortDirection::Ascending,
+                ["new-first", "old-a", "new-a", "old-b", "new-z"],
+                3,
+            ),
+            (
+                SortDirection::Descending,
+                ["new-z", "old-b", "old-a", "new-a", "new-first"],
+                1,
+            ),
+        ] {
+            let table = cx.update(|cx| {
+                cx.new(|cx| {
+                    DataTable::new(
+                        keyed_rows(&[("Bravo", "old-b"), ("Alpha", "old-a")]),
+                        private_columns(),
+                        cx,
+                    )
+                })
+            });
+            cx.update(|cx| {
+                table.update(cx, |table, cx| {
+                    table.state.sort_by_column(0, direction);
+                    let selected = table
+                        .data()
+                        .iter()
+                        .position(|row| row.revenue == "old-b")
+                        .unwrap();
+                    table.state.toggle_row(selected);
+                    table.load_more_triggered = true;
+
+                    table.append_data(
+                        keyed_rows(&[
+                            ("Alpha", "new-a"),
+                            ("Zulu", "new-z"),
+                            ("Aardvark", "new-first"),
+                        ]),
+                        cx,
+                    );
+
+                    assert_eq!(
+                        table
+                            .data()
+                            .iter()
+                            .map(|row| row.revenue.as_ref())
+                            .collect::<Vec<_>>(),
+                        expected_ids,
+                    );
+                    assert_eq!(table.selected_rows(), Some(vec![selected_index]));
+                    assert_eq!(table.data()[selected_index].revenue, "old-b");
+                    assert_eq!(table.state.sort_column_index(), Some(0));
+                    assert_eq!(table.state.sort_direction, direction);
+                    assert_eq!(table.state.scroller.total_items, 5);
+                    assert!(!table.load_more_triggered);
+                });
+            });
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn appending_sorted_data_remaps_all_except_exclusions_without_expansion() {
+        let cx = TestAppContext::single();
+        let table = cx.update(|cx| {
+            cx.new(|cx| {
+                DataTable::new(
+                    keyed_rows(&[("Bravo", "old-b"), ("Alpha", "old-a")]),
+                    private_columns(),
+                    cx,
+                )
+            })
+        });
+        cx.update(|cx| {
+            table.update(cx, |table, cx| {
+                table.state.sort_by_column(0, SortDirection::Ascending);
+                table.state.selection.select_all();
+                table.state.toggle_row(1);
+
+                table.append_data(
+                    keyed_rows(&[("Alpha", "new-a"), ("Aardvark", "new-first")]),
+                    cx,
+                );
+
+                let selection = table.selection_snapshot();
+                assert_eq!(selection.representation_key(), "all_except");
+                assert_eq!(selection.stored_index_count(), 1);
+                assert_eq!(selection.selected_count(), 3);
+                assert_eq!(selection.deselected(), Some([3].as_slice()));
+                assert_eq!(table.data()[3].revenue, "old-b");
+                for index in 0..3 {
+                    assert!(selection.contains(index));
+                }
+                assert_eq!(table.data()[0].revenue, "new-first");
+                assert_eq!(table.data()[2].revenue, "new-a");
+            });
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn appending_unsorted_data_preserves_insertion_order_and_selection() {
+        let cx = TestAppContext::single();
+        let table = cx.update(|cx| {
+            cx.new(|cx| {
+                DataTable::new(
+                    keyed_rows(&[("Bravo", "old-b"), ("Alpha", "old-a")]),
+                    private_columns(),
+                    cx,
+                )
+            })
+        });
+        cx.update(|cx| {
+            table.update(cx, |table, cx| {
+                table.state.toggle_row(1);
+                table.append_data(
+                    keyed_rows(&[("Zulu", "new-z"), ("Aardvark", "new-first")]),
+                    cx,
+                );
+                assert_eq!(
+                    table
+                        .data()
+                        .iter()
+                        .map(|row| row.revenue.as_ref())
+                        .collect::<Vec<_>>(),
+                    ["old-b", "old-a", "new-z", "new-first"],
+                );
+                assert_eq!(table.selected_rows(), Some(vec![1]));
+                assert_eq!(table.state.sort_column_index(), None);
+                assert_eq!(table.state.scroller.total_items, 4);
+            });
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn appending_empty_data_does_no_sorting_or_pagination_work() {
+        let cx = TestAppContext::single();
+        let reads = Rc::new(std::cell::Cell::new(0));
+        let table = cx.update(|cx| {
+            cx.new(|cx| {
+                let reads = reads.clone();
+                DataTable::new(
+                    keyed_rows(&[("Bravo", "old-b"), ("Alpha", "old-a")]),
+                    vec![ColumnDef::new("name", "Name", move |row: &PrivateRow| {
+                        reads.set(reads.get() + 1);
+                        row.name.clone()
+                    })],
+                    cx,
+                )
+            })
+        });
+        cx.update(|cx| {
+            table.update(cx, |table, cx| {
+                table.state.sort_by_column(0, SortDirection::Ascending);
+                table.state.toggle_row(1);
+                table.load_more_triggered = true;
+                reads.set(0);
+
+                table.append_data(Vec::new(), cx);
+
+                assert_eq!(reads.get(), 0);
+                assert!(table.load_more_triggered);
+                assert_eq!(table.selected_rows(), Some(vec![1]));
+                assert_eq!(table.data()[1].revenue, "old-b");
+                assert_eq!(table.state.scroller.total_items, 2);
+            });
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn appending_data_to_virtual_tables_preserves_query_cache_and_pending_work() {
+        let cx = TestAppContext::single();
+        let reads = Rc::new(std::cell::Cell::new(0));
+        let table = cx.update(|cx| {
+            cx.new(|cx| {
+                let reads = reads.clone();
+                DataTable::new_virtual(
+                    100,
+                    vec![ColumnDef::new("name", "Name", move |row: &PrivateRow| {
+                        reads.set(reads.get() + 1);
+                        row.name.clone()
+                    })],
+                    10,
+                    cx,
+                )
+            })
+        });
+        cx.update(|cx| {
+            table.update(cx, |table, cx| {
+                table.state.sort_by_column(0, SortDirection::Ascending);
+                let requests = table.state.virtual_requests_for_range(0..20);
+                assert!(table.set_page_data_for(requests[0], indexed_rows(0, 10), cx));
+                table.state.toggle_row(1);
+                table.load_more_triggered = true;
+                let generation = table.state.virtual_generation();
+
+                table.append_data(keyed_rows(&[("Aardvark", "ignored")]), cx);
+
+                assert_eq!(reads.get(), 0);
+                assert_eq!(table.state.virtual_generation(), generation);
+                assert_eq!(table.state.scroller.total_items, 100);
+                assert_eq!(table.cached_row_count(), 10);
+                assert_eq!(table.in_flight_page_count(), 1);
+                assert_eq!(table.selected_rows(), Some(vec![1]));
+                assert!(table.load_more_triggered);
+                assert_eq!(table.state.get_row(0).unwrap().name, "row-0");
+                assert!(table.set_page_data_for(requests[1], indexed_rows(10, 10), cx));
+            });
+        });
     }
 
     #[::core::prelude::v1::test]
