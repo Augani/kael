@@ -15,6 +15,8 @@ pub(crate) struct SubtreeCacheState {
     pub(crate) cache_key: SubtreeCacheKey,
     pub(crate) accessed_entities: FxHashSet<EntityId>,
     pub(crate) accessibility_nodes: Vec<crate::AccessibilityNode>,
+    // Normalized semantic parent; absent only before the first fresh paint.
+    pub(crate) accessibility_parent: Option<crate::AccessibilityId>,
     pub(crate) surface: Option<CachedSurface>,
     tracked_entity_generations: TrackedEntityGenerations,
 }
@@ -59,6 +61,7 @@ impl SubtreeCacheState {
             prepaint_range,
             paint_range: PaintIndex::default()..PaintIndex::default(),
             accessibility_nodes: Vec::new(),
+            accessibility_parent: None,
             surface: None,
         }
     }

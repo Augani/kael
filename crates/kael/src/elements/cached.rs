@@ -89,6 +89,7 @@ pub(crate) fn cached_paint(
             let paint_start = window.paint_index();
 
             if let Some(element) = prepaint {
+                element_state.accessibility_parent = Some(window.accessibility_parent());
                 let accessibility_start = window.accessibility_node_index();
                 element.paint(window, cx);
                 element_state.accessibility_nodes =
@@ -105,16 +106,14 @@ pub(crate) fn cached_paint(
                 if let Some(surface) = element_state.surface.as_ref() {
                     window.request_cached_surface_snapshot(paint_scene_range, surface);
                 }
-            } else if let Some(surface) = element_state.surface.as_ref() {
-                window.replay_accessibility_nodes(&element_state.accessibility_nodes);
-                window.reuse_paint_without_scene(element_state.paint_range.clone());
-                composite(window, surface);
-
-                let paint_end = window.paint_index();
-                element_state.paint_range = paint_start..paint_end;
             } else {
-                window.replay_accessibility_nodes(&element_state.accessibility_nodes);
-                window.reuse_paint(element_state.paint_range.clone());
+                window.replay_cached_accessibility(&mut element_state);
+                if let Some(surface) = element_state.surface.as_ref() {
+                    window.reuse_paint_without_scene(element_state.paint_range.clone());
+                    composite(window, surface);
+                } else {
+                    window.reuse_paint(element_state.paint_range.clone());
+                }
 
                 let paint_end = window.paint_index();
                 element_state.paint_range = paint_start..paint_end;

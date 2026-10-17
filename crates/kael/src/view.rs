@@ -264,6 +264,8 @@ impl Element for AnyView {
                             let rendered_fresh = element.is_some();
 
                             if let Some(element) = element {
+                                element_state.accessibility_parent =
+                                    Some(window.accessibility_parent());
                                 let accessibility_start = window.accessibility_node_index();
                                 let refreshing = mem::replace(&mut window.refreshing, true);
                                 element.paint(window, cx);
@@ -271,8 +273,7 @@ impl Element for AnyView {
                                 element_state.accessibility_nodes =
                                     window.accessibility_nodes_since(accessibility_start);
                             } else {
-                                window
-                                    .replay_accessibility_nodes(&element_state.accessibility_nodes);
+                                window.replay_cached_accessibility(&mut element_state);
                                 if let Some(surface) = element_state.surface.as_ref() {
                                     window.reuse_paint_without_scene(
                                         element_state.paint_range.clone(),

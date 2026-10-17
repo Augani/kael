@@ -3152,7 +3152,8 @@ pub(crate) struct TooltipRequest {
 
 pub(crate) type DeferredAccessibilityContext = (
     Option<crate::AccessibilityId>,
-    Option<crate::AccessibilityId>,
+    // Cache scope identity and its normalized external parent, if scoped.
+    Option<(crate::AccessibilityId, crate::AccessibilityId)>,
 );
 pub(crate) type DeferredAccessibilityState = Rc<Cell<DeferredAccessibilityContext>>;
 
@@ -3171,6 +3172,12 @@ pub(crate) struct DeferredDraw {
 }
 
 struct AccessibilityCacheScope(crate::AccessibilityId);
+
+#[derive(Clone, Copy)]
+struct AccessibilityScopeContext {
+    id: crate::AccessibilityId,
+    external_parent: crate::AccessibilityId,
+}
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
 struct AnonymousAccessibilityOwner {
@@ -3414,7 +3421,7 @@ pub struct Window {
     pub(crate) client_inset: Option<Pixels>,
     pub(crate) accessibility_tree: crate::AccessibilityTree,
     accessibility_parent_stack: SmallVec<[crate::AccessibilityId; 16]>,
-    accessibility_scope: Option<crate::AccessibilityId>,
+    accessibility_scope: Option<AccessibilityScopeContext>,
     accessibility_path_ids: FxHashMap<(AnonymousAccessibilityOwner, u32), crate::AccessibilityId>,
     accessibility_child_ordinals: FxHashMap<AnonymousAccessibilityOwner, u32>,
     pub(crate) accessibility_announcements: Vec<String>,
@@ -4285,17 +4292,18 @@ impl Window {
 
     /// Return a stable identity for an accessible element without an explicit id.
     pub fn next_anonymous_accessibility_id(&mut self) -> crate::AccessibilityId {
-        let parent = self
-            .accessibility_parent_stack
-            .last()
-            .copied()
-            .unwrap_or(self.accessibility_tree.root);
+        let parent = self.accessibility_parent();
         // Cached output does not consume fresh-node ordinals. Keep each view
         // and keyed cache boundary independent so replay cannot alias a sibling.
         let owner = AnonymousAccessibilityOwner {
             view: self.rendered_entity_stack.last().copied(),
-            cache: self.accessibility_scope,
-            parent,
+            cache: self.accessibility_scope.map(|scope| scope.id),
+            // External semantics may be replaced without invalidating this
+            // cache. Its roots keep their identity on both replay and repaint.
+            parent: self
+                .accessibility_scope
+                .filter(|scope| scope.external_parent == parent)
+                .map_or(parent, |scope| scope.id),
         };
         let ordinal = self.accessibility_child_ordinals.entry(owner).or_default();
         let key = (owner, *ordinal);
@@ -4401,6 +4409,75 @@ impl Window {
 
     pub(crate) fn replay_accessibility_nodes(&mut self, nodes: &[crate::AccessibilityNode]) {
         self.next_frame.accessibility_nodes.extend_from_slice(nodes);
+    }
+
+    pub(crate) fn accessibility_parent(&self) -> crate::AccessibilityId {
+        self.accessibility_parent_stack
+            .last()
+            .copied()
+            .unwrap_or(self.accessibility_tree.root)
+    }
+
+    pub(crate) fn replay_cached_accessibility(
+        &mut self,
+        cache: &mut crate::cache::SubtreeCacheState,
+    ) {
+        let parent = self.accessibility_parent();
+        if let Some(previous) = cache.accessibility_parent.replace(parent)
+            && previous != parent
+        {
+            let window_root = self.accessibility_tree.root;
+            Self::rebase_accessibility_node_parents(
+                &mut cache.accessibility_nodes,
+                window_root,
+                previous,
+                parent,
+            );
+            // Deferred content paints after the cache's own node capture and
+            // retains its nodes separately. Rebase only this cache's draws.
+            let deferred_range = cache.prepaint_range.start.deferred_draws_index
+                ..cache.prepaint_range.end.deferred_draws_index;
+            for draw in &mut self.next_frame.deferred_draws[deferred_range] {
+                let (mut captured_parent, mut scope) = draw.accessibility_context.get();
+                if captured_parent.unwrap_or(window_root) == previous {
+                    captured_parent = Some(parent);
+                }
+                if let Some((_, scope_parent)) = scope.as_mut()
+                    && *scope_parent == previous
+                {
+                    *scope_parent = parent;
+                }
+                draw.accessibility_context.set((captured_parent, scope));
+                if let Some(nodes) = draw.accessibility_nodes.as_mut()
+                    && nodes
+                        .iter()
+                        .any(|node| node.parent.unwrap_or(window_root) == previous)
+                {
+                    // The preceding frame (or another retained owner) may
+                    // still share these nodes. Ordinary replay never copies it.
+                    Self::rebase_accessibility_node_parents(
+                        Arc::make_mut(nodes),
+                        window_root,
+                        previous,
+                        parent,
+                    );
+                }
+            }
+        }
+        self.replay_accessibility_nodes(&cache.accessibility_nodes);
+    }
+
+    fn rebase_accessibility_node_parents(
+        nodes: &mut [crate::AccessibilityNode],
+        window_root: crate::AccessibilityId,
+        previous: crate::AccessibilityId,
+        parent: crate::AccessibilityId,
+    ) {
+        for node in nodes {
+            if node.parent.unwrap_or(window_root) == previous {
+                node.parent = Some(parent);
+            }
+        }
     }
 
     /// Register an accessibility node, stamping its screen-space bounds from the
@@ -4685,7 +4762,11 @@ impl Window {
         self.with_element_state::<AccessibilityCacheScope, _>(global_id, |scope, window| {
             let scope =
                 scope.unwrap_or_else(|| AccessibilityCacheScope(crate::AccessibilityId::new()));
-            let previous = mem::replace(&mut window.accessibility_scope, Some(scope.0));
+            let context = AccessibilityScopeContext {
+                id: scope.0,
+                external_parent: window.accessibility_parent(),
+            };
+            let previous = mem::replace(&mut window.accessibility_scope, Some(context));
             let result = f(window);
             window.accessibility_scope = previous;
             (result, scope)
@@ -6077,6 +6158,10 @@ impl Window {
                     });
                 };
                 let (parent, scope) = deferred_draw.accessibility_context.get();
+                let scope = scope.map(|(id, external_parent)| AccessibilityScopeContext {
+                    id,
+                    external_parent,
+                });
                 let previous_scope = mem::replace(&mut self.accessibility_scope, scope);
                 if let Some(parent) = parent {
                     self.with_accessibility_parent(parent, paint);
@@ -6962,7 +7047,8 @@ impl Window {
         self.invalidator.debug_assert_paint();
         context.set((
             self.accessibility_parent_stack.last().copied(),
-            self.accessibility_scope,
+            self.accessibility_scope
+                .map(|scope| (scope.id, scope.external_parent)),
         ));
     }
 
@@ -10682,6 +10768,345 @@ mod accessibility_cache_tests {
                 }
             }
         }
+    }
+
+    struct ReparentedCacheHost {
+        child: Entity<CachedAnonymousView>,
+        kind: CacheKind,
+        deferred: bool,
+        parent: Option<AccessibilityId>,
+        actions: Rc<Cell<usize>>,
+        paints: Rc<Cell<usize>>,
+    }
+
+    impl Render for ReparentedCacheHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let mut style = StyleRefinement::default();
+            style.size.width = Some(px(100.0).into());
+            style.size.height = Some(px(100.0).into());
+            let child = match self.kind {
+                CacheKind::View => AnyView::from(self.child.clone())
+                    .cached(style)
+                    .into_any_element(),
+                CacheKind::Element => cached(anonymous_branch(
+                    true,
+                    self.deferred,
+                    self.actions.clone(),
+                    self.paints.clone(),
+                ))
+                .id("reparented-cache")
+                .into_any_element(),
+            };
+            div()
+                .id("stable-structural-parent")
+                .size(px(100.0))
+                .when_some(self.parent, |this, parent| {
+                    this.accessibility(
+                        AccessibilityAttributes::new(AccessibilityRole::Group)
+                            .id(parent)
+                            .label("External parent"),
+                    )
+                })
+                .child(child)
+        }
+    }
+
+    fn assert_cached_semantic_roots_rebase(
+        cx: &mut TestAppContext,
+        kind: CacheKind,
+        deferred: bool,
+    ) {
+        let parents = [
+            AccessibilityId::new(),
+            AccessibilityId::new(),
+            AccessibilityId::new(),
+        ];
+        let actions = Rc::new(Cell::new(0));
+        let paints = Rc::new(Cell::new(0));
+        let child = cx.new({
+            let actions = actions.clone();
+            let paints = paints.clone();
+            move |_| CachedAnonymousView {
+                deferred,
+                actions,
+                paints,
+            }
+        });
+        let (host, window) = cx.add_window_view({
+            let actions = actions.clone();
+            let paints = paints.clone();
+            move |_, _| ReparentedCacheHost {
+                child,
+                kind,
+                deferred,
+                parent: Some(parents[0]),
+                actions,
+                paints,
+            }
+        });
+        let find = |window: &Window, label: &str| {
+            window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some(label))
+                .expect("cached semantics must remain mounted")
+                .clone()
+        };
+        let (root, action, retained_deferred) = window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(paints.get(), 1);
+            let root = find(window, "Cached parent");
+            let action = find(window, "Cached action");
+            assert_eq!(root.parent, Some(parents[0]));
+            assert_eq!(action.parent, Some(root.id));
+            let retained = window
+                .rendered_frame
+                .deferred_draws
+                .first()
+                .and_then(|draw| draw.accessibility_nodes.clone());
+            (root.id, action.id, retained)
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(paints.get(), 1);
+            if let Some(original) = retained_deferred.as_ref() {
+                let current = window.rendered_frame.deferred_draws[0]
+                    .accessibility_nodes
+                    .as_ref()
+                    .unwrap();
+                assert!(
+                    Arc::ptr_eq(original, current),
+                    "an unchanged parent must reuse the retained node buffer"
+                );
+            }
+        });
+        let mut previous_parent = Some(parents[0]);
+        for parent in [Some(parents[1]), None, Some(parents[2]), Some(parents[1])] {
+            window.update(|window, cx| {
+                host.update(cx, |host, cx| {
+                    host.parent = parent;
+                    cx.notify();
+                });
+                window.draw(cx).clear();
+                assert_eq!(
+                    paints.get(),
+                    1,
+                    "semantic reparenting must use the actual cache hit"
+                );
+                let tree = window.accessibility_tree();
+                if let Some(previous_parent) = previous_parent {
+                    assert!(
+                        tree.get(previous_parent).is_none(),
+                        "retired external parent must be absent"
+                    );
+                }
+                let parent = parent.unwrap_or(tree.root);
+                let cached_root = find(window, "Cached parent");
+                let cached_action = find(window, "Cached action");
+                assert_eq!(cached_root.id, root);
+                assert_eq!(cached_action.id, action);
+                assert_eq!(
+                    cached_root.parent,
+                    Some(parent),
+                    "only the cached external root must move"
+                );
+                assert_eq!(
+                    cached_action.parent,
+                    Some(root),
+                    "internal semantic links must not move"
+                );
+                assert_eq!(tree.get(parent).unwrap().children.as_slice(), &[root]);
+                assert!(
+                    window.has_accessibility_action_handler(action, AccessibilityAction::Click)
+                );
+                assert_eq!(
+                    window.accessibility_path_ids.len(),
+                    2,
+                    "reparenting must not accumulate path metadata"
+                );
+                if deferred {
+                    let draw = &window.rendered_frame.deferred_draws[0];
+                    assert_eq!(draw.accessibility_context.get().0, Some(parent));
+                    let original = retained_deferred.as_ref().unwrap();
+                    assert_eq!(
+                        original.iter().find(|node| node.id == root).unwrap().parent,
+                        Some(parents[0]),
+                        "rebase must not mutate a shared retained node buffer"
+                    );
+                }
+            });
+            previous_parent = parent;
+        }
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                action,
+                AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        assert_eq!(
+            actions.get(),
+            1,
+            "native actions must survive cached semantic reparenting"
+        );
+        window.update(|window, cx| {
+            let before = paints.get();
+            window.refresh();
+            window.draw(cx).clear();
+            assert!(
+                paints.get() > before,
+                "the cache must actually repaint after invalidation"
+            );
+            assert_eq!(
+                find(window, "Cached parent").id,
+                root,
+                "ordinary repaint after rebasing must preserve anonymous identity"
+            );
+            assert_eq!(find(window, "Cached action").id, action);
+            assert_eq!(window.accessibility_path_ids.len(), 2);
+        });
+    }
+
+    #[crate::test]
+    fn cached_semantic_roots_rebase_view_direct(cx: &mut TestAppContext) {
+        assert_cached_semantic_roots_rebase(cx, CacheKind::View, false);
+    }
+
+    #[crate::test]
+    fn cached_semantic_roots_rebase_view_deferred(cx: &mut TestAppContext) {
+        assert_cached_semantic_roots_rebase(cx, CacheKind::View, true);
+    }
+
+    #[crate::test]
+    fn cached_semantic_roots_rebase_element_direct(cx: &mut TestAppContext) {
+        assert_cached_semantic_roots_rebase(cx, CacheKind::Element, false);
+    }
+
+    #[crate::test]
+    fn cached_semantic_roots_rebase_element_deferred(cx: &mut TestAppContext) {
+        assert_cached_semantic_roots_rebase(cx, CacheKind::Element, true);
+    }
+
+    struct SnapshotRebaseChild {
+        snapshot: Arc<crate::AccessibilitySnapshot>,
+        paints: Rc<Cell<usize>>,
+        actions: Rc<Cell<usize>>,
+    }
+
+    impl Render for SnapshotRebaseChild {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let snapshot = self.snapshot.clone();
+            let paints = self.paints.clone();
+            let actions = self.actions.clone();
+            canvas_with_prepaint(
+                |_, _, _| (),
+                move |_, _, window, cx| {
+                    paints.set(paints.get() + 1);
+                    window.register_accessibility_snapshot(snapshot.clone());
+                    window.register_accessibility_node(snapshot.nodes[&snapshot.root].clone());
+                    let actions = actions.clone();
+                    window.on_accessibility_subtree_action(
+                        snapshot.clone(),
+                        move |_, _, _| {
+                            actions.set(actions.get() + 1);
+                        },
+                        cx,
+                    );
+                },
+            )
+            .size(px(100.0))
+        }
+    }
+
+    struct SnapshotRebaseHost {
+        child: Entity<SnapshotRebaseChild>,
+        parent: AccessibilityId,
+    }
+
+    impl Render for SnapshotRebaseHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let mut style = StyleRefinement::default();
+            style.size.width = Some(px(100.0).into());
+            style.size.height = Some(px(100.0).into());
+            div()
+                .id("snapshot-external-parent")
+                .size(px(100.0))
+                .accessibility(
+                    AccessibilityAttributes::new(AccessibilityRole::Group).id(self.parent),
+                )
+                .child(AnyView::from(self.child.clone()).cached(style))
+        }
+    }
+
+    #[crate::test]
+    fn cached_semantic_roots_rebase_preserves_retained_snapshot_and_actions(
+        cx: &mut TestAppContext,
+    ) {
+        let mut root = crate::AccessibilityNode::new(AccessibilityRole::Group);
+        let mut logical_child = crate::AccessibilityNode::new(AccessibilityRole::Button);
+        logical_child.parent = Some(root.id);
+        logical_child.actions.push(AccessibilityAction::Click);
+        root.children.push(logical_child.id);
+        let snapshot =
+            crate::AccessibilitySnapshot::new(root.id, [root.clone(), logical_child.clone()])
+                .unwrap();
+        let paints = Rc::new(Cell::new(0));
+        let actions = Rc::new(Cell::new(0));
+        let child = cx.new({
+            let snapshot = snapshot.clone();
+            let paints = paints.clone();
+            let actions = actions.clone();
+            move |_| SnapshotRebaseChild {
+                snapshot,
+                paints,
+                actions,
+            }
+        });
+        let previous = AccessibilityId::new();
+        let next = AccessibilityId::new();
+        let (host, window) = cx.add_window_view(move |_, _| SnapshotRebaseHost {
+            child,
+            parent: previous,
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(paints.get(), 1);
+            assert_eq!(
+                window.accessibility_tree().get(root.id).unwrap().parent,
+                Some(previous)
+            );
+            host.update(cx, |host, cx| {
+                host.parent = next;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            assert_eq!(
+                paints.get(),
+                1,
+                "retained snapshots must rebase through the actual cache hit"
+            );
+            let tree = window.accessibility_tree();
+            assert!(tree.get(previous).is_none());
+            assert_eq!(tree.get(next).unwrap().children.as_slice(), &[root.id]);
+            assert_eq!(tree.get(root.id).unwrap().parent, Some(next));
+            assert_eq!(tree.get(logical_child.id).unwrap().parent, Some(root.id));
+            assert!(Arc::ptr_eq(&snapshot, &tree.nodes.snapshots[&root.id]));
+            assert!(
+                tree.get(root.id)
+                    .unwrap()
+                    .children
+                    .shares_storage(&root.children)
+            );
+            assert_eq!(snapshot.nodes[&root.id].parent, None);
+            assert_eq!(snapshot.nodes[&logical_child.id].parent, Some(root.id));
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                logical_child.id,
+                AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        assert_eq!(actions.get(), 1);
     }
 }
 
