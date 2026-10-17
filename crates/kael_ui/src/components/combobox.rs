@@ -132,7 +132,9 @@ impl<T: Clone + 'static> Default for ComboboxState<T> {
 /// Combobox component with searchable dropdown
 pub struct Combobox<T: Clone + 'static> {
     focus_handle: FocusHandle,
+    focus_subscription: Option<(AnyWindowHandle, Subscription)>,
     items: Vec<T>,
+    option_accessibility_ids: Option<AccessibilityIdRange>,
     state: Entity<ComboboxState<T>>,
     placeholder: SharedString,
     disabled: bool,
@@ -149,6 +151,7 @@ pub struct Combobox<T: Clone + 'static> {
     on_search: Option<Box<dyn Fn(&str, &mut App)>>,
 
     bounds: Bounds<Pixels>,
+    dropdown_bounds: Bounds<Pixels>,
 
     style: StyleRefinement,
 }
@@ -156,9 +159,15 @@ pub struct Combobox<T: Clone + 'static> {
 impl<T: Clone + PartialEq + 'static> Combobox<T> {
     /// Create a new combobox with items and state entity
     pub fn new(items: Vec<T>, state: &Entity<ComboboxState<T>>, cx: &mut Context<Self>) -> Self {
+        let option_accessibility_ids = (!items.is_empty()).then(|| {
+            AccessibilityId::reserve_range(items.len() as u64)
+                .expect("accessibility identifier space exhausted")
+        });
         Self {
             focus_handle: cx.focus_handle(),
+            focus_subscription: None,
             items,
+            option_accessibility_ids,
             state: state.clone(),
             placeholder: "Search...".into(),
             disabled: false,
@@ -172,6 +181,7 @@ impl<T: Clone + PartialEq + 'static> Combobox<T> {
             on_select: None,
             on_search: None,
             bounds: Bounds::default(),
+            dropdown_bounds: Bounds::default(),
             style: StyleRefinement::default(),
         }
     }
@@ -283,21 +293,33 @@ impl<T: Clone + PartialEq + 'static> Combobox<T> {
 
     /// Toggle dropdown open/close
     fn toggle_dropdown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.disabled {
-            let has_items = !self.filtered_items(cx).is_empty();
-            self.state.update(cx, |state, cx| {
-                state.toggle_open();
-                if state.is_open {
-                    window.focus(&self.focus_handle);
-                    state.focused_index = has_items.then_some(0);
-                }
-                cx.notify(); // Trigger re-render
-            });
+        if self.disabled {
+            return;
         }
+        if self.state.read(cx).is_open {
+            self.close_dropdown(cx);
+            return;
+        }
+        let search = self.state.read(cx).search_text.to_lowercase();
+        let has_items = self
+            .items
+            .iter()
+            .any(|item| (self.filter_fn)(item, &search));
+        window.focus(&self.focus_handle);
+        self.state.update(cx, |state, cx| {
+            state.is_open = true;
+            state.focused_index = has_items.then_some(0);
+            state.scroll_handle.set_offset(point(px(0.0), px(0.0)));
+            if has_items {
+                state.scroll_handle.scroll_to_item(0);
+            }
+            cx.notify();
+        });
     }
 
     /// Close the dropdown
     fn close_dropdown(&mut self, cx: &mut Context<Self>) {
+        self.dropdown_bounds = Bounds::default();
         self.state.update(cx, |state, cx| {
             state.close();
             cx.notify(); // Trigger re-render
@@ -306,19 +328,44 @@ impl<T: Clone + PartialEq + 'static> Combobox<T> {
 
     /// Clear all selections
     fn clear_selection(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled || self.state.read(cx).selected.is_empty() {
+            return;
+        }
+        let has_items = self.items.iter().any(|item| (self.filter_fn)(item, ""));
         self.state.update(cx, |state, cx| {
             state.clear();
+            if state.is_open {
+                state.focused_index = has_items.then_some(0);
+            }
             cx.notify(); // Trigger re-render
         });
+        self.scroll_focused_into_view(cx);
         cx.emit(ComboboxEvent::Change);
     }
 
     /// Select an item
     fn select_item(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let filtered = self.filtered_items(cx);
-        if let Some(&(original_idx, _)) = filtered.get(index)
-            && let Some(item) = self.items.get(original_idx).cloned()
+        if let Some(&(original_idx, _)) = self.filtered_items(cx).get(index) {
+            self.select_original_item(original_idx, window, cx);
+        }
+    }
+
+    /// Pointer and native callbacks retain the original item's identity across filtering.
+    fn select_original_item(
+        &mut self,
+        original_idx: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let state = self.state.read(cx);
+        if self.disabled || !state.is_open {
+            return;
+        }
+        let search = state.search_text.to_lowercase();
+        if let Some(item) = self.items.get(original_idx)
+            && (self.filter_fn)(item, &search)
         {
+            let item = item.clone();
             self.state.update(cx, |state, cx| {
                 state.select_item(item.clone(), self.multi_select);
                 cx.notify(); // Trigger re-render
@@ -333,77 +380,62 @@ impl<T: Clone + PartialEq + 'static> Combobox<T> {
     }
 
     /// Handle up arrow key
-    fn combobox_up(&mut self, _: &ComboboxUp, _: &mut Window, cx: &mut Context<Self>) {
+    fn combobox_up(&mut self, _: &ComboboxUp, window: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
+        if !self.state.read(cx).is_open {
+            self.toggle_dropdown(window, cx);
+            return;
+        }
         let filtered_count = self.filtered_items(cx).len();
         if filtered_count == 0 {
             return;
         }
 
-        self.state.update(cx, |state, _| {
-            if !state.is_open {
-                state.is_open = true;
-                state.focused_index = Some(0);
-            } else {
-                let current = state.focused_index.unwrap_or(0);
-                state.focused_index = Some(if current == 0 {
-                    filtered_count - 1
-                } else {
-                    current - 1
-                });
-            }
+        self.state.update(cx, |state, cx| {
+            state.focused_index = Some(match state.focused_index {
+                Some(0) | None => filtered_count - 1,
+                Some(current) => current.saturating_sub(1).min(filtered_count - 1),
+            });
+            cx.notify();
         });
         self.scroll_focused_into_view(cx);
     }
 
     /// Handle down arrow key
-    fn combobox_down(&mut self, _: &ComboboxDown, _: &mut Window, cx: &mut Context<Self>) {
+    fn combobox_down(&mut self, _: &ComboboxDown, window: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
+        if !self.state.read(cx).is_open {
+            self.toggle_dropdown(window, cx);
+            return;
+        }
         let filtered_count = self.filtered_items(cx).len();
         if filtered_count == 0 {
             return;
         }
 
-        self.state.update(cx, |state, _| {
-            if !state.is_open {
-                state.is_open = true;
-                state.focused_index = Some(0);
-            } else {
-                let current = state.focused_index.unwrap_or(0);
-                state.focused_index = Some(if current >= filtered_count - 1 {
-                    0
-                } else {
-                    current + 1
-                });
-            }
+        self.state.update(cx, |state, cx| {
+            state.focused_index = Some(match state.focused_index {
+                Some(current) if current < filtered_count - 1 => current + 1,
+                _ => 0,
+            });
+            cx.notify();
         });
         self.scroll_focused_into_view(cx);
     }
 
-    /// Keep the focused item inside the visible rows of the dropdown
-    /// viewport. Row geometry mirrors the render budget: 28px rows with 4px
-    /// top padding; a negative y offset means the list is scrolled down.
+    /// Reveal against this frame's measured rows, including size and wrapped labels.
     fn scroll_focused_into_view(&self, cx: &Context<Self>) {
-        const ROW_HEIGHT: f32 = 28.0;
-        const TOP_PADDING: f32 = 4.0;
-
         let state = self.state.read(cx);
-        let Some(position) = state.focused_index else {
-            return;
-        };
-        let viewport_height = f32::from(self.max_height);
-        let row_top = TOP_PADDING + position as f32 * ROW_HEIGHT;
-        let row_bottom = row_top + ROW_HEIGHT;
-        let scrolled = -f32::from(state.scroll_handle.offset().y);
-
-        let new_scrolled = if row_top < scrolled {
-            (row_top - TOP_PADDING).max(0.0)
-        } else if row_bottom > scrolled + viewport_height {
-            row_bottom - viewport_height
-        } else {
-            return;
-        };
-        state
-            .scroll_handle
-            .set_offset(point(px(0.0), px(-new_scrolled.max(0.0))));
+        if !self.disabled
+            && state.is_open
+            && let Some(position) = state.focused_index
+        {
+            state.scroll_handle.scroll_to_item(position);
+        }
     }
 
     /// Handle enter key (confirm selection)
@@ -413,6 +445,9 @@ impl<T: Clone + PartialEq + 'static> Combobox<T> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.disabled {
+            return;
+        }
         let state = self.state.read(cx);
         if state.is_open {
             if let Some(idx) = state.focused_index {
@@ -425,7 +460,7 @@ impl<T: Clone + PartialEq + 'static> Combobox<T> {
 
     /// Handle escape key (cancel/close)
     fn combobox_cancel(&mut self, _: &ComboboxCancel, _: &mut Window, cx: &mut Context<Self>) {
-        if self.state.read(cx).is_open {
+        if !self.disabled && self.state.read(cx).is_open {
             self.close_dropdown(cx);
         }
     }
@@ -443,17 +478,39 @@ impl<T: Clone + 'static> Styled for Combobox<T> {
 }
 
 impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.disabled && self.focus_handle.is_focused(window) {
+            window.blur();
+            if self.state.read(cx).is_open {
+                self.close_dropdown(cx);
+            }
+        }
+        let window_handle = window.window_handle();
+        if self.focus_subscription.as_ref().map(|(handle, _)| *handle) != Some(window_handle) {
+            self.focus_subscription = Some((
+                window_handle,
+                cx.on_blur(&self.focus_handle, window, |this, _, cx| {
+                    if this.state.read(cx).is_open {
+                        this.close_dropdown(cx);
+                    }
+                }),
+            ));
+        }
         let theme = Theme::of(cx);
         let user_style = self.style.clone();
 
         let state = self.state.read(cx);
-        let is_open = state.is_open;
+        let is_open = state.is_open && !self.disabled;
         let search_text = state.search_text.clone();
         let focused_idx = state.focused_index;
         let has_selection = !state.selected.is_empty();
         let entity_id = cx.entity().entity_id().as_u64();
-        let is_focused = self.focus_handle.is_focused(_window);
+        let is_focused = self.focus_handle.is_focused(window);
+        let filtered = if is_open {
+            self.filtered_items(cx)
+        } else {
+            Vec::new()
+        };
 
         let display_text: SharedString = if !search_text.is_empty() {
             search_text.clone().into()
@@ -513,12 +570,21 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                 },
             ]);
         }
+        if is_open
+            && let Some(active_id) =
+                focused_idx
+                    .and_then(|index| filtered.get(index))
+                    .and_then(|(original_index, _)| {
+                        self.option_accessibility_ids
+                            .and_then(|ids| ids.get(*original_index as u64))
+                    })
+        {
+            accessibility = accessibility.active_descendant(active_id);
+        }
 
         let trigger = div()
             .id(("combobox-trigger", entity_id))
             .relative()
-            .track_focus(&self.focus_handle.clone().tab_index(0).tab_stop(true))
-            .accessibility(accessibility)
             .flex()
             .items_center()
             .justify_between()
@@ -564,12 +630,13 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                 cx.listener(|this, _, window, cx| {
                     if !this.disabled {
                         window.focus(&this.focus_handle);
-                        this.state.update(cx, |state, _| {
-                            if !state.is_open {
-                                state.is_open = true;
-                                state.focused_index = Some(0);
-                            }
-                        });
+                        if !this.state.read(cx).is_open {
+                            this.toggle_dropdown(window, cx);
+                        }
+                    } else {
+                        // A previously painted enabled owner may still have
+                        // its default pointer-focus listener until redraw.
+                        window.prevent_default();
                     }
                 }),
             )
@@ -608,6 +675,12 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                                         cx.listener(|this, _event, window, cx| {
                                             this.clear_selection(window, cx);
                                             cx.stop_propagation();
+                                        }),
+                                    )
+                                    .on_accessibility_action(
+                                        AccessibilityAction::Click,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.clear_selection(window, cx);
                                         }),
                                     )
                                     .accessibility(
@@ -655,50 +728,82 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
             });
 
         div()
+            .id(("combobox-control", entity_id))
             .relative()
             .w_full()
             .key_context("Combobox")
-            .track_focus(&self.focus_handle)
-            .when(is_open && !self.disabled, |this: Div| {
-                this.on_action(cx.listener(Combobox::combobox_up))
+            .accessibility(accessibility)
+            .when(!self.disabled, |this: Stateful<Div>| {
+                this.track_focus(&self.focus_handle.clone().tab_index(0).tab_stop(true))
+                    .on_action(cx.listener(Combobox::combobox_up))
                     .on_action(cx.listener(Combobox::combobox_down))
                     .on_action(cx.listener(Combobox::combobox_confirm))
-                    .on_action(cx.listener(Combobox::combobox_cancel))
                     .on_action(cx.listener(Combobox::combobox_clear))
+                    .on_accessibility_action(
+                        AccessibilityAction::Focus,
+                        cx.listener(|this, _, window, _| {
+                            if !this.disabled {
+                                window.focus(&this.focus_handle);
+                            }
+                        }),
+                    )
+                    .on_accessibility_action(
+                        AccessibilityAction::Click,
+                        cx.listener(|this, _, window, cx| this.toggle_dropdown(window, cx)),
+                    )
+                    .on_accessibility_action(
+                        AccessibilityAction::Expand,
+                        cx.listener(|this, _, window, cx| {
+                            if !this.state.read(cx).is_open {
+                                this.toggle_dropdown(window, cx);
+                            }
+                        }),
+                    )
+                    .on_accessibility_action(
+                        AccessibilityAction::Collapse,
+                        cx.listener(|this, _, _, cx| {
+                            if !this.disabled && this.state.read(cx).is_open {
+                                this.close_dropdown(cx);
+                            }
+                        }),
+                    )
             })
-            .when(is_open, |this: Div| {
-                this.on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+            .when(is_open, |this: Stateful<Div>| {
+                this.on_action(cx.listener(Combobox::combobox_cancel))
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if this.disabled || !this.focus_handle.is_focused(window) {
+                        return;
+                    }
+                    let mut search = this.state.read(cx).search_text.clone();
                     if event.keystroke.key == "backspace" {
-                        this.state.update(cx, |state, cx| {
-                            state.search_text.pop();
-                            state.focused_index = None;
-                            cx.notify(); // Trigger re-render
-                        });
-                        cx.emit(ComboboxEvent::Search);
-                        if let Some(ref callback) = this.on_search {
-                            let search = this.state.read(cx).search_text.clone();
-                            callback(&search, cx);
-                        }
+                        search.pop();
                     } else if event.keystroke.key.len() == 1
                         && !event.keystroke.modifiers.control
                         && !event.keystroke.modifiers.platform
                         && !event.keystroke.modifiers.alt {
-                        this.state.update(cx, |state, cx| {
-                            state.search_text.push_str(&event.keystroke.key);
-                            state.focused_index = None;
-                            cx.notify(); // Trigger re-render
-                        });
-                        cx.emit(ComboboxEvent::Search);
-
-                        if let Some(ref callback) = this.on_search {
-                            let search = this.state.read(cx).search_text.clone();
-                            callback(&search, cx);
-                        }
+                        search.push_str(&event.keystroke.key);
+                    } else {
+                        return;
                     }
+                    let query = search.to_lowercase();
+                    let has_items = this.items.iter().any(|item| (this.filter_fn)(item, &query));
+                    this.state.update(cx, |state, cx| {
+                        state.search_text = search.clone();
+                        state.focused_index = has_items.then_some(0);
+                        state.scroll_handle.set_offset(point(px(0.0), px(0.0)));
+                        cx.notify();
+                    });
+                    this.scroll_focused_into_view(cx);
+                    cx.emit(ComboboxEvent::Search);
+                    if let Some(ref callback) = this.on_search {
+                        callback(&search, cx);
+                    }
+                    cx.stop_propagation();
+                    window.prevent_default();
                 }))
             })
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                if this.state.read(cx).is_open {
+            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                if !this.disabled && this.state.read(cx).is_open && !this.dropdown_bounds.contains(&event.position) {
                     this.close_dropdown(cx);
                 }
             }))
@@ -710,8 +815,22 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                             .snap_to_window_with_margin(Edges::all(DROPDOWN_MARGIN))
                             .child(
                                 div()
+                                    .relative()
                                     .occlude()
                                     .w(bounds.size.width)
+                                    .child({
+                                        let entity = cx.weak_entity();
+                                        canvas_with_prepaint(
+                                            move |bounds, _, cx| {
+                                                _ = entity.update(cx, |this, _| {
+                                                    this.dropdown_bounds = bounds;
+                                                });
+                                            },
+                                            |_, _, _, _| {},
+                                        )
+                                        .absolute()
+                                        .size_full()
+                                    })
                                     .child(
                                         div()
                                             .occlude()
@@ -723,8 +842,6 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                                             .shadow(theme.tokens.shadow_lg.to_vec())
                                             .overflow_hidden()
                                             .child({
-                                                let filtered = self.filtered_items(cx);
-
                                                 div()
                                                     .id(("combobox-dropdown-list", entity_id))
                                                     .accessibility(
@@ -753,7 +870,7 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                                                     })
                                                     .when(!filtered.is_empty(), |this| {
                                                         this.children(
-                                                            filtered.iter().enumerate().map(|(display_idx, &(_original_idx, item))| {
+                                                            filtered.iter().enumerate().map(|(display_idx, &(original_idx, item))| {
                                                                 let is_focused = focused_idx == Some(display_idx);
                                                                 let is_selected = state.is_selected(item);
                                                                 let item_text = (self.render_item)(item);
@@ -761,17 +878,17 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                                                                 if is_selected {
                                                                     item_state |= AccessibilityState::SELECTED;
                                                                 }
-                                                                if is_focused {
-                                                                    item_state |= AccessibilityState::FOCUSED;
-                                                                }
 
                                                                 div()
                                                                     .id(ElementId::NamedInteger(
                                                                         format!("combobox-option-{entity_id}").into(),
-                                                                        display_idx as u64,
+                                                                        original_idx as u64,
                                                                     ))
                                                                     .accessibility(
                                                                         AccessibilityAttributes::new(AccessibilityRole::ListItem)
+                                                                            .id(self.option_accessibility_ids
+                                                                                .and_then(|ids| ids.get(original_idx as u64))
+                                                                                .expect("each item has a stable accessibility identity"))
                                                                             .label(item_text.to_string())
                                                                             .states(item_state)
                                                                             .actions(vec![AccessibilityAction::Click]),
@@ -803,7 +920,10 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                                                                     })
                                                                     .font_family(theme.tokens.font_family.clone())
                                                                     .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
-                                                                        this.select_item(display_idx, window, cx);
+                                                                        this.select_original_item(original_idx, window, cx);
+                                                                    }))
+                                                                    .on_accessibility_action(AccessibilityAction::Click, cx.listener(move |this, _, window, cx| {
+                                                                        this.select_original_item(original_idx, window, cx);
                                                                     }))
                                                                     .child(div().flex_1().min_w(px(0.0)).child(item_text))
                                                                     .child(
@@ -863,7 +983,909 @@ impl<T: Clone + 'static> EventEmitter<ComboboxEvent> for Combobox<T> {}
 
 #[cfg(test)]
 mod tests {
-    use super::ComboboxState;
+    use super::{Combobox, ComboboxEvent, ComboboxState, init_combobox};
+    use crate::components::input::InputSize;
+    use kael::{
+        AccessibilityAction, AccessibilityActionRequest, AccessibilityId, AccessibilityRole,
+        AccessibilityState, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+        KeyUpEvent, Keystroke, Modifiers, ParentElement as _, Render, ScrollDelta,
+        ScrollWheelEvent, StatefulInteractiveElement as _, Styled as _, TestAppContext,
+        VisualTestContext, Window, div, point, px,
+    };
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
+
+    struct ComboboxHost {
+        combobox: Entity<Combobox<&'static str>>,
+    }
+
+    impl Render for ComboboxHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().w(px(240.0)).child(self.combobox.clone())
+        }
+    }
+
+    fn mounted_combobox() -> (
+        Entity<ComboboxState<&'static str>>,
+        VisualTestContext,
+        Rc<Cell<usize>>,
+    ) {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            init_combobox(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let state = cx.new(|_| ComboboxState::new());
+        let callbacks = Rc::new(Cell::new(0));
+        let combobox = cx.new({
+            let state = state.clone();
+            let callbacks = callbacks.clone();
+            move |cx| {
+                Combobox::new(vec!["Alpha", "Beta"], &state, cx)
+                    .render_item(|item| (*item).into())
+                    .on_select(move |_, _, _| callbacks.set(callbacks.get() + 1))
+            }
+        });
+        let (_, window) = cx.add_window_view(move |_, _| ComboboxHost { combobox });
+        window.update(|window, cx| window.draw(cx).clear());
+        (state, window.clone(), callbacks)
+    }
+
+    fn exposed_node(window: &Window, role: AccessibilityRole, label: &str) -> AccessibilityId {
+        window
+            .accessibility_tree()
+            .nodes
+            .values()
+            .find(|node| node.role == role && node.label.as_deref() == Some(label))
+            .unwrap_or_else(|| panic!("missing {role:?} named {label}"))
+            .id
+    }
+
+    fn open_with_pointer(window: &mut VisualTestContext) {
+        let center = window.update(|window, _| {
+            let id = exposed_node(window, AccessibilityRole::ComboBox, "Combobox");
+            let bounds = window.accessibility_tree().get(id).unwrap().bounds.unwrap();
+            point(
+                px((bounds.x + bounds.width / 2.0) as f32),
+                px((bounds.y + bounds.height / 2.0) as f32),
+            )
+        });
+        window.simulate_click(center, Modifiers::default());
+        window.update(|window, cx| window.draw(cx).clear());
+    }
+
+    struct IndexedComboboxHost {
+        combobox: Entity<Combobox<usize>>,
+        next_focus: kael::FocusHandle,
+        cache_control: bool,
+    }
+
+    impl Render for IndexedComboboxHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w(px(240.0))
+                .child(if self.cache_control {
+                    kael::AnyView::from(self.combobox.clone())
+                        .cached(kael::StyleRefinement::default().w_full().h(px(32.0)))
+                        .into_any_element()
+                } else {
+                    self.combobox.clone().into_any_element()
+                })
+                .child(
+                    div()
+                        .id("after-combobox")
+                        .h(px(28.0))
+                        .track_focus(&self.next_focus.clone().tab_index(0).tab_stop(true))
+                        .accessibility(
+                            kael::AccessibilityAttributes::new(AccessibilityRole::Button)
+                                .label("Next control")
+                                .actions(vec![
+                                    AccessibilityAction::Focus,
+                                    AccessibilityAction::Click,
+                                ]),
+                        )
+                        .on_click(|_, _, _| {})
+                        .child("Next control"),
+                )
+        }
+    }
+
+    #[derive(Default)]
+    struct ComboboxCounts {
+        selected: RefCell<Vec<usize>>,
+        changes: Cell<usize>,
+        searches: Cell<usize>,
+        search_callbacks: Cell<usize>,
+        filter_calls: Cell<usize>,
+    }
+
+    struct IndexedComboboxFixture {
+        state: Entity<ComboboxState<usize>>,
+        combobox: Entity<Combobox<usize>>,
+        window: VisualTestContext,
+        counts: Rc<ComboboxCounts>,
+        next_focus: kael::FocusHandle,
+        _subscription: kael::Subscription,
+    }
+
+    fn choice_label(index: usize) -> String {
+        format!("Choice {index:02} with a longer label that wraps within the options viewport")
+    }
+
+    fn indexed_combobox(size: InputSize, multi_select: bool) -> IndexedComboboxFixture {
+        indexed_combobox_with_cache(size, multi_select, false)
+    }
+
+    fn indexed_combobox_with_cache(
+        size: InputSize,
+        multi_select: bool,
+        cache_control: bool,
+    ) -> IndexedComboboxFixture {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            init_combobox(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let state = cx.new(|_| ComboboxState::new());
+        let counts = Rc::new(ComboboxCounts::default());
+        let combobox = cx.new({
+            let state = state.clone();
+            let counts = counts.clone();
+            move |cx| {
+                let search_counts = counts.clone();
+                let filter_counts = counts.clone();
+                Combobox::new((0..40).collect(), &state, cx)
+                    .size(size)
+                    .max_height(px(180.0))
+                    .multi_select(multi_select)
+                    .render_item(|index| choice_label(*index).into())
+                    .filter_fn(move |index, query| {
+                        filter_counts
+                            .filter_calls
+                            .set(filter_counts.filter_calls.get() + 1);
+                        format!("choice {index:02}").contains(query)
+                    })
+                    .on_select(move |item, _, _| counts.selected.borrow_mut().push(*item))
+                    .on_search(move |_, _| {
+                        search_counts
+                            .search_callbacks
+                            .set(search_counts.search_callbacks.get() + 1)
+                    })
+            }
+        });
+        let subscription = cx.update(|cx| {
+            let counts = counts.clone();
+            cx.subscribe(&combobox, move |_, event: &ComboboxEvent, _| match event {
+                ComboboxEvent::Change => counts.changes.set(counts.changes.get() + 1),
+                ComboboxEvent::Search => counts.searches.set(counts.searches.get() + 1),
+            })
+        });
+        let next_focus = cx.update(|cx| cx.focus_handle());
+        let (_, window) = cx.add_window_view({
+            let combobox = combobox.clone();
+            let next_focus = next_focus.clone();
+            move |_, _| IndexedComboboxHost {
+                combobox,
+                next_focus,
+                cache_control,
+            }
+        });
+        window.deactivate_window();
+        window.update(|window, _| window.activate_window());
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert!(
+                window.is_window_active(),
+                "focus lifecycle requires an active test window"
+            );
+            window.draw(cx).clear();
+        });
+        IndexedComboboxFixture {
+            state,
+            combobox,
+            window: window.clone(),
+            counts,
+            next_focus,
+            _subscription: subscription,
+        }
+    }
+
+    fn assert_active_option_is_visible(
+        combobox: &Entity<Combobox<usize>>,
+        state: &Entity<ComboboxState<usize>>,
+        window: &Window,
+        cx: &kael::App,
+    ) -> AccessibilityId {
+        let combobox = combobox.read(cx);
+        let state = state.read(cx);
+        let position = state.focused_index.expect("highlighted option");
+        let original_index = combobox.filtered_items(cx)[position].0;
+        let id = combobox
+            .option_accessibility_ids
+            .unwrap()
+            .get(original_index as u64)
+            .unwrap();
+        let tree = window.accessibility_tree();
+        let option = tree.get(id).expect("active option must be mounted");
+        let bounds = option.bounds.expect("painted option bounds");
+        let viewport = state.scroll_handle.bounds();
+        assert!(
+            bounds.y >= f64::from(f32::from(viewport.top())) - 0.5
+                && bounds.y + bounds.height <= f64::from(f32::from(viewport.bottom())) + 0.5,
+            "actual option {original_index} bounds {bounds:?} must fit actual viewport {viewport:?}",
+        );
+        assert_eq!(tree.focused_node_count(), 1);
+        let control = tree
+            .get(exposed_node(
+                window,
+                AccessibilityRole::ComboBox,
+                "Combobox",
+            ))
+            .unwrap();
+        let list = tree
+            .get(exposed_node(window, AccessibilityRole::List, "Options"))
+            .unwrap();
+        assert!(control.states.contains(AccessibilityState::FOCUSED));
+        assert_eq!(control.active_descendant, Some(id));
+        assert_eq!(option.parent, Some(list.id));
+        assert_eq!(list.parent, Some(control.id));
+        let native = tree.to_accesskit_tree_update(None, None);
+        let native_control = native
+            .nodes
+            .iter()
+            .find(|(id, _)| id.0 == control.id.0)
+            .unwrap();
+        assert_eq!(native_control.1.active_descendant().unwrap().0, id.0);
+        id
+    }
+
+    fn native_action(
+        window: &mut VisualTestContext,
+        id: AccessibilityId,
+        action: AccessibilityAction,
+    ) {
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                id, action,
+            ));
+        });
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+    }
+
+    #[::core::prelude::v1::test]
+    fn native_trigger_actions_open_mounted_combobox() {
+        let mut opened = Vec::new();
+        for action in [AccessibilityAction::Click, AccessibilityAction::Expand] {
+            let (state, mut window, callbacks) = mounted_combobox();
+            window.update(|window, _| {
+                let id = exposed_node(window, AccessibilityRole::ComboBox, "Combobox");
+                assert!(
+                    window
+                        .accessibility_tree()
+                        .get(id)
+                        .unwrap()
+                        .actions
+                        .contains(&action)
+                );
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    id, action,
+                ));
+            });
+            window.run_until_parked();
+            window.update(|window, cx| {
+                window.draw(cx).clear();
+                opened.push((action, state.read(cx).is_open));
+            });
+            assert_eq!(callbacks.get(), 0);
+        }
+        eprintln!("combobox_native_open_results={opened:?}");
+        assert!(
+            opened.iter().all(|(_, open)| *open),
+            "advertised native actions must open the control: {opened:?}"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn closed_mounted_combobox_opens_with_keyboard() {
+        let (state, mut window, callbacks) = mounted_combobox();
+        window.simulate_keystrokes("tab enter");
+        window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").unwrap(),
+        });
+        let keyboard_opened = window.update(|window, cx| {
+            window.draw(cx).clear();
+            state.read(cx).is_open
+        });
+        if !keyboard_opened {
+            open_with_pointer(&mut window);
+            assert!(
+                window.update(|_, cx| state.read(cx).is_open),
+                "pointer positive control must open"
+            );
+        }
+        eprintln!("combobox_keyboard_opened={keyboard_opened}; pointer_positive_control=true");
+        assert_eq!(callbacks.get(), 0);
+        assert!(
+            keyboard_opened,
+            "a focused, closed combobox must open with Enter"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn native_option_and_clear_activate_mounted_combobox() {
+        let (state, mut window, callbacks) = mounted_combobox();
+        open_with_pointer(&mut window);
+        assert!(window.update(|_, cx| state.read(cx).is_open));
+        window.update(|window, _| {
+            let id = exposed_node(window, AccessibilityRole::ListItem, "Beta");
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                id,
+                AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        let native_selected = window.update(|window, cx| {
+            window.draw(cx).clear();
+            state.read(cx).selected == ["Beta"]
+        });
+        let native_selection_callbacks = callbacks.get();
+
+        // Establish a selection independently so clear is tested even when option activation fails.
+        window.update(|_, cx| {
+            state.update(cx, |state, cx| {
+                state.select_item("Beta", false);
+                cx.notify();
+            });
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let id = exposed_node(window, AccessibilityRole::Button, "Clear selection");
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                id,
+                AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        let native_cleared = window.update(|window, cx| {
+            window.draw(cx).clear();
+            state.read(cx).selected.is_empty()
+        });
+        eprintln!(
+            "combobox_native_selection={native_selected}; callbacks={native_selection_callbacks}; native_clear={native_cleared}"
+        );
+        assert!(
+            native_selected,
+            "native option Click must select the same item as pointer activation"
+        );
+        assert_eq!(
+            native_selection_callbacks, 1,
+            "selection callback must run exactly once"
+        );
+        assert!(
+            native_cleared,
+            "native clear Click must clear the selection"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn native_disclosure_owns_popup_and_retires_option_actions() {
+        let mut fixture = indexed_combobox(InputSize::Md, false);
+        let (control, closed_bounds) = fixture.window.update(|window, _| {
+            let id = exposed_node(window, AccessibilityRole::ComboBox, "Combobox");
+            (id, window.accessibility_tree().get(id).unwrap().bounds)
+        });
+        native_action(&mut fixture.window, control, AccessibilityAction::Expand);
+        let option = fixture.window.update(|window, cx| {
+            assert_eq!(
+                window.accessibility_tree().get(control).unwrap().bounds,
+                closed_bounds
+            );
+            assert_active_option_is_visible(&fixture.combobox, &fixture.state, window, cx)
+        });
+        native_action(&mut fixture.window, control, AccessibilityAction::Collapse);
+        fixture.window.update(|window, cx| {
+            assert!(!fixture.state.read(cx).is_open);
+            assert!(!window.accessibility_tree().nodes.contains_key(&option));
+            assert!(!window.has_accessibility_action_handler(option, AccessibilityAction::Click));
+            assert_eq!(
+                window
+                    .accessibility_tree()
+                    .get(control)
+                    .unwrap()
+                    .active_descendant,
+                None
+            );
+        });
+        native_action(&mut fixture.window, option, AccessibilityAction::Click);
+        assert_eq!(fixture.counts.changes.get(), 0);
+        assert!(fixture.counts.selected.borrow().is_empty());
+        native_action(&mut fixture.window, control, AccessibilityAction::Click);
+        fixture.window.update(|window, cx| {
+            assert!(fixture.state.read(cx).is_open);
+            assert_active_option_is_visible(&fixture.combobox, &fixture.state, window, cx);
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn filtered_native_option_preserves_original_identity_and_commits_once() {
+        let mut fixture = indexed_combobox(InputSize::Md, false);
+        fixture.window.simulate_keystrokes("tab enter up");
+        let last_id = fixture.window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(fixture.state.read(cx).focused_index, Some(39));
+            assert_active_option_is_visible(&fixture.combobox, &fixture.state, window, cx)
+        });
+        fixture.window.simulate_keystrokes("3 9");
+        fixture.window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(fixture.state.read(cx).search_text, "39");
+            assert_eq!(fixture.combobox.read(cx).filtered_items(cx).len(), 1);
+            assert_eq!(
+                assert_active_option_is_visible(&fixture.combobox, &fixture.state, window, cx),
+                last_id
+            );
+            // Both requests are queued against the painted tree. Closing on the
+            // first selection must also prevent a second callback before redraw.
+            for _ in 0..2 {
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    last_id,
+                    AccessibilityAction::Click,
+                ));
+            }
+        });
+        fixture.window.run_until_parked();
+        fixture.window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(fixture.state.read(cx).selected, [39]);
+            assert!(!fixture.state.read(cx).is_open);
+            assert!(fixture.state.read(cx).search_text.is_empty());
+            assert!(!window.has_accessibility_action_handler(last_id, AccessibilityAction::Click));
+        });
+        native_action(&mut fixture.window, last_id, AccessibilityAction::Click);
+        assert_eq!(*fixture.counts.selected.borrow(), [39]);
+        assert_eq!(fixture.counts.changes.get(), 1);
+        assert_eq!(fixture.counts.searches.get(), 2);
+        assert_eq!(fixture.counts.search_callbacks.get(), 2);
+    }
+
+    #[::core::prelude::v1::test]
+    fn measured_reveal_uses_actual_wrapped_rows_for_all_sizes() {
+        for size in [InputSize::Sm, InputSize::Md, InputSize::Lg] {
+            let mut fixture = indexed_combobox(size, false);
+            fixture.window.simulate_keystrokes("tab down up");
+            fixture.window.update(|window, cx| {
+                window.draw(cx).clear();
+                assert_eq!(fixture.state.read(cx).focused_index, Some(39));
+                assert_active_option_is_visible(&fixture.combobox, &fixture.state, window, cx);
+            });
+            for index in 0..16 {
+                fixture.window.simulate_keystrokes("down");
+                fixture.window.update(|window, cx| {
+                    window.draw(cx).clear();
+                    assert_eq!(fixture.state.read(cx).focused_index, Some(index));
+                    assert_active_option_is_visible(&fixture.combobox, &fixture.state, window, cx);
+                });
+            }
+            fixture.window.simulate_keystrokes("enter");
+            fixture.window.simulate_event(KeyUpEvent {
+                keystroke: Keystroke::parse("enter").unwrap(),
+            });
+            fixture.window.update(|_, cx| {
+                assert_eq!(fixture.state.read(cx).selected, [15]);
+                assert!(!fixture.state.read(cx).is_open);
+            });
+            assert_eq!(*fixture.counts.selected.borrow(), [15]);
+            assert_eq!(fixture.counts.changes.get(), 1);
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn pointer_wheel_keeps_popup_open_without_replaying_highlight_reveal() {
+        let mut fixture = indexed_combobox(InputSize::Md, false);
+        open_with_pointer(&mut fixture.window);
+        let center = fixture
+            .window
+            .update(|_, cx| fixture.state.read(cx).scroll_handle.bounds().center());
+        fixture
+            .window
+            .simulate_mouse_move(center, None, Modifiers::default());
+        fixture.window.simulate_event(ScrollWheelEvent {
+            position: center,
+            delta: ScrollDelta::Pixels(point(px(0.0), px(-240.0))),
+            modifiers: Modifiers::default(),
+            ..Default::default()
+        });
+        let scrolled = fixture.window.update(|window, cx| {
+            window.draw(cx).clear();
+            let state = fixture.state.read(cx);
+            assert!(state.is_open);
+            assert_eq!(state.focused_index, Some(0));
+            assert!(state.scroll_handle.offset().y < px(-100.0));
+            state.scroll_handle.offset()
+        });
+        fixture.window.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+            assert_eq!(fixture.state.read(cx).scroll_handle.offset(), scrolled);
+        });
+        assert_eq!(fixture.counts.changes.get(), 0);
+        assert!(fixture.counts.selected.borrow().is_empty());
+    }
+
+    #[::core::prelude::v1::test]
+    fn disabled_model_rejects_painted_focus_handlers_and_releases_owned_focus() {
+        let mut fixture = indexed_combobox(InputSize::Md, false);
+        fixture.window.update(|window, cx| {
+            fixture.state.update(cx, |state, cx| {
+                state.selected = vec![7];
+                cx.notify();
+            });
+            window.focus(&fixture.next_focus);
+            window.draw(cx).clear();
+        });
+        let (control, center) = fixture.window.update(|window, cx| {
+            let control = exposed_node(window, AccessibilityRole::ComboBox, "Combobox");
+            let bounds = window
+                .accessibility_tree()
+                .get(control)
+                .unwrap()
+                .bounds
+                .unwrap();
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                control,
+                AccessibilityAction::Focus,
+            ));
+            fixture.combobox.update(cx, |combobox, _| {
+                combobox.disabled = true;
+            });
+            assert!(
+                !window
+                    .accessibility_tree()
+                    .get(control)
+                    .unwrap()
+                    .states
+                    .contains(AccessibilityState::DISABLED),
+                "queue against the old enabled tree before notifying the model change"
+            );
+            (
+                control,
+                point(
+                    px((bounds.x + bounds.width / 2.0) as f32),
+                    px((bounds.y + bounds.height / 2.0) as f32),
+                ),
+            )
+        });
+        fixture.window.run_until_parked();
+        fixture.window.update(|window, cx| {
+            assert!(
+                fixture.next_focus.is_focused(window),
+                "queued native Focus must check the current disabled model"
+            );
+            fixture.combobox.update(cx, |_, cx| cx.notify());
+        });
+        fixture.window.update(|_, cx| {
+            fixture.combobox.update(cx, |combobox, cx| {
+                combobox.disabled = false;
+                cx.notify();
+            });
+        });
+        fixture.window.update(|window, cx| {
+            fixture
+                .combobox
+                .update(cx, |combobox, _| combobox.disabled = true);
+            assert!(
+                !window
+                    .accessibility_tree()
+                    .get(control)
+                    .unwrap()
+                    .states
+                    .contains(AccessibilityState::DISABLED),
+                "pointer must use the old enabled tree before notifying the model change"
+            );
+        });
+        fixture.window.simulate_click(center, Modifiers::default());
+        fixture.window.update(|window, cx| {
+            assert!(
+                fixture.next_focus.is_focused(window),
+                "old painted default pointer focus must be prevented after disabling"
+            );
+            fixture.combobox.update(cx, |_, cx| cx.notify());
+        });
+        fixture.window.simulate_platform_frame();
+        fixture.window.update(|window, cx| {
+            let node = window.accessibility_tree().get(control).unwrap();
+            assert!(node.states.contains(AccessibilityState::DISABLED));
+            assert!(!node.states.contains(AccessibilityState::FOCUSED));
+            assert_eq!(fixture.state.read(cx).selected, [7]);
+            fixture.combobox.update(cx, |combobox, cx| {
+                combobox.disabled = false;
+                cx.notify();
+            });
+        });
+        fixture.window.simulate_platform_frame();
+        native_action(&mut fixture.window, control, AccessibilityAction::Expand);
+        fixture.window.simulate_keystrokes("3");
+        fixture.window.simulate_platform_frame();
+        fixture.window.cx.update(|cx| {
+            fixture.combobox.update(cx, |combobox, cx| {
+                combobox.disabled = true;
+                cx.notify();
+            });
+        });
+        fixture.window.simulate_platform_frame();
+        fixture.window.update(|window, cx| {
+            assert!(!fixture.combobox.read(cx).focus_handle.is_focused(window));
+            assert!(!fixture.state.read(cx).is_open);
+            assert!(fixture.state.read(cx).search_text.is_empty());
+            assert_eq!(fixture.state.read(cx).selected, [7]);
+            let node = window.accessibility_tree().get(control).unwrap();
+            assert!(node.states.contains(AccessibilityState::DISABLED));
+            assert!(!node.states.contains(AccessibilityState::FOCUSED));
+            assert_eq!(node.active_descendant, None);
+        });
+        assert!(fixture.counts.selected.borrow().is_empty());
+        assert_eq!(fixture.counts.changes.get(), 0);
+        assert_eq!(fixture.counts.searches.get(), 1);
+    }
+
+    #[::core::prelude::v1::test]
+    fn disabled_combobox_rejects_pointer_keyboard_and_queued_native_actions() {
+        let mut fixture = indexed_combobox(InputSize::Md, false);
+        fixture.window.update(|_, cx| {
+            fixture.state.update(cx, |state, cx| {
+                state.selected = vec![7];
+                cx.notify();
+            });
+        });
+        fixture.window.update(|window, cx| window.draw(cx).clear());
+        open_with_pointer(&mut fixture.window);
+        let control = fixture.window.update(|window, cx| {
+            let control = exposed_node(window, AccessibilityRole::ComboBox, "Combobox");
+            let option =
+                assert_active_option_is_visible(&fixture.combobox, &fixture.state, window, cx);
+            let clear = exposed_node(window, AccessibilityRole::Button, "Clear selection");
+            for id in [option, clear] {
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    id,
+                    AccessibilityAction::Click,
+                ));
+            }
+            fixture.combobox.update(cx, |combobox, cx| {
+                combobox.disabled = true;
+                cx.notify();
+            });
+            window.blur();
+            window.draw(cx).clear();
+            let node = window.accessibility_tree().get(control).unwrap();
+            assert!(node.states.contains(AccessibilityState::DISABLED));
+            assert!(node.states.contains(AccessibilityState::COLLAPSED));
+            assert!(node.actions.is_empty());
+            assert_eq!(node.active_descendant, None);
+            assert!(!window.accessibility_tree().nodes.contains_key(&option));
+            assert!(!window.accessibility_tree().nodes.contains_key(&clear));
+            assert!(!window.has_accessibility_action_handler(option, AccessibilityAction::Click));
+            assert!(!window.has_accessibility_action_handler(clear, AccessibilityAction::Click));
+            control
+        });
+        fixture.window.run_until_parked();
+        for action in [
+            AccessibilityAction::Focus,
+            AccessibilityAction::Click,
+            AccessibilityAction::Expand,
+        ] {
+            native_action(&mut fixture.window, control, action);
+        }
+        fixture.window.simulate_keystrokes("tab enter down a");
+        open_with_pointer(&mut fixture.window);
+        fixture.window.update(|window, cx| {
+            assert!(
+                !fixture.combobox.read(cx).focus_handle.is_focused(window),
+                "disabled control must not enter the tab sequence"
+            );
+            assert_eq!(fixture.state.read(cx).selected, [7]);
+            assert!(fixture.state.read(cx).search_text.is_empty());
+            fixture.combobox.update(cx, |combobox, cx| {
+                combobox.disabled = false;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+        });
+        assert_eq!(fixture.counts.changes.get(), 0);
+        assert_eq!(fixture.counts.searches.get(), 0);
+        assert!(fixture.counts.selected.borrow().is_empty());
+        native_action(&mut fixture.window, control, AccessibilityAction::Expand);
+        let option = fixture.window.update(|window, _| {
+            exposed_node(window, AccessibilityRole::ListItem, &choice_label(0))
+        });
+        native_action(&mut fixture.window, option, AccessibilityAction::Click);
+        assert_eq!(*fixture.counts.selected.borrow(), [0]);
+        assert_eq!(fixture.counts.changes.get(), 1);
+    }
+
+    #[::core::prelude::v1::test]
+    fn multi_select_pointer_native_and_clear_emit_once_per_action() {
+        let mut fixture = indexed_combobox(InputSize::Md, true);
+        open_with_pointer(&mut fixture.window);
+        let (option, center) = fixture.window.update(|window, cx| {
+            let id = assert_active_option_is_visible(&fixture.combobox, &fixture.state, window, cx);
+            let bounds = window.accessibility_tree().get(id).unwrap().bounds.unwrap();
+            (
+                id,
+                point(
+                    px((bounds.x + bounds.width / 2.0) as f32),
+                    px((bounds.y + bounds.height / 2.0) as f32),
+                ),
+            )
+        });
+        fixture.window.simulate_click(center, Modifiers::default());
+        fixture.window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(fixture.state.read(cx).selected, [0]);
+            assert!(fixture.state.read(cx).is_open);
+            assert_active_option_is_visible(&fixture.combobox, &fixture.state, window, cx);
+        });
+        native_action(&mut fixture.window, option, AccessibilityAction::Click);
+        fixture
+            .window
+            .update(|_, cx| assert!(fixture.state.read(cx).selected.is_empty()));
+        assert_eq!(*fixture.counts.selected.borrow(), [0, 0]);
+        assert_eq!(fixture.counts.changes.get(), 2);
+        fixture.window.update(|window, cx| {
+            fixture.state.update(cx, |state, cx| {
+                state.selected = vec![0, 1];
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            let clear = exposed_node(window, AccessibilityRole::Button, "Clear selection");
+            for _ in 0..2 {
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                    clear,
+                    AccessibilityAction::Click,
+                ));
+            }
+        });
+        fixture.window.run_until_parked();
+        fixture.window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(fixture.state.read(cx).selected.is_empty());
+            assert_active_option_is_visible(&fixture.combobox, &fixture.state, window, cx);
+        });
+        assert_eq!(*fixture.counts.selected.borrow(), [0, 0]);
+        assert_eq!(fixture.counts.changes.get(), 3);
+    }
+
+    #[::core::prelude::v1::test]
+    fn focus_loss_closes_search_and_retires_options_without_selection() {
+        let mut fixture = indexed_combobox(InputSize::Md, false);
+        fixture.window.update(|_, cx| {
+            fixture.state.update(cx, |state, cx| {
+                state.selected = vec![7];
+                cx.notify();
+            });
+        });
+        fixture.window.update(|window, cx| window.draw(cx).clear());
+        fixture.window.simulate_keystrokes("tab enter 3");
+        let (control, option) = fixture.window.update(|window, cx| {
+            window.draw(cx).clear();
+            let option =
+                assert_active_option_is_visible(&fixture.combobox, &fixture.state, window, cx);
+            (
+                exposed_node(window, AccessibilityRole::ComboBox, "Combobox"),
+                option,
+            )
+        });
+        // Options expose Click, not an independent keyboard focus target.
+        native_action(&mut fixture.window, option, AccessibilityAction::Focus);
+        fixture.window.update(|window, cx| {
+            assert!(fixture.combobox.read(cx).focus_handle.is_focused(window));
+            assert!(fixture.state.read(cx).is_open);
+            assert_active_option_is_visible(&fixture.combobox, &fixture.state, window, cx);
+        });
+        fixture.window.simulate_keystrokes("tab");
+        fixture.window.simulate_platform_frame();
+        fixture.window.simulate_platform_frame();
+        fixture.window.update(|window, cx| {
+            assert!(fixture.next_focus.is_focused(window));
+            let state = fixture.state.read(cx);
+            eprintln!(
+                "combobox_blur_after_ordinary_frames: closed={} popup_mounted={} click_handler={}",
+                !state.is_open,
+                window.accessibility_tree().nodes.contains_key(&option),
+                window.has_accessibility_action_handler(option, AccessibilityAction::Click)
+            );
+            assert!(!state.is_open);
+            assert!(state.search_text.is_empty());
+            assert_eq!(state.focused_index, None);
+            assert_eq!(state.selected, [7]);
+            assert_eq!(
+                window
+                    .accessibility_tree()
+                    .get(control)
+                    .unwrap()
+                    .active_descendant,
+                None
+            );
+            assert!(!window.accessibility_tree().nodes.contains_key(&option));
+            assert!(!window.has_accessibility_action_handler(option, AccessibilityAction::Click));
+        });
+        native_action(&mut fixture.window, option, AccessibilityAction::Click);
+        assert!(fixture.counts.selected.borrow().is_empty());
+        assert_eq!(fixture.counts.changes.get(), 0);
+        assert_eq!(fixture.counts.searches.get(), 1);
+        assert_eq!(fixture.counts.search_callbacks.get(), 1);
+        native_action(&mut fixture.window, control, AccessibilityAction::Expand);
+        fixture.window.update(|window, cx| {
+            assert_eq!(fixture.combobox.read(cx).filtered_items(cx).len(), 40);
+            assert_active_option_is_visible(&fixture.combobox, &fixture.state, window, cx);
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn state_notifications_update_ordinary_and_cached_controls_on_platform_frames() {
+        for cache_control in [false, true] {
+            let mut fixture = indexed_combobox_with_cache(InputSize::Md, false, cache_control);
+            fixture.window.simulate_platform_frame();
+            assert_eq!(
+                fixture.counts.filter_calls.get(),
+                0,
+                "closed initial render must not scan/filter items"
+            );
+            fixture.window.cx.update(|cx| {
+                // Notify only the separate state entity. No owner notify,
+                // refresh, or forced draw may make this update visible.
+                fixture.state.update(cx, |state, cx| {
+                    state.selected = vec![7];
+                    cx.notify();
+                });
+            });
+            fixture.window.simulate_platform_frame();
+            fixture.window.update(|window, _| {
+                let id = exposed_node(window, AccessibilityRole::ComboBox, "Combobox");
+                assert_eq!(
+                    window.accessibility_tree().get(id).unwrap().value,
+                    Some(kael::AccessibilityValue::Text(choice_label(7))),
+                    "state notify must redraw the control, cached={cache_control}"
+                );
+            });
+            assert_eq!(
+                fixture.counts.filter_calls.get(),
+                0,
+                "closed model redraw must not scan/filter items"
+            );
+            fixture.window.simulate_keystrokes("tab down");
+            fixture.window.simulate_platform_frame();
+            fixture.window.update(|window, cx| {
+                assert_active_option_is_visible(&fixture.combobox, &fixture.state, window, cx);
+            });
+            fixture.window.simulate_keystrokes("down");
+            fixture.window.simulate_platform_frame();
+            fixture.window.update(|window, cx| {
+                assert_eq!(fixture.state.read(cx).focused_index, Some(1));
+                assert_active_option_is_visible(&fixture.combobox, &fixture.state, window, cx);
+            });
+            fixture.window.simulate_keystrokes("3");
+            fixture.window.simulate_platform_frame();
+            fixture.window.update(|window, cx| {
+                let active =
+                    assert_active_option_is_visible(&fixture.combobox, &fixture.state, window, cx);
+                assert_eq!(
+                    window
+                        .accessibility_tree()
+                        .get(active)
+                        .unwrap()
+                        .label
+                        .as_deref(),
+                    Some(choice_label(3).as_str())
+                );
+            });
+            assert_eq!(fixture.counts.changes.get(), 0);
+            assert_eq!(fixture.counts.searches.get(), 1);
+            assert!(fixture.counts.selected.borrow().is_empty());
+        }
+    }
 
     #[test]
     fn multi_select_toggles_equal_items_without_duplicates() {
