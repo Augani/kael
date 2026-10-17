@@ -43,6 +43,14 @@ with a small RSS increase and worse CPU submission tails; it establishes no
 overall framework ranking. Shared styled labels, BOM handling and form-control
 focus/actions have fresh complete core/UI and physical Metal correctness proof.
 
+The next [animation memory checkpoint](2026-10-17-animation-memory-validation.json)
+bounds archive expansion, image decoding/resize buffers and retained frame batches,
+and adapts prefetch to the admitted byte capacity. It passes native and actual
+Chrome regressions, 2,178 core tests and the complete 39-package archive preflight.
+These scoped limits leave global memory accounting and overlapping tasks open.
+Tree disclosure, rather than ordinary scrolling, is the next code-level profiling
+lead for the general desktop comparison's CPU/RSS gap.
+
 ## Component coverage and gaps
 
 The library already contains most common controls, so component count alone is
@@ -54,7 +62,8 @@ and demanding interaction paths:
 | Large navigation | Trees, file trees, virtual lists, menus, tabs | Worker-prepared filesystem snapshots, bounded lazy loading and full logical accessibility; native workflow validation remains |
 | Workspace layout | App shell, sidebar, resizable split panes, tabs | Persistent movable docking groups and floating panes now have interaction regressions; native workflow validation remains |
 | Data applications | Data table, editable data grid, virtual spreadsheet | Real remote-data, editing, clipboard, frozen-pane, and accessibility workloads; build on existing grids |
-| Documents | Code editor, rich-text display, Markdown and HTML rendering | Verify full editing/selection/IME/undo workflows using product documents |
+| Forms and settings | Inputs, Select, Combobox, menus, sliders | Native actions, live search/selection, focus ownership and app/window deactivation |
+| Documents | Rich text, Markdown, HTML, PDF/Office and text editing | Import/export fidelity, selection, accessibility and document workflows |
 | Visual tools | Retained 2D scene, gradients, shadows, blur, charts, media controls | Portable custom fragment passes and GPU-backed targets, plus visual parity across devices |
 
 ## Implemented improvements

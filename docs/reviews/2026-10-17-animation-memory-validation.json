@@ -1,0 +1,1573 @@
+{
+  "date": "2026-10-17",
+  "scope": "General desktop animation/archive quality: finite admission, adaptive prefetch, ZIP consistency and extracted release archive verification. No editor-specific implementation, registry upload or release.",
+  "source_checkpoints": {
+    "office_zip_consistency": "2e5ae352ed899c84ef4d6598576cfcf3d7ac46c5",
+    "fork_admission_and_ci": "83190dc65173b040b3ed6c47d2b70702f4a4838c",
+    "core_batch_prefetch_and_registry_preflight": "90743b817ff7f3f29a8efd476ae4a16352d1d4f5",
+    "hash_method": "SHA-256 of immutable90743 Git blob bytes, also checked against current source bytes. All packaged Rust bytes are separately compared below.",
+    "files_sha256": {
+      ".github/workflows/platform-readiness.yml": "d637e0c1cfc77dd0a4d45cca2d57d37890d30f763b515509c158d75ade95fce9",
+      "Cargo.lock": "b1b84f981fcc7d4c0e7a60a0d08a4f5ea5f66fc5f0ed086fc40eeee6e1a70e64",
+      "Cargo.toml": "ff54489574d916c2213a0c1fc7ec8c39f677b985d5d42bb7a20c7e970333177a",
+      "crates/kael/Cargo.toml": "1a65bcdcf58fe561a5c935df3ce325a804b638c8baf0fbe3d179ba76d9230af0",
+      "crates/kael/src/elements/lottie.rs": "e05cb9205802f3f2f7619e2b25dca29b378cdb0381cef0cb38029f7fd8e8a52b",
+      "crates/kael/src/lottie.rs": "f8a4fa1907c5a0596cf480ad620c2b55ba97e1dfca9d72327e2c0db0f5ae00fe",
+      "crates/kael_office/Cargo.toml": "31497b01b398d6dfbc359b37319a41649426b377487c6d609b2058124303d731",
+      "crates/kael_office/src/lib.rs": "4fb7b83f1214df52e9ff3f3efd9991c3997412ec3f34df2facd9c34828722945",
+      "crates/kael_office/src/tests.rs": "9cd583af1802b71e08010ee4c674ba99a74b10c2528c1bf46e1f084f65f3c8cb",
+      "scripts/ci/verify-lottie-admission.py": "35f87945a3be17485773cae82fe6810e16569e6104189f3cc61866abcd0c4c45",
+      "scripts/ci/verify-rasterlottie-fork.py": "26cac30c02f94497d7bc007a935ab31ee83acc5dddf4a08495bccb27cffba0f6",
+      "scripts/publish-all.sh": "b55fbaeaa8df119cf2371a68598d15581c82e7d8ef77a1c88da461f1a68b81e9",
+      "vendor/rasterlottie/Cargo.toml": "69813f43b14e58d04fd8ec336683abab300ad5bc3fed0709919da4ab67be69a4",
+      "vendor/rasterlottie/PATCHES.md": "377cd170fa344124802c98a29440bddae88943a78eeee2f1db0185e78c288306",
+      "vendor/rasterlottie/UPSTREAM-SHA256.json": "506ab0a085c8f868ce00275d0f13bffe87f73cdbc9ca5c85b111eb641778d1c0",
+      "vendor/rasterlottie/src/dotlottie.rs": "8be7b6477cbd3b0e3cb0e4a9508ca7f5a90af93220a2d3cea9b293b25b94b4b9",
+      "vendor/rasterlottie/src/lib.rs": "db2e4fce4d56e3c13782ad0944cc5d7925c1e33421e071e9aa0b2f6e3304cbf8",
+      "vendor/rasterlottie/src/model.rs": "3c95370398e3de84c342d37380c6b6f01094ede76a6e0f4515746395c019137a",
+      "vendor/rasterlottie/src/render/assets.rs": "e9be17b97083dabfbd899ddb7d11b8e3712863141a3bc0a8a005bbc2f7980c7d",
+      "vendor/rasterlottie/src/render/mod.rs": "81a5030b444d1f1a6a357f4563bdef328ff012eb6352e630d9cdb2c2205af1fc",
+      "vendor/rasterlottie/src/render/renderer/mod.rs": "6601d492f86c07f5b7766633fe8d77e5bda38eb172dde37cf5bc2d12e23846ca",
+      "vendor/rasterlottie/src/render/renderer/prepare.rs": "9d86375ef010336e837af0d23731010f6e635656c61d250dfa0e39f2483b249a",
+      "vendor/rasterlottie/src/render/renderer_types.rs": "177855d052706130f5456ff19ade22c68a2cdd71dc554b41c901c2d58fc2f441",
+      "vendor/rasterlottie/tests/zip9_compatibility.rs": "783d329053ec5d0ed596be7466f56a9822b6b0b92094a3e189b8aaaa08887980",
+      "vendor/rasterlottie/zip9-compatibility.patch": "be2c1ffe89b0910520d1709e728ab931ef74d77e96f2919a45ccc509088820dc"
+    }
+  },
+  "archive_and_image_admission": {
+    "scope": "Bounded archive/image admission beyond the dependency-only ZIP9 migration. Owned vendor Rust/API/tests only; no Kael API, Cargo, lockfile, index or publication changes.",
+    "baseline_commit": "d40166fb132dd2c24cd93c44017b919daf21339f",
+    "sources": [
+      {
+        "path": "vendor/rasterlottie/src/dotlottie.rs",
+        "sha256": "8be7b6477cbd3b0e3cb0e4a9508ca7f5a90af93220a2d3cea9b293b25b94b4b9",
+        "bytes": 20142
+      },
+      {
+        "path": "vendor/rasterlottie/src/lib.rs",
+        "sha256": "db2e4fce4d56e3c13782ad0944cc5d7925c1e33421e071e9aa0b2f6e3304cbf8",
+        "bytes": 968
+      },
+      {
+        "path": "vendor/rasterlottie/src/model.rs",
+        "sha256": "3c95370398e3de84c342d37380c6b6f01094ede76a6e0f4515746395c019137a",
+        "bytes": 17895
+      },
+      {
+        "path": "vendor/rasterlottie/src/render/assets.rs",
+        "sha256": "e9be17b97083dabfbd899ddb7d11b8e3712863141a3bc0a8a005bbc2f7980c7d",
+        "bytes": 27505
+      },
+      {
+        "path": "vendor/rasterlottie/src/render/mod.rs",
+        "sha256": "81a5030b444d1f1a6a357f4563bdef328ff012eb6352e630d9cdb2c2205af1fc",
+        "bytes": 620
+      },
+      {
+        "path": "vendor/rasterlottie/src/render/renderer/mod.rs",
+        "sha256": "6601d492f86c07f5b7766633fe8d77e5bda38eb172dde37cf5bc2d12e23846ca",
+        "bytes": 683
+      },
+      {
+        "path": "vendor/rasterlottie/src/render/renderer/prepare.rs",
+        "sha256": "9d86375ef010336e837af0d23731010f6e635656c61d250dfa0e39f2483b249a",
+        "bytes": 4604
+      },
+      {
+        "path": "vendor/rasterlottie/src/render/renderer_types.rs",
+        "sha256": "177855d052706130f5456ff19ade22c68a2cdd71dc554b41c901c2d58fc2f441",
+        "bytes": 15743
+      },
+      {
+        "path": "vendor/rasterlottie/tests/zip9_compatibility.rs",
+        "sha256": "783d329053ec5d0ed596be7466f56a9822b6b0b92094a3e189b8aaaa08887980",
+        "bytes": 22022
+      }
+    ],
+    "logs": [
+      {
+        "path": ".artifacts/2026-10-17-lottie-memory-admission/admission-red.log",
+        "sha256": "ab99968ea7c44ea3db4556dae31d37e0aadc7176f92e685dcb1ce524a111aeef",
+        "bytes": 1962
+      },
+      {
+        "path": ".artifacts/2026-10-17-lottie-memory-admission/triangle-weights-red.log",
+        "sha256": "65de2d1290f1a8cfe13d9b94c067572a1e85a445d7aaa89f06a6e6edeffa5f8e",
+        "bytes": 944
+      },
+      {
+        "path": ".artifacts/2026-10-17-lottie-memory-admission/duplicate-entry-red.log",
+        "sha256": "ed9b94bb70b00cb910fa0b9bb02da9d5e8bb54c3fb7535bdebc56fbaba573433",
+        "bytes": 944
+      },
+      {
+        "path": ".artifacts/2026-10-17-lottie-memory-admission/fork-native-all-features.log",
+        "sha256": "e1ec5065988757c4d550db5ebce179a7337bf8ff7e1ed8dca922df53ac5f7fe8",
+        "bytes": 12461
+      },
+      {
+        "path": ".artifacts/2026-10-17-lottie-memory-admission/fork-browser.log",
+        "sha256": "b1b1a4e76c855461d06956f73d9e4d63e9b76e99230884f8eafd64074d13cacf",
+        "bytes": 1784
+      },
+      {
+        "path": ".artifacts/2026-10-17-lottie-memory-admission/fork-clippy.log",
+        "sha256": "3f48ab83a8e83c0cc9a97767a2939edf66cb69b9f63cf504796345fd1551254f",
+        "bytes": 165
+      },
+      {
+        "path": ".artifacts/2026-10-17-lottie-memory-admission/fork-minimal-check.log",
+        "sha256": "58c02275959cafc5f50b4efe367f8e21f68fd1dc70e6bface80e63b31dce3160",
+        "bytes": 375
+      },
+      {
+        "path": ".artifacts/2026-10-17-lottie-memory-admission/fork-dotlottie-only-check.log",
+        "sha256": "5092494dc3ba94090954f4d30dde123c11733f55732a2d6776264c40313420a2",
+        "bytes": 247
+      }
+    ],
+    "validation": {
+      "native_all_features": {
+        "unit": 116,
+        "corpus": 1,
+        "golden": 1,
+        "integration": 14,
+        "doctest": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      "chrome_wasm32_integration": {
+        "passed": 15,
+        "failed": 0,
+        "ignored": 0
+      },
+      "strict_all_features_all_targets_clippy": "PASS -D warnings",
+      "minimal_feature_check": "PASS",
+      "dotlottie_without_images_check": "PASS",
+      "diff_check": "PASS"
+    },
+    "commands": {
+      "native": "KAEL_HEADLESS=1 CARGO_TARGET_DIR=/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target cargo test --locked -p kael_rasterlottie --all-features",
+      "clippy": "KAEL_HEADLESS=1 CARGO_TARGET_DIR=/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target cargo clippy --locked -p kael_rasterlottie --all-features --all-targets -- -D warnings",
+      "browser": "env CHROMEDRIVER=/Users/augustusotu/Projects/kael/.artifacts/browser-tools/chromedriver WASM_BINDGEN_TEST_WEBDRIVER_JSON=/Users/augustusotu/Projects/kael/.artifacts/browser-tools/webdriver.json CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner WASM_BINDGEN_TEST_TIMEOUT=60 CARGO_TARGET_DIR=/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target cargo test --locked -p kael_rasterlottie --no-default-features --features dotlottie,images,text --target wasm32-unknown-unknown --test zip9_compatibility"
+    },
+    "default_archive_limits": {
+      "max_archive_bytes": 16777216,
+      "max_entries_after_metadata_construction": 4096,
+      "max_manifest_bytes": 1048576,
+      "max_animation_bytes": 16777216,
+      "max_image_bytes": 16777216,
+      "max_total_expanded_bytes": 67108864
+    },
+    "default_image_limits": {
+      "max_dimension": 8192,
+      "max_encoded_bytes": 16777216,
+      "max_total_resolved_encoded_bytes": 67108864,
+      "max_decode_bytes": 268435456,
+      "max_rgba_bytes": 268435456,
+      "max_working_bytes": 536870912,
+      "max_total_decoded_bytes": 268435456
+    },
+    "deterministic_evidence": [
+      "Rejected declared archive entry performs zero payload reads and zero output reservations.",
+      "Underdeclared generic reader consumes at most remaining limit+1 bytes; EOF read preserves ZIP CRC validation.",
+      "Admitted32KiB entry crossing four chunks performs one fallible buffer reservation.",
+      "Rejected image budgets perform zero pixel decoder/resize calls.",
+      "Corrupt IDAT enters pixel decoder, fails, and rolls back only its reservation; subsequent valid image succeeds.",
+      "Cache hits reuse Arc and do not recharge decoded bytes.",
+      "Late-frame image admission returns an actionable error without evicting/recharging previously cached image.",
+      "Raised wasm32 policy still rejects a2.4GB target before ImageBuffer capacity overflow."
+    ],
+    "red_to_green": {
+      "dependency_baseline": [
+        "overexpanded1MiB manifest accepted",
+        "8193x1 target accepted with only~32KiB allocation"
+      ],
+      "review_fixes": [
+        "60KiB policy admitted grayscale1x8192->1x1 before weights charged",
+        "duplicate local/central directory names accepted before ZIP9 header consistency enabled"
+      ]
+    },
+    "limits": [
+      "These are finite admission limits for requested buffers, not hard allocator/processRSS/GPU/global budgets.",
+      "ZIP compressed source is checked before construction. Entry count is checked afterward and does not bound constructor central-directory metadata allocation; ZIP9 may retry earlier EOCD candidates, so the Office single-footer preflight is not a proven general fix.",
+      "Expanded totals charge every actually materialized manifest/selectedJSON/image read including repeated paths; unused archive entries are not decompressed. Base64 strings can take about4/3 image bytes, and model/metadata allocations are additional.",
+      "Image working accounting includes native decoder output, RGBA conversion, target, actual cross-aspect RGBA32F intermediate and conservatively rounded sampling-weight capacities. Decoder-private allocations/image max_alloc enforcement remain best effort; allocator overhead is additional.",
+      "External resolver callbacks allocate before returning; per-return and aggregate guards reject their returned bytes before retaining/copying, but do not bound callback-owned allocation. Inline URLs live in the already-parsed model.",
+      "Decoded totals belong to one prepared animation, worker clones have independent budgets. Existing Kael cache uses only finite default policy; custom Kael policy was not added.",
+      "Upstream unused malformed image assets remain lazy. Public additive limits allow explicit raised/tighter policies, subject to checked arithmetic and isize buffer representability."
+    ]
+  },
+  "retained_frames_and_adaptive_prefetch": {
+    "scope": "Adaptive per-animation prefetch/cache capacity using the shared exact output-canvas plan and per-call256MiB retained-frame budget. Two Kael files only; no public/global policy or fork changes.",
+    "sources": [
+      {
+        "path": "crates/kael/src/lottie.rs",
+        "sha256": "f8a4fa1907c5a0596cf480ad620c2b55ba97e1dfca9d72327e2c0db0f5ae00fe"
+      },
+      {
+        "path": "crates/kael/src/elements/lottie.rs",
+        "sha256": "e05cb9205802f3f2f7619e2b25dca29b378cdb0381cef0cb38029f7fd8e8a52b"
+      }
+    ],
+    "logs": [
+      {
+        "path": ".artifacts/2026-10-17-lottie-memory-admission/adaptive-prefetch-red.log",
+        "sha256": "ed4468849baa807fe0b7a58ee0bc22df1b41f05a525e98586bcc12672a3767f3"
+      },
+      {
+        "path": ".artifacts/2026-10-17-lottie-memory-admission/adaptive-prefetch-green.log",
+        "sha256": "a30dcf6d31018aa44629fc327e30602e5d9a3e12ec4de4e12408c5dc0978cdfa"
+      }
+    ],
+    "validation": {
+      "focused_lottie_passed": 16,
+      "failed": 0,
+      "ignored": 0,
+      "diff_check": "PASS"
+    },
+    "admission": "Shared render plan preserves requested validation, exact pinned-fork f32ceil actual dimensions and checked frame bytes. Capacity=min(256,256MiB/frame_bytes); if one frame does not fit, return an error. Renderer still rejects batches above per-call budget independently.",
+    "caller": "Compute admitted effective count before sync_animation, cache limit, pending-batch insertion and index planning; configured prefetch remains an upper bound. Zero admission yields no planned task and no recurring animation-frame wake. Player elapsed state remains active for later valid redraw/resize.",
+    "red_to_green": "Under8byte capacity, a configured1000 on a30-frame1pixel looping animation planned30distinct indices before clamping instead of2. The maintained test now renders/inserts2-frame8byte batches as current frame advances0->1->29->1 across wrap, retaining at most2cached frames.",
+    "regressions": [
+      "4byte1pixel exact capacity1; below-one-frame3byte budget rejects;8byte capacity2; default count<=256.",
+      "Existing exact8/7byte batch guard and no-preparation/no-pixel rejection checks remain green.",
+      "13x1\u2192requested7x7 actuallyrenders8x1;1x8192\u219210000x1 actuallyrenders1x1; capacity and renderer share the same math.",
+      "Zero admission produces empty plan and false wake flag without stopping player. Restoring admission at1120ms advances toframe3, resumes2indices and true wake flag."
+    ],
+    "limits": [
+      "Bounds one batch and the paint-time cache target, not all concurrent/detached old tasks, poster images, prepared assets, renderer/layer scratch or processRSS.",
+      "Cache minimum remains1 for zero admission, allowing a prior fallback frame; no new pixels are admitted. Request-layout may retain the configured cache target temporarily; paint reapplies effective count before insertion/planning.",
+      "Root owns final broad core/Clippy and39-package publication preflight."
+    ],
+    "command": "KAEL_HEADLESS=1 CARGO_TARGET_DIR=/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target cargo test --locked -p kael --lib --no-default-features --features font-kit,test-support,lottie lottie -- --nocapture"
+  },
+  "original_batch_gap": {
+    "accepted_bytes_in_principle": 68719476736,
+    "actually_allocated_in_tests": false,
+    "new_per_call_retained_bytes": 268435456,
+    "safe_red_log": ".artifacts/2026-10-17-lottie-memory-admission/batch-retention-red.log",
+    "historical_intermediate_evidence": ".artifacts/2026-10-17-lottie-memory-admission/batch-evidence.json",
+    "note": "The intermediate batch-only source hash is historical; final two-file source and validation use90743 and adaptive-prefetch-evidence."
+  },
+  "office": {
+    "passed": 8,
+    "failed": 0,
+    "ignored": 0,
+    "genuine_red_existing_passed": 6,
+    "genuine_red_new_failed": 2,
+    "production_fix": "ZIP9 ZipReadOptions::enforce_header_consistency(true) per indexed read, retaining existing UTF-8/path/size checks.",
+    "strict_all_targets_clippy": "pass",
+    "wasm32_library_check": "pass"
+  },
+  "final_core_consumer_checks": {
+    "commands": [
+      {
+        "check": "core",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "kael",
+          "--lib",
+          "--no-default-features",
+          "--features",
+          "font-kit,test-support,lottie",
+          "--",
+          "--test-threads=1"
+        ],
+        "log": ".artifacts/2026-10-17-lottie-final-core.log",
+        "exit_code": 0
+      },
+      {
+        "check": "native-clippy",
+        "command": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "kael",
+          "-p",
+          "kael_ui",
+          "-p",
+          "kael_office",
+          "-p",
+          "kael_rasterlottie",
+          "--all-targets",
+          "--features",
+          "kael/lottie",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "log": ".artifacts/2026-10-17-lottie-final-native-clippy.log",
+        "exit_code": 0
+      },
+      {
+        "check": "wasm-kael",
+        "command": [
+          "cargo",
+          "check",
+          "--locked",
+          "-p",
+          "kael",
+          "--target",
+          "wasm32-unknown-unknown",
+          "--no-default-features",
+          "--features",
+          "browser,lottie"
+        ],
+        "log": ".artifacts/2026-10-17-lottie-final-wasm-kael.log",
+        "exit_code": 0
+      }
+    ],
+    "core": {
+      "passed": 2178,
+      "failed": 0,
+      "ignored": 2,
+      "filtered": 0,
+      "ignored_names": [
+        "platform::mac::display_link::tests::native_retained_display_link_probe",
+        "platform::mac::text_system::tests::native_sized_font_shaping_diagnostic"
+      ],
+      "ignored_scope": "Opt-in physical diagnostics; these two were not re-executed for this animation checkpoint. Earlier matching-source probe evidence remains separately scoped."
+    },
+    "strict_native_all_targets_clippy": "pass with-Dwarnings",
+    "wasm32_kael_browser_lottie": "pass",
+    "format": "pass",
+    "documentation_pages_verified": 46,
+    "workflow_lint": "pass"
+  },
+  "mandatory_ci_verifier_local_execution": {
+    "native": {
+      "schema_version": 1,
+      "backend": "native",
+      "suite_passes": [
+        116,
+        1,
+        1,
+        14,
+        2
+      ],
+      "runtime_log_sha256": "dc0c1bed2a0728cef71b91e1ab5680286925122584f933aac99c96b3873d9a63",
+      "total_passed": 134
+    },
+    "chrome": {
+      "schema_version": 1,
+      "backend": "chrome",
+      "wasm_path": "/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target/wasm32-unknown-unknown/debug/deps/zip9_compatibility-413d55123756edd4.wasm",
+      "wasm_sha256": "7771e23c4af72bb05ac12594f94e1ee3797a7fc4ef092afa47990dbacb339ad0",
+      "suite_passes": [
+        15
+      ],
+      "runtime_log_sha256": "d1a8d722a1f7544b37fee67de4eedbbe81aa28edd1f2c382ce9ef0922d68979d",
+      "total_passed": 15
+    },
+    "negative_probes": "Reject empty/ignored/filtered/skipped/missing/wrong-verdict results and foreign/missing/nonregular Cargo artifacts.",
+    "ci_scope": "These are local executions of the new mandatory helper. Fresh hosted CI on these commits is separate."
+  },
+  "fork_provenance_verification": {
+    "result": "pass",
+    "archive_sha256": "384686130a2b365f82258f5e444c512e57989addcf2b45e9913c4ef6f0e95a24",
+    "offline_verifier": {
+      "path": ".artifacts/2026-10-17-lottie-provenance-verification/offline-verifier.log",
+      "sha256": "e77f74c25e2fdff9d84842236d2b4ce2920c8ab05db52c0a7c5c456a56056b4b"
+    },
+    "negative_probes": {
+      "path": ".artifacts/2026-10-17-lottie-provenance-verification/negative-probes.json",
+      "sha256": "fa5ec96db034acd8fd9ea85bfbe757d2c28d3bc1c5d1557546d64c9d7d848ed6",
+      "rejected": 11
+    },
+    "memory_sources_unchanged": 9,
+    "pristine_upstream_index_unchanged": true,
+    "unified_patch_context_lines": 0,
+    "patch_note": "Standard zero-context unified diff avoids whitespace-only context lines. Original archive hashes, exact changed-file/addition sets, zero fuzz, and complete reconstructed file hashes are all enforced.",
+    "owned_files": [
+      {
+        "path": "scripts/ci/verify-rasterlottie-fork.py",
+        "bytes": 13139,
+        "sha256": "26cac30c02f94497d7bc007a935ab31ee83acc5dddf4a08495bccb27cffba0f6"
+      },
+      {
+        "path": "vendor/rasterlottie/PATCHES.md",
+        "bytes": 10056,
+        "sha256": "377cd170fa344124802c98a29440bddae88943a78eeee2f1db0185e78c288306"
+      },
+      {
+        "path": "vendor/rasterlottie/zip9-compatibility.patch",
+        "bytes": 102434,
+        "sha256": "be2c1ffe89b0910520d1709e728ab931ef74d77e96f2919a45ccc509088820dc"
+      }
+    ]
+  },
+  "publication_preflight": {
+    "result": "pass",
+    "command": "SSL_CERT_FILE=/etc/ssl/cert.pem CARGO_TARGET_DIR=/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target bash scripts/publish-all.sh --preflight",
+    "fresh_staging": "/var/folders/8f/l7zyp8_15jl68g9stnzw7lvw0000gn/T/kael-package-preflight.kTeUd2",
+    "isolated_extracted_archives_built": 39,
+    "registry_uploads": 0,
+    "initial_red": "Cargo1.97 rejected mixed publish settings without an explicit registry. The final command selects crates-io for packaging; no gate or publish restriction was removed.",
+    "independent_archive_audit": {
+      "schema_version": 1,
+      "verified_at_utc": "2026-10-17T20:43:59.851326+00:00",
+      "source_commit_for_byte_comparison": "90743b817ff7f3f29a8efd476ae4a16352d1d4f5",
+      "archive_count": 39,
+      "metadata_sha256": "830d763d19447b9b9241399ec1875366261fa7e903bf9d1e2780f9ebcf5feb29",
+      "verifier_sha256": "faa2008f23a38946678f5a1e96b8e03220df92eea8aeaa601ee17befd7ef4709",
+      "max_compressed_archive_bytes": 10485760,
+      "archive_bytes": 6019103,
+      "rust_file_count": 928,
+      "rust_bytes": 23222165,
+      "all_included_rust_files_match_source_commit": true,
+      "archived_vcs_metadata_histogram": {
+        "{\"sha1\": \"83190dc65173b040b3ed6c47d2b70702f4a4838c\"}": 30,
+        "{\"sha1\": \"90743b817ff7f3f29a8efd476ae4a16352d1d4f5\"}": 9
+      },
+      "archived_vcs_dirty_field_histogram": {
+        "absent": 39
+      },
+      "limitations": [
+        "Archived VCS IDs/dirty flags are reported as packaged; Rust bytes were independently compared with the named immutable source commit.",
+        "An absent archived VCS dirty field is unknown metadata, not proof of a clean or dirty packaging checkout.",
+        "This artifact audit performs no build, upload, registry publication, native UI, GPU, browser, or performance measurement.",
+        "Every included Rust file was checked; package include rules intentionally omit some checkout sources, examples and benchmarks."
+      ],
+      "packages_in_publish_order": [
+        {
+          "name": "kael_sum_tree",
+          "version": "0.4.1",
+          "archive_bytes": 24415,
+          "archive_sha256": "c6c7609cb27acab29941d5844be9578a7366f529925fe589180659683ce543e1",
+          "file_count": 9,
+          "rust_file_count": 3,
+          "rust_bytes": 98712,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/sum_tree"
+          },
+          "cargo_vcs_info_sha256": "e4cecb09d98370c9c093a4bbff964bb444eacf5042a133a4ee33a77d25ff5051",
+          "original_manifest_sha256": "5cb823ba8feb3e5889f0ca6d0d56b290edcd8e7b9d8f5467d3e14dcd52fbf981",
+          "normalized_manifest_sha256": "7302ae0e8cb1335103a40eab198345d73409ed36198152acab19d77a267803e0",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/sum_tree"
+        },
+        {
+          "name": "kael_storage",
+          "version": "0.4.1",
+          "archive_bytes": 38211,
+          "archive_sha256": "1a67d48a45abb6d00ed4fb5bb7eb74e3d05711b3e93724142ec3fe9d9aba2eae",
+          "file_count": 20,
+          "rust_file_count": 14,
+          "rust_bytes": 117915,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/kael_storage"
+          },
+          "cargo_vcs_info_sha256": "aaf72dee6f8fc3721386118b91abe2a02a684112f3da99968dbf9d12ec73d297",
+          "original_manifest_sha256": "bc5330444b2329dd8c9b1f0d624d65cfef3b7176b8276e4ba41bd29034aa02e8",
+          "normalized_manifest_sha256": "6bfffd1817b432d505736e6afde813142ce6375a6b769922ffe8b042de9b6b5f",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/kael_storage"
+        },
+        {
+          "name": "kael_share",
+          "version": "0.4.1",
+          "archive_bytes": 33967,
+          "archive_sha256": "c33ef205462d49b59cce8f9d75e6b52c7558961b5e69a3caf2991f27cfbfd5ac",
+          "file_count": 13,
+          "rust_file_count": 7,
+          "rust_bytes": 83466,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/kael_share"
+          },
+          "cargo_vcs_info_sha256": "c9502d40be136a934c1d17eb915c07007cd0ed1676f0f6fc0a7a2b95d55ad5f7",
+          "original_manifest_sha256": "e8607aef232888f161c000afbbe7032e18f9eecc31de9e97db1f89bdd53105b5",
+          "normalized_manifest_sha256": "27b47f81ee5e7c81f47ae4aada47267663e7c946423a04d07efedcaad12b51db",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/kael_share"
+        },
+        {
+          "name": "kael_semantic_version",
+          "version": "0.4.1",
+          "archive_bytes": 8002,
+          "archive_sha256": "145ebe58c6728ed881cfb1e4792ab1945fd36b7deb5a9c01905fb6348e5810c2",
+          "file_count": 7,
+          "rust_file_count": 1,
+          "rust_bytes": 7185,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/semantic_version"
+          },
+          "cargo_vcs_info_sha256": "8b15e122a10d2344cc53e0ca0be74bb2a9a77359cd3235fa42a2704bb034071d",
+          "original_manifest_sha256": "49bdb1e8418f7c848be114b55d05f2ddb84288743c3b7548f6c833cbb41e6c78",
+          "normalized_manifest_sha256": "4b253096985ef3425fab54eaacbf2103c4b2b62fd6c87f263482f01568de01d4",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/semantic_version"
+        },
+        {
+          "name": "kael_secrets",
+          "version": "0.4.1",
+          "archive_bytes": 22099,
+          "archive_sha256": "e94f301ac8152126ed32207090254e8c3e30790119df168e82026c831a1a1cea",
+          "file_count": 7,
+          "rust_file_count": 1,
+          "rust_bytes": 25753,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/kael_secrets"
+          },
+          "cargo_vcs_info_sha256": "79cc97eeb3c149d7fe146768c350e0db121acf5cc769be870639bc3256511592",
+          "original_manifest_sha256": "7b71fb41c51cd49e4de47e72dc1c89c05e57b1a128c15913b55ed7c65b0a76fe",
+          "normalized_manifest_sha256": "1b3286bbeeff5f4ad372a91ef4487112550c76ba02e31494de5524ce214a37ca",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "cbb992e7014547a4d3ebda7a82a5e88b34b9dab959974d3180534f01fd8cf533"
+          },
+          "source_crate_root": "crates/kael_secrets"
+        },
+        {
+          "name": "kael_render_graph",
+          "version": "0.4.1",
+          "archive_bytes": 43807,
+          "archive_sha256": "ff68e37cd1bc14897618e83d9d647bb1f47e5227b8953c14f13df0924aa21a1d",
+          "file_count": 7,
+          "rust_file_count": 1,
+          "rust_bytes": 205886,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/kael_render_graph"
+          },
+          "cargo_vcs_info_sha256": "21aaec4a4465897b41b32a554baca4650791523d3e48de302c569c3338a29764",
+          "original_manifest_sha256": "1a77d73a6a2d845cf097eacbd4b74083f562a711159302ed5050abcd2b9ce8ba",
+          "normalized_manifest_sha256": "5f6887f946dc093752885894480b88b3e22c0b1c88e8dfe1737ed0a6c9ea0ca3",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "cbb992e7014547a4d3ebda7a82a5e88b34b9dab959974d3180534f01fd8cf533"
+          },
+          "source_crate_root": "crates/kael_render_graph"
+        },
+        {
+          "name": "kael_release",
+          "version": "0.4.1",
+          "archive_bytes": 31057,
+          "archive_sha256": "8dfa3e6f6ba19f4fd8bab1cae154e5ba601dbd145142a9f911a9188b7c2b1d0a",
+          "file_count": 13,
+          "rust_file_count": 7,
+          "rust_bytes": 79279,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/kael_release"
+          },
+          "cargo_vcs_info_sha256": "7c2a83d7272e92e0053dd1ad22480e445c3e6b9df7b569c7cb90e06ccbaa0fc3",
+          "original_manifest_sha256": "cbd805f0b1b5f1ccd6c466fb6872cb3314490df63f85c62b8c7d31c917b9708c",
+          "normalized_manifest_sha256": "6392104dbc46b85abedf9253096685e3578697b3c01e9d0b31eddf4fbfa5d6e7",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/kael_release"
+        },
+        {
+          "name": "kael_pdf",
+          "version": "0.4.1",
+          "archive_bytes": 45791,
+          "archive_sha256": "a18f53e08292e0c0a2d002ec5122f22aee21c9b754af81a83c7a75daeca35d47",
+          "file_count": 18,
+          "rust_file_count": 12,
+          "rust_bytes": 129616,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/kael_pdf"
+          },
+          "cargo_vcs_info_sha256": "5be4a3f53cf55e207a457273a91e162206d77806509ad0b4aa3fb105043108cd",
+          "original_manifest_sha256": "5ecac9c9925fa299f899d9225e1283ae29ea485cd0c405f3af9417c17ff28dc2",
+          "normalized_manifest_sha256": "a260736c5a0c6a335f41bb562dcba48be4e6d1c8f22a3a7ccf8d89104223f176",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/kael_pdf"
+        },
+        {
+          "name": "kael_office",
+          "version": "0.4.1",
+          "archive_bytes": 24707,
+          "archive_sha256": "a24358dcb8bd53202e3476b4e7113ed5fef8b66d930981998dfbd77b69013edc",
+          "file_count": 9,
+          "rust_file_count": 3,
+          "rust_bytes": 70046,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/kael_office"
+          },
+          "cargo_vcs_info_sha256": "d30e8b5ef10e2a6ea744e6d196dea512eae6bbbdce6b86d480e9480de8087f96",
+          "original_manifest_sha256": "31497b01b398d6dfbc359b37319a41649426b377487c6d609b2058124303d731",
+          "normalized_manifest_sha256": "8cd424dc7888c4bb8b9e8bc89fe3a5931398c0655ad0d4cbd81a79d81c057930",
+          "lockfile_zip_versions": [
+            "9.0.5"
+          ],
+          "licenses": {
+            "LICENSE-APACHE": "32ba437684efdac193c8f18374470790b13ac8ffa6d139dcf53f23d4496c98b9"
+          },
+          "source_crate_root": "crates/kael_office",
+          "office_zip_dependency": {
+            "version": "9",
+            "features": [
+              "deflate-flate2"
+            ],
+            "default-features": false
+          }
+        },
+        {
+          "name": "kael_notifications",
+          "version": "0.4.1",
+          "archive_bytes": 34953,
+          "archive_sha256": "aa704d7649f7c173ed60768af42ab67de76d99310136826b89e7bf70ebeda458",
+          "file_count": 16,
+          "rust_file_count": 10,
+          "rust_bytes": 90275,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/kael_notifications"
+          },
+          "cargo_vcs_info_sha256": "9a7c4ec433663e44549ba734c8bc73565e517c87877d4590ae300e9387f35153",
+          "original_manifest_sha256": "b148cfa139fb1e070de6a480eab9a71a2f75045f5fc7357679f9bfb6714560cb",
+          "normalized_manifest_sha256": "d8bf17969f05186c710ad0ab8b442bb538030d2f73e260cefc1c393558bb987a",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/kael_notifications"
+        },
+        {
+          "name": "kael_media_sys",
+          "version": "0.4.1",
+          "archive_bytes": 13255,
+          "archive_sha256": "12e9d8a2c5d72ac16187de671a687aeff2b2284d77432acf9a9f63025b7833f5",
+          "file_count": 8,
+          "rust_file_count": 2,
+          "rust_bytes": 24950,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/media"
+          },
+          "cargo_vcs_info_sha256": "bce148f5f61234a50d0239e68a7aa57f2e380a880a2be2abb5867fc59b92c820",
+          "original_manifest_sha256": "01cb83234d0e58e948b51f9ecfd1a345c802d0a7e9210901357cb7a0d409476d",
+          "normalized_manifest_sha256": "00c2d1f046673ef6aa7d4634ad4b44c71895a7055951d2cb58ed60cc402824c2",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/media"
+        },
+        {
+          "name": "kael_markdown",
+          "version": "0.4.1",
+          "archive_bytes": 11075,
+          "archive_sha256": "fddc70f3ced86e192f40cbe4add8453f4bb4133737308e511debc7ec14692019",
+          "file_count": 7,
+          "rust_file_count": 1,
+          "rust_bytes": 26410,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "90743b817ff7f3f29a8efd476ae4a16352d1d4f5"
+            },
+            "path_in_vcs": "crates/kael_markdown"
+          },
+          "cargo_vcs_info_sha256": "8571c47d61f5c33ce49056614c2dadbf2a3b336e1b2c34fadd415e63c23e3bcf",
+          "original_manifest_sha256": "4231091849cbc2a241fb570a6cb1e03cc7cf4ebba81cac6b3fbcff11675217e8",
+          "normalized_manifest_sha256": "6c3096164de15cb894d75aaa143d8f99a537e443e5c77ad8cf5f9285c821922d",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/kael_markdown"
+        },
+        {
+          "name": "kael_icons",
+          "version": "0.4.1",
+          "archive_bytes": 17003,
+          "archive_sha256": "b2a9a98c5d1bef8c5d47b899f590b16287be347694ec6ed21b8f7d4dbd8c1319",
+          "file_count": 106,
+          "rust_file_count": 4,
+          "rust_bytes": 15139,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/kael_icons"
+          },
+          "cargo_vcs_info_sha256": "60a24168b8afecb67becec46d4b2f67892d3a3bb2a44022b7263d408198cdcae",
+          "original_manifest_sha256": "3aef0e88f98ce010859a059e9a7d896de8e125bf263bf60d9f70184624610fa3",
+          "normalized_manifest_sha256": "ebbbb1ed16771788a94cf4fab9625263ef2106b31115b1cd197a7f1d68503668",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a",
+            "LICENSE-LUCIDE": "3c57143f22dac950efebf84002e360bba5458c7b90fe583b0667aaaef1a7256e",
+            "THIRD_PARTY_LICENSES.md": "8b9b7ab3cce9bc564549a82b003d158ea1deb78cbb8f624d2efb86452b8e0017"
+          },
+          "source_crate_root": "crates/kael_icons"
+        },
+        {
+          "name": "kael_i18n",
+          "version": "0.4.1",
+          "archive_bytes": 14567,
+          "archive_sha256": "0947859e7635bdb263437ffd0195605637c2e33c8c8e516296ee50f4c3cea6c7",
+          "file_count": 11,
+          "rust_file_count": 5,
+          "rust_bytes": 39372,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "90743b817ff7f3f29a8efd476ae4a16352d1d4f5"
+            },
+            "path_in_vcs": "crates/kael_i18n"
+          },
+          "cargo_vcs_info_sha256": "93436e5e2c53d923dc5324d03efbe12c31ee189f30c49940e86565ea6e9a7dd5",
+          "original_manifest_sha256": "31cea708fd9205331f1548b6c9962c6d197eaa2339fa372dc2f4b09832f0f29f",
+          "normalized_manifest_sha256": "12fcd057f44de1526f7df2d9540f308879de5fc56d6c966151ba58448c2ab9fb",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/kael_i18n"
+        },
+        {
+          "name": "kael_gpu_budget",
+          "version": "0.4.1",
+          "archive_bytes": 9999,
+          "archive_sha256": "365fc7b033aa38e70cb98959bfe5529b5aac4cae68c752c27bac44ba6721bf07",
+          "file_count": 7,
+          "rust_file_count": 1,
+          "rust_bytes": 7468,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/kael_gpu_budget"
+          },
+          "cargo_vcs_info_sha256": "e85268e903567c514dd1e3ff8628b266db159a878f339d70bea918514e127933",
+          "original_manifest_sha256": "ae2e7c62336b2e570a0837ced3632f3439f0965e88321479d6b182c83d4d419c",
+          "normalized_manifest_sha256": "e8a807a6a73e45528b09407a222e116e9fa69554615fff91af80f25ef1b20ccb",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "cbb992e7014547a4d3ebda7a82a5e88b34b9dab959974d3180534f01fd8cf533"
+          },
+          "source_crate_root": "crates/kael_gpu_budget"
+        },
+        {
+          "name": "kael_engines",
+          "version": "0.4.1",
+          "archive_bytes": 39750,
+          "archive_sha256": "7ece9706fcb8e5d72e5a0c3427643a5ad65b0544e5ecfe54940b579034859455",
+          "file_count": 15,
+          "rust_file_count": 9,
+          "rust_bytes": 132580,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "90743b817ff7f3f29a8efd476ae4a16352d1d4f5"
+            },
+            "path_in_vcs": "crates/kael_engines"
+          },
+          "cargo_vcs_info_sha256": "379dc19e0aa72dfb51a74c784122cfb7a2977aae0b6a27290f9ef1ee4318b4c8",
+          "original_manifest_sha256": "c93a07d7655566233454a03c53dc4f2c2a4826a2159a4054aa507dcc05cd8ade",
+          "normalized_manifest_sha256": "024927f8fd1773bd0a5eab3a8102eba4df0d2cfbbeb9048222e2d72bf0705c74",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/kael_engines"
+        },
+        {
+          "name": "kael_document",
+          "version": "0.4.1",
+          "archive_bytes": 51852,
+          "archive_sha256": "e3bdbf55611578b749bce877b203bcf67cb22eee97669538a22e1c8ab964e2df",
+          "file_count": 24,
+          "rust_file_count": 18,
+          "rust_bytes": 175101,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/kael_document"
+          },
+          "cargo_vcs_info_sha256": "449ce34f182586b2517ca39cf6c50df637b3bb7b08119ca25eb4e050c954d14d",
+          "original_manifest_sha256": "0a59bd749e48b11756fc05dca2afc51364c0a50e5340736d2045ae973d295a8f",
+          "normalized_manifest_sha256": "c4a9b783d77a63c8486a5a276208106b6392def1e705ed578834c912efd39b0e",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/kael_document"
+        },
+        {
+          "name": "kael_derive_refineable",
+          "version": "0.4.1",
+          "archive_bytes": 11106,
+          "archive_sha256": "e63de3daa60a447df4872a562ef477406f6dc8685b84ab4838b223bd8edd0946",
+          "file_count": 7,
+          "rust_file_count": 1,
+          "rust_bytes": 25479,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/derive_refineable"
+          },
+          "cargo_vcs_info_sha256": "963f514d17008a5c08e817b820451066bb541645b153af25f8f0cd5ed9397dca",
+          "original_manifest_sha256": "3e432893fbe33680d14a8a166b62bb00df90340a0376d96853b983e17f702545",
+          "normalized_manifest_sha256": "da86dda1c155bfecc99dce0bcf832977400b11bb9d65581101b12216c7340bdc",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/derive_refineable"
+        },
+        {
+          "name": "kael_collections",
+          "version": "0.4.1",
+          "archive_bytes": 6823,
+          "archive_sha256": "91e9d159fb69d3f9acbe46a9f70d5768c7a7e89969c46f4409234063f5127c67",
+          "file_count": 7,
+          "rust_file_count": 1,
+          "rust_bytes": 1256,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/collections"
+          },
+          "cargo_vcs_info_sha256": "9789822240711314fa864fbe29a95043f7fee0679920855e8b63e5581615b691",
+          "original_manifest_sha256": "213faabe2334fcb2cfd4cbeaaf70959f9c846ac0c9ccd482456d2fe4e797e10d",
+          "normalized_manifest_sha256": "766e25ab6397bbf0e9adeddb08811283b0da5d83e2d388dda0a989c9bf4a738a",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/collections"
+        },
+        {
+          "name": "kael_cache",
+          "version": "0.4.1",
+          "archive_bytes": 23363,
+          "archive_sha256": "a453cfb6fa4645082012250df388b0b3133fdc1ffaa60092f4882da80a65a19d",
+          "file_count": 10,
+          "rust_file_count": 4,
+          "rust_bytes": 68055,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "90743b817ff7f3f29a8efd476ae4a16352d1d4f5"
+            },
+            "path_in_vcs": "crates/kael_cache"
+          },
+          "cargo_vcs_info_sha256": "8aa3704c0b49c135d2eb937a730c3d7758b0967293091be21599a08c4b689da9",
+          "original_manifest_sha256": "e27eadef189562691baa35180f81fb73ec35d46932d8f91ec53c13b30fd29b19",
+          "normalized_manifest_sha256": "f2a226fcbe6c14757b96a08c7b257cae507df9d191e52be3e9dc7924ff18a1b7",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/kael_cache"
+        },
+        {
+          "name": "kael-media",
+          "version": "0.4.1",
+          "archive_bytes": 37551,
+          "archive_sha256": "3bc51d829ce32c58e8d4a71adb852955008a73decb13bf1b58db0a4eb2acddd1",
+          "file_count": 9,
+          "rust_file_count": 3,
+          "rust_bytes": 85459,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/kael-media"
+          },
+          "cargo_vcs_info_sha256": "cf08bcdc06430754642a59e5900500619bb1341da8bcb95ee2cefb5d4163a2f0",
+          "original_manifest_sha256": "d8f998a336bf4919b6406b41923437185656014e25b6c28e7177008063d14ae2",
+          "normalized_manifest_sha256": "76567dc149dc6925646ebbbdb46f4b0cfad20a572a4fbb1d025ae31715588c44",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/kael-media"
+        },
+        {
+          "name": "kael-macros",
+          "version": "0.4.1",
+          "archive_bytes": 28876,
+          "archive_sha256": "47108f03e2b99250c318aa2523a2b3f0b331a8dac36e81cc51ebd63258faaaee",
+          "file_count": 34,
+          "rust_file_count": 21,
+          "rust_bytes": 120315,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/kael-macros"
+          },
+          "cargo_vcs_info_sha256": "d2a9d3f47bf4574edc539224af4bfaa7a1c73e44405b80f6d5d6e98d18b9408a",
+          "original_manifest_sha256": "061454bc9c6b02a75935c763c395f1094b059438b1c8471ffb6531ad907a6afc",
+          "normalized_manifest_sha256": "a8e0f0956f58c32cd98c85e1ac4c43b82699d304286eddaf0cb81173a720cb3f",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/kael-macros"
+        },
+        {
+          "name": "kael-cli",
+          "version": "0.4.1",
+          "archive_bytes": 18925,
+          "archive_sha256": "a7fd51e4bbe1d4e20858040377a8b48cb9e172c657437eed2135f1b309eac1e0",
+          "file_count": 13,
+          "rust_file_count": 2,
+          "rust_bytes": 43870,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "90743b817ff7f3f29a8efd476ae4a16352d1d4f5"
+            },
+            "path_in_vcs": "crates/kael-cli"
+          },
+          "cargo_vcs_info_sha256": "68ad3ae023af888745fefe3fe8aef5b437427c0cd63a50a3e01ac56d2f1830d4",
+          "original_manifest_sha256": "fad4495088e994d0e4eff3fbfbe246973bffd93932b986ac21e1826965697a21",
+          "normalized_manifest_sha256": "2ab7212742d0a81c2b715d56c39bfa39b2e18fec159ba3f46e4ec90da60ef254",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "cbb992e7014547a4d3ebda7a82a5e88b34b9dab959974d3180534f01fd8cf533"
+          },
+          "source_crate_root": "crates/kael-cli"
+        },
+        {
+          "name": "kael_net",
+          "version": "0.4.1",
+          "archive_bytes": 56038,
+          "archive_sha256": "14edb51a7ecd4dce65273a77103cce17091588747acad82d6e432517b88da282",
+          "file_count": 17,
+          "rust_file_count": 11,
+          "rust_bytes": 174763,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/kael_net"
+          },
+          "cargo_vcs_info_sha256": "1b42a4a02a47dd0f870ecf9fceb023c81d9cea8fbb156ff5fa20be54cfaa6cd6",
+          "original_manifest_sha256": "8753a79bcafa24c0cbc72f932b070934284bf0de87378449ddf0045a5ae0410f",
+          "normalized_manifest_sha256": "457f3a3c315283c46fba36438944b4bd1d3a2701c675149dc3f3bc1d907b4527",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/kael_net"
+        },
+        {
+          "name": "kael_media_engines",
+          "version": "0.4.1",
+          "archive_bytes": 85241,
+          "archive_sha256": "7cb2ab4d54d824ccc8413990c489578f1b8d8909d3f4585f50713b8470b52807",
+          "file_count": 22,
+          "rust_file_count": 16,
+          "rust_bytes": 351580,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "90743b817ff7f3f29a8efd476ae4a16352d1d4f5"
+            },
+            "path_in_vcs": "crates/kael_media_engines"
+          },
+          "cargo_vcs_info_sha256": "4265cde9573b5e06746f1f5932cc3c0b6bb80d8bc1ab8c25b6226f46370eabdb",
+          "original_manifest_sha256": "7dc6c49febcf8f0c80f5bf694bdfc49a2384856617b070dbbca75a387472f1d0",
+          "normalized_manifest_sha256": "91c655ef6d7253de1651625296787df2c957b05f97709378e4f37c3804359ea5",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/kael_media_engines"
+        },
+        {
+          "name": "kael_refineable",
+          "version": "0.4.1",
+          "archive_bytes": 11025,
+          "archive_sha256": "37983067de0bd99ded5084d2df09bdc22d2fd3bdf68203b8ab4c893c19c82308",
+          "file_count": 7,
+          "rust_file_count": 1,
+          "rust_bytes": 14269,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/refineable"
+          },
+          "cargo_vcs_info_sha256": "c1b473f21576d8b655d6f78413d891484b2d35efe18a8cd6746f93185e1ef17a",
+          "original_manifest_sha256": "0bededa64054a79ea76a59e8f8aef8726017585bdf2811380456cdb424686722",
+          "normalized_manifest_sha256": "7148a005114cc59729eec0bf72723a21a87e4b3d301d802a4eaa430828b6281c",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/refineable"
+        },
+        {
+          "name": "kael_perf",
+          "version": "0.4.1",
+          "archive_bytes": 22655,
+          "archive_sha256": "38e1e745c00fec7b4bcdd8dce82e6e57a01e539d9e1df964766ad55fc3f1fc06",
+          "file_count": 9,
+          "rust_file_count": 3,
+          "rust_bytes": 57894,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/perf"
+          },
+          "cargo_vcs_info_sha256": "ed6d5cc72bf2bf33b87d890cf5638762b947f38dd826212480e7fea6e6a62ca1",
+          "original_manifest_sha256": "bd068bc13e3284d19ad2c4025c55a5f6bce9b4aee89595bfa0bad062345b866b",
+          "normalized_manifest_sha256": "f9395a315e18e14243f6d1cec7295d410c03171d575a3230c56ccc3b1f1b20c4",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/perf"
+        },
+        {
+          "name": "kael_audio",
+          "version": "0.4.1",
+          "archive_bytes": 79181,
+          "archive_sha256": "7d65d53d41c2f1914fb603952fea2bcaef18e074f7a8b3a4d6c54ceb350ad5d3",
+          "file_count": 27,
+          "rust_file_count": 21,
+          "rust_bytes": 271876,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/kael_audio"
+          },
+          "cargo_vcs_info_sha256": "3fb067f1d7d08ebc74af2e0c32b6f8a5735ca504b1074f9ff9502121d14b6efe",
+          "original_manifest_sha256": "a74a7db762d3f85f50c423ca08067a019f55a886503c7c996e3e14447ba584dc",
+          "normalized_manifest_sha256": "cf70263c3aec4366ff5e3f8073bbcaaeae9593cf284173642291708e5dda7803",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/kael_audio"
+        },
+        {
+          "name": "kael_util_macros",
+          "version": "0.4.1",
+          "archive_bytes": 11469,
+          "archive_sha256": "b9c7357c827074dc1dde23f0cffcfd8e73864b46243e51ffeff489edf856911c",
+          "file_count": 7,
+          "rust_file_count": 1,
+          "rust_bytes": 15257,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/util_macros"
+          },
+          "cargo_vcs_info_sha256": "9fe293bcb46d8cac0caf405e00e840f867ee02f3fbf7d53288c1abec5c8949a3",
+          "original_manifest_sha256": "0db77cd31358dcbb3348462084566480d3e5fc667c985350705e83b1756f6aae",
+          "normalized_manifest_sha256": "66f8f56bb07288d170f70d731f17fb295236f931418bdbaa13c94c1c7f8b3f09",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/util_macros"
+        },
+        {
+          "name": "kael_util",
+          "version": "0.4.1",
+          "archive_bytes": 68742,
+          "archive_sha256": "26f877e4d336dd386d802b527fd3cf0ecba86b08d81cfb195002af2c0a69503a",
+          "file_count": 24,
+          "rust_file_count": 18,
+          "rust_bytes": 216380,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "90743b817ff7f3f29a8efd476ae4a16352d1d4f5"
+            },
+            "path_in_vcs": "crates/util"
+          },
+          "cargo_vcs_info_sha256": "dbb5cc54eeb0a73adf8cb2d053b6410d1ede2f55391084900fff41a72d93575b",
+          "original_manifest_sha256": "453d6ca389fb868f2b99a6740bd402a5d067805564061da94a9136bab666aec3",
+          "normalized_manifest_sha256": "f5033b9405b9c893c15733348b2dd364bd2862b02fed3accf6a8aa179d5445dc",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/util"
+        },
+        {
+          "name": "kael_http_client",
+          "version": "0.4.1",
+          "archive_bytes": 30642,
+          "archive_sha256": "e7f34194d73e3df6e708c7b481cd4c855ac6e0c25d266626ddd3bb9db5699150",
+          "file_count": 9,
+          "rust_file_count": 3,
+          "rust_bytes": 50462,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/http_client"
+          },
+          "cargo_vcs_info_sha256": "37f121a9871f2a671acd8ded9ea1e55e49022a0fb4c1de6664df644512978b45",
+          "original_manifest_sha256": "63c4983ed0d30668c3824e21f1dd3bf8865399bf96540fb3f79aac1f09d9b602",
+          "normalized_manifest_sha256": "ef37af563b172461a984a8222420de0e88a9ae23b40d888a06cd800cd79bba77",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/http_client"
+        },
+        {
+          "name": "kael_diagnostics",
+          "version": "0.4.1",
+          "archive_bytes": 50003,
+          "archive_sha256": "57da006b3467370da0e2c2bd52b338e7724c2e7260126ed427c49132b78856ec",
+          "file_count": 19,
+          "rust_file_count": 13,
+          "rust_bytes": 145383,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "crates/kael_diagnostics"
+          },
+          "cargo_vcs_info_sha256": "d2c25b2d7b4fd5eb73c02c07032e1745124de9029f8807f4a6b87032474d6b05",
+          "original_manifest_sha256": "93cb3c3b3cc059cc6bc0b8ed7e34068b846d3cb954db7e314b0985147e902465",
+          "normalized_manifest_sha256": "973cf16a03fb68c02ef0da72ea66aacfa397468608390cacc855e43485408eb2",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/kael_diagnostics"
+        },
+        {
+          "name": "kael_accesskit_macos",
+          "version": "0.4.1",
+          "archive_bytes": 62687,
+          "archive_sha256": "1c86599152ee81fcd90c6165d93ea2f8f1d1d11e61966298c36b0320fd553f54",
+          "file_count": 26,
+          "rust_file_count": 13,
+          "rust_bytes": 156718,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "vendor/accesskit_macos"
+          },
+          "cargo_vcs_info_sha256": "7a5869dfdc1bf908e06bad4f9d6a9331d08221e3f6d3fc244b4e9fba44092139",
+          "original_manifest_sha256": "471707bf13142bedd18aa267bfe23fd49e73c14f86da22e47c8c3fc3be5fe9e0",
+          "normalized_manifest_sha256": "c29e984052fb1c93bec97b0a31a2db280b1e89072b044b3c5ffef8de0ab52e95",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+            "LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+          },
+          "source_crate_root": "vendor/accesskit_macos"
+        },
+        {
+          "name": "kael_accesskit_atspi_common",
+          "version": "0.4.1",
+          "archive_bytes": 56365,
+          "archive_sha256": "55bc2e9d7af1a60216c27adddfa9e13a3de7a81c7bc24b895e75b8a49eda1edb",
+          "file_count": 27,
+          "rust_file_count": 14,
+          "rust_bytes": 172522,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "vendor/accesskit_atspi_common"
+          },
+          "cargo_vcs_info_sha256": "5b98975416551e0af50fab99aca01560e7291b425d8676cee06738a44e25ec35",
+          "original_manifest_sha256": "ed8bc309aaef97ea562c24ffdefbae8a57bbfd166436ee4216ca9bba80ff54cf",
+          "normalized_manifest_sha256": "fa22f941c57f3ebbad4e0568b961c8e1294345094908e4dfdd6b2562eb5b50b0",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+            "LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+          },
+          "source_crate_root": "vendor/accesskit_atspi_common"
+        },
+        {
+          "name": "kael_accesskit_unix",
+          "version": "0.4.1",
+          "archive_bytes": 42392,
+          "archive_sha256": "b7a6f72ecddf94b165aca8fd7245734efad637fb0576fb236b706dfca2e744c9",
+          "file_count": 33,
+          "rust_file_count": 20,
+          "rust_bytes": 85947,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "vendor/accesskit_unix"
+          },
+          "cargo_vcs_info_sha256": "7ace6da3b9d9b8dfee20d3d65e7db3c8374db5d1f42e0c8dbc792dfcf3b8c8d4",
+          "original_manifest_sha256": "9347e8e642bc42987c5e6dbe7daa86b97b2eec9c2ec23b64bdf0c8315ff3817e",
+          "normalized_manifest_sha256": "d98b359185e9350f3d560cab090b7d25d18ff2df17f3fcbd645ed4bcc3abf594",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+            "LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+          },
+          "source_crate_root": "vendor/accesskit_unix"
+        },
+        {
+          "name": "kael_accesskit_windows",
+          "version": "0.4.1",
+          "archive_bytes": 85058,
+          "archive_sha256": "6ccebbce63dee10fcb04c39c7b44485419dd3058c9363496e9fd2b77b79e6f54",
+          "file_count": 27,
+          "rust_file_count": 14,
+          "rust_bytes": 184709,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "vendor/accesskit_windows"
+          },
+          "cargo_vcs_info_sha256": "4717215091f1b6fc0b4c7db3212c3d585c5076e87c128de384ad8f938bab8aa6",
+          "original_manifest_sha256": "b1606a85fa401615e76fe21ba4b3a8f99e65f22a77540930c7724bf7923edaa2",
+          "normalized_manifest_sha256": "be4de18cb4fc382a410f18c6d0392d7fd9620a3341150a72581fa678a9000edc",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+            "LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+          },
+          "source_crate_root": "vendor/accesskit_windows"
+        },
+        {
+          "name": "kael_rasterlottie",
+          "version": "0.4.1",
+          "archive_bytes": 140273,
+          "archive_sha256": "5ea4abc95b5f02c6c430890b932ee7b213f655d2f594aec00a13a2950ae005c1",
+          "file_count": 76,
+          "rust_file_count": 43,
+          "rust_bytes": 492125,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "83190dc65173b040b3ed6c47d2b70702f4a4838c"
+            },
+            "path_in_vcs": "vendor/rasterlottie"
+          },
+          "cargo_vcs_info_sha256": "8e1845449632b54c97313e8f749ac1ba874bc9987946f942b3b81a2c5de71424",
+          "original_manifest_sha256": "69813f43b14e58d04fd8ec336683abab300ad5bc3fed0709919da4ab67be69a4",
+          "normalized_manifest_sha256": "eea818314f732f0923a606bca1d1ed20c0b0a75f4130ef4be1ca41fbf1ef1756",
+          "lockfile_zip_versions": [
+            "9.0.5"
+          ],
+          "licenses": {
+            "LICENSE-APACHE": "7ab0c9e6952273543efe57a911c16140eb431c838ac34d32268fc8c773b9f892",
+            "LICENSE-MIT": "4b41420cbb308d33022de3bcefc155091f562784ef5bf985b067929e918c03df"
+          },
+          "source_crate_root": "vendor/rasterlottie",
+          "fork_provenance_sha256": {
+            "PATCHES.md": "377cd170fa344124802c98a29440bddae88943a78eeee2f1db0185e78c288306",
+            "UPSTREAM-SHA256.json": "506ab0a085c8f868ce00275d0f13bffe87f73cdbc9ca5c85b111eb641778d1c0",
+            "UPSTREAM-Cargo.toml": "d424a705c1dc8751ecc4274173fb2e8a8c4ce7d9fb9a9ce2d9ddf1ae7ce2a796",
+            "zip9-compatibility.patch": "be2c1ffe89b0910520d1709e728ab931ef74d77e96f2919a45ccc509088820dc"
+          },
+          "fork_zip_dependency": {
+            "version": "9",
+            "features": [
+              "deflate"
+            ],
+            "optional": true,
+            "default-features": false
+          }
+        },
+        {
+          "name": "kael",
+          "version": "0.4.1",
+          "archive_bytes": 2678905,
+          "archive_sha256": "f17bb5dc947eec4f36e653b97f4baf7c56b54fec01fe2abc5b0636d851132a11",
+          "file_count": 360,
+          "rust_file_count": 342,
+          "rust_bytes": 14271633,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "90743b817ff7f3f29a8efd476ae4a16352d1d4f5"
+            },
+            "path_in_vcs": "crates/kael"
+          },
+          "cargo_vcs_info_sha256": "a162726f98b88b1d71567e4a9c7fe4133fe57bd3cfc180b16e304de17afee71a",
+          "original_manifest_sha256": "1a65bcdcf58fe561a5c935df3ce325a804b638c8baf0fbe3d179ba76d9230af0",
+          "normalized_manifest_sha256": "9e325d6229c4a63820b45e8eaecf2b81a2721ef08a7454fb2aa02b7f0bf7411c",
+          "lockfile_zip_versions": [
+            "9.0.5"
+          ],
+          "licenses": {
+            "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a"
+          },
+          "source_crate_root": "crates/kael",
+          "published_rasterlottie_alias": {
+            "version": "0.4.1",
+            "features": [
+              "dotlottie",
+              "images",
+              "text"
+            ],
+            "optional": true,
+            "default-features": false,
+            "package": "kael_rasterlottie"
+          }
+        },
+        {
+          "name": "kael_ui",
+          "version": "0.4.1",
+          "archive_bytes": 1947273,
+          "archive_sha256": "312198bb10c7c32eeabe946201920f14e7abab61a48004d6c5abd0e42a625cf2",
+          "file_count": 279,
+          "rust_file_count": 264,
+          "rust_bytes": 4887060,
+          "cargo_vcs_info": {
+            "git": {
+              "sha1": "90743b817ff7f3f29a8efd476ae4a16352d1d4f5"
+            },
+            "path_in_vcs": "crates/kael_ui"
+          },
+          "cargo_vcs_info_sha256": "fc5e8a2489f06549e3a261f9068cc102d17937721470bf4ca2bddde2297cf06d",
+          "original_manifest_sha256": "0059087aa523a5f141321aa6665406f8af6c544cac35af0cefb9c18bcc57e42a",
+          "normalized_manifest_sha256": "60901f95cc57e554f2c44de11ed39a470814035265da79ac8242b8eec3660565",
+          "lockfile_zip_versions": [],
+          "licenses": {
+            "LICENSE-APACHE": "cbb992e7014547a4d3ebda7a82a5e88b34b9dab959974d3180534f01fd8cf533",
+            "THIRD_PARTY_LICENSES.md": "f225ba4081b1538a813bff97fb923d7a37dc50eafa427c37f2233a5d7ad7f12b",
+            "assets/fonts/LICENSE-INTER": "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a",
+            "assets/fonts/LICENSE-JETBRAINS-MONO": "60d55f23c6ce05a81099a762cb67ca2c9b6ea251c7912720998b4c89ebfd4faa"
+          },
+          "source_crate_root": "crates/kael_ui"
+        }
+      ]
+    }
+  },
+  "prior_platform_checkpoint": {
+    "source": "ac7811f4b9625fe11c3538e8f778cf0aaea62bab",
+    "url": "https://github.com/Augani/kael/actions/runs/39061136764",
+    "status": "completed",
+    "conclusion": "failure",
+    "jobs": [
+      {
+        "name": "Classify change",
+        "conclusion": "success"
+      },
+      {
+        "name": "Windows Native / WebView / MSI (windows-2022)",
+        "conclusion": "success"
+      },
+      {
+        "name": "WebAssembly / WebGL2 Browser",
+        "conclusion": "success"
+      },
+      {
+        "name": "Windows Native / WebView / MSI (windows-2025-vs2026)",
+        "conclusion": "success"
+      },
+      {
+        "name": "Quality / Native (macOS)",
+        "conclusion": "failure"
+      },
+      {
+        "name": "Quality / Native (Linux)",
+        "conclusion": "failure"
+      },
+      {
+        "name": "Linux Renderer / WebView Runtime",
+        "conclusion": "success"
+      },
+      {
+        "name": "Focused Linux / GTK4 native accessibility",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "Platform readiness",
+        "conclusion": "failure"
+      }
+    ],
+    "limits": "Both Windows runners, browser and Linux renderer/WebView pass. macOS mandatory drawable presentation and Linux strict advisory audit fail. These binaries predate the current text/form/dependency/admission changes."
+  },
+  "benchmark_artifact_preservation": {
+    "workflow": ".github/workflows/performance.yml",
+    "sha256": "05bfb1db6f6ab7ed9a8270adf0cdbf6566204abfa6784a4b5481dc387c54045a",
+    "change": "Future comparisons retain actual timed/untimed executables alongside raw captures. The historical100-run artifact is unchanged and its binary-byte provenance limitation remains."
+  },
+  "evidence_files": [
+    {
+      "path": ".artifacts/2026-10-17-lottie-final-core.log",
+      "bytes": 174481,
+      "sha256": "1666d33f280f3f2c35ff22b5f8cfbe029a5533e74a4a1f978afcf8ba00185f88"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-final-native-clippy.log",
+      "bytes": 622,
+      "sha256": "2236284bd4051019b40be5e90bdad6ae9a1bb4782e8558c3f0d144d563d7b795"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-final-wasm-kael.log",
+      "bytes": 301,
+      "sha256": "a0ae5884a0ded5b6684fa444c69192524dcc165cf6e855510e27488fb11ea92c"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-package-preflight.log",
+      "bytes": 60846,
+      "sha256": "f33ac0a13d576747c80b3839dab539fd32a21f47c41db71c60dc59bf6340f5c4"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-package-registry-red.log",
+      "bytes": 3214,
+      "sha256": "dfbe5554040075d7d87be48a2de38d0abaf83dadf6cb45746cc52c94e7e0a37b"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-format.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-docs.log",
+      "bytes": 104,
+      "sha256": "0fb87ecae09e05f755df5b77bb290e1636d51926a57bb5e2361c5a19dddcce3f"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-workflow-lint.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".artifacts/2026-10-17-office-zip9-consistency-red.log",
+      "bytes": 14044,
+      "sha256": "2243eb92820a1fab9e73deb38f577c7417f8ed4d600ccb8a7dabcb6be0846813"
+    },
+    {
+      "path": ".artifacts/2026-10-17-office-zip9-consistency-green.log",
+      "bytes": 993,
+      "sha256": "6d69079122d55247005395f183026afc0919f05d07ac59e8a77bcaaa61ce9c63"
+    },
+    {
+      "path": ".artifacts/2026-10-17-office-zip9-consistency-clippy.log",
+      "bytes": 274,
+      "sha256": "27cf9f68b49c89706edf43a2a142e10375ca6ebe22fe628330e4e28370d53563"
+    },
+    {
+      "path": ".artifacts/2026-10-17-office-zip9-consistency-wasm-check.log",
+      "bytes": 158,
+      "sha256": "4f5005e77f87443dc4e709d6e6370a950c1e53baa0501f22b91b1694145be4cd"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-ci-native.log",
+      "bytes": 12503,
+      "sha256": "84f4ad9a25c82f309220f00d8952974ce2104dfa3d985a4b855d8046e51726f8"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-ci-chrome.log",
+      "bytes": 3217,
+      "sha256": "229ff8123818b522d6b75b115332bcfbde32fbfb282a615e592eb40194781179"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-ci-parser-tests.log",
+      "bytes": 2023,
+      "sha256": "4599328c5b63bfc856bbae3c71bd7d0b5aae5b8f853ec3d7e01ae8ef57bb8a18"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-fork-root-verification.log",
+      "bytes": 247,
+      "sha256": "e77f74c25e2fdff9d84842236d2b4ce2920c8ab05db52c0a7c5c456a56056b4b"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-provenance-verification/result.json",
+      "bytes": 1405,
+      "sha256": "44305639098b17a80d26d7ecbad9ba1ca7564cfe96a17ea0d95c062421c3d794"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-memory-admission/evidence.json",
+      "bytes": 8195,
+      "sha256": "2c47ce54ff7412e34ba36f668a5cbd75f6dbc35dc9a0c754c407460e3b6891d4"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-memory-admission/batch-evidence.json",
+      "bytes": 3114,
+      "sha256": "4e5f4d41745b7caf8bc2e335a49acdbd89b9260408607fe6829f5f1d63945103"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-memory-admission/adaptive-prefetch-evidence.json",
+      "bytes": 3189,
+      "sha256": "87962b3ca4267bc51efbf37f502c95718a70d9236de14d2d28f49f24a9e1a8f3"
+    },
+    {
+      "path": ".artifacts/2026-10-17-release-archives.json",
+      "bytes": 351005,
+      "sha256": "c525a811b77d5a9dadff51502e7861b27cacf0c771a5d6ea50e1e03f577d5f43"
+    },
+    {
+      "path": ".artifacts/2026-10-17-verify-release-archives.py",
+      "bytes": 15707,
+      "sha256": "faa2008f23a38946678f5a1e96b8e03220df92eea8aeaa601ee17befd7ef4709"
+    },
+    {
+      "path": ".artifacts/2026-10-17-release-archives.log",
+      "bytes": 4154,
+      "sha256": "f2aeb523f8e618222bedae3eca7cc8ec58ccebd1445ff9563d61065d35ddf696"
+    },
+    {
+      "path": ".artifacts/2026-10-17-platform-checkpoint-final.json",
+      "bytes": 29042,
+      "sha256": "e41a5eb9de59f9b2c6b79e59c7e2225f984010487e75b87b62c4ec58ca2f7b06"
+    },
+    {
+      "path": ".artifacts/2026-10-17-platform-windows2025-job.log",
+      "bytes": 953088,
+      "sha256": "1ae71cf346a8982d273f31846277bcf3207d22f4afeaaa89c21e542f21a9c7a9"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-final-docs.log",
+      "bytes": 104,
+      "sha256": "0fb87ecae09e05f755df5b77bb290e1636d51926a57bb5e2361c5a19dddcce3f"
+    }
+  ],
+  "remaining_acceptance": [
+    "Global memory/GPU accounting and overlapping detached animation tasks are outside these scoped limits.",
+    "ZIP constructor metadata, parsed models/base64, decoder-private storage, allocation overhead, posters and renderer/prepared scratch are additional; worker budgets are independent.",
+    "Current all-platform hosted CI, mandatory hosted macOS drawable presentation, strict six-warning D-Bus audit, physical input-source IME/screen-reader exploration, comparative presentation and controlled power remain separate.",
+    "The completed100-capture benchmark uses frozenb11ed50 and supplies no overall framework ranking; the new admission commits have not been comparatively benchmarked by that historical run."
+  ]
+}

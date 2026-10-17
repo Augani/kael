@@ -132,3 +132,24 @@ vulnerabilities, while strict audit still denies six unmaintained D-Bus warnings
 no new ignore is added. The new 39-package preflight and latest platform matrix
 remain required. ZIP dependency compatibility does not close the newly identified
 archive expansion, image resize/scratch and retained-image admission gaps.
+
+The next animation checkpoint (`83190dc`, `90743b8`) closes those scoped admission
+gaps with finite archive/image policies, a 256 MiB retained-frame batch cap and
+adaptive prefetch/cache planning. Zero admission suppresses rendering tasks and
+recurring animation wakes; restoring capacity resumes elapsed playback. Genuine
+small-allocation regressions pass alongside 134 fork native tests, 15 actual
+Chrome cases, 2,178 full core tests and strict native/Wasm consumer checks. The
+[animation validation](2026-10-17-animation-memory-validation.json) records the
+two opt-in core probes, independent review, raw hashes and explicit remaining
+metadata/decoder/model/worker/concurrent-task/global-budget boundaries.
+
+All 39 release archives now build through fresh isolated preflight without a
+registry upload. Independent audit matches every included Rust byte (928 files)
+to immutable `90743b8`, checks licenses and registry aliases, and records actual
+packaged VCS metadata without inferring dirty-state information. The earlier
+`ac7811f` matrix finishes with both Windows jobs, browser and Linux runtime jobs
+passing; hosted Metal presentation and Linux strict advisory audit still fail.
+Those results predate the current fixes. Latest platform execution, controlled
+power/comparative presentation and physical IME/screen-reader acceptance remain
+open. General desktop forms, data, navigation, workspaces, media and shared
+rendering remain the priority; Tree disclosure needs profiling before attribution.

@@ -386,8 +386,9 @@ still have `presented_time=0`. The final window is visible and active at 723×46
 scale 1; the gate fails with `no drawable presentation callback within two
 seconds`. Physical-Mac passes do not waive this hosted requirement. Linux native
 quality passes its workspace, backend, package and documentation checks, then
-fails strict dependency audit on newly published advisories. The Windows 2022,
-browser and Linux renderer/WebView jobs pass at this checkpoint. Later text,
+fails strict dependency audit on newly published advisories. Both Windows 2022
+and Windows 2025/VS2026, browser and Linux renderer/WebView jobs pass at this
+completed checkpoint. Later text,
 forms and dependency fixes are absent from those CI binaries.
 
 The [dependency validation](2026-10-17-dependency-quality-validation.json)
@@ -423,3 +424,68 @@ requires coordinated portal, tray, keyring, notifications and native accessibili
 dependencies; changing one direct dependency would leave the other families.
 ZIP compatibility does not establish decompressed archive/image memory admission;
 that is the next independent implementation slice.
+
+General desktop performance remains the priority: forms, navigation, tables,
+trees, workspaces, media and shared rendering. The current Tree source inspection
+narrows the next profiling target. Selection and ordinary scrolling reuse the
+model and accessibility snapshot; disclosure reconstructs all 100,025 model
+nodes and the semantic catalog. Snapshot delta construction then enumerates both
+full catalogs, even when one 4,000-row branch changes. This is a code-level lead,
+not an allocation or CPU attribution established by a profiler. A useful change
+must preserve complete logical accessibility and stable identities, share the
+unchanged catalog, and bound pending work and reclamation. Prebuilding benchmark
+variants or dropping offscreen accessibility would change the comparison contract.
+
+The subsequent [animation memory validation](2026-10-17-animation-memory-validation.json)
+records the independent admission implementation. The maintained fork bounds
+compressed archives before construction, expanded selected entries while reading,
+and image decode, conversion, Triangle resize scratch/weights and retained decoded
+pixels. Defaults preserve lazy unused image decoding. Cache hits incur no new
+reservation, and failed decodes roll their reservation back. Duplicate ZIP names
+and inconsistent local/central names are rejected through the library's strict
+read option; Office receives the same consistency protection. Stored, deflated,
+ZIP64 and commented archives retain positive controls.
+
+The fork passes 134 native tests/doctests and 15 actual Chrome/Wasm cases locally,
+with zero ignored tests. The new mandatory CI verifier executes these suites and
+requires named admission and pixel regressions and rejects empty, filtered or
+skipped runtime results. The pinned fork reconstructs exactly with eight reviewed
+upstream Rust changes; the verifier rejects 11 additional provenance-corruption
+probes. Original standalone tests, fixtures, licenses and all other original
+sources retain their upstream hashes.
+
+Kael separately caps a render batch's retained output at 256 MiB, using the
+rasterizer's actual fitted/rounded canvas before preparation or rendering.
+Previously, the independent per-frame and frame-count limits admitted up to
+64 GiB in principle; that amount was never allocated in the tests. Tiny fixtures
+prove exact inclusive limits and rejection before preparation/pixel calls. The
+element adapts its configured prefetch and cache count to the admitted batch
+size, preserving playback when one frame fits but the default five-frame request
+does not. Loop advancement and cache bounds are exercised through the caller's
+real planner with eight-byte batches.
+
+These limits do not establish a global memory ceiling. ZIP constructor metadata,
+parsed models/base64 strings, decoder-private allocations, allocator overhead,
+posters, renderer scratch, prepared animations and overlapping detached tasks
+remain additional. Worker budgets are independent. Existing requested-rectangle
+validation also remains in force when the fitted output would be smaller.
+
+At the final animation source `90743b8`, all 2,178 core tests pass with the two
+explicit native diagnostic probes left opt-in. Strict native all-target Clippy,
+the Kael browser/Lottie and Office Wasm consumer checks, formatting, workflow
+lint and 46-page documentation verification pass. All eight Office tests pass;
+the two new ambiguity regressions first failed against the ZIP-only baseline.
+No shader or comparative latency result is inferred from these CPU raster tests.
+
+The complete 39-package preflight now builds every extracted archive in a fresh
+staging registry and verifies the publication contents and 10 MiB limit. No
+crate is uploaded. Its first attempt exposed Cargo's mixed publish-setting
+registry requirement; the final command explicitly selects crates.io while
+retaining the fork's publish restriction. An independent archive audit verifies
+all 928 included Rust files, totaling 23,222,165 bytes, against immutable
+`90743b8` Git blobs. The 39 compressed archives total 6,019,103 bytes. The
+packaged VCS IDs span `83190dc` and `90743b8`, and all dirty fields are absent;
+those metadata fields do not establish a clean packaging checkout. Actual byte
+comparison supplies the source identity. Future benchmark uploads also retain
+the measured executables for independent rehashing; the historical 100-capture
+artifact and its recorded binary-byte limitation remain unchanged.

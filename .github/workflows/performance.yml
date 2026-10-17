@@ -219,6 +219,7 @@ jobs:
           name: native-kael-gpui-kit-comparison
           path: |
             .artifacts/competition/*.log
+            .artifacts/competition/binaries
             .artifacts/competition/native-navigation-detail
             .artifacts/competition/navigation-detail-without-frame-timing
             .artifacts/competition/native-editor-document
