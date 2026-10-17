@@ -46,6 +46,93 @@ fn docx_fixture() -> Vec<u8> {
     ])
 }
 
+fn rewrite_zip_part_name(
+    bytes: &mut [u8],
+    from: &str,
+    to: &str,
+    local_header: bool,
+    central_header: bool,
+) {
+    assert_eq!(from.len(), to.len(), "fixture offsets must stay unchanged");
+    for (enabled, signature, header_len, name_len_offset) in [
+        (local_header, b"PK\x03\x04", 30, 26),
+        (central_header, b"PK\x01\x02", 46, 28),
+    ] {
+        if !enabled {
+            continue;
+        }
+        let headers: Vec<_> = bytes
+            .windows(signature.len())
+            .enumerate()
+            .filter_map(|(offset, value)| (value == signature).then_some(offset))
+            .collect();
+        let mut rewritten = 0;
+        for header in headers {
+            let name_len = u16::from_le_bytes(
+                bytes[header + name_len_offset..header + name_len_offset + 2]
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
+            let name_start = header + header_len;
+            if bytes.get(name_start..name_start + name_len) == Some(from.as_bytes()) {
+                bytes[name_start..name_start + name_len].copy_from_slice(to.as_bytes());
+                rewritten += 1;
+            }
+        }
+        assert_eq!(rewritten, 1, "expected one fixture header for {from}");
+    }
+}
+
+#[test]
+fn rejects_duplicate_central_names_even_when_local_headers_agree() {
+    let mut original = OfficePackage::open(&docx_fixture()).unwrap();
+    original
+        .add_part("custom/another.bin", b"second payload".to_vec())
+        .unwrap();
+    let mut bytes = original.to_bytes().unwrap();
+    let control = OfficePackage::open(&bytes).unwrap();
+    assert_eq!(control.format(), OfficeFormat::Docx);
+    let OfficeText::Document(text) = control.extract_text().unwrap() else {
+        panic!("expected Word text");
+    };
+    assert_eq!(text.paragraphs, ["Hello & welcome\tKael", "Table cell", ""]);
+    assert_eq!(control.parts().len(), 6);
+
+    // Preserve payloads, CRCs, sizes and offsets; only equal-length names change.
+    rewrite_zip_part_name(
+        &mut bytes,
+        "custom/another.bin",
+        "custom/unknown.bin",
+        true,
+        true,
+    );
+    assert_eq!(
+        ZipArchive::new(Cursor::new(&bytes)).unwrap().len(),
+        5,
+        "ZIP 9 indexes unique central names rather than all six records"
+    );
+    let error = OfficePackage::open(&bytes)
+        .expect_err("duplicate central records must not be hidden by the ZIP name index");
+    assert!(format!("{error:#}").contains("duplicate file names"));
+}
+
+#[test]
+fn rejects_local_and_central_part_name_mismatch() {
+    for (local, central) in [(true, false), (false, true)] {
+        let mut bytes = docx_fixture();
+        rewrite_zip_part_name(
+            &mut bytes,
+            "custom/unknown.bin",
+            "custom/another.bin",
+            local,
+            central,
+        );
+        let error = OfficePackage::open(&bytes)
+            .expect_err("part identity must agree between local and central ZIP headers");
+        assert!(format!("{error:#}").contains("header inconsistency"));
+    }
+}
+
 #[test]
 fn docx_metadata_text_relationships_and_roundtrip_are_portable() {
     let bytes = docx_fixture();
