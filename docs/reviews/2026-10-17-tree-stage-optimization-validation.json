@@ -1,0 +1,2177 @@
+{
+  "date": "2026-10-17",
+  "scope": "Release public model and logical accessibility API stages; not native app/render/presentation or cross-framework ranking evidence.",
+  "baseline_source_commit": "e2194399ad5ec09aba1ac5d82df55bf4a5dbfaea",
+  "validated_source_commit": "6b2ae1170d2ad6d1aa76de6f07189fa9432bacfa",
+  "source_files": [
+    {
+      "path": "crates/kael_ui/src/navigation/virtual_tree.rs",
+      "sha256": "487ed458e7568176561526bcf792c0b215c1bee71df68b43e83bf0ef9c0b0a56",
+      "git_blob": "2a607744106fcc06fdbb7baa59e798cd2f5bc22b"
+    },
+    {
+      "path": "crates/kael/src/accessibility/snapshot.rs",
+      "sha256": "cc39b8428ec2c696ad4fdb985b134ab9b4c93e9fc0a44540a2a117d305f16b56",
+      "git_blob": "6ee33b9a0a928ca68bb567ae9bfd22554becba4e"
+    },
+    {
+      "path": "crates/kael/src/elements/lottie.rs",
+      "sha256": "aed398e6ee0cc81a5c93f53d932055f8a4023c98dea785ef9c80d8d47a67f249",
+      "git_blob": "9403399b409c50b8fee7909e6982648c1eb12fc8"
+    },
+    {
+      "path": "crates/kael/src/lottie.rs",
+      "sha256": "10e10daf783fdf7b58dd227f5deb63d9e7b014e641f79b93df8978a7467366de",
+      "git_blob": "c5de33c51563e5b9dfe7ba9f2474e64ac3fe35ea"
+    },
+    {
+      "path": "crates/kael_notifications/src/platform/linux.rs",
+      "sha256": "12d3ff770a5a9188e32021498ba1d6bcd125521ba853be578f48919ee82c6122",
+      "git_blob": "9e4ef0dd5da3372aab5f1a1d4b96ae1592f47f31"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "b1b84f981fcc7d4c0e7a60a0d08a4f5ea5f66fc5f0ed086fc40eeee6e1a70e64",
+      "git_blob": "9cfe9b1b3ae40534ba276f396a29c3eb0f55f3a5"
+    }
+  ],
+  "implemented_contracts": {
+    "logical_delta": "Only frame overlays and tombstones populate the temporary candidate set. Changed disjoint snapshots compare current base nodes directly and probe old bases only for actual removals; shared snapshot Arcs remain skipped. Effective output stays unique and sorted. Changed monolithic maps remain linear.",
+    "catalog": "Only the unfiltered new() constructor skips a redundant source-catalog pass, when existing displayed-row/expansion metadata proves no provided source descendants are hidden. The generic arbitrary-order setter and collapsed/lazy fallback retain their original validation.",
+    "full_semantics": "All 100,025 expanded or 96,025 collapsed logical items remain accessible, including offscreen Unicode labels; source catalog IDs, parent links, active descendant and focus survive collapse/re-expansion."
+  },
+  "fixture": {
+    "fixture_hashes": [
+      "fnv1a64:0fbc5b81edc32f9b",
+      "fnv1a64:1bfc4b56d6a0a5eb"
+    ],
+    "fixture_bytes": [
+      6100975,
+      6100975
+    ],
+    "logical_rows_fully_expanded": 100025,
+    "logical_rows_one_branch_collapsed": 96025,
+    "root_projects": 25,
+    "children_per_root": 4000,
+    "retained_datasets": 2
+  },
+  "measurement": {
+    "conditions": {
+      "started_at_utc": "2026-10-17T21:24:05.957983+00:00",
+      "finished_at_utc": "2026-10-17T21:24:16.819783+00:00",
+      "quiet_scope": "Parent coordinated no owned Rust compiler, test, or native-window workload for this complete sequential run. Pre/post process snapshots retained; uncontrolled OS background work may remain.",
+      "timing": "Three independent process pairs alternate baseline/candidate order. Both revisions use the same 100025-node fixture, release settings, calling-thread/process CPU clocks, and headless API stages.",
+      "allocations": "Fresh corrected instrumented run per revision. Only process-local requested payload counters are compared; instrumented clocks retained in raw JSON and removed from analyzed copies.",
+      "binary_sha256": {
+        "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/tree-stages-timing": "a337e0d1623dd478e0e524bcd1598f7352db8a5f885fa71083fe19f060d2ea84",
+        "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/tree-stages-alloc": "54764f71e26255bdb3dbe55b5de1203bb025736a0d312a3ec9b7a93551561b30",
+        "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/tree-stages-timing": "c6acb9054b512a99ab1b26215a5c5f056a557196f0437267832719d6229a2c5a",
+        "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/tree-stages-alloc": "8ac2c84aa72f6c0f07bc135e570280f08af3db72799459cf24c9f3b48a77f5b5"
+      },
+      "runs": [
+        {
+          "command": [
+            "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/tree-stages-timing",
+            "3"
+          ],
+          "environment": {
+            "KAEL_HEADLESS": "1"
+          },
+          "started_at_utc": "2026-10-17T21:24:05.958239+00:00",
+          "allocation_instrumented": false,
+          "finished_at_utc": "2026-10-17T21:24:07.206310+00:00",
+          "exit_code": 0,
+          "stdout": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/baseline-cpu-run-1.json",
+          "stderr": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/baseline-cpu-run-1.stderr.log"
+        },
+        {
+          "command": [
+            "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/tree-stages-timing",
+            "3"
+          ],
+          "environment": {
+            "KAEL_HEADLESS": "1"
+          },
+          "started_at_utc": "2026-10-17T21:24:07.206948+00:00",
+          "allocation_instrumented": false,
+          "finished_at_utc": "2026-10-17T21:24:09.157542+00:00",
+          "exit_code": 0,
+          "stdout": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/cpu-run-1.json",
+          "stderr": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/cpu-run-1.stderr.log"
+        },
+        {
+          "command": [
+            "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/tree-stages-timing",
+            "3"
+          ],
+          "environment": {
+            "KAEL_HEADLESS": "1"
+          },
+          "started_at_utc": "2026-10-17T21:24:09.158077+00:00",
+          "allocation_instrumented": false,
+          "finished_at_utc": "2026-10-17T21:24:10.229334+00:00",
+          "exit_code": 0,
+          "stdout": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/cpu-run-2.json",
+          "stderr": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/cpu-run-2.stderr.log"
+        },
+        {
+          "command": [
+            "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/tree-stages-timing",
+            "3"
+          ],
+          "environment": {
+            "KAEL_HEADLESS": "1"
+          },
+          "started_at_utc": "2026-10-17T21:24:10.229869+00:00",
+          "allocation_instrumented": false,
+          "finished_at_utc": "2026-10-17T21:24:11.429286+00:00",
+          "exit_code": 0,
+          "stdout": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/baseline-cpu-run-2.json",
+          "stderr": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/baseline-cpu-run-2.stderr.log"
+        },
+        {
+          "command": [
+            "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/tree-stages-timing",
+            "3"
+          ],
+          "environment": {
+            "KAEL_HEADLESS": "1"
+          },
+          "started_at_utc": "2026-10-17T21:24:11.430001+00:00",
+          "allocation_instrumented": false,
+          "finished_at_utc": "2026-10-17T21:24:12.625665+00:00",
+          "exit_code": 0,
+          "stdout": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/baseline-cpu-run-3.json",
+          "stderr": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/baseline-cpu-run-3.stderr.log"
+        },
+        {
+          "command": [
+            "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/tree-stages-timing",
+            "3"
+          ],
+          "environment": {
+            "KAEL_HEADLESS": "1"
+          },
+          "started_at_utc": "2026-10-17T21:24:12.626280+00:00",
+          "allocation_instrumented": false,
+          "finished_at_utc": "2026-10-17T21:24:13.740699+00:00",
+          "exit_code": 0,
+          "stdout": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/cpu-run-3.json",
+          "stderr": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/cpu-run-3.stderr.log"
+        },
+        {
+          "command": [
+            "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/tree-stages-alloc",
+            "3"
+          ],
+          "environment": {
+            "KAEL_HEADLESS": "1"
+          },
+          "started_at_utc": "2026-10-17T21:24:13.741329+00:00",
+          "allocation_instrumented": true,
+          "finished_at_utc": "2026-10-17T21:24:15.074814+00:00",
+          "exit_code": 0,
+          "stdout": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/baseline-alloc-run-1-raw.json",
+          "stderr": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/baseline-alloc-run-1.stderr.log"
+        },
+        {
+          "command": [
+            "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/tree-stages-alloc",
+            "3"
+          ],
+          "environment": {
+            "KAEL_HEADLESS": "1"
+          },
+          "started_at_utc": "2026-10-17T21:24:15.075895+00:00",
+          "allocation_instrumented": true,
+          "finished_at_utc": "2026-10-17T21:24:16.768983+00:00",
+          "exit_code": 0,
+          "stdout": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/alloc-run-1-raw.json",
+          "stderr": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/alloc-run-1.stderr.log"
+        }
+      ],
+      "all_runs_passed": true
+    },
+    "semantic_oracles_passed": 64,
+    "independent_cpu_process_pairs": 3,
+    "collapse_samples_per_revision": 9,
+    "expand_samples_per_revision": 9,
+    "allocation_processes_per_revision": 1,
+    "allocation_samples_per_operation_per_revision": 3,
+    "allocation_clocks_excluded_from_comparison": true,
+    "kael_resolved_features": [
+      "backtrace",
+      "font-kit",
+      "icons",
+      "leak-detection",
+      "rand",
+      "test-support"
+    ],
+    "kael_ui_resolved_features": [],
+    "executed_changed_source": [
+      "crates/kael_ui/src/navigation/virtual_tree.rs",
+      "crates/kael/src/accessibility/snapshot.rs"
+    ],
+    "other_changed_rust_excluded_by_cfg": [
+      "crates/kael/src/elements/lottie.rs",
+      "crates/kael/src/lottie.rs",
+      "crates/kael_notifications/src/platform/linux.rs"
+    ],
+    "cpu_time_unit": "nanoseconds",
+    "allocation_unit": "requested Rust payload bytes; allocator and native overhead excluded"
+  },
+  "calling_thread_cpu_summary": [
+    {
+      "operation": "collapse",
+      "stage": "accesskit_export_including_delta",
+      "samples_each": 9,
+      "baseline_median": 41523709,
+      "candidate_median": 34456792,
+      "baseline_min": 40810167,
+      "baseline_max": 42220667,
+      "candidate_min": 33502583,
+      "candidate_max": 35710250,
+      "median_change_percent": -17.018992691621072
+    },
+    {
+      "operation": "collapse",
+      "stage": "drop_temporary_wrappers",
+      "samples_each": 9,
+      "baseline_median": 503958,
+      "candidate_median": 511250,
+      "baseline_min": 476833,
+      "baseline_max": 609500,
+      "candidate_min": 457541,
+      "candidate_max": 566167,
+      "median_change_percent": 1.4469459756567105
+    },
+    {
+      "operation": "collapse",
+      "stage": "expansion_set",
+      "samples_each": 9,
+      "baseline_median": 4416,
+      "candidate_median": 4541,
+      "baseline_min": 4166,
+      "baseline_max": 7625,
+      "candidate_min": 3958,
+      "candidate_max": 11250,
+      "median_change_percent": 2.83061594202898
+    },
+    {
+      "operation": "collapse",
+      "stage": "model_flatten_index_catalog",
+      "samples_each": 9,
+      "baseline_median": 15561208,
+      "candidate_median": 16057833,
+      "baseline_min": 15242333,
+      "baseline_max": 16195208,
+      "candidate_min": 15410875,
+      "candidate_max": 17524584,
+      "median_change_percent": 3.1914296113772167
+    },
+    {
+      "operation": "collapse",
+      "stage": "node_map_delta_only",
+      "samples_each": 9,
+      "baseline_median": 39812166,
+      "candidate_median": 33781833,
+      "baseline_min": 38939709,
+      "baseline_max": 42660959,
+      "candidate_min": 33105000,
+      "candidate_max": 36609292,
+      "median_change_percent": -15.146960353777283
+    },
+    {
+      "operation": "collapse",
+      "stage": "prepare_full_logical_accessibility",
+      "samples_each": 9,
+      "baseline_median": 37883416,
+      "candidate_median": 38815583,
+      "baseline_min": 35318459,
+      "baseline_max": 39119833,
+      "candidate_min": 37316792,
+      "candidate_max": 40742625,
+      "median_change_percent": 2.4606202355141438
+    },
+    {
+      "operation": "collapse",
+      "stage": "publish_and_headless_frame",
+      "samples_each": 9,
+      "baseline_median": 577375,
+      "candidate_median": 601584,
+      "baseline_min": 529958,
+      "baseline_max": 733750,
+      "candidate_min": 523833,
+      "candidate_max": 686416,
+      "median_change_percent": 4.192942195280369
+    },
+    {
+      "operation": "collapse",
+      "stage": "release_previous_tree_handle",
+      "samples_each": 9,
+      "baseline_median": 2667,
+      "candidate_median": 2708,
+      "baseline_min": 2250,
+      "baseline_max": 3333,
+      "candidate_min": 2209,
+      "candidate_max": 3292,
+      "median_change_percent": 1.5373078365204407
+    },
+    {
+      "operation": "collapse",
+      "stage": "steady_frame_and_queued_reclaim",
+      "samples_each": 9,
+      "baseline_median": 8089875,
+      "candidate_median": 8003833,
+      "baseline_min": 7726833,
+      "baseline_max": 9486083,
+      "candidate_min": 7675667,
+      "candidate_max": 8583291,
+      "median_change_percent": -1.0635763840603274
+    },
+    {
+      "operation": "collapse",
+      "stage": "tree_node_wrappers",
+      "samples_each": 9,
+      "baseline_median": 621500,
+      "candidate_median": 584000,
+      "baseline_min": 555042,
+      "baseline_max": 688500,
+      "candidate_min": 528084,
+      "candidate_max": 1286375,
+      "median_change_percent": -6.033789219629925
+    },
+    {
+      "operation": "expand",
+      "stage": "accesskit_export_including_delta",
+      "samples_each": 9,
+      "baseline_median": 45884917,
+      "candidate_median": 38358458,
+      "baseline_min": 44759916,
+      "baseline_max": 48037875,
+      "candidate_min": 37722166,
+      "candidate_max": 39030958,
+      "median_change_percent": -16.40290424847014
+    },
+    {
+      "operation": "expand",
+      "stage": "drop_temporary_wrappers",
+      "samples_each": 9,
+      "baseline_median": 508416,
+      "candidate_median": 495750,
+      "baseline_min": 475709,
+      "baseline_max": 676583,
+      "candidate_min": 456208,
+      "candidate_max": 578834,
+      "median_change_percent": -2.491266993957708
+    },
+    {
+      "operation": "expand",
+      "stage": "expansion_set",
+      "samples_each": 9,
+      "baseline_median": 4916,
+      "candidate_median": 4834,
+      "baseline_min": 4333,
+      "baseline_max": 6125,
+      "candidate_min": 4250,
+      "candidate_max": 13500,
+      "median_change_percent": -1.6680227827502003
+    },
+    {
+      "operation": "expand",
+      "stage": "model_flatten_index_catalog",
+      "samples_each": 9,
+      "baseline_median": 16796167,
+      "candidate_median": 8376667,
+      "baseline_min": 16199042,
+      "baseline_max": 20479375,
+      "candidate_min": 8144083,
+      "candidate_max": 8520500,
+      "median_change_percent": -50.12750825828298
+    },
+    {
+      "operation": "expand",
+      "stage": "node_map_delta_only",
+      "samples_each": 9,
+      "baseline_median": 39813583,
+      "candidate_median": 32866458,
+      "baseline_min": 39090791,
+      "baseline_max": 43015792,
+      "candidate_min": 32579917,
+      "candidate_max": 33934750,
+      "median_change_percent": -17.449132875079343
+    },
+    {
+      "operation": "expand",
+      "stage": "prepare_full_logical_accessibility",
+      "samples_each": 9,
+      "baseline_median": 35634292,
+      "candidate_median": 37786959,
+      "baseline_min": 35144917,
+      "baseline_max": 38398792,
+      "candidate_min": 37350209,
+      "candidate_max": 38270959,
+      "median_change_percent": 6.040998373140116
+    },
+    {
+      "operation": "expand",
+      "stage": "publish_and_headless_frame",
+      "samples_each": 9,
+      "baseline_median": 535708,
+      "candidate_median": 527625,
+      "baseline_min": 513833,
+      "baseline_max": 657375,
+      "candidate_min": 520333,
+      "candidate_max": 582541,
+      "median_change_percent": -1.5088443704406096
+    },
+    {
+      "operation": "expand",
+      "stage": "release_previous_tree_handle",
+      "samples_each": 9,
+      "baseline_median": 2542,
+      "candidate_median": 2542,
+      "baseline_min": 2416,
+      "baseline_max": 2958,
+      "candidate_min": 2084,
+      "candidate_max": 2750,
+      "median_change_percent": 0.0
+    },
+    {
+      "operation": "expand",
+      "stage": "steady_frame_and_queued_reclaim",
+      "samples_each": 9,
+      "baseline_median": 8447584,
+      "candidate_median": 8147250,
+      "baseline_min": 7951834,
+      "baseline_max": 9082167,
+      "candidate_min": 8037125,
+      "candidate_max": 9317458,
+      "median_change_percent": -3.555265031990207
+    },
+    {
+      "operation": "expand",
+      "stage": "tree_node_wrappers",
+      "samples_each": 9,
+      "baseline_median": 578208,
+      "candidate_median": 567833,
+      "baseline_min": 549666,
+      "baseline_max": 725667,
+      "candidate_min": 541209,
+      "candidate_max": 652291,
+      "median_change_percent": -1.7943369859981129
+    }
+  ],
+  "calling_thread_cpu_pairs": [
+    {
+      "pair": 1,
+      "operation": "collapse",
+      "stage": "accesskit_export_including_delta",
+      "baseline_thread_cpu_ns_median": 41523709,
+      "candidate_thread_cpu_ns_median": 33647209
+    },
+    {
+      "pair": 1,
+      "operation": "collapse",
+      "stage": "drop_temporary_wrappers",
+      "baseline_thread_cpu_ns_median": 510500,
+      "candidate_thread_cpu_ns_median": 458542
+    },
+    {
+      "pair": 1,
+      "operation": "collapse",
+      "stage": "expansion_set",
+      "baseline_thread_cpu_ns_median": 4459,
+      "candidate_thread_cpu_ns_median": 4500
+    },
+    {
+      "pair": 1,
+      "operation": "collapse",
+      "stage": "model_flatten_index_catalog",
+      "baseline_thread_cpu_ns_median": 16105125,
+      "candidate_thread_cpu_ns_median": 15785542
+    },
+    {
+      "pair": 1,
+      "operation": "collapse",
+      "stage": "node_map_delta_only",
+      "baseline_thread_cpu_ns_median": 40662834,
+      "candidate_thread_cpu_ns_median": 33781833
+    },
+    {
+      "pair": 1,
+      "operation": "collapse",
+      "stage": "prepare_full_logical_accessibility",
+      "baseline_thread_cpu_ns_median": 38420167,
+      "candidate_thread_cpu_ns_median": 39014000
+    },
+    {
+      "pair": 1,
+      "operation": "collapse",
+      "stage": "publish_and_headless_frame",
+      "baseline_thread_cpu_ns_median": 592375,
+      "candidate_thread_cpu_ns_median": 601584
+    },
+    {
+      "pair": 1,
+      "operation": "collapse",
+      "stage": "release_previous_tree_handle",
+      "baseline_thread_cpu_ns_median": 2500,
+      "candidate_thread_cpu_ns_median": 2542
+    },
+    {
+      "pair": 1,
+      "operation": "collapse",
+      "stage": "steady_frame_and_queued_reclaim",
+      "baseline_thread_cpu_ns_median": 9082000,
+      "candidate_thread_cpu_ns_median": 8003833
+    },
+    {
+      "pair": 1,
+      "operation": "collapse",
+      "stage": "tree_node_wrappers",
+      "baseline_thread_cpu_ns_median": 621500,
+      "candidate_thread_cpu_ns_median": 531958
+    },
+    {
+      "pair": 1,
+      "operation": "expand",
+      "stage": "accesskit_export_including_delta",
+      "baseline_thread_cpu_ns_median": 46050459,
+      "candidate_thread_cpu_ns_median": 38358458
+    },
+    {
+      "pair": 1,
+      "operation": "expand",
+      "stage": "drop_temporary_wrappers",
+      "baseline_thread_cpu_ns_median": 528958,
+      "candidate_thread_cpu_ns_median": 467292
+    },
+    {
+      "pair": 1,
+      "operation": "expand",
+      "stage": "expansion_set",
+      "baseline_thread_cpu_ns_median": 4958,
+      "candidate_thread_cpu_ns_median": 4458
+    },
+    {
+      "pair": 1,
+      "operation": "expand",
+      "stage": "model_flatten_index_catalog",
+      "baseline_thread_cpu_ns_median": 19490166,
+      "candidate_thread_cpu_ns_median": 8314750
+    },
+    {
+      "pair": 1,
+      "operation": "expand",
+      "stage": "node_map_delta_only",
+      "baseline_thread_cpu_ns_median": 39715917,
+      "candidate_thread_cpu_ns_median": 32661333
+    },
+    {
+      "pair": 1,
+      "operation": "expand",
+      "stage": "prepare_full_logical_accessibility",
+      "baseline_thread_cpu_ns_median": 37524375,
+      "candidate_thread_cpu_ns_median": 38140083
+    },
+    {
+      "pair": 1,
+      "operation": "expand",
+      "stage": "publish_and_headless_frame",
+      "baseline_thread_cpu_ns_median": 644875,
+      "candidate_thread_cpu_ns_median": 521500
+    },
+    {
+      "pair": 1,
+      "operation": "expand",
+      "stage": "release_previous_tree_handle",
+      "baseline_thread_cpu_ns_median": 2583,
+      "candidate_thread_cpu_ns_median": 2417
+    },
+    {
+      "pair": 1,
+      "operation": "expand",
+      "stage": "steady_frame_and_queued_reclaim",
+      "baseline_thread_cpu_ns_median": 8681667,
+      "candidate_thread_cpu_ns_median": 8147250
+    },
+    {
+      "pair": 1,
+      "operation": "expand",
+      "stage": "tree_node_wrappers",
+      "baseline_thread_cpu_ns_median": 653041,
+      "candidate_thread_cpu_ns_median": 544625
+    },
+    {
+      "pair": 2,
+      "operation": "collapse",
+      "stage": "accesskit_export_including_delta",
+      "baseline_thread_cpu_ns_median": 41593208,
+      "candidate_thread_cpu_ns_median": 34456792
+    },
+    {
+      "pair": 2,
+      "operation": "collapse",
+      "stage": "drop_temporary_wrappers",
+      "baseline_thread_cpu_ns_median": 508167,
+      "candidate_thread_cpu_ns_median": 527459
+    },
+    {
+      "pair": 2,
+      "operation": "collapse",
+      "stage": "expansion_set",
+      "baseline_thread_cpu_ns_median": 4416,
+      "candidate_thread_cpu_ns_median": 4583
+    },
+    {
+      "pair": 2,
+      "operation": "collapse",
+      "stage": "model_flatten_index_catalog",
+      "baseline_thread_cpu_ns_median": 15561208,
+      "candidate_thread_cpu_ns_median": 16258584
+    },
+    {
+      "pair": 2,
+      "operation": "collapse",
+      "stage": "node_map_delta_only",
+      "baseline_thread_cpu_ns_median": 39889917,
+      "candidate_thread_cpu_ns_median": 34547666
+    },
+    {
+      "pair": 2,
+      "operation": "collapse",
+      "stage": "prepare_full_logical_accessibility",
+      "baseline_thread_cpu_ns_median": 35640625,
+      "candidate_thread_cpu_ns_median": 38815583
+    },
+    {
+      "pair": 2,
+      "operation": "collapse",
+      "stage": "publish_and_headless_frame",
+      "baseline_thread_cpu_ns_median": 577375,
+      "candidate_thread_cpu_ns_median": 682042
+    },
+    {
+      "pair": 2,
+      "operation": "collapse",
+      "stage": "release_previous_tree_handle",
+      "baseline_thread_cpu_ns_median": 2292,
+      "candidate_thread_cpu_ns_median": 2708
+    },
+    {
+      "pair": 2,
+      "operation": "collapse",
+      "stage": "steady_frame_and_queued_reclaim",
+      "baseline_thread_cpu_ns_median": 7978750,
+      "candidate_thread_cpu_ns_median": 7804250
+    },
+    {
+      "pair": 2,
+      "operation": "collapse",
+      "stage": "tree_node_wrappers",
+      "baseline_thread_cpu_ns_median": 640916,
+      "candidate_thread_cpu_ns_median": 645459
+    },
+    {
+      "pair": 2,
+      "operation": "expand",
+      "stage": "accesskit_export_including_delta",
+      "baseline_thread_cpu_ns_median": 46159750,
+      "candidate_thread_cpu_ns_median": 38478042
+    },
+    {
+      "pair": 2,
+      "operation": "expand",
+      "stage": "drop_temporary_wrappers",
+      "baseline_thread_cpu_ns_median": 508416,
+      "candidate_thread_cpu_ns_median": 505000
+    },
+    {
+      "pair": 2,
+      "operation": "expand",
+      "stage": "expansion_set",
+      "baseline_thread_cpu_ns_median": 4916,
+      "candidate_thread_cpu_ns_median": 4875
+    },
+    {
+      "pair": 2,
+      "operation": "expand",
+      "stage": "model_flatten_index_catalog",
+      "baseline_thread_cpu_ns_median": 16787084,
+      "candidate_thread_cpu_ns_median": 8376667
+    },
+    {
+      "pair": 2,
+      "operation": "expand",
+      "stage": "node_map_delta_only",
+      "baseline_thread_cpu_ns_median": 39947042,
+      "candidate_thread_cpu_ns_median": 33376833
+    },
+    {
+      "pair": 2,
+      "operation": "expand",
+      "stage": "prepare_full_logical_accessibility",
+      "baseline_thread_cpu_ns_median": 35423459,
+      "candidate_thread_cpu_ns_median": 37514750
+    },
+    {
+      "pair": 2,
+      "operation": "expand",
+      "stage": "publish_and_headless_frame",
+      "baseline_thread_cpu_ns_median": 520917,
+      "candidate_thread_cpu_ns_median": 527083
+    },
+    {
+      "pair": 2,
+      "operation": "expand",
+      "stage": "release_previous_tree_handle",
+      "baseline_thread_cpu_ns_median": 2500,
+      "candidate_thread_cpu_ns_median": 2500
+    },
+    {
+      "pair": 2,
+      "operation": "expand",
+      "stage": "steady_frame_and_queued_reclaim",
+      "baseline_thread_cpu_ns_median": 8116833,
+      "candidate_thread_cpu_ns_median": 8114917
+    },
+    {
+      "pair": 2,
+      "operation": "expand",
+      "stage": "tree_node_wrappers",
+      "baseline_thread_cpu_ns_median": 578208,
+      "candidate_thread_cpu_ns_median": 567833
+    },
+    {
+      "pair": 3,
+      "operation": "collapse",
+      "stage": "accesskit_export_including_delta",
+      "baseline_thread_cpu_ns_median": 41346875,
+      "candidate_thread_cpu_ns_median": 34640708
+    },
+    {
+      "pair": 3,
+      "operation": "collapse",
+      "stage": "drop_temporary_wrappers",
+      "baseline_thread_cpu_ns_median": 492084,
+      "candidate_thread_cpu_ns_median": 502417
+    },
+    {
+      "pair": 3,
+      "operation": "collapse",
+      "stage": "expansion_set",
+      "baseline_thread_cpu_ns_median": 4292,
+      "candidate_thread_cpu_ns_median": 5291
+    },
+    {
+      "pair": 3,
+      "operation": "collapse",
+      "stage": "model_flatten_index_catalog",
+      "baseline_thread_cpu_ns_median": 15342750,
+      "candidate_thread_cpu_ns_median": 15938833
+    },
+    {
+      "pair": 3,
+      "operation": "collapse",
+      "stage": "node_map_delta_only",
+      "baseline_thread_cpu_ns_median": 39378625,
+      "candidate_thread_cpu_ns_median": 33434833
+    },
+    {
+      "pair": 3,
+      "operation": "collapse",
+      "stage": "prepare_full_logical_accessibility",
+      "baseline_thread_cpu_ns_median": 36439792,
+      "candidate_thread_cpu_ns_median": 37521292
+    },
+    {
+      "pair": 3,
+      "operation": "collapse",
+      "stage": "publish_and_headless_frame",
+      "baseline_thread_cpu_ns_median": 535542,
+      "candidate_thread_cpu_ns_median": 524709
+    },
+    {
+      "pair": 3,
+      "operation": "collapse",
+      "stage": "release_previous_tree_handle",
+      "baseline_thread_cpu_ns_median": 3041,
+      "candidate_thread_cpu_ns_median": 2875
+    },
+    {
+      "pair": 3,
+      "operation": "collapse",
+      "stage": "steady_frame_and_queued_reclaim",
+      "baseline_thread_cpu_ns_median": 8089875,
+      "candidate_thread_cpu_ns_median": 8195417
+    },
+    {
+      "pair": 3,
+      "operation": "collapse",
+      "stage": "tree_node_wrappers",
+      "baseline_thread_cpu_ns_median": 582792,
+      "candidate_thread_cpu_ns_median": 584000
+    },
+    {
+      "pair": 3,
+      "operation": "expand",
+      "stage": "accesskit_export_including_delta",
+      "baseline_thread_cpu_ns_median": 45181083,
+      "candidate_thread_cpu_ns_median": 37799709
+    },
+    {
+      "pair": 3,
+      "operation": "expand",
+      "stage": "drop_temporary_wrappers",
+      "baseline_thread_cpu_ns_median": 501916,
+      "candidate_thread_cpu_ns_median": 497708
+    },
+    {
+      "pair": 3,
+      "operation": "expand",
+      "stage": "expansion_set",
+      "baseline_thread_cpu_ns_median": 4417,
+      "candidate_thread_cpu_ns_median": 4834
+    },
+    {
+      "pair": 3,
+      "operation": "expand",
+      "stage": "model_flatten_index_catalog",
+      "baseline_thread_cpu_ns_median": 16476042,
+      "candidate_thread_cpu_ns_median": 8428500
+    },
+    {
+      "pair": 3,
+      "operation": "expand",
+      "stage": "node_map_delta_only",
+      "baseline_thread_cpu_ns_median": 39194417,
+      "candidate_thread_cpu_ns_median": 33095417
+    },
+    {
+      "pair": 3,
+      "operation": "expand",
+      "stage": "prepare_full_logical_accessibility",
+      "baseline_thread_cpu_ns_median": 35634292,
+      "candidate_thread_cpu_ns_median": 37902125
+    },
+    {
+      "pair": 3,
+      "operation": "expand",
+      "stage": "publish_and_headless_frame",
+      "baseline_thread_cpu_ns_median": 535708,
+      "candidate_thread_cpu_ns_median": 547916
+    },
+    {
+      "pair": 3,
+      "operation": "expand",
+      "stage": "release_previous_tree_handle",
+      "baseline_thread_cpu_ns_median": 2833,
+      "candidate_thread_cpu_ns_median": 2709
+    },
+    {
+      "pair": 3,
+      "operation": "expand",
+      "stage": "steady_frame_and_queued_reclaim",
+      "baseline_thread_cpu_ns_median": 8200833,
+      "candidate_thread_cpu_ns_median": 8435875
+    },
+    {
+      "pair": 3,
+      "operation": "expand",
+      "stage": "tree_node_wrappers",
+      "baseline_thread_cpu_ns_median": 553875,
+      "candidate_thread_cpu_ns_median": 646750
+    }
+  ],
+  "requested_rust_payload_allocation_summary": [
+    {
+      "operation": "collapse",
+      "stage": "accesskit_export_including_delta",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 184,
+        "candidate_median": 181,
+        "change": -3
+      },
+      "requested_bytes": {
+        "baseline_median": 4357010,
+        "candidate_median": 228218,
+        "change": -4128792
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 184,
+        "candidate_median": 181,
+        "change": -3
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 4357010,
+        "candidate_median": 228218,
+        "change": -4128792
+      },
+      "reallocation_calls": {
+        "baseline_median": 64,
+        "candidate_median": 64,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 212447802,
+        "candidate_median": 212447802,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 212447802,
+        "candidate_median": 212447802,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 215986762,
+        "candidate_median": 212571196,
+        "change": -3415566
+      }
+    },
+    {
+      "operation": "collapse",
+      "stage": "drop_temporary_wrappers",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "requested_bytes": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 51,
+        "candidate_median": 51,
+        "change": 0
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 12804776,
+        "candidate_median": 12804776,
+        "change": 0
+      },
+      "reallocation_calls": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 225225185,
+        "candidate_median": 225225185,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 212420409,
+        "candidate_median": 212420409,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 225225185,
+        "candidate_median": 225225185,
+        "change": 0
+      }
+    },
+    {
+      "operation": "collapse",
+      "stage": "expansion_set",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 52,
+        "candidate_median": 52,
+        "change": 0
+      },
+      "requested_bytes": {
+        "baseline_median": 2684,
+        "candidate_median": 2684,
+        "change": 0
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 27,
+        "candidate_median": 27,
+        "change": 0
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 1108,
+        "candidate_median": 1108,
+        "change": 0
+      },
+      "reallocation_calls": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 134001938,
+        "candidate_median": 134001938,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 134003514,
+        "candidate_median": 134003514,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 134003634,
+        "candidate_median": 134003634,
+        "change": 0
+      }
+    },
+    {
+      "operation": "collapse",
+      "stage": "model_flatten_index_catalog",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 44,
+        "candidate_median": 44,
+        "change": 0
+      },
+      "requested_bytes": {
+        "baseline_median": 51028309,
+        "candidate_median": 51028309,
+        "change": 0
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 35,
+        "candidate_median": 35,
+        "change": 0
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 22150844,
+        "candidate_median": 22150844,
+        "change": 0
+      },
+      "reallocation_calls": {
+        "baseline_median": 17,
+        "candidate_median": 17,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 134005574,
+        "candidate_median": 134005574,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 162883039,
+        "candidate_median": 162883039,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 165045735,
+        "candidate_median": 165045735,
+        "change": 0
+      }
+    },
+    {
+      "operation": "collapse",
+      "stage": "node_map_delta_only",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 20,
+        "candidate_median": 17,
+        "change": -3
+      },
+      "requested_bytes": {
+        "baseline_median": 4195872,
+        "candidate_median": 67080,
+        "change": -4128792
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 20,
+        "candidate_median": 17,
+        "change": -3
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 4195872,
+        "candidate_median": 67080,
+        "change": -4128792
+      },
+      "reallocation_calls": {
+        "baseline_median": 14,
+        "candidate_median": 14,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 212445736,
+        "candidate_median": 212445736,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 212445736,
+        "candidate_median": 212445736,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 215984696,
+        "candidate_median": 212479600,
+        "change": -3505096
+      }
+    },
+    {
+      "operation": "collapse",
+      "stage": "prepare_full_logical_accessibility",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 192394,
+        "candidate_median": 192394,
+        "change": 0
+      },
+      "requested_bytes": {
+        "baseline_median": 101243631,
+        "candidate_median": 101243631,
+        "change": 0
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 282,
+        "candidate_median": 282,
+        "change": 0
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 38905640,
+        "candidate_median": 38905640,
+        "change": 0
+      },
+      "reallocation_calls": {
+        "baseline_median": 279,
+        "candidate_median": 279,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 162885113,
+        "candidate_median": 162885113,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 225223104,
+        "candidate_median": 225223104,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 262096760,
+        "candidate_median": 262096760,
+        "change": 0
+      }
+    },
+    {
+      "operation": "collapse",
+      "stage": "publish_and_headless_frame",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 2221,
+        "candidate_median": 2221,
+        "change": 0
+      },
+      "requested_bytes": {
+        "baseline_median": 607477,
+        "candidate_median": 607477,
+        "change": 0
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 2123,
+        "candidate_median": 2123,
+        "change": 0
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 585093,
+        "candidate_median": 585093,
+        "change": 0
+      },
+      "reallocation_calls": {
+        "baseline_median": 50,
+        "candidate_median": 50,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 212422479,
+        "candidate_median": 212422479,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 212443663,
+        "candidate_median": 212443663,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 212721390,
+        "candidate_median": 212721390,
+        "change": 0
+      }
+    },
+    {
+      "operation": "collapse",
+      "stage": "release_previous_tree_handle",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "requested_bytes": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 58,
+        "candidate_median": 58,
+        "change": 0
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 14452,
+        "candidate_median": 14452,
+        "change": 0
+      },
+      "reallocation_calls": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 212453389,
+        "candidate_median": 212453389,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 212438937,
+        "candidate_median": 212438937,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 212453389,
+        "candidate_median": 212453389,
+        "change": 0
+      }
+    },
+    {
+      "operation": "collapse",
+      "stage": "steady_frame_and_queued_reclaim",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 4122,
+        "candidate_median": 4122,
+        "change": 0
+      },
+      "requested_bytes": {
+        "baseline_median": 1155170,
+        "candidate_median": 1155170,
+        "change": 0
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 204237,
+        "candidate_median": 204237,
+        "change": 0
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 87669602,
+        "candidate_median": 87669602,
+        "change": 0
+      },
+      "reallocation_calls": {
+        "baseline_median": 88,
+        "candidate_median": 88,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 212443316,
+        "candidate_median": 212443316,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 125928884,
+        "candidate_median": 125928884,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 212742395,
+        "candidate_median": 212742395,
+        "change": 0
+      }
+    },
+    {
+      "operation": "collapse",
+      "stage": "tree_node_wrappers",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 26,
+        "candidate_median": 26,
+        "change": 0
+      },
+      "requested_bytes": {
+        "baseline_median": 12803200,
+        "candidate_median": 12803200,
+        "change": 0
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "reallocation_calls": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 121196673,
+        "candidate_median": 121196673,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 133999873,
+        "candidate_median": 133999873,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 133999873,
+        "candidate_median": 133999873,
+        "change": 0
+      }
+    },
+    {
+      "operation": "expand",
+      "stage": "accesskit_export_including_delta",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 8121,
+        "candidate_median": 8118,
+        "change": -3
+      },
+      "requested_bytes": {
+        "baseline_median": 6075754,
+        "candidate_median": 1946962,
+        "change": -4128792
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 8121,
+        "candidate_median": 8118,
+        "change": -3
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 6075754,
+        "candidate_median": 1946962,
+        "change": -4128792
+      },
+      "reallocation_calls": {
+        "baseline_median": 57,
+        "candidate_median": 57,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 212473241,
+        "candidate_median": 212473241,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 212473241,
+        "candidate_median": 212473241,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 216012201,
+        "candidate_median": 214211147,
+        "change": -1801054
+      }
+    },
+    {
+      "operation": "expand",
+      "stage": "drop_temporary_wrappers",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "requested_bytes": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 52,
+        "candidate_median": 52,
+        "change": 0
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 12804808,
+        "candidate_median": 12804808,
+        "change": 0
+      },
+      "reallocation_calls": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 225258610,
+        "candidate_median": 225258610,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 212453802,
+        "candidate_median": 212453802,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 225258610,
+        "candidate_median": 225258610,
+        "change": 0
+      }
+    },
+    {
+      "operation": "expand",
+      "stage": "expansion_set",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 54,
+        "candidate_median": 54,
+        "change": 0
+      },
+      "requested_bytes": {
+        "baseline_median": 2732,
+        "candidate_median": 2732,
+        "change": 0
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 28,
+        "candidate_median": 28,
+        "change": 0
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 1124,
+        "candidate_median": 1124,
+        "change": 0
+      },
+      "reallocation_calls": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 138736217,
+        "candidate_median": 138736217,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 138737825,
+        "candidate_median": 138737825,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 138737913,
+        "candidate_median": 138737913,
+        "change": 0
+      }
+    },
+    {
+      "operation": "expand",
+      "stage": "model_flatten_index_catalog",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 43,
+        "candidate_median": 25,
+        "change": -18
+      },
+      "requested_bytes": {
+        "baseline_median": 51128245,
+        "candidate_median": 42477417,
+        "change": -8650828
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 36,
+        "candidate_median": 18,
+        "change": -18
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 26476228,
+        "candidate_median": 17825400,
+        "change": -8650828
+      },
+      "reallocation_calls": {
+        "baseline_median": 17,
+        "candidate_median": 16,
+        "change": -1
+      },
+      "live_requested_before": {
+        "baseline_median": 138739883,
+        "candidate_median": 138739883,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 163391900,
+        "candidate_median": 163391900,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 169880044,
+        "candidate_median": 163391900,
+        "change": -6488144
+      }
+    },
+    {
+      "operation": "expand",
+      "stage": "node_map_delta_only",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 15,
+        "candidate_median": 12,
+        "change": -3
+      },
+      "requested_bytes": {
+        "baseline_median": 4194880,
+        "candidate_median": 66088,
+        "change": -4128792
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 15,
+        "candidate_median": 12,
+        "change": -3
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 4194880,
+        "candidate_median": 66088,
+        "change": -4128792
+      },
+      "reallocation_calls": {
+        "baseline_median": 10,
+        "candidate_median": 10,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 212471177,
+        "candidate_median": 212471177,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 212471177,
+        "candidate_median": 212471177,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 216010137,
+        "candidate_median": 212504529,
+        "change": -3505608
+      }
+    },
+    {
+      "operation": "expand",
+      "stage": "prepare_full_logical_accessibility",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 200404,
+        "candidate_median": 200404,
+        "change": 0
+      },
+      "requested_bytes": {
+        "baseline_median": 102336935,
+        "candidate_median": 102336935,
+        "change": 0
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 292,
+        "candidate_median": 292,
+        "change": 0
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 40474376,
+        "candidate_median": 40474376,
+        "change": 0
+      },
+      "reallocation_calls": {
+        "baseline_median": 289,
+        "candidate_median": 289,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 163393972,
+        "candidate_median": 163393972,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 225256531,
+        "candidate_median": 225256531,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 263666187,
+        "candidate_median": 263666187,
+        "change": 0
+      }
+    },
+    {
+      "operation": "expand",
+      "stage": "publish_and_headless_frame",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 2064,
+        "candidate_median": 2064,
+        "change": 0
+      },
+      "requested_bytes": {
+        "baseline_median": 586767,
+        "candidate_median": 586767,
+        "change": 0
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 2030,
+        "candidate_median": 2030,
+        "change": 0
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 573531,
+        "candidate_median": 573531,
+        "change": 0
+      },
+      "reallocation_calls": {
+        "baseline_median": 40,
+        "candidate_median": 40,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 212455870,
+        "candidate_median": 212455870,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 212469106,
+        "candidate_median": 212469106,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 212753317,
+        "candidate_median": 212753317,
+        "change": 0
+      }
+    },
+    {
+      "operation": "expand",
+      "stage": "release_previous_tree_handle",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "requested_bytes": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 58,
+        "candidate_median": 58,
+        "change": 0
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 14448,
+        "candidate_median": 14448,
+        "change": 0
+      },
+      "reallocation_calls": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 212479112,
+        "candidate_median": 212479112,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 212464664,
+        "candidate_median": 212464664,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 212479112,
+        "candidate_median": 212479112,
+        "change": 0
+      }
+    },
+    {
+      "operation": "expand",
+      "stage": "steady_frame_and_queued_reclaim",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 4010,
+        "candidate_median": 4010,
+        "change": 0
+      },
+      "requested_bytes": {
+        "baseline_median": 1144222,
+        "candidate_median": 1144222,
+        "change": 0
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 196128,
+        "candidate_median": 196128,
+        "change": 0
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 92359566,
+        "candidate_median": 92359566,
+        "change": 0
+      },
+      "reallocation_calls": {
+        "baseline_median": 80,
+        "candidate_median": 80,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 212466737,
+        "candidate_median": 212466737,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 121251393,
+        "candidate_median": 121251393,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 212764320,
+        "candidate_median": 212764320,
+        "change": 0
+      }
+    },
+    {
+      "operation": "expand",
+      "stage": "tree_node_wrappers",
+      "samples_each": 3,
+      "allocation_events_including_realloc": {
+        "baseline_median": 26,
+        "candidate_median": 26,
+        "change": 0
+      },
+      "requested_bytes": {
+        "baseline_median": 12803200,
+        "candidate_median": 12803200,
+        "change": 0
+      },
+      "deallocation_events_including_realloc": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "freed_requested_bytes": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "reallocation_calls": {
+        "baseline_median": 0,
+        "candidate_median": 0,
+        "change": 0
+      },
+      "live_requested_before": {
+        "baseline_median": 125930954,
+        "candidate_median": 125930954,
+        "change": 0
+      },
+      "live_requested_after": {
+        "baseline_median": 138734154,
+        "candidate_median": 138734154,
+        "change": 0
+      },
+      "peak_live_requested": {
+        "baseline_median": 138734154,
+        "candidate_median": 138734154,
+        "change": 0
+      }
+    }
+  ],
+  "rejected_earlier_candidate": {
+    "source_commit": "91770ddb339447f921544b30842b4841b4203842",
+    "reason": "Ordered generic-setter prefix/replay fast path made collapse model construction consistently slower; replaced after release profiling despite passing semantic tests.",
+    "collapse_model_thread_cpu_ns_median": {
+      "baseline": 16109167,
+      "candidate": 28789542,
+      "change_percent": 78.71527435279553
+    },
+    "all_raw_samples_retained": true,
+    "record": ".artifacts/2026-10-17-tree-stages/candidate/evidence.json"
+  },
+  "validation": {
+    "current_ui_and_static_checks": {
+      "source_commit": "6b2ae1170d2ad6d1aa76de6f07189fa9432bacfa",
+      "files_sha256": {
+        "crates/kael/src/accessibility/snapshot.rs": "cc39b8428ec2c696ad4fdb985b134ab9b4c93e9fc0a44540a2a117d305f16b56",
+        "crates/kael_ui/src/navigation/virtual_tree.rs": "487ed458e7568176561526bcf792c0b215c1bee71df68b43e83bf0ef9c0b0a56",
+        "Cargo.toml": "ff54489574d916c2213a0c1fc7ec8c39f677b985d5d42bb7a20c7e970333177a",
+        "Cargo.lock": "b1b84f981fcc7d4c0e7a60a0d08a4f5ea5f66fc5f0ed086fc40eeee6e1a70e64"
+      },
+      "unchanged_core_validation": ".artifacts/2026-10-17-tree-stages/integration.json",
+      "checks": [
+        {
+          "name": "ui",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "kael_ui",
+            "--lib",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_code": 0,
+          "seconds": 32.25185012817383,
+          "log": ".artifacts/2026-10-17-tree-stages/candidate-v2/integration-ui.log",
+          "log_sha256": "a69179db76ea4150c3cc88a25ac692101e1cf06543bbcb917b848a42d614b3be"
+        },
+        {
+          "name": "clippy",
+          "command": [
+            "cargo",
+            "clippy",
+            "--locked",
+            "-p",
+            "kael",
+            "-p",
+            "kael_ui",
+            "--all-targets",
+            "--features",
+            "kael/lottie",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "exit_code": 0,
+          "seconds": 13.423033952713013,
+          "log": ".artifacts/2026-10-17-tree-stages/candidate-v2/integration-clippy.log",
+          "log_sha256": "dd8c6fcd61a4f6598201e2255fec9481e2fb8262f5d918d12f79ff9e4fcafb0e"
+        },
+        {
+          "name": "wasm",
+          "command": [
+            "cargo",
+            "check",
+            "--locked",
+            "-p",
+            "kael_ui",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--no-default-features",
+            "--features",
+            "kael/browser,kael/lottie"
+          ],
+          "exit_code": 0,
+          "seconds": 4.823672771453857,
+          "log": ".artifacts/2026-10-17-tree-stages/candidate-v2/integration-wasm.log",
+          "log_sha256": "28697e778af1d258e615a752e6f05976ea944bb732ccebc7ee701873215b5f9e"
+        },
+        {
+          "name": "fmt",
+          "command": [
+            "cargo",
+            "fmt",
+            "--all",
+            "--check"
+          ],
+          "exit_code": 0,
+          "seconds": 36.266221046447754,
+          "log": ".artifacts/2026-10-17-tree-stages/candidate-v2/integration-fmt.log",
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "source_files_unchanged_during_validation": true
+    },
+    "core_unchanged_source": {
+      "record": ".artifacts/2026-10-17-tree-stages/integration.json",
+      "core_source_sha256": "cc39b8428ec2c696ad4fdb985b134ab9b4c93e9fc0a44540a2a117d305f16b56",
+      "passed": 2188,
+      "ignored": 2,
+      "qualification": "The exact unchanged core file passed before the UI-only constructor revision. The two existing explicit native diagnostic probes remain opt-in; they are not new ignored acceptance tests."
+    },
+    "focused_tests": {
+      "snapshot_delta_passed": 8,
+      "virtual_tree_passed": 15,
+      "ignored": 0
+    },
+    "source_review": "Root and independent renderer reviewed final snapshot and constructor proofs; memory independently validated the complete release diagnostic with all regressions/tradeoffs retained.",
+    "independent_measurement_review": {
+      "reviewer": "memory agent, read-only independent audit",
+      "result": "PASS",
+      "verified": "32 artifact hashes, 4 binaries, 6 immutable Git blobs, identical harness/config except source marker, alternating 8 processes, 64 semantic oracles, 132 payload balances; independently recomputed 20 CPU groups, 60 pair medians and 20 allocation groups.",
+      "artifact": {
+        "path": ".artifacts/2026-10-17-tree-stages/candidate-v2-independent-audit.json",
+        "sha256": "247280a515b84ff8c8276aa34c1f6cb01b6d19813deb20a5e3a4a4ceecf50313"
+      }
+    }
+  },
+  "raw_artifacts": [
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/Cargo.toml",
+      "bytes": 533,
+      "sha256": "1bfee3a5c40082456ee54770618633e7cfca4154cb67df6f503cb259c650b5a9"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/Cargo.lock",
+      "bytes": 148910,
+      "sha256": "abfb325afe209ee97a4d626e0628ae1aaabb83a8f2760bafe8226e8ca3579653"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/commands.json",
+      "bytes": 1519,
+      "sha256": "6d34089c9a0ad420919d34e579162fd7fa555ff0bbfdc5c929f7d8bf333f159f"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/measurement-conditions.json",
+      "bytes": 6626,
+      "sha256": "5c1c93bc35577491d0678145e1cff31b1e8998ad551dd4b5b9cfa63b0663caa3"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/analyze.py",
+      "bytes": 11236,
+      "sha256": "ec7e2bc3a8c46caab824726030613f47177df00d9969d814e1c0c4ffa53a33aa"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/run-pairs.py",
+      "bytes": 5246,
+      "sha256": "7663136083dc409ba915a4f0802071770928692fc53b77d26764ce8fb889256d"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/processes-before.txt",
+      "bytes": 68355,
+      "sha256": "6de000fd220fb3bc32efd19d071ed2cf0a5d242f164d587da2193401615e8a53"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/processes-after.txt",
+      "bytes": 68355,
+      "sha256": "a6738b8227a797c1424073d563950cda53fcce717fb27b9077dff505cb1e591b"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/src/main-timing.rs",
+      "bytes": 20829,
+      "sha256": "368784e0b5716a4e9b38ced1f2b25289ee0e3839c77556819f482d409cbaa681"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/src/main-alloc.rs",
+      "bytes": 21185,
+      "sha256": "99ee91a5845fe04570bba553bdf496f15c5ac55f9c472ef6d43d6012044e87cc"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/tree-stages-timing",
+      "bytes": 7120248,
+      "sha256": "c6acb9054b512a99ab1b26215a5c5f056a557196f0437267832719d6229a2c5a"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/tree-stages-alloc",
+      "bytes": 7622168,
+      "sha256": "8ac2c84aa72f6c0f07bc135e570280f08af3db72799459cf24c9f3b48a77f5b5"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/build-timing.log",
+      "bytes": 551,
+      "sha256": "169d8d693296a0719eecfd1c0f38a49788c29736e7c9cb5543af8b9967481ae4"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/build-alloc.log",
+      "bytes": 444,
+      "sha256": "99b4b2082e98ad07c89ecd9f3dc4a22ddb6748a75d727ac7d0254a6a507cd74d"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/alloc-run-1.json",
+      "bytes": 36473,
+      "sha256": "ac99d4b854b74e5a2709c86931432443995261d0326d44e626ab4c9385b28f34"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/alloc-run-1-raw.json",
+      "bytes": 31411,
+      "sha256": "84a33117b46740275899e9bab15dd8187cc7a422e610fc0013e99ad33c199a18"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/baseline-alloc-run-1.json",
+      "bytes": 36499,
+      "sha256": "27d2460a90893b599a572e4bda1904d07a6d407cc397529821c78f61c2658d1c"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/baseline-alloc-run-1-raw.json",
+      "bytes": 31442,
+      "sha256": "34d45596592ad7bcd03a23bf25abccbcdb52fe83821266f80ad5dd18d93c56d0"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/baseline-alloc-run-1.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/baseline-cpu-run-1.json",
+      "bytes": 14217,
+      "sha256": "01e80f2c06d1fe9afb312cd2aa1147de1054802193815c0d3f5107c7a1528991"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/baseline-cpu-run-1.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/baseline-cpu-run-2.json",
+      "bytes": 14217,
+      "sha256": "eebd3b4184fbf0a366b8a69b8726569ac8ffb4c64103738d5f46398f831cc57c"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/baseline-cpu-run-2.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/baseline-cpu-run-3.json",
+      "bytes": 14216,
+      "sha256": "7cefd6a35eea5af83be6753d8d384ad5b8136ad9f5b2dc98fc4f64d5a143cc31"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/baseline-cpu-run-3.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/alloc-run-1.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/cpu-run-1.json",
+      "bytes": 14206,
+      "sha256": "5ae6d57857efa1a1c23ecd51f4c4d9ad8ac72b2f36a6169df46f5fbe8699c9bd"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/cpu-run-1.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/cpu-run-2.json",
+      "bytes": 14207,
+      "sha256": "0374901d4ec56ee59cd51d1a1c522e5a3c44d107423cf343d1dce7da0f20e500"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/cpu-run-2.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/cpu-run-3.json",
+      "bytes": 14214,
+      "sha256": "37e2fa8d2d1ba75838f8de5f68e93b1062d3c0372c1276ec6b186db0ac5bcb93"
+    },
+    {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-tree-stages/candidate-v2/cpu-run-3.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "checkpoint_references": [
+    {
+      "path": ".artifacts/2026-10-17-tree-stages/evidence.json",
+      "sha256": "a800d165ed3ed846bf74bd0bfcdf13fe92242f536b980216adb91d493f0bc09b"
+    },
+    {
+      "path": ".artifacts/2026-10-17-tree-stages/candidate/evidence.json",
+      "sha256": "8058718c2d894cee7c775c05bb8d2d099c44727208b9f8fb9bf80bb498ad2f88"
+    },
+    {
+      "path": ".artifacts/2026-10-17-tree-stages/candidate-v2/evidence.json",
+      "sha256": "c8d58383f277f33a013de675cc5d53c4195b11e73c963874bcb63b9b36f2b87e"
+    },
+    {
+      "path": ".artifacts/2026-10-17-tree-stages/candidate-v2/analysis.log",
+      "sha256": "aaee98cbb81e343ef27f0de69c3140bb95d00e1e52ecb9bcda938306318a1316"
+    },
+    {
+      "path": ".artifacts/2026-10-17-tree-stages/integration.json",
+      "sha256": "46124883282d1193aed63fa775af3181654ac663176a2e3cde97371fcaa8d8bd"
+    },
+    {
+      "path": ".artifacts/2026-10-17-tree-stages/candidate-v2/integration.json",
+      "sha256": "173c5fd53149d9ab91d7738cbb165aec0befef877c683054c7f8e8f7de82709f"
+    },
+    {
+      "path": ".artifacts/2026-10-17-tree-stages/node-map-delta-evidence.json",
+      "sha256": "573f3a974473089ee4720d6bd5011ba7ec0dad969a06ef1f0b62cab6230e7197"
+    },
+    {
+      "path": ".artifacts/2026-10-17-tree-stages/node-map-delta-red.log",
+      "sha256": "7a2af312ffa718de35de08dd88ab9479eef0bc1627870fb7303412be8343fe3f"
+    },
+    {
+      "path": ".artifacts/2026-10-17-tree-stages/node-map-delta-green.log",
+      "sha256": "51bb82a3d3c0744500f684191c769cab0adadc7755fcb92676a6620dffcc6e63"
+    },
+    {
+      "path": ".artifacts/2026-10-17-tree-stages/ordered-catalog-red.log",
+      "sha256": "cd69c07232cb7d7694457e7a959424c5dad0004e53c1fb6af2f394e8d9ac8751"
+    },
+    {
+      "path": ".artifacts/2026-10-17-tree-stages/ordered-catalog-green.log",
+      "sha256": "7773160514292d6e9d60f3a5e31c5237dfdddfc208892cdcb17caa7af5754113"
+    },
+    {
+      "path": ".artifacts/2026-10-17-tree-stages/factory-catalog-red.log",
+      "sha256": "6fd0697667fe0ae48b7a24ad1b8ef7015025290f621627c633fc21b5cdd703cc"
+    },
+    {
+      "path": ".artifacts/2026-10-17-tree-stages/factory-catalog-green.log",
+      "sha256": "a5c1a9fdd19e34a20d6781394c12015a84e4e49e7b3081f6fd3bb65d2b6601c9"
+    }
+  ],
+  "limitations": [
+    "Three baseline/candidate process pairs alternate revision order inside one root-coordinated owned-workload quiet interval. OS background activity remains uncontrolled.",
+    "Only the calling thread CPU isolates foreground stage work. Process CPU includes other threads in this process.",
+    "The AccessKit export stage includes another delta computation; do not add its timing to the separate NodeMap delta stage as if they were disjoint work.",
+    "The two steady frames and queued reclaim stage combines frame work and deferred destructors; it is not isolated destructor latency or a native worker scheduler measurement.",
+    "Rust requested-payload counters exclude allocator overhead, native allocations, provider/consumer retention, and app RSS. Realloc events overlap alloc/free events; transient old+new storage inside System.realloc is unobserved.",
+    "Allocation run instrumented clocks are intentionally removed from comparison; every scalar payload snapshot is captured before reporting JSON allocation.",
+    "Changed monolithic logical snapshots still require linear comparisons and removals. This patch does not add persistent per-branch catalogs or skip offscreen accessibility semantics.",
+    "These stages identify framework API costs and cannot establish an overall framework CPU/RSS ranking or native end-to-end gain.",
+    "Collapse model construction median rises 3.19% (15.561\u219216.058ms); process pairs have mixed direction. Full logical accessibility preparation is not improved and rises 2.46%/6.04% in this capture. These costs and all raw samples remain visible.",
+    "Full accessibility preparation still requests about 101\u2013102 MB of Rust payload per rebuild, with about 262\u2013264 MB process-live requested payload while models coexist. The changes do not establish a unified memory ceiling.",
+    "The currently running Kael/GPUI comparison uses e219439 and does not execute this 6b2ae11 tree change. These stage results do not replace matched native application runs or physical presentation/power evidence."
+  ],
+  "subsequent_release_validation": {
+    "source_commit_for_byte_comparison": "6b2ae1170d2ad6d1aa76de6f07189fa9432bacfa",
+    "archive_count": 39,
+    "archive_bytes": 6028236,
+    "included_rust_files": 928,
+    "included_rust_bytes": 23268073,
+    "all_included_rust_bytes_equal_immutable_source": true,
+    "archived_vcs_metadata_histogram": {
+      "{\"sha1\": \"bb650c2effcf3e71444906b405a30234a2f7f1e2\"}": 39
+    },
+    "archived_vcs_dirty_field_histogram": {
+      "absent": 39
+    },
+    "preflight": "All 39 packages build and their extracted consumers verify in fresh isolated staging. No registry upload. Earlier b8aff24 archive cohort preserved byte-for-byte after hash verification.",
+    "independent_audit": "Existing immutable v2 verifier rechecks all included Rust Git blobs, licenses, fork payload/provenance and published registry aliases against explicit 6b2ae11.",
+    "qualification": "Archived VCS metadata names bb650c2, a subsequent documentation commit with the same Rust bytes. Absent dirty metadata remains unknown. This is native package verification and source identity, without new Linux desktop, GPU, browser runtime or comparative performance acceptance.",
+    "evidence": [
+      {
+        "path": ".artifacts/2026-10-17-desktop-quality-final-package-preflight.json",
+        "sha256": "8bf3dc8e760247b43df764ec0da6682470386711d4c93607af4b5ac2aa2e453b"
+      },
+      {
+        "path": ".artifacts/2026-10-17-desktop-quality-final-package-preflight.log",
+        "sha256": "48fd3f68e0aeac7a26a55d0fae2b090c6cef159f27239d66a3b92fe943db3496"
+      },
+      {
+        "path": ".artifacts/2026-10-17-desktop-quality-final-release-archives.json",
+        "sha256": "98ec9fea3b92f771108e37d531a382c0d43d68daa7fdc98952ab8a4783381e00"
+      },
+      {
+        "path": ".artifacts/2026-10-17-desktop-quality-final-release-audit.log",
+        "sha256": "08fa7d49ffce2937caba0781dd1c375106b23b7b2df4991542642bf23d85e1c4"
+      },
+      {
+        "path": ".artifacts/2026-10-17-verify-release-archives-v2.py",
+        "sha256": "e9055d29c2d848f948e7090df3ba08ebc6d0a6a625cad8ba2c80237dacc3dcfb"
+      }
+    ]
+  },
+  "managed_worktree_cleanup": "The completed tree-profile and Metal-control managed worktrees are archived with recoverable Git snapshots. All required harness sources, locks, binaries and captures remain in the primary workspace artifacts. Restore the managed tree-profile checkout at the recorded source before rerunning absolute-path harness manifests."
+}

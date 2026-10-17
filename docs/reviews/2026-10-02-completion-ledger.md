@@ -167,3 +167,25 @@ fresh 39-package preflight and archive audit now verify all included Rust bytes
 against `b8aff24`; no package is uploaded. Browser ownership-runtime acceptance,
 unified configurable memory accounting and cross-platform R8 lifecycle acceptance
 remain open; the earlier animation validation record stays immutable.
+
+The later [tree stage checkpoint](2026-10-17-tree-stage-optimization-validation.json)
+preserves the full 100,025-item logical hierarchy. Release process pairs show
+fully expanded model construction using 50.1% less calling-thread CPU and
+logical comparison using 15.1–17.5% less, with separate reductions in requested
+Rust allocation. Collapse construction rises 3.2% with mixed pair direction;
+full accessibility preparation remains costly and does not improve. A prior
+candidate with a 78.7% collapse regression is rejected and retained as evidence.
+The exact final sources pass 2,188 core tests, all 501 UI tests, strict native
+lint and browser compilation. These headless API stages do not close R4 native
+application comparisons, R6 assistive-technology acceptance or R8 unified memory
+policy. General desktop data, navigation, forms, workspaces, media and platform
+services continue to guide the work.
+
+The final local `6b2ae11` sources, including the separate Linux notification
+wire correction, pass another fresh 39-package preflight. Independent audit
+matches all 928 included Rust files to immutable source and verifies licenses,
+fork contents and registry aliases without uploading packages. The old
+`e219439` hosted checkpoint separately passes browser, Linux runtime and Windows
+2022 jobs; Metal presentation and strict dependency audit fail, and Windows 2025
+and the matched application comparison remain active at capture. New local
+commits await those frozen runs before the next push and fresh platform cycle.

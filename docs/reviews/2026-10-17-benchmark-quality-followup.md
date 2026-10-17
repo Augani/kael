@@ -559,3 +559,67 @@ remains a distinct runtime requirement. A separate Zbus 6 feasibility port also
 passes its own wire tests, but no production dependency migration or advisory
 ignore is introduced. Existing one-thread-per-actionable-notification behavior
 and the six denied unmaintained dependency warnings remain.
+
+The [tree stage validation](2026-10-17-tree-stage-optimization-validation.json)
+compares frozen `e219439` and `6b2ae11` release binaries over the same
+100,025-item Unicode hierarchy. Three process pairs alternate revision order in
+one interval without owned compilers, tests or native windows; OS background
+work remains uncontrolled. All 64 full hierarchy, identity, focus and unchanged
+snapshot scroll checks pass. This is a headless framework API diagnostic, not a
+native application or GPUI performance result. The export stage includes its own
+delta computation and must not be added to the separately measured delta stage.
+
+| Calling-thread CPU median | Operation | Before (ms) | After (ms) | Change |
+| --- | --- | ---: | ---: | ---: |
+| Model construction | Collapse | 15.561 | 16.058 | +3.2% |
+| Model construction | Expand | 16.796 | 8.377 | −50.1% |
+| Logical node comparison | Collapse | 39.812 | 33.782 | −15.1% |
+| Logical node comparison | Expand | 39.814 | 32.866 | −17.5% |
+| Full accessibility preparation | Collapse | 37.883 | 38.816 | +2.5% |
+| Full accessibility preparation | Expand | 35.634 | 37.787 | +6.0% |
+| AccessKit export, including comparison | Collapse | 41.524 | 34.457 | −17.0% |
+| AccessKit export, including comparison | Expand | 45.885 | 38.358 | −16.4% |
+
+The node comparison removes 4,128,792 requested Rust allocation bytes per call.
+Fully expanded model construction removes 8,650,828 requested bytes and 18
+allocation events; collapsed construction requests exactly the same bytes.
+These are separate instrumented allocation captures, with their clocks excluded
+from the CPU comparison. They measure requested Rust payload, excluding native
+allocation, allocator overhead and application RSS. Full accessibility
+preparation still requests approximately 101–102 MB, with approximately
+262–264 MB of process-live requested payload while models coexist. It remains a
+substantial optimization target. The small collapse construction increase has
+mixed direction across process pairs; the unchanged preparation stage is not
+reported as an improvement.
+
+An earlier generic-setter fast path passed semantic tests but made collapse
+construction 78.7% slower in release measurements. That candidate and its raw
+samples remain preserved; the final change restores the generic setter and
+skips a redundant catalog only when constructor metadata proves complete source
+visibility. Snapshot comparison retains full offscreen semantics and sorted
+effective changes while limiting temporary candidates to overlays and masks;
+changed monolithic snapshots still require linear traversal. All 2,188 tests of
+the unchanged core source and all 501 tests of the final UI source pass, with
+strict native lint, browser compilation and formatting checks. Later native
+application, platform and memory-policy acceptance remain required.
+
+The preserved [later hosted checkpoint](2026-10-17-platform-e219-checkpoint.json)
+at `e219439` passes the full Linux renderer/WebView runtime job, browser job and
+Windows 2022 native/WebView/MSI job. Windows 2025 remains active at that capture.
+macOS fails the unchanged presentation gate: 43 actual drawable callbacks have
+zero timestamps. Linux quality fails strict audit on the six unmaintained D-Bus
+warnings. The three operating-system microbenchmark jobs pass; the matched GPUI
+application job finishes compilation and constrained docking verification and
+starts collecting alternating measurements. These results predate the later
+local ownership, tree and notification changes. No gate is waived or overall
+workflow success inferred. Local commits are held while those complete runs
+remain active so their frozen comparisons can finish.
+
+A final fresh preflight also verifies all 39 packages after the tree and
+notification changes. Independent archive audit matches all 928 included Rust
+files (23,268,073 bytes) against immutable `6b2ae11`, with 6,028,236 compressed
+archive bytes. The tree validation record links the preflight, exact archive
+identities, licenses, fork payload and registry-alias checks. The earlier
+ownership archive cohort is preserved before replacement. No package is
+uploaded. Completed diagnostic worktrees are archived recoverably; their source
+inputs, binaries and raw captures remain in the primary workspace artifacts.
