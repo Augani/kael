@@ -162,8 +162,36 @@ impl<T: Clone + Eq + Hash + 'static> VirtualTreeModel<T> {
         let data = Arc::get_mut(&mut self.data)
             .filter(|data| data.accessibility.is_none())
             .ok_or(VirtualTreeModelError::SharedPreparation)?;
+        let mut ids = ids.into_iter().enumerate();
+        let mut matched = 0;
+        let (index, id) = loop {
+            match ids.next() {
+                Some((index, id)) if data.rows.get(index).is_some_and(|row| row.node_id == id) => {
+                    matched += 1;
+                }
+                Some(mismatch) => break mismatch,
+                None => {
+                    if matched != data.rows.len() {
+                        return Err(VirtualTreeModelError::IncompleteCatalog);
+                    }
+                    // The visible index already validated this complete ordered
+                    // catalog. Avoid building and discarding a second large map.
+                    data.catalog_indices = data.indices.clone();
+                    return Ok(());
+                }
+            }
+        };
         let mut catalog = HashMap::new();
-        for (index, id) in ids.into_iter().enumerate() {
+        // Preserve the verified prefix when hidden IDs or a different order
+        // require the general path. All following IDs still need duplicate and
+        // coverage checks, including duplicates against this prefix.
+        catalog.extend(
+            data.rows[..matched]
+                .iter()
+                .enumerate()
+                .map(|(index, row)| (row.node_id.clone(), index)),
+        );
+        for (index, id) in std::iter::once((index, id)).chain(ids) {
             if catalog.insert(id, index).is_some() {
                 return Err(VirtualTreeModelError::DuplicateId);
             }
@@ -1267,6 +1295,129 @@ mod tests {
             VirtualTreeModel::new(&duplicate, &HashSet::new()),
             Err(VirtualTreeModelError::DuplicateId),
         ));
+    }
+
+    #[::core::prelude::v1::test]
+    fn ordered_fully_displayed_catalog_reuses_index_without_hashing() {
+        thread_local! {
+            static HASH_CALLS: Cell<usize> = const { Cell::new(0) };
+        }
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        struct CountedId(usize);
+        impl Hash for CountedId {
+            fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+                HASH_CALLS.with(|calls| calls.set(calls.get() + 1));
+                self.0.hash(state);
+            }
+        }
+
+        let nodes: Vec<_> = (0..100_025)
+            .map(|index| TreeNode::new(CountedId(index), "row"))
+            .collect();
+        let mut model = VirtualTreeModel::from_rows(
+            flatten_tree(&nodes, &HashSet::new(), 0),
+            &HashSet::new(),
+            false,
+        )
+        .unwrap();
+        HASH_CALLS.with(|calls| calls.set(0));
+        model
+            .set_accessibility_catalog_ids(nodes.iter().map(|node| node.id.clone()))
+            .unwrap();
+        assert_eq!(
+            HASH_CALLS.with(Cell::get),
+            0,
+            "ordered visible IDs already have a validated index"
+        );
+        assert!(Arc::ptr_eq(
+            &model.data.catalog_indices,
+            &model.data.indices
+        ));
+    }
+
+    #[::core::prelude::v1::test]
+    fn catalog_accepts_arbitrary_order_and_hidden_ids() {
+        let nodes: Vec<_> = [10, 20, 30]
+            .into_iter()
+            .map(|id| TreeNode::new(id, "row"))
+            .collect();
+        let mut model = VirtualTreeModel::new(&nodes, &HashSet::new()).unwrap();
+        model.set_accessibility_catalog_ids([30, 10, 20]).unwrap();
+        assert!(Arc::ptr_eq(
+            &model.data.catalog_indices,
+            &model.data.indices
+        ));
+        for ids in [[10, 20, 30, 40], [10, 40, 20, 30], [40, 30, 10, 20]] {
+            model.set_accessibility_catalog_ids(ids).unwrap();
+            assert_eq!(model.data.catalog_indices.len(), ids.len());
+            for (index, id) in ids.into_iter().enumerate() {
+                assert_eq!(model.data.catalog_indices.get(&id), Some(&index));
+            }
+        }
+        model.set_accessibility_catalog_ids([10, 20, 30]).unwrap();
+        assert!(Arc::ptr_eq(
+            &model.data.catalog_indices,
+            &model.data.indices
+        ));
+        assert!(!model.data.catalog_indices.contains_key(&40));
+
+        let mut empty = VirtualTreeModel::<usize>::new(&[], &HashSet::new()).unwrap();
+        assert!(Arc::ptr_eq(
+            &empty.data.catalog_indices,
+            &empty.data.indices
+        ));
+        empty.set_accessibility_catalog_ids([99]).unwrap();
+        assert_eq!(empty.data.catalog_indices.get(&99), Some(&0));
+        empty.set_accessibility_catalog_ids([]).unwrap();
+        assert!(Arc::ptr_eq(
+            &empty.data.catalog_indices,
+            &empty.data.indices
+        ));
+    }
+
+    #[::core::prelude::v1::test]
+    fn invalid_catalog_does_not_replace_previous_metadata() {
+        let nodes: Vec<_> = [10, 20, 30]
+            .into_iter()
+            .map(|id| TreeNode::new(id, "row"))
+            .collect();
+        let mut model = VirtualTreeModel::new(&nodes, &HashSet::new()).unwrap();
+        model
+            .set_accessibility_catalog_ids([10, 20, 30, 40])
+            .unwrap();
+        let original = model.data.catalog_indices.clone();
+        for ids in [
+            vec![10, 20, 10, 30],
+            vec![10, 20, 30, 40, 40],
+            vec![10, 40, 20, 30, 40],
+        ] {
+            assert_eq!(
+                model.set_accessibility_catalog_ids(ids),
+                Err(VirtualTreeModelError::DuplicateId)
+            );
+            assert!(Arc::ptr_eq(&model.data.catalog_indices, &original));
+        }
+        for ids in [vec![], vec![10, 20], vec![40, 10, 20]] {
+            assert_eq!(
+                model.set_accessibility_catalog_ids(ids),
+                Err(VirtualTreeModelError::IncompleteCatalog)
+            );
+            assert!(Arc::ptr_eq(&model.data.catalog_indices, &original));
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn hidden_duplicate_source_ids_are_rejected_after_matching_prefix() {
+        let nodes = vec![TreeNode::new(0, "root").with_children(vec![
+            TreeNode::new(1, "hidden"),
+            TreeNode::new(1, "hidden duplicate"),
+        ])];
+        for result in [
+            VirtualTreeModel::new(&nodes, &HashSet::new()),
+            VirtualTreeModel::filtered(&nodes, &HashSet::new(), "root", false),
+        ] {
+            assert!(matches!(result, Err(VirtualTreeModelError::DuplicateId)));
+        }
     }
 
     #[::core::prelude::v1::test]

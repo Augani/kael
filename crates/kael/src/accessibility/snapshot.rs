@@ -186,6 +186,13 @@ pub struct AccessibilityNodeMap {
     pub(crate) snapshots: HashMap<AccessibilityId, Arc<AccessibilitySnapshot>>,
     removed: HashSet<AccessibilityId>,
 }
+
+#[cfg(test)]
+thread_local! {
+    static DELTA_CANDIDATE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static DELTA_BASE_COMPARE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static DELTA_REMOVAL_PROBE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 impl PartialEq for AccessibilityNodeMap {
     fn eq(&self, other: &Self) -> bool {
         self.frame == other.frame
@@ -306,6 +313,10 @@ impl AccessibilityNodeMap {
         self.iter().map(|(_, node)| node)
     }
     /// Retain an immutable logical subtree; reusing its Arc makes updates cheap.
+    ///
+    /// Node identities must be disjoint from every other attached snapshot.
+    /// Ordinary frame nodes may share those identities: they act as effective
+    /// overlays, taking priority over immutable snapshot records.
     pub fn attach(&mut self, snapshot: Arc<AccessibilitySnapshot>) {
         self.removed.retain(|id| !snapshot.nodes.contains_key(id));
         self.snapshots.insert(snapshot.root, snapshot);
@@ -338,25 +349,62 @@ impl AccessibilityNodeMap {
             .copied()
             .collect();
         candidates.extend(self.removed.iter().chain(previous.removed.iter()).copied());
+        #[cfg(test)]
+        DELTA_CANDIDATE_COUNT.with(|count| count.set(candidates.len()));
+        let mut nodes = Vec::new();
+        let mut removed = Vec::new();
+        for id in &candidates {
+            match (self.get(id), previous.get(id)) {
+                (Some(current), Some(old)) if current == old => {}
+                (Some(current), _) => nodes.push(current),
+                (None, Some(_)) => removed.push(*id),
+                _ => {}
+            }
+        }
+        // Only explicit frame overlays and tombstones need a candidate set.
+        // Changed immutable snapshots are disjoint: compare their current base
+        // records directly, then probe previous bases only for removed IDs. A
+        // base masked by an overlay/tombstone was already compared above.
+        #[cfg(test)]
+        let (mut base_compares, mut removal_probes) = (0, 0);
         for (root, snapshot) in &self.snapshots {
-            if !self.shares_snapshot(*root, previous) {
-                candidates.extend(snapshot.nodes.keys().copied());
+            if self.shares_snapshot(*root, previous) {
+                continue;
+            }
+            for (id, current) in &snapshot.nodes {
+                if candidates.contains(id) {
+                    continue;
+                }
+                #[cfg(test)]
+                {
+                    base_compares += 1;
+                }
+                if previous.get(id) != Some(current) {
+                    nodes.push(current);
+                }
             }
         }
         for (root, snapshot) in &previous.snapshots {
-            if !self.shares_snapshot(*root, previous) {
-                candidates.extend(snapshot.nodes.keys().copied());
+            if self.shares_snapshot(*root, previous) {
+                continue;
+            }
+            for id in snapshot.nodes.keys() {
+                if candidates.contains(id) {
+                    continue;
+                }
+                #[cfg(test)]
+                {
+                    removal_probes += 1;
+                }
+                if !self.contains_key(id) {
+                    removed.push(*id);
+                }
             }
         }
-        let mut nodes = Vec::new();
-        let mut removed = Vec::new();
-        for id in candidates {
-            match (self.get(&id), previous.get(&id)) {
-                (Some(current), Some(old)) if current == old => {}
-                (Some(current), _) => nodes.push(current),
-                (None, Some(_)) => removed.push(id),
-                _ => {}
-            }
+        #[cfg(test)]
+        {
+            DELTA_BASE_COMPARE_COUNT.with(|count| count.set(base_compares));
+            DELTA_REMOVAL_PROBE_COUNT.with(|count| count.set(removal_probes));
         }
         nodes.sort_unstable_by_key(|node| node.id.0);
         removed.sort_unstable_by_key(|id| id.0);
@@ -418,6 +466,226 @@ mod tests {
         }
     }
 
+    fn assert_delta_matches_effective_maps(
+        current: &AccessibilityNodeMap,
+        previous: &AccessibilityNodeMap,
+    ) {
+        let before: HashMap<_, _> = previous.iter().map(|(id, node)| (*id, node)).collect();
+        let after: HashMap<_, _> = current.iter().map(|(id, node)| (*id, node)).collect();
+        let mut expected_nodes = after
+            .iter()
+            .filter_map(|(id, node)| (before.get(id) != Some(node)).then_some(*node))
+            .collect::<Vec<_>>();
+        let mut expected_removed = before
+            .keys()
+            .filter(|id| !after.contains_key(id))
+            .copied()
+            .collect::<Vec<_>>();
+        expected_nodes.sort_unstable_by_key(|node| node.id.0);
+        expected_removed.sort_unstable_by_key(|id| id.0);
+        let delta = current.delta(Some(previous));
+        assert_eq!(delta.nodes, expected_nodes);
+        assert_eq!(delta.removed, expected_removed);
+        assert!(
+            delta
+                .nodes
+                .windows(2)
+                .all(|pair| pair[0].id.0 < pair[1].id.0)
+        );
+        assert!(delta.removed.windows(2).all(|pair| pair[0].0 < pair[1].0));
+    }
+
+    fn logical_group(root: u64, rows: &[u64], label: &str) -> Arc<AccessibilitySnapshot> {
+        let mut parent = AccessibilityNode::new(AccessibilityRole::Tree);
+        parent.id = AccessibilityId(root);
+        parent.label = Some(label.into());
+        let mut nodes = rows
+            .iter()
+            .map(|id| {
+                let mut node = AccessibilityNode::new(AccessibilityRole::TreeItem);
+                node.id = AccessibilityId(*id);
+                node.label = Some(format!("{label} row {id}"));
+                node.parent = Some(parent.id);
+                parent.children.push(node.id);
+                node
+            })
+            .collect::<Vec<_>>();
+        nodes.push(parent);
+        AccessibilitySnapshot::new(AccessibilityId(root), nodes).unwrap()
+    }
+
+    #[test]
+    fn delta_matches_effective_maps_for_masks_root_replacement_and_cross_snapshot_moves() {
+        let first = logical_group(100, &[101, 102, 103], "first");
+        let second = logical_group(200, &[201, 202], "second");
+        let shared = logical_group(300, &[301, 302], "shared");
+        let mut previous = AccessibilityNodeMap::default();
+        previous.attach(first);
+        previous.attach(second);
+        previous.attach(shared.clone());
+        previous.get_mut(&AccessibilityId(101)).unwrap().label = Some("old overlay".into());
+        previous.remove(&AccessibilityId(102));
+        previous.get_mut(&AccessibilityId(301)).unwrap().bounds =
+            Some(AccessibilityRect::new(1.0, 2.0, 3.0, 4.0));
+        let mut current = AccessibilityNodeMap::default();
+        // Root 100 becomes 110, while row 103 moves to the other changed
+        // snapshot. The old-only pass must not report row 103 as removed.
+        current.attach(logical_group(110, &[101, 102], "replacement"));
+        current.attach(logical_group(200, &[201, 202, 103], "second"));
+        current.attach(shared);
+        current.remove(&AccessibilityId(201));
+        let mut overlay = AccessibilityNode::new(AccessibilityRole::Button);
+        overlay.id = AccessibilityId(202);
+        overlay.label = Some("current overlay".into());
+        current.insert(overlay.id, overlay);
+        assert_delta_matches_effective_maps(&current, &previous);
+        let delta = current.delta(Some(&previous));
+        assert!(delta.removed.contains(&AccessibilityId(100)));
+        assert!(delta.removed.contains(&AccessibilityId(201)));
+        assert!(!delta.removed.contains(&AccessibilityId(103)));
+        assert_eq!(
+            delta
+                .nodes
+                .iter()
+                .filter(|node| node.id == AccessibilityId(103))
+                .count(),
+            1
+        );
+        assert!(
+            delta
+                .nodes
+                .iter()
+                .any(|node| node.id == AccessibilityId(102))
+        );
+        assert!(
+            delta
+                .nodes
+                .iter()
+                .any(|node| node.id == AccessibilityId(301))
+        );
+        // A frame overlay can move into or out of an unchanged shared base.
+        assert_delta_matches_effective_maps(&previous, &current);
+    }
+
+    #[test]
+    fn delta_matches_naive_maps_through_deterministic_overlay_and_snapshot_churn() {
+        let mut seed = 0x5d84_3a91_81e4_ba23_u64;
+        let mut next = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            seed
+        };
+        let mut groups = (0..4)
+            .map(|group| {
+                let root = 1000 + group * 100;
+                logical_group(
+                    root,
+                    &(1..=12).map(|row| root + row).collect::<Vec<_>>(),
+                    "initial",
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut previous = AccessibilityNodeMap::default();
+        for group in &groups {
+            previous.attach(group.clone());
+        }
+        for round in 0..400 {
+            let group = (next() % 4) as usize;
+            let root = 1000 + group as u64 * 100;
+            let rows = (1..=12)
+                .filter(|_| next() % 4 != 0)
+                .map(|row| root + row)
+                .collect::<Vec<_>>();
+            groups[group] = logical_group(root, &rows, &format!("round {round}"));
+            let mut current = AccessibilityNodeMap::default();
+            for group in &groups {
+                if next() % 5 != 0 {
+                    current.attach(group.clone());
+                }
+            }
+            for _ in 0..18 {
+                let group = next() % 4;
+                let id = AccessibilityId(1000 + group * 100 + 1 + next() % 12);
+                match next() % 4 {
+                    0 => {
+                        current.remove(&id);
+                    }
+                    1 => {
+                        if let Some(node) = current.get_mut(&id) {
+                            node.label = Some(format!("overlay {round}"));
+                            node.parent = Some(AccessibilityId(50_000 + next() % 4));
+                        }
+                    }
+                    _ => {
+                        let mut node = AccessibilityNode::new(AccessibilityRole::Button);
+                        node.id = id;
+                        node.label = Some(format!("frame {round}"));
+                        current.insert(id, node);
+                    }
+                }
+            }
+            assert_delta_matches_effective_maps(&current, &previous);
+            assert_delta_matches_effective_maps(&previous, &current);
+            previous = current;
+        }
+    }
+
+    #[test]
+    fn snapshot_root_reparent_and_cached_overlay_reset_preserve_consumer_identity() {
+        let mut window = AccessibilityNode::new(AccessibilityRole::Window);
+        window.id = AccessibilityId(1);
+        let mut previous = AccessibilityTree::new(window);
+        for id in [10, 20] {
+            let mut group = AccessibilityNode::new(AccessibilityRole::Group);
+            group.id = AccessibilityId(id);
+            previous.insert(group);
+            previous.set_parent(AccessibilityId(id), previous.root);
+        }
+        let snapshot = logical_group(100, &[101, 102], "stable");
+        previous.nodes.attach(snapshot.clone());
+        previous.set_parent(AccessibilityId(100), AccessibilityId(10));
+        previous.get_mut(AccessibilityId(101)).unwrap().bounds =
+            Some(AccessibilityRect::new(1.0, 2.0, 3.0, 4.0));
+        let mut current = previous.clone();
+        current
+            .get_mut(AccessibilityId(10))
+            .unwrap()
+            .children
+            .clear();
+        current.set_parent(AccessibilityId(100), AccessibilityId(20));
+        // An outgoing cached frame's geometry must disappear while its shared
+        // logical node remains present under the newly painted parent.
+        current.nodes.frame.remove(&AccessibilityId(101));
+        assert!(
+            current
+                .nodes
+                .shares_snapshot(AccessibilityId(100), &previous.nodes)
+        );
+        assert_delta_matches_effective_maps(&current.nodes, &previous.nodes);
+        let mut consumer =
+            accesskit_consumer::Tree::new(previous.to_accesskit_tree_update(None, None), true);
+        let mut changes = Changes::default();
+        consumer.update_and_process_changes(
+            current.to_accesskit_tree_update_after(Some(&previous), None, None),
+            &mut changes,
+        );
+        assert_eq!(changes.added, 0);
+        assert_eq!(changes.removed, 0);
+        let row = consumer
+            .state()
+            .node_by_tree_local_id(accesskit::NodeId(101), accesskit::TreeId::ROOT)
+            .unwrap();
+        assert_eq!(row.label().as_deref(), Some("stable row 101"));
+        assert!(!row.has_bounds());
+        assert_eq!(row.parent().unwrap().locate().0, accesskit::NodeId(100));
+        let root = consumer
+            .state()
+            .node_by_tree_local_id(accesskit::NodeId(100), accesskit::TreeId::ROOT)
+            .unwrap();
+        assert_eq!(root.parent().unwrap().locate().0, accesskit::NodeId(20));
+    }
+
     #[test]
     fn hundred_thousand_logical_nodes_share_labels_and_export_only_changed_geometry() {
         let window = crate::AccessibilityNode::new(AccessibilityRole::Window);
@@ -446,6 +714,8 @@ mod tests {
             previous.get(last_id).unwrap().label.as_ref().unwrap()
         ));
         assert!(current.delta(Some(&previous)).nodes.is_empty());
+        assert_eq!(DELTA_BASE_COMPARE_COUNT.with(std::cell::Cell::get), 0);
+        assert_eq!(DELTA_REMOVAL_PROBE_COUNT.with(std::cell::Cell::get), 0);
         assert!(
             current
                 .to_accesskit_tree_update_after(Some(&previous), None, None)
@@ -482,6 +752,55 @@ mod tests {
                 .node_by_tree_local_id(accesskit::NodeId(last_id.0), accesskit::TreeId::ROOT)
                 .unwrap()
                 .has_bounds()
+        );
+    }
+
+    #[test]
+    fn changed_flat_snapshot_does_not_allocate_a_full_logical_candidate_set() {
+        let window = AccessibilityNode::new(AccessibilityRole::Window);
+        let mut root = AccessibilityNode::new(AccessibilityRole::Tree);
+        let root_id = root.id;
+        let mut nodes = Vec::with_capacity(100_001);
+        for index in 0..100_000 {
+            let mut row = AccessibilityNode::new(AccessibilityRole::TreeItem)
+                .with_label(format!("logical {index}"));
+            row.parent = Some(root_id);
+            root.children.push(row.id);
+            nodes.push(row);
+        }
+        let last_id = nodes.last().unwrap().id;
+        nodes.push(root);
+        let previous_snapshot = AccessibilitySnapshot::new(root_id, nodes).unwrap();
+        let mut previous = AccessibilityTree::new(window);
+        previous.nodes.attach(previous_snapshot.clone());
+        previous.set_parent(root_id, previous.root);
+        let replacement = AccessibilitySnapshot::new(
+            root_id,
+            previous_snapshot.nodes.values().cloned().map(|mut node| {
+                if node.id == last_id {
+                    node.label = Some("changed offscreen logical row".into());
+                }
+                node
+            }),
+        )
+        .unwrap();
+        let mut current = previous.clone();
+        current.nodes.attach(replacement);
+        let delta = current.delta(Some(&previous));
+        assert_eq!(delta.nodes.len(), 1);
+        assert_eq!(delta.nodes[0].id, last_id);
+        assert!(delta.removed.is_empty());
+        assert_eq!(current.node_count(), 100_002);
+        let candidates = DELTA_CANDIDATE_COUNT.with(std::cell::Cell::get);
+        assert!(
+            candidates <= 2,
+            "flat logical replacement allocated {candidates} candidate IDs for two frame overlays"
+        );
+        // Changed flat snapshots still require linear comparison/removal work.
+        assert_eq!(DELTA_BASE_COMPARE_COUNT.with(std::cell::Cell::get), 100_000);
+        assert_eq!(
+            DELTA_REMOVAL_PROBE_COUNT.with(std::cell::Cell::get),
+            100_000
         );
     }
 
