@@ -657,6 +657,13 @@ fn launch(started: Instant, options: Options, cx: &mut App) {
             window
                 .spawn(cx, async move |cx| {
                     cx.background_executor().timer(Duration::from_secs(1)).await;
+                    weak.update_in(cx, |_, window, _| {
+                        request_client_size(window, WINDOW_WIDTH, WINDOW_HEIGHT)
+                    })
+                    .unwrap();
+                    cx.background_executor()
+                        .timer(Duration::from_millis(40))
+                        .await;
                     for phase in PHASES {
                         weak.update_in(cx, |view, window, cx| view.set_phase(phase, window, cx))
                             .unwrap();

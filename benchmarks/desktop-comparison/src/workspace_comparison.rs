@@ -964,6 +964,21 @@ fn launch(started: Instant, options: Options, cx: &mut App) {
             window
                 .spawn(cx, async move |cx| {
                     cx.background_executor().timer(Duration::from_secs(1)).await;
+                    weak.update_in(cx, |_, window, _| {
+                        request_client_size(
+                            window,
+                            if options.compact { 880.0 } else { WINDOW_WIDTH },
+                            if options.compact {
+                                640.0
+                            } else {
+                                WINDOW_HEIGHT
+                            },
+                        )
+                    })
+                    .unwrap();
+                    cx.background_executor()
+                        .timer(Duration::from_millis(40))
+                        .await;
                     // AppKit can constrain the requested window to the screen.
                     // Normalize the initial split against its measured native
                     // container, before any timed idle/interaction phase.

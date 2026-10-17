@@ -657,6 +657,13 @@ impl Workload {
         window.refresh();
     }
     fn collect(&mut self, window: &mut Window) {
+        #[cfg(feature = "frame-timing")]
+        let record_durations = self.measuring
+            && matches!(
+                self.phase,
+                "idle-before" | "active" | "idle-after" | "churn"
+            );
+
         #[cfg(not(feature = "frame-timing"))]
         let _ = window;
         #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
@@ -666,7 +673,7 @@ impl Workload {
                     if self.measuring {
                         self.phase_frames.drew(self.phase);
                     }
-                    if self.measuring && self.draw_us.len() < 4096 {
+                    if record_durations && self.draw_us.len() < 4096 {
                         self.draw_us.push(frame.duration_us);
                     }
                     self.last_draw = Some(frame.frame_number);
@@ -680,7 +687,7 @@ impl Workload {
                     if self.measuring {
                         self.phase_frames.submitted(self.phase);
                     }
-                    if self.measuring && self.submission_us.len() < 4096 {
+                    if record_durations && self.submission_us.len() < 4096 {
                         self.submission_us.push(frame.duration_us);
                     }
                     if self.measuring {
@@ -704,7 +711,7 @@ impl Workload {
                         if self.measuring {
                             self.phase_frames.drew(self.phase);
                         }
-                        if self.measuring && self.draw_us.len() < 4096 {
+                        if record_durations && self.draw_us.len() < 4096 {
                             self.draw_us.push(frame.draw_duration().as_micros() as u64);
                         }
                     }
@@ -712,7 +719,7 @@ impl Workload {
                         if self.measuring {
                             self.phase_frames.submitted(self.phase);
                         }
-                        if self.measuring && self.submission_us.len() < 4096 {
+                        if record_durations && self.submission_us.len() < 4096 {
                             self.submission_us
                                 .push(frame.present_duration().as_micros() as u64);
                         }
@@ -757,7 +764,9 @@ impl Workload {
                     "end_selection":self.operations[5], "replace_model":self.operations[6]},
                 "operation_cpu_us":self.operation_us, "first_render_us":self.first_render_us,
                 "render_callback_intervals_us":self.active_us, "renders":self.renders, "elapsed_us":self.started.elapsed().as_micros(),
-                "first_submission_us":self.first_submission_us, "draw_cpu_us":self.draw_us, "submission_cpu_us":self.submission_us,
+                "first_submission_us":self.first_submission_us,
+                "startup_scope": "diagnostic first render/submission; initial native geometry is not paired",
+                "draw_cpu_us":self.draw_us, "submission_cpu_us":self.submission_us,
                 "phase_frame_counts": self.phase_frames.report(),
                 "native_window_geometry": self.geometry.samples,
                 "gpu_allocated_bytes":self.gpu_samples,
@@ -828,6 +837,8 @@ fn launch(started: Instant, options: Options, cx: &mut App) {
         let view=cx.new(|cx|Workload::new(started,options,window,cx));let weak=view.downgrade();
         window.spawn(cx,async move |cx| {
             cx.background_executor().timer(Duration::from_secs(1)).await;
+            weak.update_in(cx,|_,window,_|native_geometry::request_client_size(window,1100.0,760.0)).unwrap();
+            cx.background_executor().timer(Duration::from_millis(40)).await;
             for phase in ["idle-before","active","idle-after","churn"] {
                 weak.update_in(cx,|view,window,cx|view.set_phase(phase,window,cx)).unwrap();
                 println!("KAEL_PHASE {}",serde_json::json!({"phase":phase,"elapsed_us":started.elapsed().as_micros()}));

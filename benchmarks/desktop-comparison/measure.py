@@ -408,7 +408,10 @@ def main():
             if comparison_geometry is None:
                 comparison_geometry = geometry
             elif not same_geometry(comparison_geometry, geometry):
-                raise RuntimeError('native viewport or display scale changed between captures')
+                raise RuntimeError(
+                    f'{engine} run {index}: native viewport or display scale changed '
+                    f'between captures: expected={comparison_geometry}, actual={geometry}; '
+                    'raw reports are preserved and excluded from comparison')
             pair.append(report)
         validate_paired_geometry(pair[0]['application'], pair[1]['application'])
         reports.extend(pair)

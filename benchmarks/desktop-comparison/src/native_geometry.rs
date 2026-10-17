@@ -5,6 +5,14 @@ use gpui_kit as ui;
 #[cfg(feature = "kael-engine")]
 use kael as ui;
 
+/// Reassert the client size through each engine's public native API after the
+/// window has been shown. AppKit's initial placement can constrain a window or
+/// adjust its content height differently during titlebar setup. This runs once
+/// before measured phases; the collector still rejects unequal actual sizes.
+pub fn request_client_size(window: &mut ui::Window, width: f32, height: f32) {
+    window.resize(ui::size(ui::px(width), ui::px(height)));
+}
+
 pub struct NativeGeometry {
     pub samples: Vec<serde_json::Value>,
 }

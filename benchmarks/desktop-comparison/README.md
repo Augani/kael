@@ -32,6 +32,11 @@ ordered samples, stable geometry within and across runs, and equal geometry for
 both engines. Requested window dimensions alone do not establish equality;
 equally constrained native windows are permitted and recorded. Schema 3 captures
 enforce this gate; older captures remain historical diagnostics.
+After the startup warmup, both binaries reassert the requested client size once
+through their public native resize APIs and allow another event turn before any
+measured phase. This avoids comparing different AppKit initial-placement or
+titlebar adjustments. The actual geometry gate remains mandatory; a rejected
+pair is preserved and never resized or retried during measurement.
 Active and churn phases must also repaint beyond their first phase frame.
 Instrumented builds require native CPU draw and submission activity in each
 phase; disabled builds require application render activity with native timing
@@ -47,9 +52,13 @@ satisfy the same comparison contract.
 
 `first_render_us` measures entry into the first root render callback;
 `first_submission_us` includes native platform startup and the first CPU-side
-frame submission. CPU draw covers `Window::draw`, while CPU submission covers
-the native renderer call. Render callback intervals include pacing. None of
-these claims GPU completion or the time a compositor shows a frame. Both builds
+frame submission. These startup values remain diagnostic: their initial native
+geometry is not paired by the phase-boundary geometry gate. Comparative CPU draw
+and submission arrays contain only measured phases; startup, warmup, resize and
+validation frames are drained without adding durations. CPU draw covers
+`Window::draw`, while CPU submission covers the native renderer call. Render
+callback intervals include pacing. None of these claims GPU completion or the
+time a compositor shows a frame. Both builds
 include their optional frame instrumentation; inspect its overhead separately
 before asserting an advantage in uninstrumented applications.
 

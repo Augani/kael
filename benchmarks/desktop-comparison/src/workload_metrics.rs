@@ -10,6 +10,7 @@ use ui::Window;
 
 #[path = "native_geometry.rs"]
 mod native_geometry;
+pub use native_geometry::request_client_size;
 use native_geometry::{NativeGeometry, PhaseFrames};
 
 pub const WINDOW_WIDTH: f32 = 1100.0;
@@ -160,6 +161,13 @@ impl Metrics {
         }
     }
     pub fn collect(&mut self, window: &mut Window) {
+        #[cfg(feature = "frame-timing")]
+        let record_durations = self.measuring
+            && matches!(
+                self.phase,
+                "idle-before" | "active" | "idle-after" | "churn"
+            );
+
         #[cfg(not(feature = "frame-timing"))]
         let _ = window;
         #[cfg(all(feature = "kael-engine", feature = "frame-timing"))]
@@ -169,7 +177,7 @@ impl Metrics {
                     if self.measuring {
                         self.phase_frames.drew(self.phase);
                     }
-                    if self.measuring && self.draw_us.len() < 4096 {
+                    if record_durations && self.draw_us.len() < 4096 {
                         self.draw_us.push(frame.duration_us);
                     }
                     self.last_draw = Some(frame.frame_number);
@@ -183,7 +191,7 @@ impl Metrics {
                     if self.measuring {
                         self.phase_frames.submitted(self.phase);
                     }
-                    if self.measuring && self.submission_us.len() < 4096 {
+                    if record_durations && self.submission_us.len() < 4096 {
                         self.submission_us.push(frame.duration_us);
                     }
                     if self.measuring {
@@ -207,7 +215,7 @@ impl Metrics {
                         if self.measuring {
                             self.phase_frames.drew(self.phase);
                         }
-                        if self.measuring && self.draw_us.len() < 4096 {
+                        if record_durations && self.draw_us.len() < 4096 {
                             self.draw_us.push(frame.draw_duration().as_micros() as u64);
                         }
                     }
@@ -215,7 +223,7 @@ impl Metrics {
                         if self.measuring {
                             self.phase_frames.submitted(self.phase);
                         }
-                        if self.measuring && self.submission_us.len() < 4096 {
+                        if record_durations && self.submission_us.len() < 4096 {
                             self.submission_us
                                 .push(frame.present_duration().as_micros() as u64);
                         }
@@ -248,6 +256,7 @@ impl Metrics {
             "font_size_px":FONT_SIZE,"line_height_px":LINE_HEIGHT,"window_width_px":WINDOW_WIDTH,
             "window_height_px":WINDOW_HEIGHT,"theme_mode":"dark","operation_cpu_us":self.operations_us,
             "first_render_us":self.first_render_us,"first_submission_us":self.first_submission_us,
+            "startup_scope": "diagnostic first render/submission; initial native geometry is not paired",
             "render_callback_intervals_us":self.callback_intervals_us,"renders":self.renders,
             "elapsed_us":self.started.elapsed().as_micros(),"draw_cpu_us":self.draw_us,
             "submission_cpu_us":self.submission_us,"gpu_allocated_bytes":self.gpu_samples,
