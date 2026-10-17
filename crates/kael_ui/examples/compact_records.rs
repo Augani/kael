@@ -9,6 +9,7 @@ const PAGE_ROWS: usize = 64;
 const HEADERS: [&str; 8] = [
     "Record", "Team", "Status", "Score", "Sprint", "Date", "Tags", "Notes",
 ];
+const COLUMN_WIDTHS: [f32; 8] = [200.0, 120.0, 104.0, 80.0, 104.0, 144.0, 112.0, 200.0];
 
 struct Record {
     id: u64,
@@ -112,7 +113,7 @@ impl RecordsBrowser {
                             SharedString::new(arc)
                         },
                     )
-                    .width(px(112.0))
+                    .width(px(COLUMN_WIDTHS[column]))
                     .resizable(false)
                     .sortable(false)
                     .editable(false)
@@ -120,6 +121,7 @@ impl RecordsBrowser {
                 .collect();
             DataTable::new_virtual(ROWS, columns, PAGE_ROWS, cx)
                 .show_search(false)
+                .fill_parent(true)
                 .max_cached_pages(16)
                 .max_in_flight_pages(4)
                 .on_fetch_page_request(move |request, _, cx| {
@@ -180,6 +182,7 @@ impl Render for RecordsBrowser {
                 div()
                     .flex()
                     .items_center()
+                    .flex_shrink_0()
                     .gap_2()
                     .child(
                         div()
@@ -212,6 +215,7 @@ impl Render for RecordsBrowser {
             .child(
                 div()
                     .text_sm()
+                    .flex_shrink_0()
                     .text_color(theme.tokens.muted_foreground)
                     .child("Browse the records or change their order. This view is read-only."),
             )
@@ -223,7 +227,7 @@ impl Render for RecordsBrowser {
                         element.child(table.clone())
                     }),
             )
-            .child(div().text_sm().child(self.status.clone()))
+            .child(div().text_sm().flex_shrink_0().child(self.status.clone()))
     }
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {

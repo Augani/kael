@@ -1172,6 +1172,7 @@ pub struct DataTable<T: Clone + 'static> {
     resize_start_x: f32,
     resize_start_width: Pixels,
     sticky_header: bool,
+    fill_parent: bool,
     on_load_more: Option<Box<dyn Fn(&mut Window, &mut Context<Self>) + 'static>>,
     load_more_threshold: f32,
     load_more_triggered: bool,
@@ -1272,6 +1273,7 @@ impl<T: Clone + 'static> DataTable<T> {
             resize_start_x: 0.0,
             resize_start_width: px(0.0),
             sticky_header: true,
+            fill_parent: false,
             on_load_more: None,
             load_more_threshold: 0.7,
             load_more_triggered: false,
@@ -1313,6 +1315,18 @@ impl<T: Clone + 'static> DataTable<T> {
 
     pub fn sticky_header(mut self, sticky: bool) -> Self {
         self.sticky_header = sticky;
+        self
+    }
+
+    /// Fit the table into the height provided by its parent.
+    ///
+    /// Header, search controls, and horizontal scrollbar keep their natural
+    /// height; the remaining space becomes the vertically scrolling body.
+    /// The parent must provide a bounded height, for example a flex child with
+    /// `flex_1()` and `min_h(px(0.0))`. By default the body keeps its existing
+    /// 600-pixel maximum height (or fewer rows for an in-memory table).
+    pub fn fill_parent(mut self, fill_parent: bool) -> Self {
+        self.fill_parent = fill_parent;
         self
     }
 
@@ -1402,6 +1416,7 @@ impl<T: Clone + 'static> DataTable<T> {
             resize_start_x: 0.0,
             resize_start_width: px(0.0),
             sticky_header: true,
+            fill_parent: false,
             on_load_more: None,
             load_more_threshold: 0.7,
             load_more_triggered: false,
@@ -1960,6 +1975,7 @@ impl<T: Clone + 'static> DataTable<T> {
 
         div()
             .flex()
+            .when(self.fill_parent, |div| div.flex_shrink_0())
             .items_center()
             .gap(px(12.0))
             .px(px(16.0))
@@ -2008,7 +2024,8 @@ impl<T: Clone + 'static> DataTable<T> {
         let mut header_row = div()
             .accessibility(AccessibilityAttributes::new(AccessibilityRole::Row).row_index(1))
             .flex()
-            .w_full();
+            .w_full()
+            .when(self.fill_parent, |div| div.flex_shrink_0());
 
         if self.show_selection {
             let all_selected = self.is_all_selected();
@@ -2278,6 +2295,7 @@ impl<T: Clone + 'static> DataTable<T> {
             },
         )
         .track_scroll(&horizontal_scroll)
+        .restrict_scroll_to_axis(true)
         .overscan(2)
         .h(px(self.state.row_height()))
         .flex_1();
@@ -3428,6 +3446,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
             DataBacking::Virtual { .. } => (self.state.total_items(), None),
         };
         let viewport_height = self.state.effective_viewport_height(total_items);
+        let fill_parent = self.fill_parent;
         let row_extent = px(self.state.row_height());
         let column_extents = ColumnExtents(Rc::new(self.state.column_widths.clone()));
         let horizontal_scroll_handle = self.horizontal_scroll_handle.clone();
@@ -3734,6 +3753,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                             },
                         )
                         .track_scroll(&horizontal_scroll)
+                        .restrict_scroll_to_axis(true)
                         .overscan(2)
                         .h(row_extent)
                         .flex_1();
@@ -3798,6 +3818,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                             },
                         )
                         .track_scroll(&horizontal_scroll)
+                        .restrict_scroll_to_axis(true)
                         .overscan(2)
                         .h(row_extent)
                         .flex_1();
@@ -3818,8 +3839,10 @@ impl<T: Clone + 'static> Render for DataTable<T> {
             renderer,
         )
         .track_scroll(&self.scroll_handle)
+        .restrict_scroll_to_axis(true)
         .overscan(8)
-        .h(px(viewport_height))
+        .when(fill_parent, |list| list.h_full().min_h(px(0.0)))
+        .when(!fill_parent, |list| list.h(px(viewport_height)))
         .on_visible_range(move |range, window, app| {
             let start = range.start;
             let end = range.end;
@@ -3858,7 +3881,6 @@ impl<T: Clone + 'static> Render for DataTable<T> {
         });
 
         let body_content_height = total_items as f32 * self.state.row_height();
-        let body_viewport_height = viewport_height;
         let empty_body_message = if self.search_query.is_empty() {
             self.empty_message.clone()
         } else {
@@ -3886,7 +3908,8 @@ impl<T: Clone + 'static> Render for DataTable<T> {
             .accessibility(
                 AccessibilityAttributes::new(AccessibilityRole::Group).label("Table rows"),
             )
-            .h(px(viewport_height))
+            .when(fill_parent, |div| div.flex_1().min_h(px(0.0)))
+            .when(!fill_parent, |div| div.h(px(viewport_height)))
             .on_scroll_wheel(
                 cx.listener(move |view, event: &ScrollWheelEvent, _window, cx| {
                     let delta_y: f32 = match &event.delta {
@@ -3899,7 +3922,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                     if should_capture_vertical_scroll(
                         scroll_y,
                         body_content_height,
-                        body_viewport_height,
+                        f32::from(view.scroll_handle.bounds().size.height),
                         delta_y,
                     ) {
                         cx.stop_propagation();
@@ -3917,25 +3940,31 @@ impl<T: Clone + 'static> Render for DataTable<T> {
             .flex_col()
             .overflow_hidden()
             .w_full()
+            .when(fill_parent, |div| div.flex_1().min_h(px(0.0)))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .w_full()
+                    .when(fill_parent, |div| div.flex_1().min_h(px(0.0)))
                     .child(self.render_header(cx))
                     .child(body_container),
             )
             .child(
-                div().w_full().h(px(12.0)).child(
-                    scroll_bar(
-                        ElementId::NamedChild(
-                            Box::new(table_id.clone()),
-                            "horizontal-scrollbar".into(),
-                        ),
-                        horizontal_scroll_handle,
-                    )
-                    .horizontal(),
-                ),
+                div()
+                    .w_full()
+                    .h(px(12.0))
+                    .when(fill_parent, |div| div.flex_shrink_0())
+                    .child(
+                        scroll_bar(
+                            ElementId::NamedChild(
+                                Box::new(table_id.clone()),
+                                "horizontal-scrollbar".into(),
+                            ),
+                            horizontal_scroll_handle,
+                        )
+                        .horizontal(),
+                    ),
             );
 
         let table_div = if self.sticky_header {
@@ -3949,6 +3978,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                 .overflow_hidden()
                 .bg(theme.tokens.card)
                 .shadow_sm()
+                .when(fill_parent, |div| div.flex_1().min_h(px(0.0)))
                 .when(self.show_search, |div| {
                     div.child(self.render_search_bar(cx))
                 })
@@ -3968,6 +3998,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                 .overflow_hidden()
                 .bg(theme.tokens.card)
                 .shadow_sm()
+                .when(fill_parent, |div| div.flex_1().min_h(px(0.0)))
                 .when(self.show_search, |div| {
                     div.child(self.render_search_bar(cx))
                 })
@@ -3992,6 +4023,9 @@ impl<T: Clone + 'static> Render for DataTable<T> {
             )
             .relative()
             .w_full()
+            .when(fill_parent, |div| {
+                div.flex().flex_col().h_full().min_h(px(0.0))
+            })
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
                 if let Some(col_idx) = this.resizing_column {
                     let current_x: f32 = event.position.x.into();
@@ -4101,5 +4135,416 @@ impl<T: Clone + 'static> DataTable<T> {
                         })),
                 ),
         )
+    }
+}
+
+#[cfg(test)]
+mod mounted_parent_layout_regression_tests {
+    use super::*;
+    use kael::{TestAppContext, VisualTestContext};
+
+    #[derive(Clone)]
+    struct Row(usize);
+
+    struct Host {
+        table: Entity<DataTable<Row>>,
+        parent_wheel_events: Rc<std::cell::Cell<usize>>,
+    }
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .p(px(13.0))
+                .gap(px(8.0))
+                .on_scroll_wheel({
+                    let events = self.parent_wheel_events.clone();
+                    move |_, _, _| events.set(events.get() + 1)
+                })
+                .child(div().h(px(32.0)).flex_shrink_0().child("Toolbar"))
+                .child(
+                    div()
+                        .debug_selector(|| "table-layout-slot".to_string())
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .child(self.table.clone()),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "table-layout-footer".to_string())
+                        .h(px(24.0))
+                        .flex_shrink_0()
+                        .child("Record status"),
+                )
+        }
+    }
+
+    fn columns() -> Vec<ColumnDef<Row>> {
+        [200.0, 120.0, 200.0]
+            .into_iter()
+            .enumerate()
+            .map(|(column, width)| {
+                ColumnDef::new(
+                    format!("column-{column}"),
+                    format!("Column {column}"),
+                    move |row: &Row| format!("Record {} / value {column}", row.0).into(),
+                )
+                .width(px(width))
+                .sortable(false)
+                .editable(false)
+            })
+            .collect()
+    }
+
+    fn fixture() -> (Entity<Host>, VisualTestContext) {
+        fixture_with(100, false, false, true)
+    }
+
+    fn fixture_with(
+        rows: usize,
+        virtual_rows: bool,
+        search: bool,
+        fill_parent: bool,
+    ) -> (Entity<Host>, VisualTestContext) {
+        let mut app = TestAppContext::single();
+        app.update(|cx| {
+            crate::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::dark());
+        });
+        let (host, window) = app.add_window_view(|_, cx| Host {
+            table: cx.new(|cx| {
+                let table = if virtual_rows {
+                    DataTable::new_virtual(rows, columns(), 64, cx)
+                } else {
+                    DataTable::new((0..rows).map(Row).collect(), columns(), cx)
+                };
+                table.show_search(search).fill_parent(fill_parent)
+            }),
+            parent_wheel_events: Rc::default(),
+        });
+        (host, window.clone())
+    }
+
+    fn draw_at(window: &mut VisualTestContext, width: f32, height: f32) {
+        window.simulate_resize(size(px(width), px(height)));
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert_eq!(window.viewport_size(), size(px(width), px(height)));
+            window.draw(cx).clear();
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn constrained_table_body_and_footer_do_not_overlap_after_resize() {
+        let (host, mut window) = fixture();
+        for height in [520.0, 360.0, 800.0] {
+            draw_at(&mut window, 700.0, height);
+            let slot = window.debug_bounds("table-layout-slot").unwrap();
+            let footer = window.debug_bounds("table-layout-footer").unwrap();
+            let body = window.update(|_, cx| host.read(cx).table.read(cx).scroll_handle.bounds());
+            assert!(body.size.height > px(0.0));
+            assert!(
+                body.bottom() <= slot.bottom(),
+                "actual table body {body:?} must fit its available parent {slot:?}"
+            );
+            assert!(
+                body.bottom() < footer.top(),
+                "actual table body {body:?} must leave the footer {footer:?} unobscured"
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn table_first_column_aligns_with_actual_body_and_header_when_columns_fit() {
+        let (host, mut window) = fixture();
+        draw_at(&mut window, 700.0, 800.0);
+        window.update(|window, cx| {
+            let body = host.read(cx).table.read(cx).scroll_handle.bounds();
+            let tree = window.accessibility_tree();
+            let cell = tree
+                .nodes
+                .values()
+                .find(|node| {
+                    node.role == AccessibilityRole::Cell
+                        && node.row_index == Some(2)
+                        && node.column_index == Some(1)
+                })
+                .expect("first row's first semantic cell");
+            let cell = cell.bounds.expect("first cell painted bounds");
+            assert!(
+                (cell.x - f64::from(f32::from(body.left()))).abs() < 0.5,
+                "first column {cell:?} must start at the body viewport {body:?}"
+            );
+            assert_eq!(cell.width, 200.0);
+            let header = tree
+                .nodes
+                .values()
+                .find(|node| {
+                    node.role == AccessibilityRole::ColumnHeader && node.column_index == Some(1)
+                })
+                .unwrap()
+                .bounds
+                .unwrap();
+            assert_eq!(header.x, cell.x);
+            assert_eq!(header.width, cell.width);
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn fitted_tables_bound_empty_short_virtual_and_cached_bodies_with_search_and_resize() {
+        for (rows, virtual_rows) in [(0, false), (3, false), (100, false), (1_000, true)] {
+            for search in [false, true] {
+                let (host, mut window) = fixture_with(rows, virtual_rows, search, true);
+                for (width, height) in [(700.0, 520.0), (400.0, 360.0), (1_200.0, 800.0)] {
+                    draw_at(&mut window, width, height);
+                    let slot = window.debug_bounds("table-layout-slot").unwrap();
+                    let footer = window.debug_bounds("table-layout-footer").unwrap();
+                    window.update(|window, _| {
+                        let body = window
+                            .accessibility_tree()
+                            .nodes
+                            .values()
+                            .find(|node| node.label.as_deref() == Some("Table rows"))
+                            .unwrap()
+                            .bounds
+                            .unwrap();
+                        assert!(body.height > 0.0, "{rows} rows / search={search}");
+                        assert!(body.y >= f64::from(f32::from(slot.top())));
+                        assert!(
+                            body.y + body.height <= f64::from(f32::from(slot.bottom())),
+                            "actual body {body:?} must fit slot {slot:?}"
+                        );
+                        assert!(body.y + body.height < f64::from(f32::from(footer.top())));
+                    });
+                }
+                if virtual_rows {
+                    window.update(|_, cx| {
+                        let table = host.read(cx).table.clone();
+                        table.update(cx, |table, cx| {
+                            let request = table.state.virtual_requests_for_range(0..64).remove(0);
+                            assert!(table.set_page_data_for(
+                                request,
+                                (0..64).map(Row).collect(),
+                                cx
+                            ));
+                        });
+                    });
+                    draw_at(&mut window, 700.0, 520.0);
+                    window.update(|window, cx| {
+                        assert_eq!(host.read(cx).table.read(cx).cached_row_count(), 64);
+                        let body = host.read(cx).table.read(cx).scroll_handle.bounds();
+                        let cell = window
+                            .accessibility_tree()
+                            .nodes
+                            .values()
+                            .find(|node| {
+                                node.role == AccessibilityRole::Cell
+                                    && node.row_index == Some(2)
+                                    && node.column_index == Some(1)
+                            })
+                            .unwrap()
+                            .bounds
+                            .unwrap();
+                        assert_eq!(cell.x, f64::from(f32::from(body.left())));
+                    });
+                }
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn default_table_mode_retains_the_existing_body_height() {
+        for virtual_rows in [false, true] {
+            let (host, mut window) = fixture_with(1_000, virtual_rows, false, false);
+            draw_at(&mut window, 700.0, 1_100.0);
+            window.update(|_, cx| {
+                assert_eq!(
+                    host.read(cx)
+                        .table
+                        .read(cx)
+                        .scroll_handle
+                        .bounds()
+                        .size
+                        .height,
+                    px(600.0)
+                );
+            });
+        }
+        let (host, mut window) = fixture_with(3, false, false, false);
+        draw_at(&mut window, 700.0, 520.0);
+        window.update(|_, cx| {
+            assert_eq!(
+                host.read(cx)
+                    .table
+                    .read(cx)
+                    .scroll_handle
+                    .bounds()
+                    .size
+                    .height,
+                px(144.0)
+            );
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn fitted_table_wheel_bubbles_at_the_actual_large_body_bottom() {
+        let (host, mut window) = fixture();
+        draw_at(&mut window, 700.0, 1_100.0);
+        window.update(|window, cx| {
+            let table = host.read(cx).table.clone();
+            table.update(cx, |table, cx| {
+                table
+                    .scroll_handle
+                    .set_offset(point(px(0.0), px(-100_000.0)));
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+        });
+        let (body, previous_offset) = window.update(|_, cx| {
+            let host = host.read(cx);
+            host.parent_wheel_events.set(0);
+            let table = host.table.read(cx);
+            let body = table.scroll_handle.bounds();
+            assert!(body.size.height > px(600.0));
+            let actual_max = px(4_800.0) - body.size.height;
+            assert_eq!(table.scroll_handle.max_offset().height, actual_max);
+            assert_eq!(table.scroll_handle.offset().y, -actual_max);
+            (body, table.scroll_handle.offset().y)
+        });
+        window.simulate_event(ScrollWheelEvent {
+            position: body.origin + point(px(24.0), px(24.0)),
+            delta: ScrollDelta::Lines(point(0.0, -1.0)),
+            ..Default::default()
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            let host = host.read(cx);
+            assert_eq!(
+                host.table.read(cx).scroll_handle.offset().y,
+                previous_offset
+            );
+            assert_eq!(host.parent_wheel_events.get(), 1);
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn table_vertical_and_horizontal_wheels_remain_independent_when_both_axes_overflow() {
+        let (host, mut window) = fixture();
+        draw_at(&mut window, 400.0, 800.0);
+        let body = window.update(|_, cx| {
+            let table = host.read(cx).table.read(cx);
+            assert!(table.scroll_handle.max_offset().height > px(0.0));
+            assert!(table.horizontal_scroll_handle.max_offset().width > px(0.0));
+            table.scroll_handle.bounds()
+        });
+        let position = body.origin + point(px(24.0), px(24.0));
+        window.simulate_event(ScrollWheelEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(0.0), px(-48.0))),
+            ..Default::default()
+        });
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+        let vertical = window.update(|_, cx| {
+            let table = host.read(cx).table.read(cx);
+            assert_eq!(
+                table.horizontal_scroll_handle.offset().x,
+                px(0.0),
+                "vertical wheel must not scroll the horizontal column lists"
+            );
+            assert!(table.scroll_handle.offset().y < px(0.0));
+            table.scroll_handle.offset().y
+        });
+        window.simulate_event(ScrollWheelEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(-48.0), px(0.0))),
+            ..Default::default()
+        });
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+        window.update(|_, cx| {
+            let table = host.read(cx).table.read(cx);
+            assert!(table.horizontal_scroll_handle.offset().x < px(0.0));
+            assert_eq!(table.scroll_handle.offset().y, vertical);
+        });
+    }
+
+    fn assert_unconsumed_horizontal_wheel_bubbles(width: f32, right_edge: bool, delta_x: f32) {
+        let (host, mut window) = fixture();
+        draw_at(&mut window, width, 800.0);
+        window.update(|window, cx| {
+            let table = host.read(cx).table.clone();
+            table.update(cx, |table, cx| {
+                table.scroll_handle.set_offset(point(px(0.0), px(-96.0)));
+                table.horizontal_scroll_handle.set_offset(point(
+                    if right_edge { px(-100_000.0) } else { px(0.0) },
+                    px(0.0),
+                ));
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+        });
+        let (position, horizontal, vertical) = window.update(|_, cx| {
+            let host = host.read(cx);
+            host.parent_wheel_events.set(0);
+            let table = host.table.read(cx);
+            let horizontal = table.horizontal_scroll_handle.offset().x;
+            if width > 520.0 {
+                assert_eq!(table.horizontal_scroll_handle.max_offset().width, px(0.0));
+            } else {
+                assert!(table.horizontal_scroll_handle.max_offset().width > px(0.0));
+                if right_edge {
+                    assert_eq!(
+                        horizontal,
+                        -table.horizontal_scroll_handle.max_offset().width
+                    );
+                } else {
+                    assert_eq!(horizontal, px(0.0));
+                }
+            }
+            assert_eq!(table.scroll_handle.offset().y, px(-96.0));
+            (
+                table.scroll_handle.bounds().origin + point(px(24.0), px(24.0)),
+                horizontal,
+                table.scroll_handle.offset().y,
+            )
+        });
+        window.simulate_event(ScrollWheelEvent {
+            position,
+            delta: ScrollDelta::Lines(point(delta_x, 0.0)),
+            ..Default::default()
+        });
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+        window.update(|_, cx| {
+            let host = host.read(cx);
+            let table = host.table.read(cx);
+            assert_eq!(table.horizontal_scroll_handle.offset().x, horizontal);
+            assert_eq!(
+                table.scroll_handle.offset().y,
+                vertical,
+                "an unconsumed horizontal wheel must not move the vertical body"
+            );
+            assert_eq!(host.parent_wheel_events.get(), 1);
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn horizontal_wheel_at_left_column_edge_does_not_move_vertical_body() {
+        assert_unconsumed_horizontal_wheel_bubbles(400.0, false, 1.0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn horizontal_wheel_at_right_column_edge_does_not_move_vertical_body() {
+        assert_unconsumed_horizontal_wheel_bubbles(400.0, true, -1.0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn horizontal_wheel_when_columns_fit_does_not_move_vertical_body() {
+        assert_unconsumed_horizontal_wheel_bubbles(700.0, false, -1.0);
+        assert_unconsumed_horizontal_wheel_bubbles(700.0, false, 1.0);
     }
 }

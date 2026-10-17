@@ -245,6 +245,26 @@ those tasks in the data source when a limit across queries is required. Prefer
 the generation-safe callback above for asynchronous sources; legacy
 `on_fetch_page`/`set_page_data` callbacks cannot identify stale query results.
 
+### Fit a table beside application controls
+
+Use `DataTable::fill_parent(true)` when a table should occupy the space left
+between a toolbar and a footer. Give its parent a bounded height and allow the
+table's flex slot to shrink:
+
+```rust,ignore
+let table = cx.new(|cx| DataTable::new(rows, columns, cx).fill_parent(true));
+div().size_full().flex().flex_col()
+    .child(toolbar.flex_shrink_0())
+    .child(div().flex_1().min_h(px(0.0)).child(table))
+    .child(footer.flex_shrink_0())
+```
+
+Search controls, column headers, and the horizontal scrollbar retain their
+natural height; the body scrolls within the remaining space as the window
+resizes. Vertical and horizontal wheel movement follow their own axes. Without
+`fill_parent(true)`, the body retains its existing maximum height of 600 pixels,
+or fewer rows for an in-memory table.
+
 ### Keep business records independent from UI text
 
 `DataTable<T>` can retain an application's own record type instead of converting
