@@ -87,6 +87,16 @@ impl Clone for EncodedImageSource {
 }
 
 impl ImageAssetStore {
+    #[cfg(feature = "images")]
+    pub(super) fn cached_decoded_bytes(&self) -> u64 {
+        self.decoded_bytes.get()
+    }
+
+    #[cfg(not(feature = "images"))]
+    pub(super) const fn cached_decoded_bytes(&self) -> u64 {
+        0
+    }
+
     #[cfg(all(feature = "images", feature = "gif"))]
     pub(super) fn clone_for_worker(&self) -> Self {
         let mut entries = FxHashMap::default();

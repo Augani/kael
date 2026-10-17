@@ -101,6 +101,18 @@ impl Renderer {
 }
 
 impl PreparedAnimation {
+    /// Returns the cached target RGBA8 image payload bytes for this preparation.
+    ///
+    /// Images are decoded lazily, so this value can grow after rendering a later
+    /// frame. Cache hits do not increase it. Without the `images` feature it is zero.
+    /// This excludes encoded assets, parsed models, other preparation caches,
+    /// temporary rendering/decoder buffers and allocator overhead; it is not total
+    /// prepared memory or process RSS.
+    #[must_use]
+    pub fn cached_decoded_image_bytes(&self) -> u64 {
+        self.image_assets.cached_decoded_bytes()
+    }
+
     /// Returns the preprocessed animation model.
     #[must_use]
     pub const fn animation(&self) -> &Animation {
@@ -117,5 +129,22 @@ impl PreparedAnimation {
             },
             layer_hierarchy_cache: Some(&self.layer_hierarchy_cache),
         }
+    }
+}
+
+#[cfg(test)]
+mod cache_byte_tests {
+    use super::*;
+
+    #[test]
+    fn preparation_without_images_reports_zero_cached_pixel_bytes() {
+        let animation =
+            Animation::from_json_str(r#"{"fr":30,"ip":0,"op":1,"w":1,"h":1,"layers":[]}"#).unwrap();
+        let prepared = Renderer::target_corpus().prepare(&animation).unwrap();
+        assert_eq!(prepared.cached_decoded_image_bytes(), 0);
+        prepared
+            .render_frame(0.0, crate::RenderConfig::default())
+            .unwrap();
+        assert_eq!(prepared.cached_decoded_image_bytes(), 0);
     }
 }

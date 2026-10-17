@@ -31,6 +31,54 @@ mod tests {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
     #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn prepared_image_byte_stats_track_lazy_hits_growth_and_failed_admission() {
+        use base64::Engine as _;
+        let mut png = Vec::new();
+        PngEncoder::new(&mut png)
+            .write_image(&[255, 0, 0, 255], 1, 1, ColorType::Rgba8.into())
+            .unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(png);
+        let animation = Animation::from_json_str(&format!(
+            r#"{{"fr":30,"ip":0,"op":2,"w":1,"h":1,
+            "assets":[{{"id":"first","w":1,"h":1,"e":1,"p":"data:image/png;base64,{data}"}},
+                      {{"id":"second","w":1,"h":1,"e":1,"p":"data:image/png;base64,{data}"}}],
+            "layers":[{{"ty":2,"ind":1,"refId":"first","ip":0,"op":1}},
+                      {{"ty":2,"ind":2,"refId":"second","ip":1,"op":2}}]}}"#
+        ))
+        .unwrap();
+        let prepared = Renderer::target_corpus().prepare(&animation).unwrap();
+        assert_eq!(prepared.cached_decoded_image_bytes(), 0);
+        for _ in 0..2 {
+            assert_eq!(
+                prepared
+                    .render_frame(0.0, RenderConfig::default())
+                    .unwrap()
+                    .pixels,
+                [255, 0, 0, 255]
+            );
+            assert_eq!(prepared.cached_decoded_image_bytes(), 4);
+        }
+        assert_eq!(
+            prepared
+                .render_frame(1.0, RenderConfig::default())
+                .unwrap()
+                .pixels,
+            [255, 0, 0, 255]
+        );
+        assert_eq!(prepared.cached_decoded_image_bytes(), 8);
+        let mut limits = ImageLimits::default();
+        limits.max_total_decoded_bytes = 4;
+        let prepared = Renderer::target_corpus()
+            .with_image_limits(limits)
+            .prepare(&animation)
+            .unwrap();
+        prepared.render_frame(0.0, RenderConfig::default()).unwrap();
+        assert!(prepared.render_frame(1.0, RenderConfig::default()).is_err());
+        assert_eq!(prepared.cached_decoded_image_bytes(), 4);
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn admission_rejects_manifest_expansion_before_parsing() {
         let mut manifest = br#"{"animations":[{"id":"main"}]}"#.to_vec();
         manifest.resize(1024 * 1024 + 1, b' ');

@@ -4,7 +4,8 @@ This source derives from published `rasterlottie` **0.2.1**, upstream commit
 [c2cf0560a320776bed01d0942914f1fba258285f](https://github.com/neodyland/rasterlottie/tree/c2cf0560a320776bed01d0942914f1fba258285f).
 Kael maintains the separate package **`kael_rasterlottie` 0.4.1**, with the Rust
 library name `rasterlottie`. Existing entrypoints and features remain available;
-the fork adds archive and image admission policies with finite defaults.
+the fork adds archive and image admission policies with finite defaults and
+exact cached-image payload statistics.
 Original README, copyright notices, MIT/Apache-2.0 licenses, corpus/golden tests,
 and fixtures are preserved. Eight upstream Rust files have reviewed changes.
 
@@ -99,7 +100,32 @@ process RSS, GPU, or global application limits. Important remaining boundaries:
 - GIF workers clone admitted external encoded sources and have independent
   decoded budgets. Concurrent workers and prepared animations multiply memory;
   a host still needs its own global budget. Kael currently uses the finite
-  defaults; this change adds no custom Kael-level policy API.
+  defaults; this change adds no custom Kael-level image policy API.
+
+### Host cache accounting
+
+`PreparedAnimation::cached_decoded_image_bytes()` exposes the committed target
+RGBA8 **payload** counter without allocating or decoding assets. It is zero
+before the first image use, unchanged on cache hits and failed decode admission,
+and grows when later frames decode another asset. Without the `images` feature
+it returns zero. It does not report allocator capacities, encoded strings,
+parsed models, shape/timeline/path caches, transient scratch, or total RSS.
+
+Kael uses this counter after rendering to admit idle worker preparations. Its
+local LRU retains at most four preparations and 64 MiB of decoded image payloads
+per thread. Metadata-only process-wide reservations bound all idle caches to
+16 preparations and 256 MiB of those payloads. Preparations remain on their
+creating thread; weak source identities and normal LRU retirement are preserved.
+Checkout releases the idle reservation, and reinsertion measures lazy image
+growth again. Retired resources are destroyed outside cache/budget locks before
+their quota is released. A valid preparation that is too large or cannot obtain
+quota still renders and then bypasses caching.
+
+These host limits concern **idle cached image payloads and idle entry counts**.
+Active preparations, GIF workers, parsed models and other caches, decoder/render
+scratch, posters, ready/output frames and allocator overhead remain additional.
+They are not a total Lottie, process RSS, or GPU memory limit. The standalone
+fork still has no host-global budget of its own.
 
 ## Provenance and exact reconstruction
 
@@ -124,9 +150,11 @@ The exact intentionally modified original files are:
 - `src/lib.rs`: public policy exports.
 - `src/model.rs`: additive archive-policy entrypoint and API documentation.
 - `src/render/assets.rs`: lazy image admission, retained reservations, working
-  accounting, resolver guards, worker policy propagation, and regressions.
+  accounting, resolver guards, worker policy propagation, cached-payload counter
+  access, and regressions.
 - `src/render/mod.rs` and `src/render/renderer/mod.rs`: policy exports.
-- `src/render/renderer/prepare.rs`: renderer policy selection and retention.
+- `src/render/renderer/prepare.rs`: renderer policy selection and retention,
+  additive prepared-image payload statistics and no-images counter regression.
 - `src/render/renderer_types.rs`: image policy types/defaults and renderer field.
 
 All other original source, standalone tests, fixtures, licenses, and metadata
@@ -146,13 +174,17 @@ the containing workspace resolves ZIP 9 and generates the release lockfile.
 
 ## Validation
 
-The source-frozen admission slice passes 116 unit tests, one corpus test, one
-golden test, 14 native integration tests, and two doctests: 134 native passes,
-zero ignored. Actual Chrome WebAssembly runs 15 integration tests, including
-safe rejection of a 2.4 GB target under a raised 32-bit policy. Strict
-all-feature/all-target Clippy and minimal/dotLottie-without-images builds pass.
-These validate requested-buffer admission and compatibility, not hard RSS
-ceilings, every decoder format, or additional Lottie feature support.
+The prior source-frozen admission checkpoint passed 116 unit tests, one corpus
+test, one golden test, 14 native integration tests, and two doctests; its actual
+Chrome WebAssembly run passed 15 integration tests, including safe rejection of
+a 2.4 GB target under a raised 32-bit policy. Its evidence remains historical.
+The cached-image counter extension adds a no-images unit regression and a
+portable lazy-decode/hit/growth/failed-admission integration regression. Kael's
+host cache tests separately exercise byte/entry LRU admission, shared quota,
+weak identity, cancellation, errors, unwinding, reentrancy and thread teardown
+with tiny injected budgets. These validate requested-buffer/cache admission and
+compatibility, not hard RSS ceilings, every decoder format, or additional Lottie
+feature support.
 
 The earlier dependency-only
 [checkpoint d40166f](https://github.com/Augani/kael/commit/d40166fb132dd2c24cd93c44017b919daf21339f)

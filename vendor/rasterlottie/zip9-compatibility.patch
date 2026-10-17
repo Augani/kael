@@ -640,30 +640,58 @@
 -]
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -15,2 +15,2 @@
+@@ -12,8 +12,8 @@
+ [package]
+ edition = "2024"
+ rust-version = "1.92"
 -name = "rasterlottie"
 -version = "0.2.1"
 +name = "kael_rasterlottie"
 +version = "0.4.1"
-@@ -24 +23,0 @@
+ build = false
+ include = [
+     "/CHANGELOG.md",
+@@ -21,10 +21,12 @@
+     "/LICENSE-APACHE",
+     "/LICENSE-MIT",
+     "/README.md",
 -    "/examples/**",
-@@ -27 +26,4 @@
+     "/src/**",
+     "/tests/**",
 -    "/tools/bench/**",
 +    "/PATCHES.md",
 +    "/UPSTREAM-Cargo.toml",
 +    "/UPSTREAM-SHA256.json",
 +    "/zip9-compatibility.patch",
-@@ -35,3 +37,3 @@
+ ]
+ publish = ["crates-io"]
+ autolib = false
+@@ -32,9 +34,9 @@
+ autoexamples = false
+ autotests = false
+ autobenches = false
 -description = "Pure Rust, headless Lottie rasterizer for deterministic server-side rendering"
 -homepage = "https://github.com/neodyland/rasterlottie"
 -documentation = "https://docs.rs/rasterlottie"
 +description = "Kael-maintained pure Rust Lottie rasterizer with ZIP 9 dotLottie support"
 +homepage = "https://github.com/Augani/kael"
 +documentation = "https://docs.rs/kael_rasterlottie"
-@@ -51 +53 @@
+ readme = "README.md"
+ keywords = [
+     "lottie",
+@@ -48,7 +50,7 @@
+     "multimedia::images",
+ ]
+ license = "MIT OR Apache-2.0"
 -repository = "https://github.com/neodyland/rasterlottie"
 +repository = "https://github.com/Augani/kael"
-@@ -82,7 +84,3 @@
+
+ [package.metadata.docs.rs]
+ all-features = true
+@@ -79,13 +81,9 @@
+ name = "rasterlottie"
+ path = "src/lib.rs"
+
 -[[example]]
 -name = "benchmark_render"
 -path = "examples/benchmark_render.rs"
@@ -674,14 +702,26 @@
 +[[test]]
 +name = "zip9_compatibility"
 +path = "tests/zip9_compatibility.rs"
-@@ -147 +145 @@
+
+ [[test]]
+ name = "corpus"
+@@ -144,7 +142,7 @@
+ optional = true
+
+ [dependencies.zip]
 -version = "8"
 +version = "9"
-@@ -169,0 +168,3 @@
+ features = ["deflate"]
+ optional = true
+ default-features = false
+@@ -167,51 +165,26 @@
+     "fmt",
+ ]
+
 +[target.'cfg(target_arch = "wasm32")'.dev-dependencies.wasm-bindgen-test]
 +version = "0.3.72"
 +
-@@ -171,35 +172,11 @@
+ [lints.clippy]
 -absolute_paths = "warn"
 -allow_attributes = "deny"
 -allow_attributes_without_reason = "deny"
@@ -728,12 +768,13 @@
 +todo = "deny"
 +too_many_arguments = "allow"
 +type_complexity = "allow"
-@@ -207,2 +184,2 @@
+
 -[lints.clippy.nursery]
 -level = "warn"
 +[lints.clippy.style]
 +level = "allow"
-@@ -211,7 +188,3 @@
+ priority = -1
+
 -[lints.clippy.pedantic]
 -level = "warn"
 -priority = -1
@@ -1386,16 +1427,28 @@
 +]
 --- a/src/dotlottie.rs
 +++ b/src/dotlottie.rs
-@@ -9 +9 @@
+@@ -6,11 +6,16 @@
+ #[cfg(feature = "images")]
+ use base64::{Engine, engine::general_purpose};
+ use serde::Deserialize;
 -use zip::{ZipArchive, result::ZipError};
 +use zip::{ZipArchive, read::ZipReadOptions, result::ZipError};
-@@ -13,0 +14,5 @@
+
+ #[cfg(feature = "images")]
+ use crate::Asset;
+ use crate::{Animation, RasterlottieError};
 +
 +#[cfg(test)]
 +thread_local! {
 +    static ALLOCATION_REQUESTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 +}
-@@ -35,0 +41,39 @@
+
+ #[derive(Debug, Deserialize)]
+ struct DotLottieManifest {
+@@ -33,26 +38,105 @@
+     animation: Option<String>,
+ }
+
 +/// Finite admission limits for loading a selected animation from a ZIP container.
 +///
 +/// Byte limits are inclusive. Zero rejects nonempty content. The total counts
@@ -1435,7 +1488,9 @@
 +    }
 +}
 +
-@@ -38,0 +83,13 @@
+ pub fn load_animation_from_dotlottie_bytes(
+     dotlottie: &[u8],
+ ) -> Result<Animation, RasterlottieError> {
 +    load_animation_from_dotlottie_bytes_with_limits(dotlottie, DotLottieLimits::default())
 +}
 +
@@ -1449,7 +1504,7 @@
 +            "compressed source limit exceeded",
 +        ));
 +    }
-@@ -40 +97,13 @@
+     let mut archive = ZipArchive::new(Cursor::new(dotlottie))?;
 -    let manifest_json = read_archive_string(&mut archive, "manifest.json")?;
 +    if archive.len() > limits.max_entries {
 +        return Err(admission_error(
@@ -1464,7 +1519,12 @@
 +        limits.max_manifest_bytes,
 +        &mut remaining,
 +    )?;
-@@ -47,2 +116,6 @@
+     let manifest = serde_json::from_str::<DotLottieManifest>(&manifest_json).map_err(|error| {
+         RasterlottieError::InvalidDotLottie {
+             detail: format!("failed to parse manifest.json: {error}"),
+         }
+     })?;
+     let animation_id = select_animation_id(&manifest)?;
 -    let animation_json =
 -        read_archive_string_any(&mut archive, &animation_candidate_paths(animation_id))?;
 +    let animation_json = read_archive_string_any(
@@ -1473,7 +1533,11 @@
 +        limits.max_animation_bytes,
 +        &mut remaining,
 +    )?;
-@@ -54 +127,6 @@
+     #[cfg(feature = "images")]
+     let mut animation = Animation::from_json_str(&animation_json)?;
+     #[cfg(not(feature = "images"))]
+     let animation = Animation::from_json_str(&animation_json)?;
+     #[cfg(feature = "images")]
 -    embed_archive_images(&mut archive, &mut animation)?;
 +    embed_archive_images(
 +        &mut archive,
@@ -1481,14 +1545,20 @@
 +        limits.max_image_bytes,
 +        &mut remaining,
 +    )?;
-@@ -55,0 +134,6 @@
+     Ok(animation)
 +}
 +
 +fn admission_error(path: &str, detail: &str) -> RasterlottieError {
 +    RasterlottieError::InvalidDotLottie {
 +        detail: format!("archive entry `{path}` exceeds admission limits: {detail}"),
 +    }
-@@ -115,8 +198,0 @@
+ }
+
+ fn select_animation_id(manifest: &DotLottieManifest) -> Result<&str, RasterlottieError> {
+@@ -112,50 +196,100 @@
+     candidates
+ }
+
 -fn read_archive_string(
 -    archive: &mut ZipArchive<Cursor<&[u8]>>,
 -    path: &str,
@@ -1497,10 +1567,12 @@
 -    read_archive_string_any(archive, &[normalized])
 -}
 -
-@@ -125,0 +202,2 @@
+ fn read_archive_string_any(
+     archive: &mut ZipArchive<Cursor<&[u8]>>,
+     candidates: &[String],
 +    per_entry_limit: u64,
 +    remaining: &mut u64,
-@@ -127 +205,9 @@
+ ) -> Result<String, RasterlottieError> {
 -    let (path, bytes) = read_archive_bytes_any(archive, candidates)?;
 +    let (path, bytes) =
 +        read_archive_bytes_optional(archive, candidates, per_entry_limit, remaining)?.ok_or_else(
@@ -1511,7 +1583,11 @@
 +                ),
 +            },
 +        )?;
-@@ -133,12 +219,51 @@
+     String::from_utf8(bytes).map_err(|error| RasterlottieError::InvalidDotLottie {
+         detail: format!("archive entry `{path}` is not valid UTF-8: {error}"),
+     })
+ }
+
 -fn read_archive_bytes_any(
 -    archive: &mut ZipArchive<Cursor<&[u8]>>,
 -    candidates: &[String],
@@ -1575,16 +1651,21 @@
 +        }
 +        bytes.extend_from_slice(&chunk[..count]);
 +    }
-@@ -149,0 +275,2 @@
+ }
+
+ fn read_archive_bytes_optional(
+     archive: &mut ZipArchive<Cursor<&[u8]>>,
+     candidates: &[String],
 +    per_entry_limit: u64,
 +    remaining: &mut u64,
-@@ -152 +279,4 @@
+ ) -> Result<Option<(String, Vec<u8>)>, RasterlottieError> {
+     for candidate in candidates {
 -        match archive.by_name(candidate) {
 +        match archive.by_name_with_options(
 +            candidate,
 +            ZipReadOptions::new().enforce_header_consistency(true),
 +        ) {
-@@ -154,5 +284,9 @@
+             Ok(mut file) => {
 -                let mut bytes = Vec::new();
 -                file.read_to_end(&mut bytes).map_err(|error| {
 -                    RasterlottieError::InvalidDotLottie {
@@ -1599,17 +1680,39 @@
 +                )?;
 +                *remaining = remaining.checked_sub(bytes.len() as u64).ok_or_else(|| {
 +                    admission_error(candidate, "aggregate expanded size overflow")
-@@ -166 +299,0 @@
+                 })?;
+                 return Ok(Some((candidate.clone(), bytes)));
+             }
+@@ -163,7 +297,6 @@
+             Err(error) => return Err(error.into()),
+         }
+     }
 -
-@@ -173,0 +307,2 @@
+     Ok(None)
+ }
+
+@@ -171,6 +304,8 @@
+ fn embed_archive_images(
+     archive: &mut ZipArchive<Cursor<&[u8]>>,
+     animation: &mut Animation,
 +    per_image_limit: u64,
 +    remaining: &mut u64,
-@@ -181 +316,3 @@
+ ) -> Result<(), RasterlottieError> {
+     for asset in &mut animation.assets {
+         if !asset.is_image_asset() || asset.is_embedded_image_asset() {
+@@ -178,16 +313,22 @@
+         }
+
+         let candidates = archive_image_candidates(asset);
 -        let Some((path, bytes)) = read_archive_bytes_optional(archive, &candidates)? else {
 +        let Some((path, bytes)) =
 +            read_archive_bytes_optional(archive, &candidates, per_image_limit, remaining)?
 +        else {
-@@ -187,4 +324,8 @@
+             continue;
+         };
+         let media_type = media_type_for_path(&path);
+         asset.base_path = None;
+         asset.embedded = Some(1);
 -        asset.path = Some(format!(
 -            "data:{media_type};base64,{}",
 -            general_purpose::STANDARD.encode(bytes)
@@ -1622,10 +1725,20 @@
 +            .map_err(|_| admission_error(&path, "cannot reserve bounded base64 buffer"))?;
 +        general_purpose::STANDARD.encode_string(bytes, &mut data_url);
 +        asset.path = Some(data_url);
-@@ -285 +426 @@
+     }
+
+     Ok(())
+@@ -282,13 +423,69 @@
+
+ #[cfg(test)]
+ mod tests {
 -    use std::io::{Cursor, Write};
 +    use std::io::{Cursor, Read, Write};
-@@ -291 +432,57 @@
+
+     #[cfg(feature = "images")]
+     use image::{ColorType, ImageEncoder, Rgba, RgbaImage, codecs::png::PngEncoder};
+     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
 -    use super::load_animation_from_dotlottie_bytes;
 +    use super::{ALLOCATION_REQUESTS, load_animation_from_dotlottie_bytes, read_bounded};
 +
@@ -1684,28 +1797,58 @@
 +        );
 +        assert_eq!(ALLOCATION_REQUESTS.with(std::cell::Cell::get), 1);
 +    }
+
+     fn archive_from_entries(entries: &[(&str, &[u8])]) -> Vec<u8> {
+         let cursor = Cursor::new(Vec::new());
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -18,0 +19,2 @@
+@@ -16,6 +16,8 @@
+ mod support;
+ mod timeline;
+
 +#[cfg(feature = "dotlottie")]
 +pub use dotlottie::DotLottieLimits;
-@@ -28 +30,2 @@
+ pub use error::RasterlottieError;
+ pub use model::{
+     AnimatedValue, Animation, Asset, BezierPath, BezierVertex, Font, FontCharacter, Layer,
+@@ -25,7 +27,8 @@
+ #[cfg(feature = "gif")]
+ pub use render::GifRenderConfig;
+ pub use render::{
 -    ImageAssetResolver, Pixmap, PreparedAnimation, RasterFrame, RenderConfig, Renderer, Rgba8,
 +    ImageAssetResolver, ImageLimits, Pixmap, PreparedAnimation, RasterFrame, RenderConfig,
 +    Renderer, Rgba8,
+ };
+ pub use support::{
+     SupportProfile, SupportReport, UnsupportedFeature, UnsupportedKind, analyze_animation,
 --- a/src/model.rs
 +++ b/src/model.rs
-@@ -4 +4,3 @@
+@@ -1,7 +1,9 @@
+ use serde_json::Value;
+
+ #[cfg(feature = "dotlottie")]
 -use super::dotlottie::load_animation_from_dotlottie_bytes;
 +use super::dotlottie::{
 +    load_animation_from_dotlottie_bytes, load_animation_from_dotlottie_bytes_with_limits,
 +};
-@@ -24 +26,3 @@
+ use super::{
+     RasterlottieError,
+     model_parse::{color_components_to_rgba, f32_unit_to_u8, parse_bezier_path},
+@@ -21,7 +23,9 @@
+     /// Parses the primary animation from a `.lottie` archive.
+     ///
+     /// The loader prefers the manifest's explicitly selected animation and
 -    /// otherwise falls back to the first listed animation entry.
 +    /// otherwise falls back to the first listed animation entry. Finite
 +    /// [`crate::DotLottieLimits::default`] admission limits apply; use
 +    /// [`Self::from_dotlottie_bytes_with_limits`] to choose another policy.
-@@ -33,0 +38,16 @@
+     ///
+     /// # Errors
+     ///
+@@ -31,6 +35,22 @@
+     #[cfg_attr(docsrs, doc(cfg(feature = "dotlottie")))]
+     pub fn from_dotlottie_bytes(dotlottie: &[u8]) -> Result<Self, RasterlottieError> {
+         load_animation_from_dotlottie_bytes(dotlottie)
 +    }
 +
 +    /// Parses the selected animation with explicit archive admission limits.
@@ -1722,41 +1865,64 @@
 +        limits: crate::DotLottieLimits,
 +    ) -> Result<Self, RasterlottieError> {
 +        load_animation_from_dotlottie_bytes_with_limits(dotlottie, limits)
+     }
+
+     /// Returns the duration in frames.
 --- a/src/render/assets.rs
 +++ b/src/render/assets.rs
-@@ -1,2 +0,0 @@
+@@ -1,13 +1,20 @@
 -#[cfg(feature = "images")]
 -use std::cell::RefCell;
-@@ -5,0 +4,6 @@
+ #[cfg(not(feature = "images"))]
+ use std::mem::size_of_val;
+ use std::sync::Arc;
 +#[cfg(feature = "images")]
 +use std::{
 +    borrow::Cow,
 +    cell::{Cell, RefCell},
 +    io::Cursor,
 +};
-@@ -10 +14,4 @@
+
+ #[cfg(feature = "images")]
+ use base64::{Engine, engine::general_purpose};
+ #[cfg(feature = "images")]
 -use image::imageops::{self, FilterType};
 +use image::{
 +    ImageDecoder as _, ImageReader,
 +    imageops::{self, FilterType},
 +};
-@@ -18 +25 @@
+ #[cfg(feature = "images")]
+ use rustc_hash::FxHashMap;
+ #[cfg(not(feature = "images"))]
+@@ -15,15 +22,23 @@
+ #[cfg(feature = "images")]
+ use tiny_skia::{IntSize, Pixmap};
+
 -use super::renderer::ImageAssetResolver;
 +use super::renderer::{ImageAssetResolver, ImageLimits};
-@@ -21,0 +29,6 @@
+ #[cfg(feature = "images")]
+ use crate::Asset;
+ use crate::{Animation, RasterlottieError};
 +
 +#[cfg(all(test, feature = "images"))]
 +thread_local! {
 +    static PIXEL_DECODES: Cell<usize> = const { Cell::new(0) };
 +    static RESIZES: Cell<usize> = const { Cell::new(0) };
 +}
-@@ -26,0 +40,2 @@
+
+ #[cfg(feature = "images")]
+ #[derive(Debug, Default)]
+ pub(super) struct ImageAssetStore {
+     entries: FxHashMap<String, LazyImageAssetEntry>,
 +    limits: ImageLimits,
 +    decoded_bytes: Cell<u64>,
-@@ -38,0 +54,16 @@
-+}
-+
-+#[cfg(feature = "images")]
+ }
+
+ #[cfg(not(feature = "images"))]
+@@ -39,6 +54,22 @@
+ }
+
+ #[cfg(feature = "images")]
 +struct DecodedReservation<'a> {
 +    total: &'a Cell<u64>,
 +    bytes: u64,
@@ -1770,19 +1936,57 @@
 +            self.total.set(self.total.get() - self.bytes);
 +        }
 +    }
-@@ -74 +105,5 @@
++}
++
++#[cfg(feature = "images")]
+ #[derive(Debug)]
+ enum EncodedImageSource {
+     EmbeddedDataUrl,
+@@ -56,6 +87,16 @@
+ }
+
+ impl ImageAssetStore {
++    #[cfg(feature = "images")]
++    pub(super) fn cached_decoded_bytes(&self) -> u64 {
++        self.decoded_bytes.get()
++    }
++
++    #[cfg(not(feature = "images"))]
++    pub(super) const fn cached_decoded_bytes(&self) -> u64 {
++        0
++    }
++
+     #[cfg(all(feature = "images", feature = "gif"))]
+     pub(super) fn clone_for_worker(&self) -> Self {
+         let mut entries = FxHashMap::default();
+@@ -71,7 +112,11 @@
+             );
+         }
+
 -        Self { entries }
 +        Self {
 +            entries,
 +            limits: self.limits,
 +            decoded_bytes: Cell::new(0),
 +        }
-@@ -102,0 +138 @@
+     }
+
+     #[cfg(all(not(feature = "images"), feature = "gif"))]
+@@ -100,6 +145,7 @@
+                 detail: "image asset index is out of bounds".to_string(),
+             }
+         })?;
 +        validate_declared_dimensions(asset, self.limits)?;
-@@ -112 +148 @@
+         let bytes = match &entry.source {
+             EncodedImageSource::EmbeddedDataUrl => {
+                 let data_url =
+@@ -109,11 +155,16 @@
+                             id: asset.id.clone(),
+                             detail: "embedded image asset is missing a data URL".to_string(),
+                         })?;
 -                decode_data_url_bytes(asset, data_url)?
 +                Cow::Owned(decode_data_url_bytes(asset, data_url, self.limits)?)
-@@ -114,3 +150,8 @@
+             }
 -            EncodedImageSource::EncodedBytes(bytes) => bytes.clone(),
 -        };
 -        let decoded = Arc::new(decode_image_bytes(asset, &bytes)?);
@@ -1794,16 +1998,30 @@
 +            self.limits,
 +            &self.decoded_bytes,
 +        )?);
-@@ -143,0 +185 @@
+         *entry.decoded.borrow_mut() = Some(Arc::clone(&decoded));
+         Ok(Some(decoded))
+     }
+@@ -141,8 +192,10 @@
+ pub(super) fn resolve_image_assets(
+     animation: &Animation,
+     resolver: Option<&dyn ImageAssetResolver>,
 +    limits: ImageLimits,
-@@ -145,0 +188 @@
+ ) -> Result<ImageAssetStore, RasterlottieError> {
+     let mut entries = FxHashMap::default();
 +    let mut resolved_bytes = 0u64;
-@@ -154,2 +197,2 @@
+     for (asset_index, asset) in animation.assets.iter().enumerate() {
+         if !asset.is_image_asset() {
+             continue;
+@@ -151,12 +204,22 @@
+         let source = if asset.image_data_url().is_some() {
+             EncodedImageSource::EmbeddedDataUrl
+         } else if let Some(resolver) = resolver {
 -            EncodedImageSource::EncodedBytes(resolver.resolve_image_asset(asset)?.ok_or_else(
 -                || RasterlottieError::InvalidImageAsset {
 +            let bytes = resolver.resolve_image_asset(asset)?.ok_or_else(|| {
 +                RasterlottieError::InvalidImageAsset {
-@@ -158,2 +201,12 @@
+                     id: asset.id.clone(),
+                     detail: "image asset resolver did not return bytes".to_string(),
 -                },
 -            )?)
 +                }
@@ -1818,16 +2036,33 @@
 +                    image_limit_error(asset, "aggregate resolver encoded image bytes")
 +                })?;
 +            EncodedImageSource::EncodedBytes(bytes)
-@@ -178 +231,5 @@
+         } else {
+             return Err(RasterlottieError::InvalidImageAsset {
+                 id: asset.id.clone(),
+@@ -175,13 +238,18 @@
+         );
+     }
+
 -    Ok(ImageAssetStore { entries })
 +    Ok(ImageAssetStore {
 +        entries,
 +        limits,
 +        decoded_bytes: Cell::new(0),
 +    })
-@@ -184,0 +242 @@
+ }
+
+ #[cfg(not(feature = "images"))]
+ pub(super) fn resolve_image_assets(
+     animation: &Animation,
+     resolver: Option<&dyn ImageAssetResolver>,
 +    _limits: ImageLimits,
-@@ -206,3 +264,65 @@
+ ) -> Result<ImageAssetStore, RasterlottieError> {
+     if let Some(asset) = animation.assets.iter().find(|asset| asset.is_image_asset()) {
+         return Err(RasterlottieError::InvalidImageAsset {
+@@ -203,42 +271,171 @@
+ }
+
+ #[cfg(feature = "images")]
 -fn decode_image_bytes(asset: &Asset, bytes: &[u8]) -> Result<Pixmap, RasterlottieError> {
 -    let mut rgba = image::load_from_memory(bytes)
 -        .map_err(|err| RasterlottieError::InvalidImageAsset {
@@ -1896,7 +2131,7 @@
 +    let mut reader = ImageReader::new(Cursor::new(bytes))
 +        .with_guessed_format()
 +        .map_err(|error| RasterlottieError::InvalidImageAsset {
-@@ -210,14 +330,82 @@
+             id: asset.id.clone(),
 -            detail: format!("failed to decode image bytes: {err}"),
 -        })?
 -        .to_rgba8();
@@ -1993,9 +2228,10 @@
 +    if resizing {
 +        #[cfg(test)]
 +        RESIZES.with(|count| count.set(count.get() + 1));
-@@ -226 +413,0 @@
+         rgba = imageops::resize(&rgba, target_width, target_height, FilterType::Triangle);
+     }
 -
-@@ -228,14 +415,14 @@
+     premultiply_rgba(rgba.as_mut());
 -    let size = IntSize::from_wh(target_width, target_height).ok_or(
 -        RasterlottieError::InvalidCanvasSize {
 -            width: target_width,
@@ -2024,7 +2260,13 @@
 +    data_url: &str,
 +    limits: ImageLimits,
 +) -> Result<Vec<u8>, RasterlottieError> {
-@@ -261,3 +448,30 @@
+     let Some((metadata, payload)) = data_url.split_once(',') else {
+         return Err(RasterlottieError::InvalidImageAsset {
+             id: asset.id.clone(),
+@@ -258,12 +455,41 @@
+         });
+     }
+
 -    general_purpose::STANDARD
 -        .decode(payload.trim())
 -        .map_err(|err| RasterlottieError::InvalidImageAsset {
@@ -2058,14 +2300,20 @@
 +    let count = general_purpose::STANDARD
 +        .decode_slice(payload, &mut bytes)
 +        .map_err(|error| RasterlottieError::InvalidImageAsset {
-@@ -265,2 +479,4 @@
+             id: asset.id.clone(),
 -            detail: format!("failed to decode base64 image data: {err}"),
 -        })
 +            detail: format!("failed to decode base64 image data: {error}"),
 +        })?;
 +    bytes.truncate(count);
 +    Ok(bytes)
-@@ -277,0 +494,286 @@
+ }
+
+ #[cfg(feature = "images")]
+@@ -275,3 +501,289 @@
+         pixel[2] = ((pixel[2] as u16 * alpha + 127) / 255) as u8;
+     }
+ }
 +
 +#[cfg(all(test, feature = "images"))]
 +mod tests {
@@ -2354,26 +2602,47 @@
 +}
 --- a/src/render/mod.rs
 +++ b/src/render/mod.rs
-@@ -30 +30 @@
+@@ -27,6 +27,6 @@
+ #[cfg(feature = "gif")]
+ pub use renderer::GifRenderConfig;
+ pub use renderer::{
 -    ImageAssetResolver, PreparedAnimation, RasterFrame, RenderConfig, Renderer, Rgba8,
 +    ImageAssetResolver, ImageLimits, PreparedAnimation, RasterFrame, RenderConfig, Renderer, Rgba8,
+ };
+ pub use tiny_skia::Pixmap;
 --- a/src/render/renderer/mod.rs
 +++ b/src/render/renderer/mod.rs
-@@ -15 +15 @@
+@@ -12,5 +12,5 @@
+     ShapeRenderableItem, ShapeRenderableKind, ShapeStyles, StaticPathCache, StrokeStyle, TrimStyle,
+ };
+ pub use super::renderer_types::{
 -    ImageAssetResolver, PreparedAnimation, RasterFrame, RenderConfig, Renderer, Rgba8,
 +    ImageAssetResolver, ImageLimits, PreparedAnimation, RasterFrame, RenderConfig, Renderer, Rgba8,
+ };
 --- a/src/render/renderer/prepare.rs
 +++ b/src/render/renderer/prepare.rs
-@@ -2 +2 @@
+@@ -1,5 +1,5 @@
+ use super::{
 -    super::assets::resolve_image_assets, ImageAssetResolver, LayerHierarchyCache,
 +    super::assets::resolve_image_assets, ImageAssetResolver, ImageLimits, LayerHierarchyCache,
-@@ -14 +14,4 @@
+     PreparedAnimation, Renderer, ShapeCaches, ShapePlanCache, StaticPathCache,
+ };
+ use crate::{
+@@ -11,13 +11,24 @@
+     /// Creates a renderer that uses the provided support profile.
+     #[must_use]
+     pub const fn new(profile: SupportProfile) -> Self {
 -        Self { profile }
 +        Self {
 +            profile,
 +            image_limits: ImageLimits::DEFAULT,
 +        }
-@@ -20,0 +24,8 @@
+     }
+
+     /// Creates a renderer configured with the default target-corpus support profile.
+     #[must_use]
+     pub const fn target_corpus() -> Self {
+         Self::new(SupportProfile::target_corpus())
 +    }
 +
 +    /// Chooses the policy retained by this renderer and every prepared animation.
@@ -2382,16 +2651,74 @@
 +    pub const fn with_image_limits(mut self, limits: ImageLimits) -> Self {
 +        self.image_limits = limits;
 +        self
-@@ -42 +53 @@
+     }
+
+     /// Analyzes an animation with this renderer's support profile.
+@@ -39,7 +50,7 @@
+             return Err(RasterlottieError::UnsupportedFeatures { report });
+         }
+
 -        let image_assets = resolve_image_assets(&resolved, None)?;
 +        let image_assets = resolve_image_assets(&resolved, None, self.image_limits)?;
-@@ -76 +87,2 @@
+         let layer_hierarchy_cache = LayerHierarchyCache::from_animation(&resolved);
+         let shape_plan_cache = ShapePlanCache::from_animation(&resolved);
+         Ok(PreparedAnimation {
+@@ -73,7 +84,8 @@
+             return Err(RasterlottieError::UnsupportedFeatures { report });
+         }
+
 -        let image_assets = resolve_image_assets(&prepared_animation, Some(resolver))?;
 +        let image_assets =
 +            resolve_image_assets(&prepared_animation, Some(resolver), self.image_limits)?;
+         let layer_hierarchy_cache = LayerHierarchyCache::from_animation(&prepared_animation);
+         let shape_plan_cache = ShapePlanCache::from_animation(&prepared_animation);
+         Ok(PreparedAnimation {
+@@ -89,6 +101,18 @@
+ }
+
+ impl PreparedAnimation {
++    /// Returns the cached target RGBA8 image payload bytes for this preparation.
++    ///
++    /// Images are decoded lazily, so this value can grow after rendering a later
++    /// frame. Cache hits do not increase it. Without the `images` feature it is zero.
++    /// This excludes encoded assets, parsed models, other preparation caches,
++    /// temporary rendering/decoder buffers and allocator overhead; it is not total
++    /// prepared memory or process RSS.
++    #[must_use]
++    pub fn cached_decoded_image_bytes(&self) -> u64 {
++        self.image_assets.cached_decoded_bytes()
++    }
++
+     /// Returns the preprocessed animation model.
+     #[must_use]
+     pub const fn animation(&self) -> &Animation {
+@@ -107,3 +131,20 @@
+         }
+     }
+ }
++
++#[cfg(test)]
++mod cache_byte_tests {
++    use super::*;
++
++    #[test]
++    fn preparation_without_images_reports_zero_cached_pixel_bytes() {
++        let animation =
++            Animation::from_json_str(r#"{"fr":30,"ip":0,"op":1,"w":1,"h":1,"layers":[]}"#).unwrap();
++        let prepared = Renderer::target_corpus().prepare(&animation).unwrap();
++        assert_eq!(prepared.cached_decoded_image_bytes(), 0);
++        prepared
++            .render_frame(0.0, crate::RenderConfig::default())
++            .unwrap();
++        assert_eq!(prepared.cached_decoded_image_bytes(), 0);
++    }
++}
 --- a/src/render/renderer_types.rs
 +++ b/src/render/renderer_types.rs
-@@ -73,0 +74,49 @@
+@@ -71,10 +71,60 @@
+     fn resolve_image_asset(&self, asset: &Asset) -> Result<Option<Vec<u8>>, RasterlottieError>;
+ }
+
 +/// Admission limits for lazily decoded image assets.
 +///
 +/// Limits bound encoded inputs and requested pixel/resize buffers per prepared
@@ -2441,8 +2768,14 @@
 +    }
 +}
 +
-@@ -77,0 +127 @@
+ /// Stateless entry point for analyzing and rendering animations.
+ #[derive(Debug, Clone, Copy)]
+ pub struct Renderer {
+     pub(super) profile: SupportProfile,
 +    pub(super) image_limits: ImageLimits,
+ }
+
+ /// A preprocessed animation that can be rendered repeatedly.
 --- /dev/null
 +++ b/tests/fixtures/zip9_glyph_text.json
 @@ -0,0 +1,41 @@
@@ -2489,7 +2822,7 @@
 +            }
 --- /dev/null
 +++ b/tests/zip9_compatibility.rs
-@@ -0,0 +1,530 @@
+@@ -0,0 +1,578 @@
 +//! ZIP 9 dotLottie loader/render compatibility on native Rust and in real browsers.
 +#![cfg(all(feature = "dotlottie", feature = "images", feature = "text"))]
 +
@@ -2519,6 +2852,54 @@
 +    fn pixel(frame: &RasterFrame, x: usize, y: usize) -> &[u8] {
 +        let offset = (y * frame.width as usize + x) * 4;
 +        &frame.pixels[offset..offset + 4]
++    }
++
++    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
++    #[cfg_attr(not(target_arch = "wasm32"), test)]
++    fn prepared_image_byte_stats_track_lazy_hits_growth_and_failed_admission() {
++        use base64::Engine as _;
++        let mut png = Vec::new();
++        PngEncoder::new(&mut png)
++            .write_image(&[255, 0, 0, 255], 1, 1, ColorType::Rgba8.into())
++            .unwrap();
++        let data = base64::engine::general_purpose::STANDARD.encode(png);
++        let animation = Animation::from_json_str(&format!(
++            r#"{{"fr":30,"ip":0,"op":2,"w":1,"h":1,
++            "assets":[{{"id":"first","w":1,"h":1,"e":1,"p":"data:image/png;base64,{data}"}},
++                      {{"id":"second","w":1,"h":1,"e":1,"p":"data:image/png;base64,{data}"}}],
++            "layers":[{{"ty":2,"ind":1,"refId":"first","ip":0,"op":1}},
++                      {{"ty":2,"ind":2,"refId":"second","ip":1,"op":2}}]}}"#
++        ))
++        .unwrap();
++        let prepared = Renderer::target_corpus().prepare(&animation).unwrap();
++        assert_eq!(prepared.cached_decoded_image_bytes(), 0);
++        for _ in 0..2 {
++            assert_eq!(
++                prepared
++                    .render_frame(0.0, RenderConfig::default())
++                    .unwrap()
++                    .pixels,
++                [255, 0, 0, 255]
++            );
++            assert_eq!(prepared.cached_decoded_image_bytes(), 4);
++        }
++        assert_eq!(
++            prepared
++                .render_frame(1.0, RenderConfig::default())
++                .unwrap()
++                .pixels,
++            [255, 0, 0, 255]
++        );
++        assert_eq!(prepared.cached_decoded_image_bytes(), 8);
++        let mut limits = ImageLimits::default();
++        limits.max_total_decoded_bytes = 4;
++        let prepared = Renderer::target_corpus()
++            .with_image_limits(limits)
++            .prepare(&animation)
++            .unwrap();
++        prepared.render_frame(0.0, RenderConfig::default()).unwrap();
++        assert!(prepared.render_frame(1.0, RenderConfig::default()).is_err());
++        assert_eq!(prepared.cached_decoded_image_bytes(), 4);
 +    }
 +
 +    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]

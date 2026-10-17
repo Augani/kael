@@ -31,18 +31,169 @@ const MAX_LOTTIE_FRAMES: usize = 100_000;
 const MAX_LOTTIE_FPS: f32 = 1_000.0;
 const MAX_LOTTIE_RENDER_BATCH: usize = 256;
 const MAX_PREPARED_ANIMATIONS_PER_THREAD: usize = 4;
+const MAX_PREPARED_IMAGE_BYTES_PER_THREAD: u64 = 64 * 1024 * 1024;
+const MAX_PREPARED_ANIMATIONS_GLOBAL: usize = 16;
+const MAX_PREPARED_IMAGE_BYTES_GLOBAL: u64 = 256 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PreparedCacheUsage {
+    entries: usize,
+    decoded_image_bytes: u64,
+}
+
+/// Metadata only: prepared animations remain in their creating thread's TLS.
+struct PreparedCacheBudget {
+    max_entries: usize,
+    max_decoded_image_bytes: u64,
+    usage: parking_lot::Mutex<PreparedCacheUsage>,
+}
+
+impl PreparedCacheBudget {
+    fn new(max_entries: usize, max_decoded_image_bytes: u64) -> Self {
+        Self {
+            max_entries,
+            max_decoded_image_bytes,
+            usage: parking_lot::Mutex::new(PreparedCacheUsage::default()),
+        }
+    }
+
+    fn reserve(self: &Arc<Self>, bytes: u64) -> Option<PreparedCacheReservation> {
+        let mut usage = self.usage.lock();
+        let entries = usage.entries.checked_add(1)?;
+        let decoded_image_bytes = usage.decoded_image_bytes.checked_add(bytes)?;
+        if entries > self.max_entries || decoded_image_bytes > self.max_decoded_image_bytes {
+            return None;
+        }
+        *usage = PreparedCacheUsage {
+            entries,
+            decoded_image_bytes,
+        };
+        Some(PreparedCacheReservation {
+            budget: self.clone(),
+            decoded_image_bytes: bytes,
+        })
+    }
+}
+
+struct PreparedCacheReservation {
+    budget: Arc<PreparedCacheBudget>,
+    decoded_image_bytes: u64,
+}
+
+impl Drop for PreparedCacheReservation {
+    fn drop(&mut self) {
+        let mut usage = self.budget.usage.lock();
+        usage.entries -= 1;
+        usage.decoded_image_bytes -= self.decoded_image_bytes;
+    }
+}
 
 struct PreparedAnimationCacheEntry {
     source: Weak<[u8]>,
+    // Field order matters: dispose prepared resources before releasing quota.
     animation: PreparedAnimation,
+    reservation: PreparedCacheReservation,
+}
+
+impl PreparedAnimationCacheEntry {
+    fn into_active_animation(self) -> PreparedAnimation {
+        let Self {
+            animation,
+            reservation,
+            ..
+        } = self;
+        // Active rendering is outside the idle-cache budget. Recompute the
+        // charge after rendering because another lazy image may have decoded.
+        drop(reservation);
+        animation
+    }
+}
+
+struct PreparedAnimationCache {
+    entries: VecDeque<PreparedAnimationCacheEntry>,
+    decoded_image_bytes: u64,
+    max_entries: usize,
+    max_decoded_image_bytes: u64,
+    budget: Arc<PreparedCacheBudget>,
+}
+
+impl PreparedAnimationCache {
+    fn new(
+        max_entries: usize,
+        max_decoded_image_bytes: u64,
+        budget: Arc<PreparedCacheBudget>,
+    ) -> Self {
+        Self {
+            entries: VecDeque::with_capacity(max_entries),
+            decoded_image_bytes: 0,
+            max_entries,
+            max_decoded_image_bytes,
+            budget,
+        }
+    }
+
+    fn remove(&mut self, index: usize) -> Option<PreparedAnimationCacheEntry> {
+        let entry = self.entries.remove(index)?;
+        self.decoded_image_bytes -= entry.reservation.decoded_image_bytes;
+        Some(entry)
+    }
+
+    fn retire(&mut self, source: Option<&Weak<[u8]>>) -> Vec<PreparedAnimationCacheEntry> {
+        let mut retired = Vec::new();
+        let mut index = 0;
+        while index < self.entries.len() {
+            let entry = &self.entries[index];
+            if entry.source.strong_count() == 0
+                || source.is_some_and(|source| Weak::ptr_eq(&entry.source, source))
+            {
+                retired.push(self.remove(index).unwrap());
+            } else {
+                index += 1;
+            }
+        }
+        retired
+    }
+
+    #[cfg(test)]
+    fn clear(&mut self) -> VecDeque<PreparedAnimationCacheEntry> {
+        self.decoded_image_bytes = 0;
+        std::mem::take(&mut self.entries)
+    }
+}
+
+#[cfg(not(test))]
+static PREPARED_CACHE_BUDGET: std::sync::LazyLock<Arc<PreparedCacheBudget>> =
+    std::sync::LazyLock::new(|| {
+        Arc::new(PreparedCacheBudget::new(
+            MAX_PREPARED_ANIMATIONS_GLOBAL,
+            MAX_PREPARED_IMAGE_BYTES_GLOBAL,
+        ))
+    });
+
+fn default_prepared_animation_cache() -> PreparedAnimationCache {
+    #[cfg(not(test))]
+    let budget = PREPARED_CACHE_BUDGET.clone();
+    // Unit tests get an isolated budget; multi-thread admission tests explicitly
+    // share an injected budget instead of altering process-global limits.
+    #[cfg(test)]
+    let budget = Arc::new(PreparedCacheBudget::new(
+        MAX_PREPARED_ANIMATIONS_GLOBAL,
+        MAX_PREPARED_IMAGE_BYTES_GLOBAL,
+    ));
+    PreparedAnimationCache::new(
+        MAX_PREPARED_ANIMATIONS_PER_THREAD,
+        MAX_PREPARED_IMAGE_BYTES_PER_THREAD,
+        budget,
+    )
 }
 
 thread_local! {
-    /// Prepared animations contain `Rc` and `RefCell` caches, so they must remain on
-    /// the thread that created them. Render workers each keep a deliberately small
-    /// LRU rather than reparsing and preparing every requested frame batch.
-    static PREPARED_ANIMATION_CACHE: RefCell<VecDeque<PreparedAnimationCacheEntry>> =
-        RefCell::new(VecDeque::with_capacity(MAX_PREPARED_ANIMATIONS_PER_THREAD));
+    /// Idle decoded image buffers are bounded to 64 MiB / 4 entries per thread and
+    /// 256 MiB / 16 entries across threads. These limits exclude active renders,
+    /// parsed models, other preparation caches, scratch and allocator overhead.
+    /// Prepared animations contain Rc/RefCell and never move between threads.
+    static PREPARED_ANIMATION_CACHE: RefCell<PreparedAnimationCache> =
+        RefCell::new(default_prepared_animation_cache());
 
     #[cfg(test)]
     static PREPARED_ANIMATION_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -89,6 +240,12 @@ pub enum LoopMode {
 }
 
 /// Parsed Lottie animation metadata and source bytes.
+///
+/// Idle worker preparations retain at most 64 MiB of decoded image pixels and
+/// four entries per thread, with process-wide limits of 256 MiB and 16 entries.
+/// Larger valid preparations render without being cached. These bounds exclude
+/// active rendering, parsed models, other preparation caches, scratch buffers,
+/// poster/output frames and allocator overhead; they do not bound total RSS.
 #[derive(Clone, Debug)]
 pub struct LottieAnimation {
     data: Arc<LottieData>,
@@ -887,61 +1044,113 @@ fn prepare_animation(
     Ok(prepared)
 }
 
-fn take_prepared_animation(bytes: &Arc<[u8]>) -> Option<PreparedAnimationCacheEntry> {
+fn take_prepared_animation_from(
+    cache: &RefCell<PreparedAnimationCache>,
+    bytes: &Arc<[u8]>,
+) -> Option<PreparedAnimation> {
     let source = Arc::downgrade(bytes);
-    PREPARED_ANIMATION_CACHE.with(|cache| {
+    let (entry, retired) = {
         let mut cache = cache.borrow_mut();
-        cache.retain(|entry| entry.source.strong_count() > 0);
-        let index = cache
+        let retired = cache.retire(None);
+        let entry = cache
+            .entries
             .iter()
-            .position(|entry| Weak::ptr_eq(&entry.source, &source))?;
-        cache.remove(index)
-    })
+            .position(|entry| Weak::ptr_eq(&entry.source, &source))
+            .and_then(|index| cache.remove(index));
+        (entry, retired)
+    };
+    // No TLS borrow or budget lock is held while resources are destroyed.
+    drop(retired);
+    entry.map(PreparedAnimationCacheEntry::into_active_animation)
+}
+
+fn cache_prepared_animation_in(
+    cache: &RefCell<PreparedAnimationCache>,
+    bytes: &Arc<[u8]>,
+    animation: PreparedAnimation,
+) {
+    let source = Arc::downgrade(bytes);
+    let bytes = animation.cached_decoded_image_bytes();
+    let (budget, mut retired, can_retain) = {
+        let mut cache = cache.borrow_mut();
+        let mut retired = cache.retire(Some(&source));
+        let can_retain = cache.max_entries > 0
+            && bytes <= cache.max_decoded_image_bytes
+            && cache.budget.max_entries > 0
+            && bytes <= cache.budget.max_decoded_image_bytes;
+        if can_retain {
+            while cache.entries.len() >= cache.max_entries
+                || cache.decoded_image_bytes > cache.max_decoded_image_bytes - bytes
+            {
+                let index = cache.entries.len() - 1;
+                retired.push(cache.remove(index).unwrap());
+            }
+        }
+        (cache.budget.clone(), retired, can_retain)
+    };
+    retired.clear();
+    if !can_retain {
+        return;
+    }
+    loop {
+        if let Some(reservation) = budget.reserve(bytes) {
+            let mut cache = cache.borrow_mut();
+            cache.decoded_image_bytes += bytes;
+            cache.entries.push_front(PreparedAnimationCacheEntry {
+                source,
+                animation,
+                reservation,
+            });
+            return;
+        }
+        // Other threads may own the global quota. Evict only this local LRU,
+        // outside its borrow, and bypass caching if no local entry can free it.
+        let entry = {
+            let mut cache = cache.borrow_mut();
+            let index = cache.entries.len().checked_sub(1);
+            index.and_then(|index| cache.remove(index))
+        };
+        let Some(entry) = entry else {
+            return;
+        };
+        drop(entry);
+    }
 }
 
 fn cache_prepared_animation(bytes: &Arc<[u8]>, animation: PreparedAnimation) {
-    let source = Arc::downgrade(bytes);
-    PREPARED_ANIMATION_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        cache.retain(|entry| {
-            entry.source.strong_count() > 0 && !Weak::ptr_eq(&entry.source, &source)
-        });
-        while cache.len() >= MAX_PREPARED_ANIMATIONS_PER_THREAD {
-            cache.pop_back();
-        }
-        cache.push_front(PreparedAnimationCacheEntry { source, animation });
-    });
+    PREPARED_ANIMATION_CACHE.with(|cache| cache_prepared_animation_in(cache, bytes, animation));
+}
+
+fn with_prepared_animation_in<T>(
+    cache: &RefCell<PreparedAnimationCache>,
+    bytes: &Arc<[u8]>,
+    render: impl FnOnce(&PreparedAnimation) -> Result<Option<T>, LottieError>,
+) -> Result<Option<T>, LottieError> {
+    let animation = if let Some(animation) = take_prepared_animation_from(cache, bytes) {
+        animation
+    } else {
+        prepare_animation(&parse_animation(bytes)?)?
+    };
+    // No TLS borrow or budget lock crosses rendering, including nested calls.
+    let result = render(&animation);
+    // Cancellation retires the preparation instead of retaining obsolete assets.
+    if !matches!(result, Ok(None)) {
+        cache_prepared_animation_in(cache, bytes, animation);
+    }
+    result
 }
 
 fn with_prepared_animation<T>(
     bytes: &Arc<[u8]>,
     render: impl FnOnce(&PreparedAnimation) -> Result<Option<T>, LottieError>,
 ) -> Result<Option<T>, LottieError> {
-    let entry = if let Some(entry) = take_prepared_animation(bytes) {
-        entry
-    } else {
-        let animation = parse_animation(bytes)?;
-        PreparedAnimationCacheEntry {
-            source: Arc::downgrade(bytes),
-            animation: prepare_animation(&animation)?,
-        }
-    };
-
-    // Move the entry out of the RefCell while rendering. Besides shortening the
-    // borrow, this makes a nested render safe: it can independently miss and
-    // prepare instead of panicking on a re-entrant RefCell borrow.
-    let result = render(&entry.animation);
-    // Cancellation also retires this worker's prepared/decoded assets instead
-    // of keeping obsolete work in its thread-local LRU.
-    if !matches!(result, Ok(None)) {
-        cache_prepared_animation(bytes, entry.animation);
-    }
-    result
+    PREPARED_ANIMATION_CACHE.with(|cache| with_prepared_animation_in(cache, bytes, render))
 }
 
 #[cfg(test)]
 fn reset_prepared_animation_cache() {
-    PREPARED_ANIMATION_CACHE.with(|cache| cache.borrow_mut().clear());
+    let retired = PREPARED_ANIMATION_CACHE.with(|cache| cache.borrow_mut().clear());
+    drop(retired);
     PREPARED_ANIMATION_COUNT.with(|count| count.set(0));
     RENDERED_FRAME_COUNT.with(|count| count.set(0));
 }
@@ -953,7 +1162,7 @@ fn prepared_animation_count() -> usize {
 
 #[cfg(test)]
 fn prepared_animation_cache_len() -> usize {
-    PREPARED_ANIMATION_CACHE.with(|cache| cache.borrow().len())
+    PREPARED_ANIMATION_CACHE.with(|cache| cache.borrow().entries.len())
 }
 
 #[cfg(test)]
@@ -962,6 +1171,7 @@ fn is_prepared_animation_cached(bytes: &Arc<[u8]>) -> bool {
     PREPARED_ANIMATION_CACHE.with(|cache| {
         cache
             .borrow()
+            .entries
             .iter()
             .any(|entry| Weak::ptr_eq(&entry.source, &source))
     })
@@ -1380,6 +1590,303 @@ mod tests {
         assert!(is_prepared_animation_cached(&animations[0].data.bytes));
         assert!(!is_prepared_animation_cached(&animations[1].data.bytes));
         reset_prepared_animation_cache();
+    }
+
+    fn pixel_source(width: u32, two_frames: bool) -> Arc<[u8]> {
+        use base64::Engine as _;
+        use image::ImageEncoder as _;
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(&[255, 0, 0, 255], 1, 1, image::ColorType::Rgba8.into())
+            .unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(png);
+        let second_asset = if two_frames {
+            format!(
+                r#",{{"id":"second","w":{width},"h":1,"e":1,"p":"data:image/png;base64,{data}"}}"#
+            )
+        } else {
+            String::new()
+        };
+        let second_layer = if two_frames {
+            r#",{"ty":2,"ind":2,"refId":"second","ip":1,"op":2}"#
+        } else {
+            ""
+        };
+        Arc::from(format!(r#"{{"fr":30,"ip":0,"op":2,"w":{width},"h":1,
+            "assets":[{{"id":"first","w":{width},"h":1,"e":1,"p":"data:image/png;base64,{data}"}}{second_asset}],
+            "layers":[{{"ty":2,"ind":1,"refId":"first","ip":0,"op":1}}{second_layer}]}}"#).into_bytes())
+    }
+
+    fn render_pixel_source(
+        cache: &RefCell<PreparedAnimationCache>,
+        source: &Arc<[u8]>,
+        frame: f32,
+    ) -> Vec<u8> {
+        with_prepared_animation_in(cache, source, |prepared| {
+            let frame = prepared.render_frame(frame, RenderConfig::default())?;
+            assert!(
+                frame
+                    .pixels
+                    .chunks_exact(4)
+                    .all(|pixel| pixel == [255, 0, 0, 255])
+            );
+            Ok(Some(frame.pixels))
+        })
+        .unwrap()
+        .unwrap()
+    }
+
+    fn cache_usage(budget: &PreparedCacheBudget) -> PreparedCacheUsage {
+        *budget.usage.lock()
+    }
+
+    #[test]
+    fn prepared_cache_local_bytes_evict_lru_and_oversize_still_renders() {
+        let budget = Arc::new(PreparedCacheBudget::new(16, 64));
+        let cache = RefCell::new(PreparedAnimationCache::new(4, 8, budget.clone()));
+        let sources: Vec<_> = (0..3).map(|_| pixel_source(1, false)).collect();
+        for source in &sources {
+            render_pixel_source(&cache, source, 0.0);
+        }
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 2,
+                decoded_image_bytes: 8
+            }
+        );
+        assert!(take_prepared_animation_from(&cache, &sources[0]).is_none());
+        // Touch source1, so source2 is the next byte-pressure victim.
+        assert_eq!(
+            render_pixel_source(&cache, &sources[1], 0.0),
+            [255, 0, 0, 255]
+        );
+        render_pixel_source(&cache, &sources[0], 0.0);
+        assert!(take_prepared_animation_from(&cache, &sources[2]).is_none());
+        assert_eq!(
+            Arc::strong_count(&sources[0]),
+            1,
+            "cache identity must stay weak"
+        );
+        let oversized = pixel_source(3, false);
+        for _ in 0..2 {
+            assert_eq!(render_pixel_source(&cache, &oversized, 0.0).len(), 12);
+        }
+        assert!(take_prepared_animation_from(&cache, &oversized).is_none());
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 2,
+                decoded_image_bytes: 8
+            }
+        );
+        drop(cache);
+        assert_eq!(cache_usage(&budget), PreparedCacheUsage::default());
+    }
+
+    #[test]
+    fn prepared_cache_recharges_lazy_growth_and_replaces_same_source() {
+        let budget = Arc::new(PreparedCacheBudget::new(16, 64));
+        let cache = RefCell::new(PreparedAnimationCache::new(4, 8, budget.clone()));
+        let growing = pixel_source(1, true);
+        let other = pixel_source(1, false);
+        render_pixel_source(&cache, &growing, 0.0);
+        render_pixel_source(&cache, &other, 0.0);
+        assert_eq!(cache_usage(&budget).decoded_image_bytes, 8);
+        render_pixel_source(&cache, &growing, 1.0);
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 1,
+                decoded_image_bytes: 8
+            }
+        );
+        assert!(take_prepared_animation_from(&cache, &other).is_none());
+        let replacement = prepare_animation(&parse_animation(&growing).unwrap()).unwrap();
+        replacement
+            .render_frame(0.0, RenderConfig::default())
+            .unwrap();
+        cache_prepared_animation_in(&cache, &growing, replacement);
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 1,
+                decoded_image_bytes: 4
+            }
+        );
+        drop(growing);
+        assert_eq!(
+            cache_usage(&budget).entries,
+            1,
+            "idle cleanup is lazy but remains bounded"
+        );
+        render_pixel_source(&cache, &other, 0.0);
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 1,
+                decoded_image_bytes: 4
+            }
+        );
+        drop(cache);
+        assert_eq!(cache_usage(&budget), PreparedCacheUsage::default());
+    }
+
+    #[test]
+    fn prepared_cache_global_pressure_bypasses_retention_and_bounds_zero_image_entries() {
+        let budget = Arc::new(PreparedCacheBudget::new(1, 4));
+        let first_cache = RefCell::new(PreparedAnimationCache::new(4, 8, budget.clone()));
+        let second_cache = RefCell::new(PreparedAnimationCache::new(4, 8, budget.clone()));
+        let first = pixel_source(1, false);
+        let second = pixel_source(1, false);
+        render_pixel_source(&first_cache, &first, 0.0);
+        // Valid frames are returned even when another thread/cache owns all quota.
+        for _ in 0..2 {
+            render_pixel_source(&second_cache, &second, 0.0);
+        }
+        assert_eq!(second_cache.borrow().entries.len(), 0);
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 1,
+                decoded_image_bytes: 4
+            }
+        );
+        drop(first_cache);
+        render_pixel_source(&second_cache, &second, 0.0);
+        assert_eq!(cache_usage(&budget).entries, 1);
+        drop(second_cache);
+        let zero_cache = RefCell::new(PreparedAnimationCache::new(4, 0, budget.clone()));
+        let other_zero_cache = RefCell::new(PreparedAnimationCache::new(4, 0, budget.clone()));
+        let zero: Arc<[u8]> = Arc::from(SIMPLE_LOTTIE.as_bytes());
+        let other_zero: Arc<[u8]> = Arc::from(SIMPLE_LOTTIE.as_bytes());
+        with_prepared_animation_in(&zero_cache, &zero, |_| Ok(Some(()))).unwrap();
+        with_prepared_animation_in(&other_zero_cache, &other_zero, |_| Ok(Some(()))).unwrap();
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 1,
+                decoded_image_bytes: 0
+            }
+        );
+        assert_eq!(other_zero_cache.borrow().entries.len(), 0);
+        drop(zero_cache);
+        drop(other_zero_cache);
+        assert_eq!(cache_usage(&budget), PreparedCacheUsage::default());
+    }
+
+    #[test]
+    fn prepared_cache_checkout_error_cancel_panic_and_reentrancy_balance_quota() {
+        let budget = Arc::new(PreparedCacheBudget::new(4, 8));
+        let cache = RefCell::new(PreparedAnimationCache::new(4, 8, budget.clone()));
+        let source = pixel_source(1, false);
+        render_pixel_source(&cache, &source, 0.0);
+        let other = pixel_source(1, false);
+        with_prepared_animation_in(&cache, &source, |prepared| {
+            assert_eq!(
+                cache_usage(&budget),
+                PreparedCacheUsage::default(),
+                "checkout releases idle quota"
+            );
+            assert!(cache.try_borrow_mut().is_ok());
+            assert!(budget.usage.try_lock().is_some());
+            assert_eq!(
+                prepared.render_frame(0.0, RenderConfig::default())?.pixels,
+                [255, 0, 0, 255]
+            );
+            render_pixel_source(&cache, &other, 0.0);
+            Ok(Some(()))
+        })
+        .unwrap();
+        assert_eq!(cache_usage(&budget).decoded_image_bytes, 8);
+        let error = with_prepared_animation_in::<()>(&cache, &source, |_| {
+            Err(anyhow::anyhow!("render error").into())
+        });
+        assert!(error.is_err());
+        assert_eq!(cache_usage(&budget).decoded_image_bytes, 8);
+        assert!(
+            with_prepared_animation_in::<()>(&cache, &source, |_| Ok(None))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 1,
+                decoded_image_bytes: 4
+            }
+        );
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = with_prepared_animation_in::<()>(&cache, &other, |_| {
+                panic!("simulated raster panic")
+            });
+        }));
+        assert!(panic.is_err());
+        assert_eq!(cache_usage(&budget), PreparedCacheUsage::default());
+        render_pixel_source(&cache, &source, 0.0);
+        drop(cache);
+        assert_eq!(cache_usage(&budget), PreparedCacheUsage::default());
+    }
+
+    #[test]
+    fn prepared_cache_metadata_admission_checks_overflow_without_allocating_pixels() {
+        let budget = Arc::new(PreparedCacheBudget::new(2, u64::MAX));
+        let reservation = budget.reserve(u64::MAX).unwrap();
+        assert!(budget.reserve(1).is_none());
+        let empty = budget.reserve(0).unwrap();
+        assert!(budget.reserve(0).is_none());
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 2,
+                decoded_image_bytes: u64::MAX
+            }
+        );
+        drop(reservation);
+        drop(empty);
+        assert_eq!(cache_usage(&budget), PreparedCacheUsage::default());
+    }
+
+    #[test]
+    fn prepared_cache_shared_admission_is_race_safe_and_thread_exit_releases() {
+        let budget = Arc::new(PreparedCacheBudget::new(2, 8));
+        let start = Arc::new(std::sync::Barrier::new(9));
+        let finish = Arc::new(std::sync::Barrier::new(9));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let budget = budget.clone();
+                let start = start.clone();
+                let finish = finish.clone();
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    let cache = RefCell::new(PreparedAnimationCache::new(4, 8, budget.clone()));
+                    let source = pixel_source(1, false);
+                    start.wait();
+                    render_pixel_source(&cache, &source, 0.0);
+                    let usage = cache_usage(&budget);
+                    assert!(usage.entries <= 2 && usage.decoded_image_bytes <= 8);
+                    tx.send(cache.borrow().entries.len()).unwrap();
+                    finish.wait();
+                    // Drop the source and leave its cache idle until this thread exits.
+                    drop(source);
+                })
+            })
+            .collect();
+        start.wait();
+        assert_eq!((0..8).map(|_| rx.recv().unwrap()).sum::<usize>(), 2);
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 2,
+                decoded_image_bytes: 8
+            }
+        );
+        finish.wait();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert_eq!(cache_usage(&budget), PreparedCacheUsage::default());
     }
 
     #[test]
