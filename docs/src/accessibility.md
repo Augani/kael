@@ -65,7 +65,8 @@ div()
 
 ### Tab stops
 
-Controls with IDs are automatically tab-focusable. Custom tab order:
+Buttons, text inputs and other focusable controls participate in tab order.
+For a custom Div, assign a stable ID and use `tab_index` to make it a tab stop:
 
 ```rust
 div()
@@ -81,36 +82,38 @@ div()
 
 For custom modals, popovers, command palettes, and inspector panels, use the
 headless `FocusTrapController` so `Tab`, `Shift-Tab`, and `Escape` behave like
-users expect without tying the behavior to one visual component:
+users expect without tying the behavior to one visual component. Retain the
+root focus handle in the owning view: initialize `settings_focus` with
+`cx.focus_handle()` once in its constructor. When the surface changes from
+closed to open, check `trap.should_autofocus()` and call
+`window.focus(&self.settings_focus)` once if enabled. In Render, clone that
+retained handle:
 
 ```rust
 use kael_ui::prelude::{FocusTrapAction, FocusTrapController};
 
 let trap = FocusTrapController::modal();
-let root_focus = cx.focus_handle();
-
-if trap.should_autofocus() {
-    window.focus(&root_focus);
-}
+let root_focus = self.settings_focus.clone();
 
 div()
     .id("settings-dialog")
     .track_focus(&root_focus)
-    .tab_index(0)
     .on_key_down(move |event, window, cx| {
         match trap.action_for_keystroke(&event.keystroke) {
             Some(FocusTrapAction::FocusNext) => {
-                window.focus_next_in_group();
+                window.focus_next_within(&root_focus);
                 cx.stop_propagation();
                 window.prevent_default();
             }
             Some(FocusTrapAction::FocusPrevious) => {
-                window.focus_prev_in_group();
+                window.focus_prev_within(&root_focus);
                 cx.stop_propagation();
                 window.prevent_default();
             }
             Some(FocusTrapAction::Dismiss) => {
                 close_settings(window, cx);
+                cx.stop_propagation();
+                window.prevent_default();
             }
             Some(FocusTrapAction::FocusFirst) | None => {}
         }
@@ -121,6 +124,20 @@ div()
 
 Use `FocusTrapController::persistent()` for surfaces where Escape should not
 dismiss, or `.dismiss_on_escape(false)` / `.autofocus(false)` to tune a trap.
+
+Scoped traversal uses the most recently rendered focus ancestry and current tab
+stops, wraps within the root, and focuses the root when it has no eligible
+stops. A removed root or a window with focus disabled leaves focus unchanged.
+`action_for_keystroke` preserves Control, Alt, platform and function shortcuts;
+`action_for_key` maps only the key and Shift arguments supplied to it. Keep
+visibility, closing, focus restoration and background accessibility policy in
+the owning view. `Dialog` and `Sheet` install their own plain Tab/Shift-Tab
+handling, including nested and empty surfaces.
+
+For semantic elements with `track_focus`, the published frame derives
+`FOCUSED` from that handle's actual current focus, including cached nodes when a
+later view requests focus during rendering. Untracked logical accessibility
+states remain authored by their control.
 
 ## Virtual controls and retained logical trees
 

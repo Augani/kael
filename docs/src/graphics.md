@@ -329,6 +329,12 @@ let modal = LayerOptions::modal();
 tracing::info!(summary = modal.to_text(), "native layer options");
 ```
 
+Cached paint ranges belong to the preceding drawn frame. A subtree that
+skips painting, such as content under an invisible parent, rebuilds when it
+returns. A nested cache can also rebuild when its ancestor stops replaying:
+its own saved ranges have not been remapped by the ancestor. Consecutive direct
+cache paints retain normal reuse.
+
 Inspect `Cached::to_text()`, `Deferred::to_text()`, and
 `EffectLayer::to_text()` in generated graphics, overlays, previews, and
 inspectors. Inspect `LayerAnchor::to_text()`, `LayerOptions::to_text()`, and

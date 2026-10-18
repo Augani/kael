@@ -942,3 +942,15 @@ the maintained public loader-policy test. Compressed archives total 6,077,870
 bytes; all 3,014 combined-validation inputs still match. No registry upload occurs.
 The hosted comparison retains its earlier source identity, and current platform
 execution and remaining physical acceptance stay open.
+
+The [modal and clear-control checkpoint](2026-10-18-modal-and-clear-validation.json)
+adds scoped Tab traversal for Dialog/Sheet, correct empty and cached semantic
+focus, and named native clear-button Click actions. A real hide/show regression
+first reproduces a stale cursor-style range panic; cached paint now rebuilds
+after a missed paint, then resumes reuse. Twenty focused cases pass alongside
+unfiltered default-parallel core 2,236 passes (the same two opt-in ignores), all
+555 UI tests, strict all-target lint, Wasm compilation and formatting. All 1,015
+selected compiled inputs in the primary checkout match the isolated tested
+graph. Four updated guides pass documentation checks. This is headless
+correctness proof; fresh native, package and later-source performance checks
+remain separate.

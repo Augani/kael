@@ -2889,13 +2889,13 @@ impl Element for Div {
                             accessibility_id.expect("an accessible element must have an id"),
                         );
                         node.bounds = Some(crate::AccessibilityRect::from_bounds(bounds));
-                        if self
-                            .interactivity
-                            .tracked_focus_handle
-                            .as_ref()
-                            .is_some_and(|h| h.is_focused(window))
-                        {
-                            node.states |= crate::AccessibilityState::FOCUSED;
+                        if let Some(handle) = self.interactivity.tracked_focus_handle.as_ref() {
+                            // Focus can change after render authored the attributes
+                            // (for example, when a later sibling opens a modal).
+                            node.states.set(
+                                crate::AccessibilityState::FOCUSED,
+                                handle.is_focused(window),
+                            );
                         }
                         if self.interactivity.active.unwrap_or(false) {
                             node.states |= crate::AccessibilityState::PRESSED;
@@ -2908,6 +2908,11 @@ impl Element for Div {
                     .register_accessibility_handlers(node, bounds, window, cx);
             }
 
+            let accessibility_focus = self
+                .interactivity
+                .tracked_focus_handle
+                .as_ref()
+                .map(|handle| handle.id);
             self.interactivity.paint_with_auto_scrollbars(
                 global_id,
                 inspector_id,
@@ -2919,7 +2924,10 @@ impl Element for Div {
                 |_style, window, cx| {
                     let child_visibility = &prepaint.child_visibility;
                     if let Some(node) = accessibility_node.as_ref() {
-                        window.register_accessibility_node(node.clone());
+                        window.register_accessibility_node_with_focus(
+                            node.clone(),
+                            accessibility_focus,
+                        );
                         if node.role.is_container() {
                             window.with_accessibility_parent(node.id, |window| {
                                 paint_visible_children(

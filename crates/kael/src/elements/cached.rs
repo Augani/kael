@@ -41,7 +41,7 @@ pub(crate) fn cached_prepaint(
         if !caching_disabled
             && !window.refreshing
             && let Some(mut element_state) = element_state
-            && element_state.is_reusable(&cache_key, cx)
+            && element_state.is_reusable(&cache_key, cx, window.cache_paint_epoch())
         {
             let prepaint_start = window.prepaint_index();
             window.reuse_prepaint(element_state.prepaint_range.clone());
@@ -118,6 +118,8 @@ pub(crate) fn cached_paint(
                 let paint_end = window.paint_index();
                 element_state.paint_range = paint_start..paint_end;
             }
+
+            element_state.record_paint(window.cache_paint_epoch());
 
             ((), element_state)
         })

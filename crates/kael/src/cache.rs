@@ -12,6 +12,7 @@ pub(crate) type TrackedEntityGenerations = SmallVec<[(EntityId, u64); 8]>;
 pub(crate) struct SubtreeCacheState {
     pub(crate) prepaint_range: Range<PrepaintStateIndex>,
     pub(crate) paint_range: Range<PaintIndex>,
+    last_painted_epoch: Option<u64>,
     pub(crate) cache_key: SubtreeCacheKey,
     pub(crate) accessed_entities: FxHashSet<EntityId>,
     pub(crate) accessibility_nodes: Vec<crate::AccessibilityNode>,
@@ -60,20 +61,36 @@ impl SubtreeCacheState {
             cache_key,
             prepaint_range,
             paint_range: PaintIndex::default()..PaintIndex::default(),
+            last_painted_epoch: None,
             accessibility_nodes: Vec::new(),
             accessibility_parent: None,
             surface: None,
         }
     }
 
-    pub(crate) fn is_reusable(&self, cache_key: &SubtreeCacheKey, cx: &App) -> bool {
-        self.cache_key == *cache_key
+    pub(crate) fn is_reusable(
+        &self,
+        cache_key: &SubtreeCacheKey,
+        cx: &App,
+        paint_epoch: u64,
+    ) -> bool {
+        // These ranges address the immediately preceding frame, not retained
+        // history. Ancestor replay does not remap a nested cache's own ranges.
+        // A skipped paint (and epoch wrap) therefore requires fresh output.
+        self.last_painted_epoch
+            .and_then(|epoch| epoch.checked_add(1))
+            == Some(paint_epoch)
+            && self.cache_key == *cache_key
             && self
                 .tracked_entity_generations
                 .iter()
                 .all(|(entity_id, generation)| {
                     cx.entity_generation(*entity_id) == Some(*generation)
                 })
+    }
+
+    pub(crate) fn record_paint(&mut self, paint_epoch: u64) {
+        self.last_painted_epoch = Some(paint_epoch);
     }
 
     pub(crate) fn prepare_surface(

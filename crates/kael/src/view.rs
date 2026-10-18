@@ -200,7 +200,7 @@ impl Element for AnyView {
                     };
 
                     if let Some(mut element_state) = element_state
-                        && element_state.is_reusable(&cache_key, cx)
+                        && element_state.is_reusable(&cache_key, cx, window.cache_paint_epoch())
                         && !window.refreshing
                     {
                         let prepaint_start = window.prepaint_index();
@@ -302,6 +302,8 @@ impl Element for AnyView {
                                     );
                                 }
                             }
+
+                            element_state.record_paint(window.cache_paint_epoch());
 
                             ((), element_state)
                         },

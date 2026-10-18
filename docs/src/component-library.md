@@ -176,6 +176,17 @@ coverage without logging ids, labels, titles, descriptions, categories,
 shortcut strings, user queries, coordinates, dimensions, child contents, or
 callback internals.
 
+`Dialog` and `Sheet` keep plain Tab and Shift-Tab within the active rendered
+modal, skip disabled or removed controls, and let the innermost modal handle the
+key. Empty surfaces keep actual and exported focus on their semantic Dialog
+root. Their existing Escape and dismissal policies still apply.
+
+`InputClearButton::new(label).on_click(...)` exposes a named native Button and
+Click action. Disabled and callback-free instances have no Click handler. It
+keeps its 24-pixel visuals, pointer-down activation and input focus behavior;
+it adds no keyboard handler or Tab stop. Repeated labels use distinct anonymous
+semantic identities rather than a shared label-derived key.
+
 ## Tree models and rendering cost
 
 For file explorers, navigation trees, and project outlines, `TreeList` builds

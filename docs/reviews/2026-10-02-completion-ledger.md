@@ -21,7 +21,7 @@ Its published claims are comparison inputs; superiority requires matched runs.
 | R9 | Reusable virtual filesystem explorer with cached sort keys, lazy async loading, context actions and drag/drop | Visible explorer example and UI-driven tests; bounded model/cache/pending state, generations/cancellation and stale-response tests | Actual native keyboard move/reload and fresh pointer readme-to-Archive move pass; disk oracle verifies source removal and destination bytes. Fresh complete glyph pixels and hidden-file toggle pass |
 | R10 | Persistent movable docking/tab groups, nested splits, floating panes and structured property inspectors | Runnable workspace; pointer/keyboard rearrangement, float/redock, persistence restore and editing/undo tests | Fresh integrated native pointer tab/edge split movement, float/move/resize/redock, keyboard edge docking, floating/nested save/reset/restore, Unicode inspector Undo/Redo and live preview pixels pass |
 | R11 | Rich document and remote-data workflows build on current editors/grids | Real documents exercise selection, IME, undo/redo; remote-data editing/clipboard/frozen-pane/accessibility tests and sustained workloads | Actual native formatting/Undo, Unicode remote edit/sort identity, atomic 2×2 TSV paste/Undo/Redo, frozen-row vertical scrolling and populated pixels pass. Native horizontal keyboard reveal/frozen-column pixels also pass; physical input-source IME, nonzero horizontal wheel delivery and sustained performance remain |
-| R12 | Consumer docs, examples, capability truth and platform CI cover the finished APIs | Native/browser consumer builds, working examples, strict lints/docs, CI evidence and no outdated roadmap claims for implemented features | The latest [nine-path primary batch](2026-10-18-asset-admission-validation.json) passes 15 combined checks: 2,232 core/all 538 UI tests, strict all-target lint, Wasm, example tests/build, twenty benchmark compile targets, native animation/public policy, provenance, parsers, formatting and docs. Its [fresh 39-package proof](2026-10-18-admission-package-source-validation.json) binds committed source `4bb5a44` and all 930 included Rust files. The [physical Metal proof](2026-10-18-native-desktop-quality-validation.json) binds preceding b279795 source. Current platform execution, the hosted presentation failure, three strict advisories and remaining physical workflows stay open |
+| R12 | Consumer docs, examples, capability truth and platform CI cover the finished APIs | Native/browser consumer builds, working examples, strict lints/docs, CI evidence and no outdated roadmap claims for implemented features | The preceding [nine-path primary batch](2026-10-18-asset-admission-validation.json) passes 15 combined checks: 2,232 core/all 538 UI tests, strict all-target lint, Wasm, example tests/build, twenty benchmark compile targets, native animation/public policy, provenance, parsers, formatting and docs. Its [fresh 39-package proof](2026-10-18-admission-package-source-validation.json) binds committed source `4bb5a44` and all 930 included Rust files. The [physical Metal proof](2026-10-18-native-desktop-quality-validation.json) binds preceding b279795 source. Current platform execution, the hosted presentation failure, three strict advisories and remaining physical workflows stay open |
 
 The shader design's later built-in-blur migration is a separate architecture
 effort; it must not remove the existing visual correctness tests. Any scope
@@ -346,3 +346,15 @@ manifest-alias, fork provenance and existing size policies pass; all 3,014 combi
 validation inputs still match. Archived VCS IDs name `4bb5a44`, while absent dirty
 flags remain unknown metadata. No crates are uploaded. Current hosted platform,
 physical workflows and later-source performance remain separate acceptance work.
+
+The [modal and clear-control checkpoint](2026-10-18-modal-and-clear-validation.json)
+adds scoped Tab traversal for Dialog/Sheet, correct empty and cached semantic
+focus, and named native clear-button Click actions. A real hide/show regression
+first reproduces a stale cursor-style range panic; cached paint now rebuilds
+after a missed paint, then resumes reuse. Twenty focused cases pass alongside
+unfiltered default-parallel core 2,236 passes (the same two opt-in ignores), all
+555 UI tests, strict all-target lint, Wasm compilation and formatting. All 1,015
+selected compiled inputs in the primary checkout match the isolated tested
+graph. Four updated guides pass documentation checks. This is headless
+correctness proof; fresh native, package and later-source performance checks
+remain separate.

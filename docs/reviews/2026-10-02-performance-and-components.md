@@ -423,3 +423,15 @@ Local build logs and probes are retained in `.artifacts/kael-review-*`,
 The changes are validated on this macOS host; a browser compile check is distinct
 from browser runtime evidence, and DirectX/Vulkan runtime parity still needs
 the maintained platform CI and hardware checks.
+
+The [modal and clear-control checkpoint](2026-10-18-modal-and-clear-validation.json)
+adds scoped Tab traversal for Dialog/Sheet, correct empty and cached semantic
+focus, and named native clear-button Click actions. A real hide/show regression
+first reproduces a stale cursor-style range panic; cached paint now rebuilds
+after a missed paint, then resumes reuse. Twenty focused cases pass alongside
+unfiltered default-parallel core 2,236 passes (the same two opt-in ignores), all
+555 UI tests, strict all-target lint, Wasm compilation and formatting. All 1,015
+selected compiled inputs in the primary checkout match the isolated tested
+graph. Four updated guides pass documentation checks. This is headless
+correctness proof; fresh native, package and later-source performance checks
+remain separate.

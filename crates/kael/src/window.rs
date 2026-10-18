@@ -3424,6 +3424,9 @@ pub struct Window {
     accessibility_parent_stack: SmallVec<[crate::AccessibilityId; 16]>,
     accessibility_scope: Option<AccessibilityScopeContext>,
     accessibility_path_ids: FxHashMap<(AnonymousAccessibilityOwner, u32), crate::AccessibilityId>,
+    // Only painted tracked semantics; raw IDs retain no FocusHandle or Entity.
+    // Retained entries also describe nodes replayed from subtree caches.
+    accessibility_focus_handles: FxHashMap<crate::AccessibilityId, FocusId>,
     accessibility_child_ordinals: FxHashMap<AnonymousAccessibilityOwner, u32>,
     pub(crate) accessibility_announcements: Vec<String>,
     accessibility_action_router: crate::AccessibilityActionRouter,
@@ -3436,6 +3439,8 @@ pub struct Window {
     inspector: Option<Entity<Inspector>>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     frame_timeline: crate::FrameTimeline,
+    // Cache ranges refer only to the preceding completed draw in every build.
+    cache_paint_epoch: u64,
     #[cfg(any(feature = "inspector", debug_assertions))]
     frame_counter: u64,
     #[cfg(any(feature = "inspector", debug_assertions))]
@@ -3928,6 +3933,7 @@ impl Window {
             accessibility_parent_stack: SmallVec::new(),
             accessibility_scope: None,
             accessibility_path_ids: FxHashMap::default(),
+            accessibility_focus_handles: FxHashMap::default(),
             accessibility_child_ordinals: FxHashMap::default(),
             accessibility_announcements: Vec::new(),
             accessibility_action_router: crate::AccessibilityActionRouter::new(),
@@ -3938,6 +3944,7 @@ impl Window {
             inspector: None,
             #[cfg(any(feature = "inspector", debug_assertions))]
             frame_timeline: crate::FrameTimeline::new(),
+            cache_paint_epoch: 0,
             #[cfg(any(feature = "inspector", debug_assertions))]
             frame_counter: 0,
             #[cfg(any(feature = "inspector", debug_assertions))]
@@ -4316,9 +4323,23 @@ impl Window {
     }
 
     /// Register an accessibility node for the current frame.
-    pub fn register_accessibility_node(&mut self, mut node: crate::AccessibilityNode) {
+    pub fn register_accessibility_node(&mut self, node: crate::AccessibilityNode) {
+        self.register_accessibility_node_with_focus(node, None);
+    }
+
+    pub(crate) fn register_accessibility_node_with_focus(
+        &mut self,
+        mut node: crate::AccessibilityNode,
+        focus: Option<FocusId>,
+    ) {
         if node.parent.is_none() {
             node.parent = self.accessibility_parent_stack.last().copied();
+        }
+        if let Some(focus) = focus {
+            self.accessibility_focus_handles.insert(node.id, focus);
+        } else {
+            // A fresh untracked registration may reuse a formerly tracked ID.
+            self.accessibility_focus_handles.remove(&node.id);
         }
         self.next_frame.accessibility_nodes.push(node);
     }
@@ -4510,6 +4531,8 @@ impl Window {
             .drain(..)
             .collect::<Vec<_>>();
         let painted: std::collections::HashSet<_> = nodes.iter().map(|node| node.id).collect();
+        self.accessibility_focus_handles
+            .retain(|id, _| painted.contains(id));
         self.accessibility_snapshots
             .retain(|root, _| painted.contains(root));
         for snapshot in self.accessibility_snapshots.values() {
@@ -4517,6 +4540,15 @@ impl Window {
         }
         for node in &nodes {
             let mut node = node.clone();
+            if let Some(focus) = self.accessibility_focus_handles.get(&node.id) {
+                // Render/prepaint can move focus after a cached sibling's
+                // replay was selected. Reconcile only tracked painted nodes
+                // against final frame focus; leave logical semantics authored.
+                node.states.set(
+                    crate::AccessibilityState::FOCUSED,
+                    self.focus == Some(*focus),
+                );
+            }
             if let Some(base) = tree.nodes.base(&node.id) {
                 if node.children.is_empty() {
                     node.children = base.children.clone();
@@ -4705,6 +4737,49 @@ impl Window {
         if let Some(handle) = self.rendered_frame.tab_stops.prev(self.focus.as_ref()) {
             self.focus(&handle)
         }
+    }
+
+    /// Move focus to the next tab stop inside a rendered focus scope, wrapping.
+    ///
+    /// Membership follows the most recently rendered focus ancestry, including
+    /// cached subtrees. If the scope has no eligible stops, focus the scope itself.
+    /// An unrendered scope or a window with focus disabled leaves focus unchanged.
+    /// This selects a target before focusing and does not focus rejected stops.
+    pub fn focus_next_within(&mut self, scope: &FocusHandle) {
+        if !self.focus_enabled
+            || self
+                .rendered_frame
+                .dispatch_tree
+                .focusable_node_id(scope.id)
+                .is_none()
+        {
+            return;
+        }
+        let frame = &self.rendered_frame;
+        let next = frame.tab_stops.next_matching(self.focus.as_ref(), |id| {
+            frame.dispatch_tree.focus_contains(scope.id, id)
+        });
+        self.focus(next.as_ref().unwrap_or(scope));
+    }
+
+    /// Move focus to the previous tab stop inside a rendered focus scope, wrapping.
+    ///
+    /// See [`Window::focus_next_within`] for membership and empty-scope behavior.
+    pub fn focus_prev_within(&mut self, scope: &FocusHandle) {
+        if !self.focus_enabled
+            || self
+                .rendered_frame
+                .dispatch_tree
+                .focusable_node_id(scope.id)
+                .is_none()
+        {
+            return;
+        }
+        let frame = &self.rendered_frame;
+        let previous = frame.tab_stops.prev_matching(self.focus.as_ref(), |id| {
+            frame.dispatch_tree.focus_contains(scope.id, id)
+        });
+        self.focus(previous.as_ref().unwrap_or(scope));
     }
 
     /// Move focus to the next tab stop within the currently focused tab group.
@@ -5768,7 +5843,12 @@ impl Window {
         #[cfg(any(feature = "inspector", debug_assertions))]
         self.record_frame_timing(frame_started_at, draw_roots_timing);
 
+        self.cache_paint_epoch = self.cache_paint_epoch.wrapping_add(1);
         ArenaClearNeeded
+    }
+
+    pub(crate) fn cache_paint_epoch(&self) -> u64 {
+        self.cache_paint_epoch
     }
 
     #[cfg(any(feature = "inspector", debug_assertions))]
