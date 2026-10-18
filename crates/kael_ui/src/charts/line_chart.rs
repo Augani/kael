@@ -1,5 +1,8 @@
 use crate::{
-    charts::{finite_or_zero, format_axis_value},
+    charts::{
+        expand_chart_range, finite_or_zero, format_axis_value, interpolate_chart_value,
+        normalize_chart_value,
+    },
     theme::Theme,
 };
 use kael::{prelude::FluentBuilder as _, *};
@@ -85,9 +88,11 @@ impl DataRange {
         let mut x_max = f64::MIN;
         let mut y_min = f64::MAX;
         let mut y_max = f64::MIN;
+        let mut has_data = false;
 
         for s in series {
             for point in &s.points {
+                has_data = true;
                 x_min = x_min.min(point.x);
                 x_max = x_max.max(point.x);
                 y_min = y_min.min(point.y);
@@ -95,21 +100,15 @@ impl DataRange {
             }
         }
 
-        if x_min == f64::MAX {
+        if !has_data {
             x_min = 0.0;
             x_max = 1.0;
-        }
-        if y_min == f64::MAX {
             y_min = 0.0;
             y_max = 1.0;
         }
 
-        if (x_max - x_min).abs() < f64::EPSILON {
-            x_max = x_min + 1.0;
-        }
-        if (y_max - y_min).abs() < f64::EPSILON {
-            y_max = y_min + 1.0;
-        }
+        let (x_min, x_max) = expand_chart_range(x_min, x_max);
+        let (y_min, y_max) = expand_chart_range(y_min, y_max);
 
         Self {
             x_min,
@@ -120,15 +119,15 @@ impl DataRange {
     }
 
     fn normalize_x(&self, x: f64) -> f32 {
-        ((x - self.x_min) / (self.x_max - self.x_min)) as f32
+        normalize_chart_value(x, self.x_min, self.x_max)
     }
 
     fn normalize_y(&self, y: f64) -> f32 {
-        ((y - self.y_min) / (self.y_max - self.y_min)) as f32
+        normalize_chart_value(y, self.y_min, self.y_max)
     }
 
     fn y_value_at(&self, normalized: f64) -> f64 {
-        self.y_min + (self.y_max - self.y_min) * (1.0 - normalized)
+        interpolate_chart_value(self.y_min, self.y_max, 1.0 - normalized)
     }
 }
 
@@ -234,8 +233,15 @@ impl LineChart {
     pub fn y_range(mut self, min: f64, max: f64) -> Self {
         let min = finite_or_zero(min);
         let max = finite_or_zero(max);
-        self.y_min = Some(min.min(max));
-        self.y_max = Some(max.max(min) + if min == max { 1.0 } else { 0.0 });
+        let (min, max) = (min.min(max), max.max(min));
+        let (min, max) = if min == max {
+            expand_chart_range(min, max)
+        } else {
+            // Retain the old builder's addition of positive zero (including -0).
+            (min, max + 0.0)
+        };
+        self.y_min = Some(min);
+        self.y_max = Some(max);
         self
     }
 
@@ -605,5 +611,121 @@ mod tests {
         assert!(summary.contains("and 3 more"));
         assert!(!summary.contains("Revenue P12"));
         assert_eq!(line_chart_summary(&[]), "Line chart. No data");
+    }
+}
+
+#[cfg(test)]
+mod numeric_range_regressions {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn wide_finite_series_normalize_and_interpolate_ticks() {
+        let series = [LineChartSeries::new(
+            "Wide",
+            vec![
+                LineChartPoint::new(-f64::MAX, -f64::MAX),
+                LineChartPoint::new(f64::MAX, f64::MAX),
+            ],
+        )];
+        let range = DataRange::from_series(&series, None, None);
+        for (value, fraction) in [(-f64::MAX, 0.0), (0.0, 0.5), (f64::MAX, 1.0)] {
+            assert_eq!(range.normalize_x(value), fraction, "wide line x fraction");
+            assert_eq!(range.normalize_y(value), fraction, "wide line y fraction");
+        }
+        assert_eq!(range.y_value_at(0.0), f64::MAX, "wide line top tick");
+        assert_eq!(range.y_value_at(0.5), 0.0, "wide line middle tick");
+        assert_eq!(range.y_value_at(1.0), -f64::MAX, "wide line bottom tick");
+    }
+
+    #[::core::prelude::v1::test]
+    fn maximum_finite_samples_are_not_empty() {
+        let series = [LineChartSeries::new(
+            "MAX",
+            vec![LineChartPoint::new(f64::MAX, f64::MAX)],
+        )];
+        let range = DataRange::from_series(&series, None, None);
+        assert_eq!(
+            (
+                range.x_min.to_bits(),
+                range.x_max.to_bits(),
+                range.y_min.to_bits(),
+                range.y_max.to_bits()
+            ),
+            (
+                0x7fef_ffff_ffff_fffe,
+                0x7fef_ffff_ffff_ffff,
+                0x7fef_ffff_ffff_fffe,
+                0x7fef_ffff_ffff_ffff
+            ),
+            "MAX line data is not an empty unit range"
+        );
+        assert_eq!(
+            (range.normalize_x(f64::MAX), range.normalize_y(f64::MAX)),
+            (1.0, 1.0)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn large_constant_series_and_y_override_use_finite_neighbors() {
+        for (value, lower, upper) in [
+            (1e20, 0x4415_af1d_78b5_8c40, 0x4415_af1d_78b5_8c41),
+            (-1e20, 0xc415_af1d_78b5_8c40, 0xc415_af1d_78b5_8c3f),
+            (f64::MAX, 0x7fef_ffff_ffff_fffe, 0x7fef_ffff_ffff_ffff),
+        ] {
+            let series = [LineChartSeries::new(
+                "Constant",
+                vec![LineChartPoint::new(value, value)],
+            )];
+            let range = DataRange::from_series(&series, None, None);
+            assert_eq!(
+                (range.x_min.to_bits(), range.x_max.to_bits()),
+                (lower, upper),
+                "line constant x neighbors"
+            );
+            let chart = LineChart::new(series.to_vec()).y_range(value, value);
+            assert_eq!(
+                (
+                    chart.y_min.unwrap().to_bits(),
+                    chart.y_max.unwrap().to_bits()
+                ),
+                (lower, upper),
+                "line explicit y neighbors"
+            );
+            let overridden = DataRange::from_series(&chart.series, chart.y_min, chart.y_max);
+            assert!((0.0..=1.0).contains(&overridden.normalize_y(value)));
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn empty_and_ordinary_line_ranges_preserve_controls() {
+        let empty = DataRange::from_series(&[], None, None);
+        assert_eq!(
+            (empty.x_min, empty.x_max, empty.y_min, empty.y_max),
+            (0.0, 1.0, 0.0, 1.0)
+        );
+        let series = [LineChartSeries::new(
+            "Constant",
+            vec![LineChartPoint::new(8.0, 9.0)],
+        )];
+        let range = DataRange::from_series(&series, None, None);
+        assert_eq!(
+            (range.x_min, range.x_max, range.y_min, range.y_max),
+            (8.0, 9.0, 9.0, 10.0)
+        );
+        let overridden = DataRange::from_series(&series, Some(3.0), Some(7.0));
+        assert_eq!(overridden.y_value_at(0.5), 5.0);
+        let tiny_override = LineChart::new(Vec::new()).y_range(0.0, f64::EPSILON / 2.0);
+        assert_eq!(
+            (tiny_override.y_min, tiny_override.y_max),
+            (Some(0.0), Some(f64::EPSILON / 2.0))
+        );
+        assert_eq!(
+            LineChart::new(Vec::new())
+                .y_range(-1.0, -0.0)
+                .y_max
+                .unwrap()
+                .to_bits(),
+            0
+        );
     }
 }

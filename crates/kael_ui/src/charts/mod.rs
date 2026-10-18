@@ -72,6 +72,59 @@ pub(crate) fn finite_or_zero(value: f64) -> f64 {
     if value.is_finite() { value } else { 0.0 }
 }
 
+// Callers preserve their existing sanitation/order policy before expanding.
+// Keep the existing absolute-EPSILON/+1 behavior whenever +1 really widens.
+pub(crate) fn expand_chart_range(mut min: f64, mut max: f64) -> (f64, f64) {
+    if (max - min).abs() < f64::EPSILON {
+        let widened = min + 1.0;
+        if widened.is_finite() && widened > min {
+            max = widened;
+        } else {
+            let next = min.next_up();
+            if next.is_finite() {
+                max = next;
+            } else {
+                max = min;
+                min = min.next_down();
+            }
+        }
+    }
+    (min, max)
+}
+
+pub(crate) fn normalize_chart_value(value: f64, min: f64, max: f64) -> f32 {
+    let span = max - min;
+    if span == f64::INFINITY && min.is_finite() && max.is_finite() && (min..=max).contains(&value) {
+        // A finite wide interval can overflow only its subtraction. Scaling
+        // before subtracting keeps in-domain endpoint/midpoint ratios finite.
+        ((value * 0.5 - min * 0.5) / (max * 0.5 - min * 0.5)) as f32
+    } else {
+        ((value - min) / span) as f32
+    }
+}
+
+pub(crate) fn interpolate_chart_value(min: f64, max: f64, fraction: f64) -> f64 {
+    let span = max - min;
+    if span == f64::INFINITY
+        && min.is_finite()
+        && max.is_finite()
+        && (0.0..=1.0).contains(&fraction)
+    {
+        if fraction == 0.0 {
+            min
+        } else if fraction == 1.0 {
+            max
+        } else {
+            // Overflowing finite endpoint differences have opposite signs;
+            // each weighted term is finite and their sum cannot overflow.
+            min * (1.0 - fraction) + max * fraction
+        }
+    } else {
+        // Preserve ordinary results and the existing extrapolation behavior.
+        min + span * fraction
+    }
+}
+
 pub(crate) fn format_axis_value(value: f64) -> String {
     let value = finite_or_zero(value);
     if value == 0.0 {

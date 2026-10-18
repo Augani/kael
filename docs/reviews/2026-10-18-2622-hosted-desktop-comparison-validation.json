@@ -1,0 +1,605 @@
+{
+  "status": "FROZEN2622_HOSTED_DESCRIPTIVE_COMPARISON_PASS_ORIGINAL_GATES_ONLY",
+  "source_commit": "2622dbf77bd614482c0f1fe0a69966b9bca1c60d",
+  "source_tree": "2c071bd64726ee677712384596e03eba512cd685",
+  "run_id": 39136144963,
+  "matched_job_id": 117700940974,
+  "artifact_id": 12141554423,
+  "artifact_sha256": "75386afecd290fc7830242835f04b45bc471a69d7f6193c0b5c3b0af6bcdb7ce",
+  "validation": {
+    "all_original_workload_and_active_phase_gates_pass": true,
+    "unchanged_frozen_validator": true,
+    "captures": 100,
+    "contract_mode_groups": 10,
+    "repetitions_per_engine_per_group": 5,
+    "native_geometry_boundaries_checked": 800,
+    "cross_engine_pairs_checked": 50,
+    "paired_boundaries_checked": 400,
+    "all_actual_native_geometry": {
+      "viewport_width_px": 1100.0,
+      "viewport_height_px": 645.0,
+      "scale_factor": 1.0
+    },
+    "raw_log_result_and_phase_markers_match_all_reports": true,
+    "individual_and_aggregate_reports_match": true,
+    "phase_and_quantile_metrics_recomputed": true,
+    "mach_tick_cpu_conversions_checked": true,
+    "cumulative_process_cpu_monotonic": true,
+    "zero_only_counters_across_all_process_samples": {
+      "instructions": true,
+      "cycles": true,
+      "billed_energy_raw": true,
+      "serviced_energy_raw": true
+    },
+    "total_process_samples": 10818,
+    "total_stable_measured_samples": 9277,
+    "owned_active_and_churn_activation_requests_accepted": 200,
+    "reported_binary_hashes": 20,
+    "actual_uploaded_binary_hashes_match_all100captures": true,
+    "failures": []
+  },
+  "summary": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-benchmark-2622-independent-renderer-audit/summary.json",
+    "sha256": "c60b84591134ac7162b805fd3be865ca3838249d00c852e610b986bee151a5e7",
+    "bytes": 523985
+  },
+  "supplemental": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-benchmark-2622-independent-renderer-audit/supplemental-validation.json",
+    "sha256": "2777c54c7632a79412f04629279a14f011be1d5e42d307c37b8a7d433d254ce9",
+    "bytes": 118363
+  },
+  "tables": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-benchmark-2622-independent-renderer-audit/derived-tables.json",
+    "sha256": "d702b3f8608d4102239391bf4215a520bb9cc789aa2464464bbbc0d38b61cb28",
+    "bytes": 109960
+  },
+  "counter_quality": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-benchmark-2622-independent-renderer-audit/counter-quality.json",
+    "sha256": "b4ce803b60943064f1e4a2c6c33afe5b48c03ea292fcb3732f7fe14523412d30",
+    "bytes": 229947
+  },
+  "lead_general_workload_resources": [
+    {
+      "group": "data-table-without-frame-timing",
+      "contract": "native-data-table-v1",
+      "frame_timing_enabled": false,
+      "engine": "kael",
+      "cpu_percent_by_phase": {
+        "idle-before": 0.8702958438275118,
+        "active": 26.59218075181712,
+        "idle-after": 0.006411821990682797,
+        "churn": 20.746453025238257
+      },
+      "stable_sampled_peak_rss_bytes": 214138880,
+      "stable_sampled_peak_rss_range_bytes": [
+        213647360,
+        214876160
+      ],
+      "actual_operation_totals": [
+        330,
+        398,
+        382,
+        369,
+        366
+      ],
+      "draw_cpu_us_p99": null,
+      "submission_cpu_us_p99": null
+    },
+    {
+      "group": "data-table-without-frame-timing",
+      "contract": "native-data-table-v1",
+      "frame_timing_enabled": false,
+      "engine": "gpui-kit",
+      "cpu_percent_by_phase": {
+        "idle-before": 1.6264972554196184,
+        "active": 19.365194176983895,
+        "idle-after": 1.3572784924683854,
+        "churn": 14.498474527928526
+      },
+      "stable_sampled_peak_rss_bytes": 142786560,
+      "stable_sampled_peak_rss_range_bytes": [
+        142688256,
+        143114240
+      ],
+      "actual_operation_totals": [
+        363,
+        397,
+        385,
+        358,
+        366
+      ],
+      "draw_cpu_us_p99": null,
+      "submission_cpu_us_p99": null
+    },
+    {
+      "group": "native-data-table",
+      "contract": "native-data-table-v1",
+      "frame_timing_enabled": true,
+      "engine": "kael",
+      "cpu_percent_by_phase": {
+        "idle-before": 0.970223992089174,
+        "active": 26.555594246372916,
+        "idle-after": 0.006320432143720548,
+        "churn": 20.583104190307917
+      },
+      "stable_sampled_peak_rss_bytes": 214663168,
+      "stable_sampled_peak_rss_range_bytes": [
+        214499328,
+        215400448
+      ],
+      "actual_operation_totals": [
+        331,
+        366,
+        379,
+        372,
+        202
+      ],
+      "draw_cpu_us_p99": 17091,
+      "submission_cpu_us_p99": 657
+    },
+    {
+      "group": "native-data-table",
+      "contract": "native-data-table-v1",
+      "frame_timing_enabled": true,
+      "engine": "gpui-kit",
+      "cpu_percent_by_phase": {
+        "idle-before": 1.4309206627603688,
+        "active": 19.96434370201878,
+        "idle-after": 1.3822574026132037,
+        "churn": 13.28811302675915
+      },
+      "stable_sampled_peak_rss_bytes": 148504576,
+      "stable_sampled_peak_rss_range_bytes": [
+        147881984,
+        148602880
+      ],
+      "actual_operation_totals": [
+        392,
+        405,
+        389,
+        392,
+        401
+      ],
+      "draw_cpu_us_p99": 20247,
+      "submission_cpu_us_p99": 581
+    },
+    {
+      "group": "native-dock-workspace",
+      "contract": "native-dock-workspace-v1",
+      "frame_timing_enabled": true,
+      "engine": "kael",
+      "cpu_percent_by_phase": {
+        "idle-before": 0.8954874401008628,
+        "active": 18.49684170687615,
+        "idle-after": 0.004858682996746735,
+        "churn": 13.895521461313956
+      },
+      "stable_sampled_peak_rss_bytes": 85409792,
+      "stable_sampled_peak_rss_range_bytes": [
+        85180416,
+        85803008
+      ],
+      "actual_operation_totals": [
+        367,
+        410,
+        369,
+        359,
+        406
+      ],
+      "draw_cpu_us_p99": 20467,
+      "submission_cpu_us_p99": 597
+    },
+    {
+      "group": "native-dock-workspace",
+      "contract": "native-dock-workspace-v1",
+      "frame_timing_enabled": true,
+      "engine": "gpui-kit",
+      "cpu_percent_by_phase": {
+        "idle-before": 1.4235155648606106,
+        "active": 18.530630158311517,
+        "idle-after": 0.7388451150296439,
+        "churn": 14.200974844885266
+      },
+      "stable_sampled_peak_rss_bytes": 90243072,
+      "stable_sampled_peak_rss_range_bytes": [
+        90095616,
+        90767360
+      ],
+      "actual_operation_totals": [
+        380,
+        347,
+        376,
+        374,
+        375
+      ],
+      "draw_cpu_us_p99": 21310,
+      "submission_cpu_us_p99": 685
+    },
+    {
+      "group": "native-dock-workspace-without-frame-timing",
+      "contract": "native-dock-workspace-v1",
+      "frame_timing_enabled": false,
+      "engine": "kael",
+      "cpu_percent_by_phase": {
+        "idle-before": 0.9409117217235101,
+        "active": 15.066365864926048,
+        "idle-after": 0.008857291674706875,
+        "churn": 10.878256788181606
+      },
+      "stable_sampled_peak_rss_bytes": 84606976,
+      "stable_sampled_peak_rss_range_bytes": [
+        84000768,
+        85000192
+      ],
+      "actual_operation_totals": [
+        335,
+        358,
+        359,
+        363,
+        231
+      ],
+      "draw_cpu_us_p99": null,
+      "submission_cpu_us_p99": null
+    },
+    {
+      "group": "native-dock-workspace-without-frame-timing",
+      "contract": "native-dock-workspace-v1",
+      "frame_timing_enabled": false,
+      "engine": "gpui-kit",
+      "cpu_percent_by_phase": {
+        "idle-before": 1.5184178275739801,
+        "active": 16.869343299284363,
+        "idle-after": 0.7980976912456206,
+        "churn": 9.55153000855289
+      },
+      "stable_sampled_peak_rss_bytes": 84361216,
+      "stable_sampled_peak_rss_range_bytes": [
+        84164608,
+        84443136
+      ],
+      "actual_operation_totals": [
+        372,
+        334,
+        374,
+        362,
+        375
+      ],
+      "draw_cpu_us_p99": null,
+      "submission_cpu_us_p99": null
+    },
+    {
+      "group": "native-navigation-detail",
+      "contract": "native-navigation-detail-v1",
+      "frame_timing_enabled": true,
+      "engine": "kael",
+      "cpu_percent_by_phase": {
+        "idle-before": 0.9635335181428788,
+        "active": 9.550521388491225,
+        "idle-after": 0.010457425489317392,
+        "churn": 9.03116663959952
+      },
+      "stable_sampled_peak_rss_bytes": 96174080,
+      "stable_sampled_peak_rss_range_bytes": [
+        95944704,
+        96813056
+      ],
+      "actual_operation_totals": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "draw_cpu_us_p99": 9745,
+      "submission_cpu_us_p99": 841
+    },
+    {
+      "group": "native-navigation-detail",
+      "contract": "native-navigation-detail-v1",
+      "frame_timing_enabled": true,
+      "engine": "gpui-kit",
+      "cpu_percent_by_phase": {
+        "idle-before": 1.335326802318704,
+        "active": 13.188310740729749,
+        "idle-after": 0.7777269965098337,
+        "churn": 12.337329788005018
+      },
+      "stable_sampled_peak_rss_bytes": 88260608,
+      "stable_sampled_peak_rss_range_bytes": [
+        87769088,
+        88293376
+      ],
+      "actual_operation_totals": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "draw_cpu_us_p99": 14466,
+      "submission_cpu_us_p99": 620
+    },
+    {
+      "group": "native-virtual-tree",
+      "contract": "native-virtual-tree-v1",
+      "frame_timing_enabled": true,
+      "engine": "kael",
+      "cpu_percent_by_phase": {
+        "idle-before": 1.1163531109138525,
+        "active": 46.84075349970041,
+        "idle-after": 0.006320095264445806,
+        "churn": 26.561919264233907
+      },
+      "stable_sampled_peak_rss_bytes": 1029881856,
+      "stable_sampled_peak_rss_range_bytes": [
+        1016430592,
+        1045544960
+      ],
+      "actual_operation_totals": [
+        274,
+        274,
+        268,
+        292,
+        283
+      ],
+      "draw_cpu_us_p99": 6481,
+      "submission_cpu_us_p99": 570
+    },
+    {
+      "group": "native-virtual-tree",
+      "contract": "native-virtual-tree-v1",
+      "frame_timing_enabled": true,
+      "engine": "gpui-kit",
+      "cpu_percent_by_phase": {
+        "idle-before": 1.7487737366214742,
+        "active": 14.787883760181908,
+        "idle-after": 0.9411187017148491,
+        "churn": 11.183081831070997
+      },
+      "stable_sampled_peak_rss_bytes": 691879936,
+      "stable_sampled_peak_rss_range_bytes": [
+        683737088,
+        692305920
+      ],
+      "actual_operation_totals": [
+        346,
+        312,
+        317,
+        326,
+        329
+      ],
+      "draw_cpu_us_p99": 8457,
+      "submission_cpu_us_p99": 510
+    },
+    {
+      "group": "native-virtual-tree-without-frame-timing",
+      "contract": "native-virtual-tree-v1",
+      "frame_timing_enabled": false,
+      "engine": "kael",
+      "cpu_percent_by_phase": {
+        "idle-before": 0.9384736322910666,
+        "active": 39.969713202078104,
+        "idle-after": 0.007258413998572123,
+        "churn": 25.041902822914857
+      },
+      "stable_sampled_peak_rss_bytes": 1026850816,
+      "stable_sampled_peak_rss_range_bytes": [
+        940916736,
+        1048199168
+      ],
+      "actual_operation_totals": [
+        275,
+        288,
+        299,
+        289,
+        299
+      ],
+      "draw_cpu_us_p99": null,
+      "submission_cpu_us_p99": null
+    },
+    {
+      "group": "native-virtual-tree-without-frame-timing",
+      "contract": "native-virtual-tree-v1",
+      "frame_timing_enabled": false,
+      "engine": "gpui-kit",
+      "cpu_percent_by_phase": {
+        "idle-before": 1.5987851769428432,
+        "active": 16.234750289852908,
+        "idle-after": 1.0748786751023394,
+        "churn": 10.502790447280178
+      },
+      "stable_sampled_peak_rss_bytes": 686309376,
+      "stable_sampled_peak_rss_range_bytes": [
+        679264256,
+        686456832
+      ],
+      "actual_operation_totals": [
+        309,
+        345,
+        324,
+        344,
+        341
+      ],
+      "draw_cpu_us_p99": null,
+      "submission_cpu_us_p99": null
+    },
+    {
+      "group": "navigation-detail-without-frame-timing",
+      "contract": "native-navigation-detail-v1",
+      "frame_timing_enabled": false,
+      "engine": "kael",
+      "cpu_percent_by_phase": {
+        "idle-before": 0.8420275929732127,
+        "active": 9.878590845815584,
+        "idle-after": 0.01262697323683307,
+        "churn": 7.305100946837055
+      },
+      "stable_sampled_peak_rss_bytes": 96403456,
+      "stable_sampled_peak_rss_range_bytes": [
+        96190464,
+        96862208
+      ],
+      "actual_operation_totals": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "draw_cpu_us_p99": null,
+      "submission_cpu_us_p99": null
+    },
+    {
+      "group": "navigation-detail-without-frame-timing",
+      "contract": "native-navigation-detail-v1",
+      "frame_timing_enabled": false,
+      "engine": "gpui-kit",
+      "cpu_percent_by_phase": {
+        "idle-before": 1.625854881844389,
+        "active": 13.084963739314384,
+        "idle-after": 0.8872324900650501,
+        "churn": 10.018280737000746
+      },
+      "stable_sampled_peak_rss_bytes": 82952192,
+      "stable_sampled_peak_rss_range_bytes": [
+        82706432,
+        83230720
+      ],
+      "actual_operation_totals": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "draw_cpu_us_p99": null,
+      "submission_cpu_us_p99": null
+    }
+  ],
+  "editor_supplement": [
+    {
+      "group": "editor-document-without-frame-timing",
+      "contract": "native-editor-document-v1",
+      "frame_timing_enabled": false,
+      "engine": "kael",
+      "cpu_percent_by_phase": {
+        "idle-before": 0.9509099725222818,
+        "active": 33.80376387659411,
+        "idle-after": 0.011962431264347062,
+        "churn": 21.2490292362205
+      },
+      "stable_sampled_peak_rss_bytes": 90669056,
+      "stable_sampled_peak_rss_range_bytes": [
+        90226688,
+        90783744
+      ],
+      "actual_operation_totals": [
+        357,
+        408,
+        357,
+        379,
+        415
+      ],
+      "draw_cpu_us_p99": null,
+      "submission_cpu_us_p99": null
+    },
+    {
+      "group": "editor-document-without-frame-timing",
+      "contract": "native-editor-document-v1",
+      "frame_timing_enabled": false,
+      "engine": "gpui-kit",
+      "cpu_percent_by_phase": {
+        "idle-before": 1.2987672096144696,
+        "active": 8.86362089690724,
+        "idle-after": 0.7681736544732868,
+        "churn": 11.995705926708741
+      },
+      "stable_sampled_peak_rss_bytes": 100040704,
+      "stable_sampled_peak_rss_range_bytes": [
+        99958784,
+        100139008
+      ],
+      "actual_operation_totals": [
+        358,
+        383,
+        336,
+        348,
+        355
+      ],
+      "draw_cpu_us_p99": null,
+      "submission_cpu_us_p99": null
+    },
+    {
+      "group": "native-editor-document",
+      "contract": "native-editor-document-v1",
+      "frame_timing_enabled": true,
+      "engine": "kael",
+      "cpu_percent_by_phase": {
+        "idle-before": 0.986967045497612,
+        "active": 34.53119394142585,
+        "idle-after": 0.007314405895272871,
+        "churn": 21.19142062911117
+      },
+      "stable_sampled_peak_rss_bytes": 90914816,
+      "stable_sampled_peak_rss_range_bytes": [
+        87162880,
+        91127808
+      ],
+      "actual_operation_totals": [
+        384,
+        403,
+        424,
+        405,
+        407
+      ],
+      "draw_cpu_us_p99": 9782,
+      "submission_cpu_us_p99": 628
+    },
+    {
+      "group": "native-editor-document",
+      "contract": "native-editor-document-v1",
+      "frame_timing_enabled": true,
+      "engine": "gpui-kit",
+      "cpu_percent_by_phase": {
+        "idle-before": 1.376297675669127,
+        "active": 9.544553254786127,
+        "idle-after": 0.8548917057028746,
+        "churn": 11.158626093901164
+      },
+      "stable_sampled_peak_rss_bytes": 106545152,
+      "stable_sampled_peak_rss_range_bytes": [
+        105906176,
+        106594304
+      ],
+      "actual_operation_totals": [
+        379,
+        345,
+        354,
+        353,
+        379
+      ],
+      "draw_cpu_us_p99": 6534,
+      "submission_cpu_us_p99": 662
+    }
+  ],
+  "report": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-benchmark-2622-independent-renderer-audit/general-desktop-results.md",
+    "sha256": "29d81c84689df65afca30ed3c8c8cb0f1d42752baa1cad1449e38993573e30bd",
+    "bytes": 2871
+  },
+  "limitations": [
+    "Frozen hosted source 2622dbf77bd614482c0f1fe0a69966b9bca1c60d and released GPUI Kit0.7.3 revision67265a36. Any later Kael or competitor changes are excluded, including later catalog/chart changes and the separately rejected IconButton experiment.",
+    "One shared hosted virtual macOS runner. Exact CPU/memory metadata is preserved in the linked summary. Five alternating repetitions per engine are descriptive within each fixed contract/mode, not an overall framework ranking or controlled bare-metal power comparison.",
+    "Actual phase-boundary geometry is derived below from the raw reports; nominal1100x760 fixture metadata alone is not geometry proof.",
+    "The display inventory is empty. Accepted owned foreground requests and mandatory active/churn repaint gates were verified; this is not independent proof of foreground focus, native monitor presentation, GPU completion, compositor latency, or visible smoothness.",
+    "CPU draw/submission durations are CPU-side wall-clock spans recorded with optional instrumentation, not GPU time or end-to-end latency. Timing-enabled and timing-disabled builds are kept separate.",
+    "Stable sampled RSS excludes startup and oracle validation, and is process RSS rather than retained heap, allocator usage, GPU residency, or an exact high-water mark.",
+    "Startup timings lack matched initial geometry and are not summarized as comparative results.",
+    "Application executable bytes were uploaded and independently rehashed against every capture. This verifies binary identity, not visible compositor presentation or GPU time.",
+    "Unavailable/zero-only counters are reported explicitly from this run and are not converted to watts or used to rank energy efficiency.",
+    "The fixed phase schedule and original operation-coverage gates do not guarantee equal operation counts across captures or engines. Actual per-run counts and native component differences are retained; modes are not a controlled instrumentation-overhead experiment.",
+    "Native component contracts preserve documented differences such as data-header height, tree accessibility metadata scope and dock chrome. Passing the original oracle/geometry gates does not establish pixel-identical rendering or complete feature parity.",
+    "All V6 energy capability/deltas remain unknown/null for this zero-filled hosted cohort.",
+    "Actual named GPUI0.7.3 compile lines appear for both instrumentation builds; no historical cached-only producer assumption is reused."
+  ]
+}

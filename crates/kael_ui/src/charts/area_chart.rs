@@ -1,5 +1,8 @@
 use crate::{
-    charts::{finite_or_zero, format_axis_value},
+    charts::{
+        expand_chart_range, finite_or_zero, format_axis_value, interpolate_chart_value,
+        normalize_chart_value,
+    },
     theme::Theme,
 };
 use kael::{prelude::FluentBuilder as _, *};
@@ -115,9 +118,11 @@ impl AreaChartRange {
         let mut x_max = f64::MIN;
         let y_min = 0.0_f64;
         let mut y_max = f64::MIN;
+        let mut has_data = false;
 
         for s in series {
             for &(x, y) in &s.points {
+                has_data = true;
                 x_min = x_min.min(x);
                 x_max = x_max.max(x);
                 if mode == AreaChartMode::Overlaid {
@@ -137,19 +142,13 @@ impl AreaChartRange {
             }
         }
 
-        if x_min == f64::MAX {
+        if !has_data {
             x_min = 0.0;
             x_max = 1.0;
-        }
-        if y_max == f64::MIN {
             y_max = 1.0;
         }
-        if (x_max - x_min).abs() < f64::EPSILON {
-            x_max = x_min + 1.0;
-        }
-        if (y_max - y_min).abs() < f64::EPSILON {
-            y_max = y_min + 1.0;
-        }
+        let (x_min, x_max) = expand_chart_range(x_min, x_max);
+        let (y_min, y_max) = expand_chart_range(y_min, y_max);
 
         Self {
             x_min,
@@ -160,11 +159,11 @@ impl AreaChartRange {
     }
 
     fn normalize_x(&self, x: f64) -> f32 {
-        ((x - self.x_min) / (self.x_max - self.x_min)) as f32
+        normalize_chart_value(x, self.x_min, self.x_max)
     }
 
     fn normalize_y(&self, y: f64) -> f32 {
-        ((y - self.y_min) / (self.y_max - self.y_min)) as f32
+        normalize_chart_value(y, self.y_min, self.y_max)
     }
 }
 
@@ -314,7 +313,7 @@ impl RenderOnce for AreaChart {
             (0..=self.y_label_count)
                 .map(|i| {
                     let normalized = i as f64 / self.y_label_count as f64;
-                    let value = range.y_min + (range.y_max - range.y_min) * (1.0 - normalized);
+                    let value = interpolate_chart_value(range.y_min, range.y_max, 1.0 - normalized);
                     format_axis_value(value)
                 })
                 .collect()
@@ -615,5 +614,70 @@ impl RenderOnce for AreaChart {
                         })),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod numeric_range_regressions {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn wide_overlaid_x_normalizes_without_changing_y_policy() {
+        let series = [AreaChartSeries::new(
+            "Wide",
+            vec![(-f64::MAX, 0.0), (f64::MAX, f64::MAX)],
+        )];
+        let range = AreaChartRange::from_series(&series, AreaChartMode::Overlaid);
+        for (value, fraction) in [(-f64::MAX, 0.0), (0.0, 0.5), (f64::MAX, 1.0)] {
+            assert_eq!(range.normalize_x(value), fraction, "wide area x fraction");
+        }
+        assert_eq!(
+            (range.normalize_y(0.0), range.normalize_y(f64::MAX)),
+            (0.0, 1.0)
+        );
+        assert_eq!(
+            AreaChartSeries::new("Clamped", vec![(0.0, -1.0)]).points,
+            vec![(0.0, 0.0)]
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn maximum_finite_area_x_is_not_empty_in_either_mode() {
+        let series = [AreaChartSeries::new("MAX", vec![(f64::MAX, 1.0)])];
+        for mode in [AreaChartMode::Overlaid, AreaChartMode::Stacked] {
+            let range = AreaChartRange::from_series(&series, mode);
+            assert_eq!(
+                (range.x_min.to_bits(), range.x_max.to_bits()),
+                (0x7fef_ffff_ffff_fffe, 0x7fef_ffff_ffff_ffff),
+                "MAX area x is not an empty unit range"
+            );
+            assert_eq!(range.normalize_x(f64::MAX), 1.0);
+            assert_eq!((range.y_min, range.y_max), (0.0, 1.0));
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn large_constant_area_x_and_empty_controls() {
+        for mode in [AreaChartMode::Overlaid, AreaChartMode::Stacked] {
+            let empty =
+                AreaChartRange::from_series(&[AreaChartSeries::new("Empty", Vec::new())], mode);
+            assert_eq!(
+                (empty.x_min, empty.x_max, empty.y_min, empty.y_max),
+                (0.0, 1.0, 0.0, 1.0)
+            );
+            for (value, lower, upper) in [
+                (1e20, 0x4415_af1d_78b5_8c40, 0x4415_af1d_78b5_8c41),
+                (-1e20, 0xc415_af1d_78b5_8c40, 0xc415_af1d_78b5_8c3f),
+            ] {
+                let series = [AreaChartSeries::new("Constant", vec![(value, 1.0)])];
+                let range = AreaChartRange::from_series(&series, mode);
+                assert_eq!(
+                    (range.x_min.to_bits(), range.x_max.to_bits()),
+                    (lower, upper),
+                    "area constant x neighbors"
+                );
+                assert!((0.0..=1.0).contains(&range.normalize_x(value)));
+            }
+        }
     }
 }
