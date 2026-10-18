@@ -1004,3 +1004,18 @@ presentation frames. Initial 720×460 sizing at scale 2, the programmatic resize
 1,250 ms idle model wake and the complete deterministic readback pass. The PNG
 is byte-identical to the earlier scene. Independent audit keeps these GPU and
 presentation counts separate; current packaging and hosted acceptance remain open.
+
+The [completed b411 comparison](2026-10-18-b411-gpui073-hosted-comparison.md)
+passes 100 original captures, 800 equal actual 1100×645 at scale 1 boundaries, 50 pairs and
+20 executable identities. Four general desktop workloads lead the CPU/RSS and
+separate CPU timing tables. Navigation active CPU is 9.95% / 12.64%
+(Kael/GPUI Kit); table and tree CPU/RSS remain higher, while docking is close.
+Operation totals and component/accessibility work differ, and later Grid/image
+changes are excluded. No overall winner, power or presentation claim is made.
+
+The [committed ce39eed package proof](2026-10-18-image-grid-package-validation.json)
+builds all 39 extracted archives and independently matches all 931 included Rust
+files to immutable source, with no upload. Local image/Grid Metal proof remains
+a separate checkpoint. The [native wheel attempt](2026-10-18-native-wheel-validation.json)
+stops on a child-process-group ownership guard before any event; later cleanup
+recovery is recorded separately and native wheel acceptance remains open.
