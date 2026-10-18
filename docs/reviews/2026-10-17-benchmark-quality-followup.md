@@ -979,3 +979,21 @@ production and test Wasm compilation and formatting. The earlier frame-test
 failure remains archived: its helper also drained a valid latest publication;
 a separately named case now checks those two intervals independently. This is
 headless behavior evidence, with no new CPU/RSS or native-presentation claim.
+
+The [static-image admission checkpoint](2026-10-18-static-image-working-validation.json)
+shares an App-wide byte reservation across built-in static decoders, covering
+native pixels and RGBA conversion. All 2,251 enabled core tests and 565 UI tests
+pass, with strict lint, Wasm compilation and formatting. Five fixed alternating
+CPU pairs pass all 80 predeclared checks; tiny WebP calling-thread CPU increases
+5.56% for the typed common-shim route and 3.61% for the public resource route.
+The 1,280 MiB accounting capacity preserves permitted high-bit-depth images.
+Codec-private buffers, encoded input, animations, synchronous constructors and
+retained output ownership remain separate; no RSS saving or unified R8 closure
+is claimed. Current native presentation and fresh packaging remain pending.
+
+The [immutable platform cohort at `b411223`](2026-10-18-platform-b411-validation.json)
+passes Windows 2022/2025, Linux runtime and browser jobs. Hosted Mac GPU tests
+pass, while native presentation and three independent Apple controls produce
+zero positive timestamps. The same-source local Metal check records a positive
+frame. Three denied unmaintained-dependency advisories also remain failed.
+This cohort predates the subsequent Grid and image changes.

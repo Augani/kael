@@ -439,6 +439,15 @@ image_cache(lru_with_limits("gallery-cache", ImageCacheLimits {
 Declared raster/SVG dimensions are checked against the byte limit before pixel
 allocation; animated images additionally count every decoded frame. Four built-in
 image jobs may perform I/O or decoding concurrently across all image caches.
+Static raster loads additionally share one App-wide 1,280 MiB accounting pool
+for native decoder pixels and RGBA conversion buffers. Whole-request reservations
+are granted in FIFO order before pixel decoding; cancellation releases them.
+Contended loads retain scalar header metadata and reopen the decoder after
+admission. Reservations account for bytes and allocate pixels on demand. This
+capacity preserves the existing high-bit-depth image limits. Codec-private
+buffers, encoded sources, animations, SVG, synchronous constructors and retained
+ready images have separate ownership and limits.
+
 Pending admission errors can be retried when a load completes; rendering helpers
 wake waiting views automatically. Clearing, removing, dropping a cache entity,
 or critical memory pressure cancels its owned image loads and releases residency.

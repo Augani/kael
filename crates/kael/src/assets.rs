@@ -1,6 +1,11 @@
 use crate::{DevicePixels, Pixels, Result, SharedString, Size, size};
 use smallvec::SmallVec;
 
+mod image_working;
+pub(crate) use image_working::{
+    IMAGE_LOAD_PIPELINES, ImageWorkingBudget, decode_static_image_with_admission,
+};
+
 use image::{Delay, Frame, ImageDecoder, ImageFormat, ImageReader, Limits};
 use std::{
     borrow::Cow,

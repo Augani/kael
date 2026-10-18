@@ -1,0 +1,1191 @@
+{
+  "schema": 1,
+  "status": "EXACT_IMAGE_SOURCES_ADOPTED_CORRECTNESS_CPU_AND_EXPLICIT_THREAD_ACCEPTANCE_COMPLETE",
+  "adoption": {
+    "status": "EXACT_FOUR_V6_FILES_PROMOTED_PRIMARY_AND_MANAGED_BEFORE_DOCUMENTATION",
+    "commit": null,
+    "base_cohort_provided_by_Root": "124260c; prior Grid adoption, before Image working admission",
+    "unaugmented_candidate_preparation": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-admission-prototype-v6/preparation.json",
+      "sha256": "f4067227a6b9dc9e68ed26766276e812c6649a786f3376d6d7d859f8cd51d2dd",
+      "bytes": 3899
+    },
+    "exact_four_source_files": [
+      {
+        "relative_path": "crates/kael/src/assets.rs",
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-admission-prototype-v6/candidate/crates/kael/src/assets.rs",
+        "sha256": "01259d1d432d9578d47dacd34c9357cf3a8d4458b91102b8f615c4de6b4d530b",
+        "bytes": 9497
+      },
+      {
+        "relative_path": "crates/kael/src/app.rs",
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-admission-prototype-v6/candidate/crates/kael/src/app.rs",
+        "sha256": "dbc484ee52696b808aeae9540c2dcb9948f5ab6f74f1ec98306d67de00a84f29",
+        "bytes": 2004616
+      },
+      {
+        "relative_path": "crates/kael/src/elements/img.rs",
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-admission-prototype-v6/candidate/crates/kael/src/elements/img.rs",
+        "sha256": "671b1855343c4b6c62a5e67c20d40778672094be06a8fecca0a97dde2caac7aa",
+        "bytes": 47546
+      },
+      {
+        "relative_path": "crates/kael/src/assets/image_working.rs",
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-admission-prototype-v6/candidate/crates/kael/src/assets/image_working.rs",
+        "sha256": "9444a834c22bbdeba2be81a694ebeb16ef4b6bdca1ead6140859663911cfcfe9",
+        "bytes": 25476
+      }
+    ],
+    "no_common_cost_seams_to_be_promoted": true,
+    "no_dependency_or_public_API_change": true,
+    "promotion_receipt": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-primary-promotion/receipt.json",
+      "sha256": "ddafd15e6ef5552595e9de0029e686983637b89a048a7f07160eb158c75a494e",
+      "bytes": 1270
+    },
+    "all_compiled_inputs_match_primary_and_managed": 3157,
+    "primary_Cargo_rebuild_claim": false
+  },
+  "policy": {
+    "owner": "App: both built-in typed-image and resource loaders share this private budget and the existing four image-load slots. Distinct Apps own distinct budgets.",
+    "default_capacity_bytes": 1342177280,
+    "default_capacity_MiB": 1280,
+    "bounded_domain": "Conservatively requested native DynamicImage pixels plus RGBA8 conversion output, admitted before pixel decode/conversion, held through conversion.",
+    "metadata": "FIFO weighted whole-request admission; bounded four waiters behind the shared four pipeline slots. Cancellation/error/unwind releases reservations; wakeups run outside the metadata mutex.",
+    "ordinary_fast_path": "Header decoder is reused when budget is uncontended; only a contested wait drops/reopens the opaque decoder. Static resource WebP retains its existing separate animation-header probe.",
+    "does_not_bound": [
+      "encoded inputs",
+      "codec-private allocations/header tables",
+      "animated-image frame collection",
+      "SVG rendering",
+      "retained decoded outputs/ready consumers/image caches",
+      "native/GPU atlas or rendering scratch",
+      "direct public synchronous Image::to_image_data constructors",
+      "whole process RSS or application memory"
+    ],
+    "default_memory_saving_not_established": "Four default LRU requests each capped at64 MiB RGBA output can already fit the widest native-plus-RGBA representation within1280 MiB. Typed or higher-cap requests have separate output limits. The pool preserves every individually legal up-to256 MiB RGBA output; no reduction in default-workload memory use was measured.",
+    "public_custom_budget": "No new public byte-budget API; smaller pool values appear only in controlled tests."
+  },
+  "correctness": {
+    "focused_native_ten": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-v6-independent-memory-audit/review.json",
+      "sha256": "8c67ea918c81bf3e856cf10c489176a2c4705561989c9b7fb1ee7fa43c487fd6",
+      "bytes": 25891
+    },
+    "focused_passed": 10,
+    "focused_ignored": 0,
+    "focused_overlap": "These ten are included again in the broad core total; do not add as unique tests.",
+    "broad_receipt": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-broad-validation/result.json",
+      "sha256": "ff8e607dbb2dd53973ca899a12b05f7a81c1079faa321daf087d61feaf5fc30b",
+      "bytes": 2552943
+    },
+    "independent_broad_review": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-v6-broad-independent-general-review/review.json",
+      "sha256": "4cc23e6f7756d1468db58ec2a561442f07366867a60618a646e720fd6bbd7a2e",
+      "bytes": 18258
+    },
+    "whole_source_maps": {
+      "before_entries_per_root": 3156,
+      "candidate_managed_entries": 3157,
+      "before_fingerprint": "c7143f2d163e94d294f1984b9cd4694bc8674fa4990b86527eb79682fa0b10da",
+      "exact_delta": {
+        "new": [
+          "crates/kael/src/assets/image_working.rs"
+        ],
+        "changed": [
+          "crates/kael/src/assets.rs",
+          "crates/kael/src/app.rs",
+          "crates/kael/src/elements/img.rs"
+        ]
+      },
+      "restoration": "Successful broad driver finally asserted original full maps; separate after maps not saved. General reviewed archived evidence, not the later leased roots."
+    },
+    "full_suites": [
+      {
+        "package": "kael",
+        "inventory": 2253,
+        "passed": 2251,
+        "ignored_names": [
+          "platform::mac::display_link::tests::native_retained_display_link_probe",
+          "platform::mac::text_system::tests::native_sized_font_shaping_diagnostic"
+        ],
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [
+          "backtrace",
+          "font-kit",
+          "icons",
+          "leak-detection",
+          "lottie",
+          "rand",
+          "test-support"
+        ],
+        "exact_copied_binary": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-broad-validation/kael-frozen-test-binary",
+          "sha256": "bff88894c476b9b03002cb2c9693ffb5bc8a5b6defb3e2ecc94911076cd5883e",
+          "bytes": 170436056
+        },
+        "test_argv": [
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-broad-validation/kael-frozen-test-binary",
+          "--show-output"
+        ],
+        "unfiltered": true,
+        "argv_has_no_thread_override": true
+      },
+      {
+        "package": "kael_ui",
+        "inventory": 565,
+        "passed": 565,
+        "ignored_names": [],
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [
+          "default",
+          "editor",
+          "http",
+          "native"
+        ],
+        "exact_copied_binary": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-broad-validation/kael_ui-frozen-test-binary",
+          "sha256": "2832b768934a357e714fd2583711654acca80b405044608bc2aa82b3f72b95b3",
+          "bytes": 137626264
+        },
+        "test_argv": [
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-broad-validation/kael_ui-frozen-test-binary",
+          "--show-output"
+        ],
+        "unfiltered": true,
+        "argv_has_no_thread_override": true
+      }
+    ],
+    "strict_and_compile_checks": [
+      [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "kael",
+        "--all-targets",
+        "--no-default-features",
+        "--features",
+        "font-kit,test-support,lottie,icons",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "kael_ui",
+        "--all-targets",
+        "--features",
+        "kael/lottie,kael/test-support",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      [
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "kael_ui",
+        "--lib",
+        "--target",
+        "wasm32-unknown-unknown",
+        "--no-default-features",
+        "--features",
+        "browser,kael/lottie"
+      ],
+      [
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "kael",
+        "-p",
+        "kael_ui",
+        "--tests",
+        "--target",
+        "wasm32-unknown-unknown",
+        "--no-default-features",
+        "--features",
+        "kael/browser,kael/test-support,kael/lottie,kael_ui/browser"
+      ],
+      [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ]
+    ],
+    "wasm_scope": "Production UI+lottie and joint core/UI test sources compile for wasm32; not browser test execution. Existing safe_gpu_dimension deadcode warning remains.",
+    "test_thread_provenance": {
+      "actual_argv": "Unfiltered copied binaries --show-output, without --test-threads/--ignored/filter.",
+      "original_gap": "RUST_TEST_THREADS was inherited but not captured in those launch records, so fully recorded default-thread provenance is not established by the original runs.",
+      "later_context_only": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-test-thread-environment-context/context.json",
+        "sha256": "a19368cecd27442cb5b33398097cb1e7306532a5a22576e6fcd2288459da5f66",
+        "bytes": 535
+      },
+      "qualification": "Root sets CARGO_BUILD_JOBS=1 in each test runner environment and passes no libtest thread override. The inherited RUST_TEST_THREADS value was not separately saved in the original launch receipts; this later observation is context, not a retroactive per-process launch capture. Future reports will capture the allowlisted value directly.",
+      "explicit_parallel_verification": {
+        "status": "ACTUAL_EXACT_BINARY_REPLAY_PASS",
+        "receipt": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-explicit-thread-validation/result.json",
+          "sha256": "21d786206b75b0039135a2626f5b1381f619af47f2b4a0e0649b2a4f4af7aa1c",
+          "bytes": 3679
+        },
+        "environment": {
+          "KAEL_HEADLESS": "1",
+          "RUST_TEST_THREADS": null,
+          "CARGO_BUILD_JOBS": "1"
+        },
+        "cases": [
+          {
+            "package": "kael",
+            "binary": {
+              "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-broad-validation/kael-frozen-test-binary",
+              "sha256": "bff88894c476b9b03002cb2c9693ffb5bc8a5b6defb3e2ecc94911076cd5883e",
+              "bytes": 170436056
+            },
+            "argv": [
+              "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-broad-validation/kael-frozen-test-binary",
+              "--show-output"
+            ],
+            "passed": 2251,
+            "ignored_names": [
+              "platform::mac::display_link::tests::native_retained_display_link_probe",
+              "platform::mac::text_system::tests::native_sized_font_shaping_diagnostic"
+            ],
+            "unfiltered": true,
+            "RUST_TEST_THREADS": null,
+            "stdout": {
+              "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-explicit-thread-validation/kael/stdout",
+              "sha256": "4c738d8cf6cadfacab2450a8e0ac7c577b3aed23a2856c6ea86c6f32a568062a",
+              "bytes": 368862
+            },
+            "stderr": {
+              "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-explicit-thread-validation/kael/stderr",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            }
+          },
+          {
+            "package": "kael_ui",
+            "binary": {
+              "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-broad-validation/kael_ui-frozen-test-binary",
+              "sha256": "2832b768934a357e714fd2583711654acca80b405044608bc2aa82b3f72b95b3",
+              "bytes": 137626264
+            },
+            "argv": [
+              "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-broad-validation/kael_ui-frozen-test-binary",
+              "--show-output"
+            ],
+            "passed": 565,
+            "ignored_names": [],
+            "unfiltered": true,
+            "RUST_TEST_THREADS": null,
+            "stdout": {
+              "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-explicit-thread-validation/kael_ui/stdout",
+              "sha256": "1d0509414f321df03451d5cf66fcd619a8d80141b4005fce159bbca6743ec0c6",
+              "bytes": 107920
+            },
+            "stderr": {
+              "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-explicit-thread-validation/kael_ui/stderr",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            }
+          }
+        ],
+        "source_inputs_exact": 3157,
+        "not_additional_unique_tests": "Same copied full-suite binaries run once again specifically to capture default libtest thread provenance; no Cargo or changed bodies, and no new unique test count."
+      }
+    },
+    "historical_failures": {
+      "preserved_review": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-v4-independent-memory-audit/review.json",
+        "sha256": "2a9d686882029ad56642446b4dca9b5d9fa1f6b72ff2c8016ce183a602462b08",
+        "bytes": 25995
+      },
+      "classification": "V2/V3 fixture type/borrow errors executed zero cases; V4 first mounted-case failure was illegal off-render cache use. V5 corrected the fixture to an actual mounted host; V6 only formats one assert. These are not a claimed baseline policy-overflow RED."
+    }
+  },
+  "CPU": {
+    "status": "ACTUAL_80_OF80_GATES_PASS_INDEPENDENT_RAW_RECOMPUTATION_CLEAR",
+    "independent_reviewer": "Renderer independent archived-raw recomputation (no original evaluator import or workload rerun).",
+    "independent_review": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-cost-independent-renderer-audit/review.json",
+      "sha256": "75f4035c4bb178e412cea8ec60654742699515ec8336f243c8e6d594b845f393",
+      "bytes": 43546
+    },
+    "build_receipt": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-cost-build-v2/result.json",
+      "sha256": "a4bba29ce67438d7f54565e929efd2e9993f833d0079f0c75235ccab88364b4a",
+      "bytes": 3161891
+    },
+    "measurement_receipt": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-cost-measure-v2/result.json",
+      "sha256": "10064c8d982dd3509bdeb3200c9f7ac13d43c14b27fc5cf4ad350e8462fd3c24",
+      "bytes": 3151237
+    },
+    "raw_run": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-cost-measure-v2/run.json",
+      "sha256": "ec2e68325d2ad55c7333a60fbb515ea81ee6544a3f549043233e7954851bfd7b",
+      "bytes": 10352
+    },
+    "evaluation": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-cost-measure-v2/evaluation.json",
+      "sha256": "153aa087ed04ff36700955fc2ba1de8916083fcec949ed4eb4d27dce37b51e0a",
+      "bytes": 89567
+    },
+    "fixed_gates": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-cpu-cost-proposal/gates.json",
+      "sha256": "c378668fa20d61c65cec51ae18abe9d844ee541d85882da8f96f53376662c57d",
+      "bytes": 1847
+    },
+    "quiet_receipt": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-cost-root-ready/quiet.json",
+      "sha256": "c914be78a1c2064c0e0efdabe3096123b43d05604fb9455ce3c6623aa9a0a3f9",
+      "bytes": 980
+    },
+    "two_release_variants": {
+      "A": {
+        "copied_binary": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-cost-build-v2/frozen-A",
+          "sha256": "974bdf86483257500275f55f3bcadf0d9414315b527a6a0b5471fcbc1d758875",
+          "bytes": 7056992
+        },
+        "actual_kael_features": [
+          "backtrace",
+          "font-kit",
+          "leak-detection",
+          "rand",
+          "test-support"
+        ],
+        "actual_kael_profile": {
+          "opt_level": "3",
+          "debuginfo": 1,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "actual_executable_profile": {
+          "opt_level": "3",
+          "debuginfo": 1,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "cfg_test": false,
+        "kael_and_owned_artifacts_fresh_false": true
+      },
+      "B": {
+        "copied_binary": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-cost-build-v2/frozen-B",
+          "sha256": "a80525a73897e4dd8ceae3584097f72ad89b0bd9c4f6816b9e6a109a59a3c54b",
+          "bytes": 7098336
+        },
+        "actual_kael_features": [
+          "backtrace",
+          "font-kit",
+          "leak-detection",
+          "rand",
+          "test-support"
+        ],
+        "actual_kael_profile": {
+          "opt_level": "3",
+          "debuginfo": 1,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "actual_executable_profile": {
+          "opt_level": "3",
+          "debuginfo": 1,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "cfg_test": false,
+        "kael_and_owned_artifacts_fresh_false": true
+      }
+    },
+    "source_graph": {
+      "A": "Primary baseline plus two identical temporary typed/source-setup seams;3156 eligible inputs.",
+      "B": "Managed V6 plus the same seams;3157 eligible inputs.",
+      "both_restored": "Measure finally validated every owned overlay before writes, then restored both original3156 maps/bytes/modes/mtime.",
+      "same_registry_subset": "One offline standalone resolution each from root-pinned lock, then --locked release builds; actual driver requires no new registry/source/version/checksum tuple.",
+      "standalone_locks": {
+        "A": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-root-cost-crates/A/Cargo.lock",
+          "sha256": "35c5d97852e80051ea55406d8459266884baa41c62320b044f78e5793ef66150",
+          "bytes": 144838
+        },
+        "B": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-root-cost-crates/B/Cargo.lock",
+          "sha256": "35c5d97852e80051ea55406d8459266884baa41c62320b044f78e5793ef66150",
+          "bytes": 144838
+        }
+      },
+      "no_allocation_instrumentation": "Same System allocator; no allocation counter or replacement allocator policy."
+    },
+    "fixture_and_pixel_oracles": {
+      "immutable_input_manifest": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-cpu-cost-proposal/fixtures/inputs.json",
+        "sha256": "2eff9227f5ac1881d3631fbc953c24fd6929fcfe714121da147afc638e92cb5b",
+        "bytes": 3356
+      },
+      "PNG_RGBA16_WebP": "Tiny3x2 PNG/static lossless WebP and256x192 RGBA16 PNG; RGBA16 channels\u00d7257 independently specify BGRA8 values.",
+      "JPEG": "384x256 JPEG expected full BGRA codec output from unchanged public synchronous constructor in A, with exact B byte/hash equality before any cost process; not independent external decoder pixels.",
+      "JPEG_golden": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-root-cost-crates/A/fixtures/medium_jpeg.bgra",
+        "sha256": "462aca7b646957b89c969dab3fa08e0dd469280b9de57a0438efc70012c53656",
+        "bytes": 393216
+      },
+      "all_frame_values": "Every result has exactly one complete static frame; every warmup/measured load checks all BGRA bytes, dimensions/length and full-byte FNV hash.",
+      "no_ready_cache": "Direct Asset::load futures actually decode each iteration; resource source-call counts equal measured load count."
+    },
+    "measurement_scope": "Calling-thread and process CPU for actual sequential load + full-value/hash oracle + output drop; construction of typed encoded source and App setup occur separately. No Window/layout/render/native GUI/GPU.",
+    "typed_route": "Identical temporary doc-hidden wrapper calls unchanged private ImageDecoder::load in both variants. This is common-shim private-loader CPU, not an unmodified public typed API claim.",
+    "resource_route": "Unchanged public ImageAssetLoader::load with Resource::Embedded and common setup-only AssetSource injection. Loader encoded-data copy is included; no filesystem/network IO.",
+    "schedule": {
+      "alternating_pairs": 5,
+      "cost_order": [
+        "A",
+        "B",
+        "B",
+        "A",
+        "A",
+        "B",
+        "B",
+        "A",
+        "A",
+        "B"
+      ],
+      "prerequisite_oracle_processes": 2,
+      "cost_processes": 10,
+      "retries": 0,
+      "outliers_removed": 0,
+      "iteration_adjustment": false
+    },
+    "gates": {
+      "passed": 80,
+      "failed": 0,
+      "median_CPU_limit": "<=1.10 baseline, plus100 microseconds per ENTIRE tiny bundle only (zero medium slack).",
+      "minimum_every_bundle_ns": 20000000,
+      "max_MAD_fraction": 0.1,
+      "actual_largest_MAD_fraction": 0.024992103600758056,
+      "no_hash_cost_subtraction": true
+    },
+    "tradeoffs": {
+      "typed_tiny_WebP_thread_CPU_percent": 5.5592363614870965,
+      "resource_tiny_WebP_thread_CPU_percent": 3.6070273312715173,
+      "typed_tiny_WebP_process_CPU_percent": 5.555818241997268,
+      "resource_tiny_WebP_process_CPU_percent": 3.6022612735001625,
+      "calling_thread_group_percent_range": [
+        -2.755829734731652,
+        5.5592363614870965
+      ],
+      "process_group_percent_range": [
+        -2.751895135818072,
+        5.555818241997268
+      ],
+      "interpretation": "Tiny WebP cost increased5.559% on typed common-shim path and3.607% on public embedded path. All predeclared gates pass; this is a measured cost tradeoff, not a universal speed improvement."
+    },
+    "eight_groups_with_all_five_vectors": [
+      {
+        "route": "embedded_public",
+        "fixture": "medium_jpeg",
+        "iterations_per_bundle": 256,
+        "calling_thread": {
+          "variants": {
+            "A": {
+              "raw_bundle_ns": [
+                260864334,
+                259368667,
+                259146375,
+                259256792,
+                258806125
+              ],
+              "median_ns": 259256792,
+              "mad_ns": 111875,
+              "mad_fraction": 0.0004315219637524482,
+              "median_ns_per_load": 1012721.84375
+            },
+            "B": {
+              "raw_bundle_ns": [
+                259737583,
+                260854875,
+                261577333,
+                260021208,
+                262612417
+              ],
+              "median_ns": 260854875,
+              "mad_ns": 833667,
+              "mad_fraction": 0.0031959034693141157,
+              "median_ns_per_load": 1018964.35546875
+            }
+          },
+          "raw_median_ratio": 1.0061640930896036,
+          "median_percent_change": 0.6164093089603639,
+          "fixed_whole_bundle_slack_ns": 0,
+          "acceptance_limit_ns": 285182471.20000005
+        },
+        "process": {
+          "variants": {
+            "A": {
+              "raw_bundle_ns": [
+                260866000,
+                259369000,
+                259147000,
+                259257000,
+                258806000
+              ],
+              "median_ns": 259257000,
+              "mad_ns": 112000,
+              "mad_fraction": 0.0004320037646042344,
+              "median_ns_per_load": 1012722.65625
+            },
+            "B": {
+              "raw_bundle_ns": [
+                259738000,
+                260855000,
+                261577000,
+                260021000,
+                262613000
+              ],
+              "median_ns": 260855000,
+              "mad_ns": 834000,
+              "mad_fraction": 0.0031971785091334266,
+              "median_ns_per_load": 1018964.84375
+            }
+          },
+          "raw_median_ratio": 1.0061637679985498,
+          "median_percent_change": 0.6163767998549785,
+          "fixed_whole_bundle_slack_ns": 0,
+          "acceptance_limit_ns": 285182700.0
+        }
+      },
+      {
+        "route": "embedded_public",
+        "fixture": "medium_rgba16_png",
+        "iterations_per_bundle": 256,
+        "calling_thread": {
+          "variants": {
+            "A": {
+              "raw_bundle_ns": [
+                302345417,
+                301405125,
+                302606542,
+                300673792,
+                299873084
+              ],
+              "median_ns": 301405125,
+              "mad_ns": 940292,
+              "mad_fraction": 0.0031196947961651283,
+              "median_ns_per_load": 1177363.76953125
+            },
+            "B": {
+              "raw_bundle_ns": [
+                300942792,
+                299642792,
+                300689042,
+                299619625,
+                300897417
+              ],
+              "median_ns": 300689042,
+              "mad_ns": 253750,
+              "mad_fraction": 0.0008438950695117117,
+              "median_ns_per_load": 1174566.5703125
+            }
+          },
+          "raw_median_ratio": 0.9976241843930159,
+          "median_percent_change": -0.23758156069840775,
+          "fixed_whole_bundle_slack_ns": 0,
+          "acceptance_limit_ns": 331545637.5
+        },
+        "process": {
+          "variants": {
+            "A": {
+              "raw_bundle_ns": [
+                302347000,
+                301406000,
+                302607000,
+                300675000,
+                299874000
+              ],
+              "median_ns": 301406000,
+              "mad_ns": 941000,
+              "mad_fraction": 0.0031220347305627627,
+              "median_ns_per_load": 1177367.1875
+            },
+            "B": {
+              "raw_bundle_ns": [
+                300943000,
+                299644000,
+                300689000,
+                299620000,
+                300897000
+              ],
+              "median_ns": 300689000,
+              "mad_ns": 254000,
+              "mad_fraction": 0.00084472661121624,
+              "median_ns_per_load": 1174566.40625
+            }
+          },
+          "raw_median_ratio": 0.9976211488822386,
+          "median_percent_change": -0.23788511177613714,
+          "fixed_whole_bundle_slack_ns": 0,
+          "acceptance_limit_ns": 331546600.0
+        }
+      },
+      {
+        "route": "embedded_public",
+        "fixture": "tiny_png",
+        "iterations_per_bundle": 16000,
+        "calling_thread": {
+          "variants": {
+            "A": {
+              "raw_bundle_ns": [
+                27163584,
+                24265500,
+                25328125,
+                25959959,
+                25170125
+              ],
+              "median_ns": 25328125,
+              "mad_ns": 631834,
+              "mad_fraction": 0.02494594447871684,
+              "median_ns_per_load": 1583.0078125
+            },
+            "B": {
+              "raw_bundle_ns": [
+                24630125,
+                24000791,
+                24572000,
+                25042292,
+                25326375
+              ],
+              "median_ns": 24630125,
+              "mad_ns": 412167,
+              "mad_fraction": 0.01673426342740851,
+              "median_ns_per_load": 1539.3828125
+            }
+          },
+          "raw_median_ratio": 0.9724417026526835,
+          "median_percent_change": -2.755829734731652,
+          "fixed_whole_bundle_slack_ns": 100000,
+          "acceptance_limit_ns": 27960937.500000004
+        },
+        "process": {
+          "variants": {
+            "A": {
+              "raw_bundle_ns": [
+                27163000,
+                24266000,
+                25328000,
+                25961000,
+                25171000
+              ],
+              "median_ns": 25328000,
+              "mad_ns": 633000,
+              "mad_fraction": 0.024992103600758056,
+              "median_ns_per_load": 1583.0
+            },
+            "B": {
+              "raw_bundle_ns": [
+                24631000,
+                24000000,
+                24573000,
+                25041000,
+                25326000
+              ],
+              "median_ns": 24631000,
+              "mad_ns": 410000,
+              "mad_fraction": 0.016645690390158743,
+              "median_ns_per_load": 1539.4375
+            }
+          },
+          "raw_median_ratio": 0.9724810486418193,
+          "median_percent_change": -2.751895135818072,
+          "fixed_whole_bundle_slack_ns": 100000,
+          "acceptance_limit_ns": 27960800.000000004
+        }
+      },
+      {
+        "route": "embedded_public",
+        "fixture": "tiny_webp",
+        "iterations_per_bundle": 12000,
+        "calling_thread": {
+          "variants": {
+            "A": {
+              "raw_bundle_ns": [
+                22890917,
+                23075917,
+                22610000,
+                22699625,
+                22817709
+              ],
+              "median_ns": 22817709,
+              "mad_ns": 118084,
+              "mad_fraction": 0.005175103249848615,
+              "median_ns_per_load": 1901.47575
+            },
+            "B": {
+              "raw_bundle_ns": [
+                23773834,
+                23407583,
+                23747833,
+                23521584,
+                23640750
+              ],
+              "median_ns": 23640750,
+              "mad_ns": 119166,
+              "mad_fraction": 0.005040703023381238,
+              "median_ns_per_load": 1970.0625
+            }
+          },
+          "raw_median_ratio": 1.0360702733127152,
+          "median_percent_change": 3.6070273312715173,
+          "fixed_whole_bundle_slack_ns": 100000,
+          "acceptance_limit_ns": 25199479.900000002
+        },
+        "process": {
+          "variants": {
+            "A": {
+              "raw_bundle_ns": [
+                22891000,
+                23075000,
+                22610000,
+                22700000,
+                22819000
+              ],
+              "median_ns": 22819000,
+              "mad_ns": 119000,
+              "mad_fraction": 0.005214952451904115,
+              "median_ns_per_load": 1901.5833333333333
+            },
+            "B": {
+              "raw_bundle_ns": [
+                23774000,
+                23409000,
+                23748000,
+                23521000,
+                23641000
+              ],
+              "median_ns": 23641000,
+              "mad_ns": 120000,
+              "mad_fraction": 0.005075927414237976,
+              "median_ns_per_load": 1970.0833333333333
+            }
+          },
+          "raw_median_ratio": 1.0360226127350016,
+          "median_percent_change": 3.6022612735001625,
+          "fixed_whole_bundle_slack_ns": 100000,
+          "acceptance_limit_ns": 25200900.000000004
+        }
+      },
+      {
+        "route": "typed_common_shim",
+        "fixture": "medium_jpeg",
+        "iterations_per_bundle": 256,
+        "calling_thread": {
+          "variants": {
+            "A": {
+              "raw_bundle_ns": [
+                258638084,
+                257360083,
+                260039125,
+                260914917,
+                259116542
+              ],
+              "median_ns": 259116542,
+              "mad_ns": 922583,
+              "mad_fraction": 0.0035604944125875223,
+              "median_ns_per_load": 1012173.9921875
+            },
+            "B": {
+              "raw_bundle_ns": [
+                260505625,
+                261657125,
+                261552375,
+                260042834,
+                259937375
+              ],
+              "median_ns": 260505625,
+              "mad_ns": 568250,
+              "mad_fraction": 0.0021813348560131857,
+              "median_ns_per_load": 1017600.09765625
+            }
+          },
+          "raw_median_ratio": 1.005360842612665,
+          "median_percent_change": 0.5360842612665007,
+          "fixed_whole_bundle_slack_ns": 0,
+          "acceptance_limit_ns": 285028196.20000005
+        },
+        "process": {
+          "variants": {
+            "A": {
+              "raw_bundle_ns": [
+                258638000,
+                257360000,
+                260040000,
+                260916000,
+                259116000
+              ],
+              "median_ns": 259116000,
+              "mad_ns": 924000,
+              "mad_fraction": 0.003565970453387672,
+              "median_ns_per_load": 1012171.875
+            },
+            "B": {
+              "raw_bundle_ns": [
+                260505000,
+                261657000,
+                261555000,
+                260043000,
+                259938000
+              ],
+              "median_ns": 260505000,
+              "mad_ns": 567000,
+              "mad_fraction": 0.002176541717049577,
+              "median_ns_per_load": 1017597.65625
+            }
+          },
+          "raw_median_ratio": 1.0053605335062288,
+          "median_percent_change": 0.5360533506228782,
+          "fixed_whole_bundle_slack_ns": 0,
+          "acceptance_limit_ns": 285027600.0
+        }
+      },
+      {
+        "route": "typed_common_shim",
+        "fixture": "medium_rgba16_png",
+        "iterations_per_bundle": 256,
+        "calling_thread": {
+          "variants": {
+            "A": {
+              "raw_bundle_ns": [
+                300821750,
+                299330250,
+                299601625,
+                303396583,
+                299346583
+              ],
+              "median_ns": 299601625,
+              "mad_ns": 271375,
+              "mad_fraction": 0.0009057861418475284,
+              "median_ns_per_load": 1170318.84765625
+            },
+            "B": {
+              "raw_bundle_ns": [
+                299639750,
+                299576875,
+                300520625,
+                299634208,
+                298436000
+              ],
+              "median_ns": 299634208,
+              "mad_ns": 57333,
+              "mad_fraction": 0.0001913433061688337,
+              "median_ns_per_load": 1170446.125
+            }
+          },
+          "raw_median_ratio": 1.0001087544168026,
+          "median_percent_change": 0.010875441680258113,
+          "fixed_whole_bundle_slack_ns": 0,
+          "acceptance_limit_ns": 329561787.5
+        },
+        "process": {
+          "variants": {
+            "A": {
+              "raw_bundle_ns": [
+                300821000,
+                299330000,
+                299602000,
+                303397000,
+                299347000
+              ],
+              "median_ns": 299602000,
+              "mad_ns": 272000,
+              "mad_fraction": 0.0009078711090046128,
+              "median_ns_per_load": 1170320.3125
+            },
+            "B": {
+              "raw_bundle_ns": [
+                299640000,
+                299576000,
+                300521000,
+                299634000,
+                298435000
+              ],
+              "median_ns": 299634000,
+              "mad_ns": 58000,
+              "mad_fraction": 0.0001935694881088261,
+              "median_ns_per_load": 1170445.3125
+            }
+          },
+          "raw_median_ratio": 1.0001068083657652,
+          "median_percent_change": 0.010680836576515418,
+          "fixed_whole_bundle_slack_ns": 0,
+          "acceptance_limit_ns": 329562200.0
+        }
+      },
+      {
+        "route": "typed_common_shim",
+        "fixture": "tiny_png",
+        "iterations_per_bundle": 16000,
+        "calling_thread": {
+          "variants": {
+            "A": {
+              "raw_bundle_ns": [
+                24681667,
+                24114125,
+                24369250,
+                25685334,
+                23804167
+              ],
+              "median_ns": 24369250,
+              "mad_ns": 312417,
+              "mad_fraction": 0.012820131928557505,
+              "median_ns_per_load": 1523.078125
+            },
+            "B": {
+              "raw_bundle_ns": [
+                24674000,
+                24010917,
+                24021000,
+                24342042,
+                22992541
+              ],
+              "median_ns": 24021000,
+              "mad_ns": 321042,
+              "mad_fraction": 0.013365055576370676,
+              "median_ns_per_load": 1501.3125
+            }
+          },
+          "raw_median_ratio": 0.9857094494085784,
+          "median_percent_change": -1.4290550591421591,
+          "fixed_whole_bundle_slack_ns": 100000,
+          "acceptance_limit_ns": 26906175.000000004
+        },
+        "process": {
+          "variants": {
+            "A": {
+              "raw_bundle_ns": [
+                24681000,
+                24113000,
+                24369000,
+                25685000,
+                23804000
+              ],
+              "median_ns": 24369000,
+              "mad_ns": 312000,
+              "mad_fraction": 0.012803151544995691,
+              "median_ns_per_load": 1523.0625
+            },
+            "B": {
+              "raw_bundle_ns": [
+                24674000,
+                24011000,
+                24021000,
+                24342000,
+                22993000
+              ],
+              "median_ns": 24021000,
+              "mad_ns": 321000,
+              "mad_fraction": 0.013363307106282004,
+              "median_ns_per_load": 1501.3125
+            }
+          },
+          "raw_median_ratio": 0.985719561738274,
+          "median_percent_change": -1.428043826172598,
+          "fixed_whole_bundle_slack_ns": 100000,
+          "acceptance_limit_ns": 26905900.000000004
+        }
+      },
+      {
+        "route": "typed_common_shim",
+        "fixture": "tiny_webp",
+        "iterations_per_bundle": 12000,
+        "calling_thread": {
+          "variants": {
+            "A": {
+              "raw_bundle_ns": [
+                21099791,
+                21212458,
+                21331250,
+                21076292,
+                21148750
+              ],
+              "median_ns": 21148750,
+              "mad_ns": 63708,
+              "mad_fraction": 0.003012376618003428,
+              "median_ns_per_load": 1762.3958333333333
+            },
+            "B": {
+              "raw_bundle_ns": [
+                22295917,
+                22534917,
+                22067583,
+                22405292,
+                22324459
+              ],
+              "median_ns": 22324459,
+              "mad_ns": 80833,
+              "mad_fraction": 0.003620826824963597,
+              "median_ns_per_load": 1860.3715833333333
+            }
+          },
+          "raw_median_ratio": 1.055592363614871,
+          "median_percent_change": 5.5592363614870965,
+          "fixed_whole_bundle_slack_ns": 100000,
+          "acceptance_limit_ns": 23363625.000000004
+        },
+        "process": {
+          "variants": {
+            "A": {
+              "raw_bundle_ns": [
+                21100000,
+                21213000,
+                21332000,
+                21077000,
+                21149000
+              ],
+              "median_ns": 21149000,
+              "mad_ns": 64000,
+              "mad_fraction": 0.003026147808407017,
+              "median_ns_per_load": 1762.4166666666667
+            },
+            "B": {
+              "raw_bundle_ns": [
+                22296000,
+                22535000,
+                22067000,
+                22406000,
+                22324000
+              ],
+              "median_ns": 22324000,
+              "mad_ns": 82000,
+              "mad_fraction": 0.003673176850026877,
+              "median_ns_per_load": 1860.3333333333333
+            }
+          },
+          "raw_median_ratio": 1.0555581824199727,
+          "median_percent_change": 5.555818241997268,
+          "fixed_whole_bundle_slack_ns": 100000,
+          "acceptance_limit_ns": 23363900.000000004
+        }
+      }
+    ],
+    "cold_App_and_setup_diagnostic_not_acceptance": {
+      "A": {
+        "thread_ns": {
+          "five_ns": [
+            54875,
+            52292,
+            53000,
+            63958,
+            52250
+          ],
+          "median_ns": 53000
+        },
+        "process_ns": {
+          "five_ns": [
+            54000,
+            53000,
+            53000,
+            64000,
+            52000
+          ],
+          "median_ns": 53000
+        }
+      },
+      "B": {
+        "thread_ns": {
+          "five_ns": [
+            50208,
+            51292,
+            55083,
+            54084,
+            50792
+          ],
+          "median_ns": 51292
+        },
+        "process_ns": {
+          "five_ns": [
+            50000,
+            51000,
+            55000,
+            54000,
+            50000
+          ],
+          "median_ns": 51000
+        }
+      }
+    },
+    "all_cold_firstload_hash_wall_teardown_diagnostics_retained_in": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-cost-measure-v2/evaluation.json",
+      "sha256": "153aa087ed04ff36700955fc2ba1de8916083fcec949ed4eb4d27dce37b51e0a",
+      "bytes": 89567
+    },
+    "limits": [
+      "No allocation/peak/RSS/native residency/power/default-memory-saving/global-budget or ranking claim.",
+      "Sequential uncontended CPU does not establish contention throughput or a frame-latency budget.",
+      "Full hash/value checks are included; diagnostic hash-only cost is never subtracted.",
+      "This is a projection of actual receipts; Renderer independently recomputed all 80 gates from archived raw records."
+    ],
+    "independent_raw_recomputation": {
+      "passed": 80,
+      "total": 80,
+      "processes": {
+        "total": 12,
+        "oracle": 2,
+        "cost": 10,
+        "fixed_order": [
+          "A",
+          "B",
+          "B",
+          "A",
+          "A",
+          "B",
+          "B",
+          "A",
+          "A",
+          "B"
+        ],
+        "all_exit_zero": true,
+        "full_preflight_pixel_case_reports": 96,
+        "full_warm_case_reports": 80
+      },
+      "registry_packages_per_standalone_variant": 573
+    }
+  },
+  "open_scope": "R8 remains open: general model/cache/renderer scratch, decoder-private work, retained/live outputs and direct constructors require separate ownership/admission analysis. This slice does not establish unified memory closure.",
+  "previous_immutable_draft": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-public-adoption-draft/validation-draft.json",
+    "sha256": "9936679b5537c67c95bc4c0112d88c64bbbd970aba7f87302ff8a37664158faa",
+    "bytes": 38938
+  },
+  "further_scope": {
+    "current_source_native_GUI_GPU_compositor_acceptance": "Not executed by this image proof; previous b411 local presentation is a separate historical cohort.",
+    "fresh39_package_preflight": "Pending Root; no new package result claimed.",
+    "strict_dependency_advisories": "No dependency change or advisory closure claimed; the separate Platform strict audit still has three denied unmaintained advisories.",
+    "R8_unified_memory_closure": false
+  }
+}
