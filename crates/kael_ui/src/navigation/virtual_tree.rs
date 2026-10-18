@@ -21,6 +21,10 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
+mod catalog;
+use catalog::TreeModelRows;
+pub use catalog::VirtualTreeCatalog;
+
 /// Invalid input for a visible tree snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VirtualTreeModelError {
@@ -48,7 +52,7 @@ impl fmt::Display for VirtualTreeModelError {
 impl std::error::Error for VirtualTreeModelError {}
 
 struct TreeModelData<T: Clone> {
-    rows: Vec<FlatTreeNode<T>>,
+    rows: TreeModelRows<T>,
     parents: Vec<Option<usize>>,
     expanded: Vec<bool>,
     indices: Arc<HashMap<T, usize>>,
@@ -151,7 +155,7 @@ impl<T: Clone + Eq + Hash + 'static> VirtualTreeModel<T> {
         let indices = Arc::new(indices);
         Ok(Self {
             data: Arc::new(TreeModelData {
-                rows,
+                rows: TreeModelRows::Owned(rows),
                 parents,
                 expanded,
                 catalog_indices: indices.clone(),
@@ -837,8 +841,11 @@ fn navigation_action<T: Clone + Eq + Hash + 'static>(
             enabled.get(position).copied().map_or(None, Move)
         }
         "right" if row.has_children && !model.data.expanded[index] => Toggle(index, true),
-        "right" if row.has_children => model.data.rows[index + 1..]
+        "right" if row.has_children => model
+            .data
+            .rows
             .iter()
+            .skip(index + 1)
             .enumerate()
             .take_while(|(_, child)| child.level > row.level)
             .find(|(_, child)| child.level == row.level + 1 && !child.disabled)

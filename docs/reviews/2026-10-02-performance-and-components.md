@@ -601,10 +601,10 @@ The [21b platform cohort](2026-10-18-platform-21b-validation.json) remains faile
 
 The [earlier native wheel attempt](2026-10-18-native-wheel-21b-validation.json) also fails. One fixed horizontal event reaches the fixture’s AppKit monitor with delta `[-80, 0]` and no assigned window; no Core wheel or Grid offset trace follows. S0 is populated, but S1 does not settle, so no vertical or extra event is posted. Owned process cleanup passes; prior-foreground restoration remains unconfirmed and is not forced over an unrelated app. The evidence does not identify a routing, decoder or Grid cause. The user explicitly defers IME testing; IME, nonzero horizontal wheel delivery, presentation, denied-advisory resolution and all other required acceptance scopes remain open.
 
-The [immutable tree catalog
+The earlier [immutable tree catalog
 experiment](2026-10-18-tree-immutable-catalog-experiment.json) passes its separate
 correctness checks, including six focused cases, all 574 UI tests and three mutation
-oracles, but remains unadopted. Its pre-font 3,177-input cost cohort is INCONCLUSIVE:
+oracles, but was not adopted from that cohort. Its pre-font 3,177-input cost cohort is INCONCLUSIVE:
 1,624 of 1,628 numeric checks pass; four legacy requested-byte limits fail, and two
 warm-model-wide CPU quality rows exceed the 10% MAD limit at about 10.92%. All numeric
 CPU ratio gates and duration floors pass; those observations establish neither an
@@ -642,3 +642,19 @@ native pixel or application-wide memory result. The exact validated source and s
 regressions are installed in both checkouts. All 35 validation groups are terminal; the
 two earlier test-fixture compile failures remain distinct from the three intentional
 baseline allocation controls.
+
+The [opt-in immutable tree
+catalog](2026-10-18-tree-immutable-catalog-post-icon-validation.json) is now adopted as
+the exact three-path payload validated after Icon. All 1,628 frozen numeric gates and 48
+floor/noise checks passed across 26 fixed processes, with all 38 build/measurement
+groups quiescent and both pre-adoption 3,188-input maps restored. In the wide headless
+warm-model bundle, catalog use reduced median thread CPU by 71.18% and requested bytes
+from 1,565,447,216 to 346,106,368 (77.89%); cold thread CPU increased 7.42%, and one
+retained wide source/index added 12,493,912 requested live bytes. All six legacy
+requested totals remained within the original 64-byte-per-operation allowance. These are
+scoped TestPlatform results with full logical data and ownership checks, not
+native/RSS/ranking or global R8 closure. The earlier INCONCLUSIVE report remains
+unchanged. A completion-record KeyError was corrected by adding only the frozen
+config/build references before reevaluating the same samples. The exact source adoption
+receipt and documentation-only header update are recorded; later native, package,
+platform and comparative acceptance remain separate.
