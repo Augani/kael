@@ -1,0 +1,392 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-10-18T13:25:42.414099+00:00",
+  "status": "CURRENT21B_NATIVE_WHEEL_ATTEMPT_FAILED_NO_RETRY",
+  "source_commit": "21b393294c89148fdba25bad35822c831f6dc0d7",
+  "evidence": {
+    "actual": {
+      "path": ".artifacts/2026-10-18-native-wheel-21b-native-actual-v2/result.json",
+      "sha256": "5f7f5f67af0ccb5fb99ed800c11ec9b2eed83dfdb3124ac25006454dd7bbd04d",
+      "bytes": 3159618
+    },
+    "independent_audit": {
+      "path": ".artifacts/2026-10-18-native-wheel-21b-failure-independent-general-audit/review.json",
+      "sha256": "57228f22790e6fe304b29304715609547ae9fb9b9330b8b25367d08d85967145",
+      "bytes": 16702
+    },
+    "fresh_build": {
+      "path": ".artifacts/2026-10-18-native-wheel-21b-fresh-build-actual-v2/result.json",
+      "sha256": "cc95fa5c4a815e2bcb900f457f1185f529bf3f18357c6013b87701da92899441",
+      "bytes": 3171749
+    },
+    "fresh_build_peer": {
+      "path": ".artifacts/2026-10-18-native-wheel-21b-build-independent-general-actual-audit/review.json",
+      "sha256": "042b24f56fd484676cd75b257dcb23146dc97304c20619683dfccef0a78daab6",
+      "bytes": 28167
+    }
+  },
+  "functional_acceptance": false,
+  "physical_mouse": false,
+  "input_source_APIs": false,
+  "extra_events_or_retry": false,
+  "fixed_scenario": {
+    "intended_events": [
+      [
+        -80,
+        0
+      ],
+      [
+        0,
+        -56
+      ]
+    ],
+    "actual_send_intents": 1,
+    "actual_post_returns": 1,
+    "actual_events": [
+      [
+        -80,
+        0
+      ]
+    ],
+    "post_return_is_delivery_acknowledgement": false
+  },
+  "fixture_event_histogram": {
+    "local_scroll_observer": 2,
+    "fixture_started": 1,
+    "snapshot": 117,
+    "app_scroll_entry": 1,
+    "fixture_closed": 1
+  },
+  "Core_trace_histogram": {
+    "native": 0,
+    "apply": 0,
+    "frame": 5
+  },
+  "AppKit_entry": {
+    "event": "app_scroll_entry",
+    "pid": 64395,
+    "type": 22,
+    "timestamp": 233035.210810708,
+    "window_number": 0,
+    "has_window": false,
+    "location_in_window": [
+      1019.0,
+      577.0
+    ],
+    "precise": true,
+    "delta": [
+      -80.0,
+      0.0
+    ],
+    "phase": 0,
+    "momentum_phase": 0,
+    "modifier_flags": 0,
+    "returns_original_event": true
+  },
+  "phases_observed": [
+    "S0"
+  ],
+  "phases_missing": [
+    "S1",
+    "S2"
+  ],
+  "first_failure": "helper exit1; S1 did not settle; no vertical or extra event; verifier rejects helper nonzero at its first command-status gate.",
+  "S0": {
+    "PNG": {
+      "path": ".artifacts/2026-10-18-native-wheel-21b-native-actual-v2/evidence/S0.png",
+      "sha256": "0b775f96daabce25e530e7d003117eff1efd601cddc3a9e401461d0349a56988",
+      "bytes": 482744
+    },
+    "dimensions": [
+      1400,
+      840
+    ],
+    "cell_crop_distinct_colors": 214,
+    "visually_inspected_populated_grid": true,
+    "scene_scope": "Retained native GPU PNG, not OS/compositor/window chrome capture.",
+    "snapshot": {
+      "active": true,
+      "capture_path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-native-wheel-21b-native-actual-v2/evidence/S0.png",
+      "capture_phase": "S0",
+      "cells": [
+        {
+          "actions": [
+            "Focus",
+            "Click",
+            "ScrollToVisible",
+            "SetValue"
+          ],
+          "bounds": [
+            1,
+            33,
+            112,
+            28
+          ],
+          "column": 0,
+          "id": 69,
+          "label": "A, row 1",
+          "rendered_id": 69,
+          "row": 0,
+          "value": "Some(Text(\"R000 C00 \u8a9e\"))"
+        },
+        {
+          "actions": [
+            "Focus",
+            "Click",
+            "ScrollToVisible",
+            "SetValue"
+          ],
+          "bounds": [
+            113,
+            33,
+            112,
+            28
+          ],
+          "column": 1,
+          "id": 70,
+          "label": "B, row 1",
+          "rendered_id": 70,
+          "row": 0,
+          "value": "Some(Text(\"R000 C01 \u8a9e\"))"
+        },
+        {
+          "actions": [
+            "Focus",
+            "Click",
+            "ScrollToVisible",
+            "SetValue"
+          ],
+          "bounds": [
+            449,
+            33,
+            112,
+            28
+          ],
+          "column": 4,
+          "id": 73,
+          "label": "E, row 1",
+          "rendered_id": 73,
+          "row": 0,
+          "value": "Some(Text(\"R000 C04 \u8a9e\"))"
+        },
+        {
+          "actions": [
+            "Focus",
+            "Click",
+            "ScrollToVisible",
+            "SetValue"
+          ],
+          "bounds": [
+            1,
+            145,
+            112,
+            28
+          ],
+          "column": 0,
+          "id": 329,
+          "label": "A, row 5",
+          "rendered_id": 329,
+          "row": 4,
+          "value": "Some(Text(\"R004 C00 \u8a9e\"))"
+        },
+        {
+          "actions": [
+            "Focus",
+            "Click",
+            "ScrollToVisible",
+            "SetValue"
+          ],
+          "bounds": [
+            113,
+            145,
+            112,
+            28
+          ],
+          "column": 1,
+          "id": 330,
+          "label": "B, row 5",
+          "rendered_id": 330,
+          "row": 4,
+          "value": "Some(Text(\"R004 C01 \u8a9e\"))"
+        },
+        {
+          "actions": [
+            "Focus",
+            "Click",
+            "ScrollToVisible",
+            "SetValue"
+          ],
+          "bounds": [
+            449,
+            145,
+            112,
+            28
+          ],
+          "column": 4,
+          "id": 333,
+          "label": "E, row 5",
+          "rendered_id": 333,
+          "row": 4,
+          "value": "Some(Text(\"R004 C04 \u8a9e\"))"
+        }
+      ],
+      "columns": 64,
+      "event": "snapshot",
+      "generation": 1,
+      "gpu": null,
+      "mounted": [
+        17,
+        9,
+        153
+      ],
+      "native": {
+        "available": true,
+        "cocoa_target": [
+          1019,
+          577
+        ],
+        "cocoa_window_frame": [
+          514,
+          316,
+          700,
+          452
+        ],
+        "key_window": true,
+        "normal_window": true,
+        "view_size": [
+          700,
+          420
+        ],
+        "visible": true,
+        "window_number": 2522
+      },
+      "pending": 0,
+      "ready": true,
+      "rows": 1000,
+      "scale": 2,
+      "selection": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "serial": 2,
+      "target": [
+        505,
+        159
+      ],
+      "viewport": [
+        700,
+        420
+      ]
+    },
+    "unchanged_geometry_snapshots": 117,
+    "target_local_cell_center": [
+      505,
+      159
+    ],
+    "Cocoa_target": [
+      1019,
+      577
+    ],
+    "Quartz_post_point": [
+      1019,
+      540
+    ],
+    "cross_phase_pixel_translation_or_frozen_pane_acceptance": "NOT_REACHED; no S1/S2 images."
+  },
+  "owned_process_cleanup": {
+    "driver_reaped": true,
+    "driver_exit_code": 1,
+    "direct_driver_exit_observed": true,
+    "group_quiescent": true,
+    "hard_kill": false,
+    "actions": [],
+    "observations": [
+      [
+        {
+          "pid": 64393,
+          "expected_pgid_at_attach": 64393,
+          "ownership_basis": "direct Popen child waitid(WNOWAIT), unreaped; not current libproc identity",
+          "exit_observation": {
+            "si_pid": 64393,
+            "si_uid": 0,
+            "si_signo": 20,
+            "si_code": 1,
+            "si_status": 1
+          }
+        }
+      ],
+      [
+        {
+          "pid": 64393,
+          "expected_pgid_at_attach": 64393,
+          "ownership_basis": "direct Popen child waitid(WNOWAIT), unreaped; not current libproc identity",
+          "exit_observation": {
+            "si_pid": 64393,
+            "si_uid": 0,
+            "si_signo": 20,
+            "si_code": 1,
+            "si_status": 1
+          }
+        }
+      ]
+    ],
+    "errors": [],
+    "fixture_identity_reobservations": [
+      {
+        "pid": 64395,
+        "attempts": 2,
+        "outcome": "identity_absent_no_exit_claim",
+        "retry_budget_seconds": 0.24,
+        "clamped_to_command_deadline": true
+      }
+    ],
+    "pass": true,
+    "restoration_after_supervisor_signal_or_crash": "UNKNOWN; helper result alone is not accepted after supervisor intervention"
+  },
+  "foreground_restoration": {
+    "child_exit": {
+      "normal_exit_zero": true,
+      "observation_error": null,
+      "parent_uid": 501,
+      "pid": 64395,
+      "reaped_status": 0,
+      "waitable_exit_observed": true,
+      "waitid_code": 1,
+      "waitid_observed_uid": 0,
+      "waitid_signo": 20,
+      "waitid_status": 0
+    },
+    "errors": [
+      "unrelated foreground app; restoration not forced",
+      "prior app restoration unconfirmed"
+    ],
+    "event": "restoration",
+    "fixture_started": true,
+    "frontmost_pid": 39348,
+    "intervened": false,
+    "pass": false,
+    "prior_frontmost_pid": 58178
+  },
+  "source_inputs_per_checkout": 3182,
+  "both_source_maps_unchanged": true,
+  "IME": {
+    "status": "EXPLICITLY_DEFERRED_BY_USER",
+    "authority": "Explicit user direction relayed in the current task; no input-source enablement or IME attempt is authorized by this wheel record.",
+    "acceptance": "OPEN_NOT_PASSED"
+  },
+  "conclusions": [
+    "Exactly one fixed horizontal scroll reaches this fixture application local AppKit monitor, with correct nonzero X delta but no assigned window. This differs from absence of any application entry.",
+    "No Core native wheel trace or ScrollHandle apply/handled-offset trace is recorded. Existing snapshots keep the same six cell bounds/IDs/actions and generation; nonzero Grid scrolling is unproved.",
+    "Outgoing zero routing/window integer fields and nil-window AppKit observation are evidence, not independently sufficient proof of a specific Quartz/NSApplication/responder/decoder/Grid cause.",
+    "Owned process cleanup passes: fixture normal0/reaped0, driver1/reaped, group quiescent, no signal action/hardkill/supervisor error. Foreground restoration is separately FAIL/unconfirmed because current PID39348 differs from prior58178; the helper correctly declines to force unrelated foreground.",
+    "Both3182 eligible-source maps remain exact. No retry, extra event, input-source use, permission request, persistent setting change or maintained write was performed by this audit."
+  ],
+  "limits": [
+    "Actual native attempt remains FAIL; S0 is a populated scene/geometry observation only, not full scroll/action/frozen-pane/pixel/display-presentation acceptance.",
+    "No raw window-assigned AppKit entry, actual Core wheel conversion, nonzero sharedGrid offset, vertical delivery or physical mouse proof.",
+    "Ownership cleanup success does not convert foreground restoration or functional native failure into success."
+  ],
+  "independent_audit_method": "The independent evidence review used only artifact parsing, hashes, PNG decoding and image inspection; it did not import or execute frozen helpers/verifiers, drivers, Cargo/compiler/Git/native/process operations or capture current roots. The recorded Root native attempt did execute; its actual failure is preserved in this report."
+}

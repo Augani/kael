@@ -1,0 +1,416 @@
+{
+  "schema_version": 1,
+  "status": "ORIGINAL_V10_WRAPPER_FAIL_WITH_INDEPENDENT_SCOPED_SESSION_DELIVERY_GEOMETRY_AND_RETAINED_PIXEL_OBSERVATIONS",
+  "source_scope": {
+    "Rust_source_commit": "21b393294c89148fdba25bad35822c831f6dc0d7",
+    "Rust_source_tree": "c7486732fb27f1cb5868cf5a618faf626216b3a1",
+    "recorded_source_inputs_per_checkout": 3182,
+    "recorded_before_after_source_maps_exact": true,
+    "source_scope": "Original21b font-source context with the pre-adoption Icon implementation. Later exact Icon adoption and future commits are separate; this record does not establish native proof for a newer HEAD.",
+    "independent_current_root_capture": false
+  },
+  "original_wrapper": {
+    "status_preserved": "FIRST_ATTEMPT_FAILED_NO_REPAIR_OR_RETRY",
+    "functional_acceptance": "NOT_UNQUALIFIED_PASS",
+    "first_failure": {
+      "file": "verify.py",
+      "line": 67,
+      "predicate": "cg[flags] == 0 within original outgoing CGEvent type/flags/timestamp/location conjunction",
+      "record": "H post_return",
+      "observed_flags": 536870912,
+      "observed_hex": "0x20000000"
+    },
+    "first_failed_result_or_verifier_modified": false,
+    "retry_or_extra_inputs": false,
+    "helper_exit_code": 0,
+    "helper_driver_pass_emitted": true,
+    "qualification": "Helper exit0 and its driver_pass do not turn the original outer verification failure into PASS."
+  },
+  "distinct_session_contract": {
+    "version": 10,
+    "route": "cgSessionEventTap",
+    "PID_addressed": false,
+    "fixed_intended_events": [
+      [
+        -80,
+        0
+      ],
+      [
+        0,
+        -56
+      ]
+    ],
+    "actual_send_count": 2,
+    "actual_post_return_count": 2,
+    "physical_mouse": false,
+    "input_source_APIs": false,
+    "pre_post_guards": "Owned active foreground PID/executable/group/session, latest ready same-window/geometry snapshot plus logmtime<=0.25s, owned normal/key/visible window and first covering on-screen CGWindow rectangle.",
+    "recipient_boundary": "Checks are non-atomic observations; session routing cannot atomically constrain the recipient. Actual owned AppKit/window/delta/Core/Grid observations are independently required.",
+    "difference_from_history": "New ordinary-session experiment; V8/V9 failed PID-addressed attempts remain immutable historical failures."
+  },
+  "flags_observations": {
+    "send_intent": [
+      {
+        "phase": "H",
+        "flags": 0
+      },
+      {
+        "phase": "V",
+        "flags": 0
+      }
+    ],
+    "post_return": [
+      {
+        "phase": "H",
+        "flags": 536870912,
+        "hex": "0x20000000"
+      },
+      {
+        "phase": "V",
+        "flags": 536870912,
+        "hex": "0x20000000"
+      }
+    ],
+    "actual_received_AppKit_raw_modifier_flags": [
+      0,
+      0
+    ],
+    "all_other_outgoing_CG_diagnostic_fields_unchanged": true,
+    "public_named_meaning": "UNKNOWN_NOT_PROVEN",
+    "cause": "UNKNOWN_NOT_PROVEN",
+    "reserved_bit_assessment_scope": "The source assessment finds no proven public named meaning or cause for this observed post bit. No ignored bit, changed verifier, equivalence waiver or future behavior is assumed.",
+    "no_flags_repair_or_acceptance_substitution": true
+  },
+  "independent_predicate_audit": {
+    "predicate_evaluations": 79,
+    "passing_evaluations": 77,
+    "violations": 2,
+    "violation_scope": "Only H and V post_return outgoing-zero-flags predicates fail. The original wrapper stops on H, so V and later original predicates were not executed by that wrapper.",
+    "integrity_checks_passed": 12,
+    "unexpected_remaining_predicate_failures": 0,
+    "method": "New artifact-only stdlib JSON/log parsing, hashes and independent PNG decoding evaluated the recorded remaining original predicates without importing/executing the original verifier or driver.",
+    "retroactive_wrapper_pass": false
+  },
+  "actual_recorded_native_delivery": {
+    "fixture_pid": 80237,
+    "owned_window_number": 2559,
+    "actual_AppKit_entries": [
+      {
+        "event": "app_scroll_entry",
+        "pid": 80237,
+        "type": 22,
+        "timestamp": 236372.657566291,
+        "window_number": 2559,
+        "has_window": true,
+        "location_in_window": [
+          505.0,
+          261.0
+        ],
+        "precise": true,
+        "delta": [
+          -80.0,
+          0.0
+        ],
+        "phase": 0,
+        "momentum_phase": 0,
+        "modifier_flags": 0,
+        "returns_original_event": true
+      },
+      {
+        "event": "app_scroll_entry",
+        "pid": 80237,
+        "type": 22,
+        "timestamp": 236373.156330125,
+        "window_number": 2559,
+        "has_window": true,
+        "location_in_window": [
+          425.0,
+          261.0
+        ],
+        "precise": true,
+        "delta": [
+          0.0,
+          -56.0
+        ],
+        "phase": 0,
+        "momentum_phase": 0,
+        "modifier_flags": 0,
+        "returns_original_event": true
+      }
+    ],
+    "actual_Core_native_scroll_traces": [
+      "[kael-scroll:native] precise=true momentum=false phase=NSEventPhase(0) momentum_phase=NSEventPhase(0) raw=(-80.00,0.00) delta=pixels(-80.00,0.00)",
+      "[kael-scroll:native] precise=true momentum=false phase=NSEventPhase(0) momentum_phase=NSEventPhase(0) raw=(0.00,-56.00) delta=pixels(0.00,-56.00)"
+    ],
+    "actual_Grid_handled_offset_traces": [
+      "[kael-scroll:apply] event=pixels(-80.00,0.00) precise=true momentum=false phase=Moved line_h=26.00 px=(-80.00,0.00) applied=(-80.00,0.00) can=(x:true,y:false) offset=(0.00,0.00)->(-80.00,0.00) max=(6470.00,0.00) overscroll=(0.00,0.00)->(0.00,0.00) handled=true",
+      "[kael-scroll:apply] event=pixels(0.00,-56.00) precise=true momentum=false phase=Moved line_h=26.00 px=(0.00,-56.00) applied=(0.00,-56.00) can=(x:false,y:true) offset=(0.00,0.00)->(0.00,-56.00) max=(0.00,27614.00) overscroll=(0.00,0.00)->(0.00,0.00) handled=true"
+    ],
+    "native_and_handled_count_each": 2,
+    "native_axis_and_momentum": "Precise H(-80,0), V(0,-56), momentum=false; separate X and Y handles apply exact offsets with zero overscroll.",
+    "vertical_frozen_horizontal_propagation_observed": true
+  },
+  "independent_late_scene_and_pixel_observations": {
+    "phases": [
+      "S0",
+      "S1",
+      "S2"
+    ],
+    "client_size": [
+      700,
+      420
+    ],
+    "scale": 2,
+    "grid": [
+      1000,
+      64
+    ],
+    "frozen_rows": 1,
+    "frozen_columns": 2,
+    "same_generation": true,
+    "same_selection": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "pending": 0,
+    "probe_cells": [
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        1
+      ],
+      [
+        0,
+        4
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        4,
+        1
+      ],
+      [
+        4,
+        4
+      ]
+    ],
+    "stable_ids": [
+      69,
+      70,
+      73,
+      329,
+      330,
+      333
+    ],
+    "same_rendered_ids_actions_labels_values": true,
+    "required_actions": [
+      "Focus",
+      "Click",
+      "ScrollToVisible",
+      "SetValue"
+    ],
+    "translated_cell_geometry_and_pixel_matches": 12,
+    "translation_scope": "Six fixed cells across S0\u2192S1 and S1\u2192S2: scrollable columns shift -80 horizontally, non-header rows shift -56 vertically, frozen axes retain original bounds; inset same-content pixel crops are byte-identical.",
+    "PNG": [
+      {
+        "phase": "S0",
+        "image": {
+          "path": ".artifacts/2026-10-18-native-wheel-v10-native-actual-v1/evidence/S0.png",
+          "sha256": "0b775f96daabce25e530e7d003117eff1efd601cddc3a9e401461d0349a56988",
+          "bytes": 482744
+        },
+        "dimensions": [
+          1400,
+          840
+        ],
+        "channels": 4
+      },
+      {
+        "phase": "S1",
+        "image": {
+          "path": ".artifacts/2026-10-18-native-wheel-v10-native-actual-v1/evidence/S1.png",
+          "sha256": "2cf9be40bfb784638405921095b6ff1b4286d7e79b72660b5a3843e613323ce0",
+          "bytes": 474444
+        },
+        "dimensions": [
+          1400,
+          840
+        ],
+        "channels": 4
+      },
+      {
+        "phase": "S2",
+        "image": {
+          "path": ".artifacts/2026-10-18-native-wheel-v10-native-actual-v1/evidence/S2.png",
+          "sha256": "5866a7ae84d99d5560f404397494a12ad6c260633813c8fbfcf3bf4792626f57",
+          "bytes": 469845
+        },
+        "dimensions": [
+          1400,
+          840
+        ],
+        "channels": 4
+      }
+    ],
+    "fixed_location_pixel_changes": [
+      {
+        "transition": [
+          "S0",
+          "S1"
+        ],
+        "fixed_rect": [
+          900,
+          292,
+          220,
+          52
+        ],
+        "changed_pixels": 2502,
+        "before_distinct_colors": 214
+      },
+      {
+        "transition": [
+          "S1",
+          "S2"
+        ],
+        "fixed_rect": [
+          740,
+          292,
+          220,
+          52
+        ],
+        "changed_pixels": 327,
+        "before_distinct_colors": 214
+      }
+    ],
+    "full_frozen_pixel_regions": {
+      "H_fullheight_left": [
+        2,
+        2,
+        446,
+        836
+      ],
+      "H_identical": true,
+      "V_fullwidth_top": [
+        2,
+        2,
+        1396,
+        118
+      ],
+      "V_identical": true
+    },
+    "image_integrity": "Three1400\u00d7840 PNG signatures/chunks/CRCs/decompression/filtering independently decoded.",
+    "capture_boundary": "Native retained GPU exports only, not OS/compositor/window-chrome capture or independent display presentation."
+  },
+  "owned_cleanup_and_foreground": {
+    "owned_fixture_pid": 80237,
+    "fixture_normal_exit_zero": true,
+    "fixture_reaped_status": 0,
+    "owned_helper_pid": 80236,
+    "helper_exit_and_reaped_status": 0,
+    "group_quiescent": true,
+    "hard_kill": false,
+    "signal_actions": [],
+    "errors": [],
+    "owned_cleanup_pass": true,
+    "prior_frontmost_pid": 58178,
+    "prequit_frontmost_pid": 58178,
+    "final_frontmost_pid": 58178,
+    "prequit_prior_identity_valid": true,
+    "prequit_confirmed": true,
+    "activation_requests": 1,
+    "restoration_order": "prior_confirmation_then_fixture_finish_then_final_confirmation",
+    "foreground_restoration_pass": true,
+    "qualification": "Retained prior application identity/executable and before-finish/final foreground confirmations are scoped observations, not continuous focus or a post-signal/crash restoration guarantee."
+  },
+  "historical_PID_attempts": [
+    {
+      "version": 8,
+      "route": "PID-addressed synthetic wheel",
+      "status": "HISTORICAL_FAIL_UNCHANGED",
+      "actual": {
+        "path": ".artifacts/2026-10-18-native-wheel-21b-native-actual-v2/result.json",
+        "sha256": "5f7f5f67af0ccb5fb99ed800c11ec9b2eed83dfdb3124ac25006454dd7bbd04d",
+        "bytes": 3159618
+      },
+      "independent_audit": {
+        "path": ".artifacts/2026-10-18-native-wheel-21b-failure-independent-general-audit/review.json",
+        "sha256": "57228f22790e6fe304b29304715609547ae9fb9b9330b8b25367d08d85967145",
+        "bytes": 16702
+      },
+      "substitution_or_retry": false
+    },
+    {
+      "version": 9,
+      "route": "PID-addressed synthetic wheel",
+      "status": "HISTORICAL_FAIL_UNCHANGED",
+      "actual": {
+        "path": ".artifacts/2026-10-18-native-wheel-v9-native-actual-v1/result.json",
+        "sha256": "adacdcd7382249b0a6e994c24df2a7e3ea8421e2da90ebe2d91f730be425a8e9",
+        "bytes": 3159613
+      },
+      "independent_audit": {
+        "path": ".artifacts/2026-10-18-native-wheel-v9-failure-independent-general-audit/review.json",
+        "sha256": "115062e54aa18eb7361486d67e9e4b6d9e844092768b1e48525f6362052ac27c",
+        "bytes": 17315
+      },
+      "substitution_or_retry": false
+    }
+  ],
+  "IME": {
+    "status": "EXPLICITLY_DEFERRED_BY_USER",
+    "acceptance": "OPEN_NOT_PASSED",
+    "input_source_enablement_or_attempt_authorized_by_this_report": false
+  },
+  "evidence": {
+    "original_actual_failure": {
+      "path": ".artifacts/2026-10-18-native-wheel-v10-native-actual-v1/result.json",
+      "sha256": "8f48674bdd1aebb4580916f3f056447c508c27a375eac5b6dd6ec1cacea1a3c6",
+      "bytes": 3159400
+    },
+    "independent_remaining_predicate_audit": {
+      "path": ".artifacts/2026-10-18-native-wheel-v10-failure-independent-memory-audit/review.json",
+      "sha256": "0f7f937ad00dc1234d6021f85319ac77e4e73fc779246724285130e500a88e83",
+      "bytes": 55322
+    },
+    "reserved_post_flag_source_assessment": {
+      "path": ".artifacts/2026-10-18-native-wheel-v10-post-flags-source-assessment-v1/review.json",
+      "sha256": "851047a6ec6d57edaab606f0548411aaa04d31e7c048c596b8d3ed302d5bed1b",
+      "bytes": 4381
+    },
+    "original_verifier": {
+      "path": ".artifacts/2026-10-18-native-wheel-guarded-session-source-v10/verify.py",
+      "sha256": "e30f825063c7f0d18abdd68c473f6620a9f9c3e200783238471cc95214472fc2",
+      "bytes": 11457
+    },
+    "source_preparation": {
+      "path": ".artifacts/2026-10-18-native-wheel-guarded-session-source-v10/preparation.json",
+      "sha256": "eee71f31377d5c27f8083f9b2de68a43a87f3460dcb6a67e8997dfc6b507d1cc",
+      "bytes": 22065
+    },
+    "actual_Rust_Swift_composite": {
+      "path": ".artifacts/2026-10-18-native-wheel-v10-helper-build-actual-v1/result.json",
+      "sha256": "b6f9ae432da38bd83d719a8499d1f3fd9d68db68da43c5c816ca38214ea14e64",
+      "bytes": 3164684
+    },
+    "independent_actual_composite_peer": {
+      "path": ".artifacts/2026-10-18-native-wheel-v10-build-independent-general-actual-audit/review.json",
+      "sha256": "7f74210be803ce63656542e35af6bb1c4d9df0f36295e13adc6d4afeb9d1d07f",
+      "bytes": 24649
+    }
+  },
+  "limits": [
+    "The original V10 wrapper remains FAIL; independent late observations do not repair or relabel its result. Original V8/V9 failures also remain FAIL.",
+    "No physical mouse/keyboard or IME/input-source proof; IME remains explicitly deferred. No NSEvent replacement/manual Grid offset/production source patch is inferred.",
+    "No new current-HEAD or post-Icon native/platform/presentation claim. Recorded3182 maps are historical before/after evidence, never presented as the later live source maps.",
+    "No compositor/physical display proof, GPU device identity, CPU/latency/RSS/power measurement, framework ranking, package/archive or R1\u2013R12 final completion claim.",
+    "No extra runtime/supplement or repeated native input was run for this public projection."
+  ],
+  "audit_method_attribution": "Root performed the recorded native attempt. The independent review and this projection used frozen artifacts only, with no original verifier/driver imports, new Cargo/compiler/Git/native execution, current root capture or maintained writes."
+}

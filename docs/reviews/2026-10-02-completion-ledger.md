@@ -20,8 +20,8 @@ Its published claims are comparison inputs; superiority requires matched runs.
 | R8 | Unified memory policy for decoded images, pending work, completed default assets, scratch and atlases | Checked byte/count admission before expensive work; pressure shedding and retained-owner/cancellation tests on each backend | The [static-image working admission](2026-10-18-static-image-working-validation.json) covers built-in native pixels and RGBA conversion, passes 2,251 enabled core/all 565 UI tests and 80 fixed CPU gates, and has current local native proof. The 1,280 MiB accounting domain preserves permitted high-bit-depth images; codec scratch, encoded input, animations, retained outputs and active/model bytes remain separate. Unified pressure and cross-platform lifecycle acceptance remain open |
 | R9 | Reusable virtual filesystem explorer with cached sort keys, lazy async loading, context actions and drag/drop | Visible explorer example and UI-driven tests; bounded model/cache/pending state, generations/cancellation and stale-response tests | Actual native keyboard move/reload and fresh pointer readme-to-Archive move pass; disk oracle verifies source removal and destination bytes. Fresh complete glyph pixels and hidden-file toggle pass |
 | R10 | Persistent movable docking/tab groups, nested splits, floating panes and structured property inspectors | Runnable workspace; pointer/keyboard rearrangement, float/redock, persistence restore and editing/undo tests | Fresh integrated native pointer tab/edge split movement, float/move/resize/redock, keyboard edge docking, floating/nested save/reset/restore, Unicode inspector Undo/Redo and live preview pixels pass |
-| R11 | Rich document and remote-data workflows build on current editors/grids | Real documents exercise selection, IME, undo/redo; remote-data editing/clipboard/frozen-pane/accessibility tests and sustained workloads | Actual native formatting/Undo, Unicode remote edit/sort identity, atomic 2×2 TSV paste/Undo/Redo, frozen-row vertical scrolling and populated pixels pass. Native horizontal keyboard reveal/frozen-column pixels also pass; physical input-source IME, nonzero horizontal wheel delivery and sustained performance remain |
-| R12 | Consumer docs, examples, capability truth and platform CI cover the finished APIs | Native/browser consumer builds, working examples, strict lints/docs, CI evidence and no outdated roadmap claims for implemented features | The [fresh 39-package checkpoint](2026-10-18-image-grid-package-validation.json) binds committed ce39eed source and all 931 included Rust files; all 39 extracted builds and independent archive audit pass. The image/Grid source has separate local Metal proof. The [40b24 platform cohort](2026-10-18-platform-40b24-validation.json) remains failed overall: scoped Windows 2022/2025, Linux runtime and browser jobs pass; native Mac presentation and three denied dependency advisories fail. The separate hardware-browser budget passes this run, with no attributed improvement. Its actual merge checkout shares the 40b24 tree. The [font-arrival fix](2026-10-18-font-arrival-validation.json) has complete Core/UI and native CoreText correctness proof; later font-source packaging/platform execution, native delivery/IME, hardware coverage and physical workflows remain open |
+| R11 | Rich document and remote-data workflows build on current editors/grids | Real documents exercise selection, IME, undo/redo; remote-data editing/clipboard/frozen-pane/accessibility tests and sustained workloads | Actual native formatting/Undo, Unicode remote edit/sort identity, atomic 2×2 TSV paste/Undo/Redo, frozen-row vertical scrolling and populated pixels pass at their recorded checkpoints. Native horizontal keyboard reveal/frozen-column pixels also pass. The [21b ordinary-session wheel record](2026-10-18-native-wheel-session-validation.json) has two owned-window AppKit/Core/Grid events, exact geometry and independently checked frozen-region pixels and cleanup. Its original wrapper still fails on two unexplained reserved post-return flags; complete native acceptance remains qualified. The user explicitly defers input-source IME testing; physical IME and sustained performance remain open. |
+| R12 | Consumer docs, examples, capability truth and platform CI cover the finished APIs | Native/browser consumer builds, working examples, strict lints/docs, CI evidence and no outdated roadmap claims for implemented features | The [21b font-source package proof](2026-10-18-font-package-validation.json) verifies all 39 extracted builds and 931 included Rust files; the original wrapper STOP and single successful underlying build remain distinct. The [21b platform cohort](2026-10-18-platform-21b-validation.json) fails overall on native Mac presentation and the same three denied advisories; scoped Windows, Linux runtime and browser passes do not close R12. Its distinct merge shares the exact 21b tree. The [font-arrival fix](2026-10-18-font-arrival-validation.json) has Core/UI and real CoreText correctness proof. Prior ce39eed/40b24 reports remain historical; current native delivery/IME, presentation, advisory resolution, hardware coverage and physical workflows remain open. The adopted [Icon optimization](2026-10-18-icon-lazy-default-id-validation.json) passes all 575 UI tests, strict UI Clippy and Wasm typechecks; packaging/platform acceptance for this later Icon source remains separate. |
 
 The shader design's later built-in-blur migration is a separate architecture
 effort; it must not remove the existing visual correctness tests. Any scope
@@ -504,3 +504,51 @@ and 568 UI tests, strict Core/UI lints, production/test Wasm typechecks and
 formatting pass. Three fixture files are present in the package listing; extracted
 archive builds remain separate. Platform-specific font caches, browser held-width
 revisions, native presentation and comparative performance remain open.
+
+The [font-source package preflight](2026-10-18-font-package-validation.json) verifies one complete set of 39 extracted archives at `21b3932`: 931 Rust files (23,718,715 bytes), exact font fixture/license bytes, 47 internal dependency aliases and 53 required license/notice checks. The underlying build succeeds once. Its original wrapper STOP is preserved because Cargo’s `Verifying` labels name source origins; a separate supplement checks those 39 origins and 39 extracted `Compiling` paths, then completes only the three remaining postchecks. Both 3,182-input maps stay unchanged and known-owned staging cleanup passes; no crate is uploaded.
+
+The [21b platform cohort](2026-10-18-platform-21b-validation.json) remains failed overall. Its distinct PR merge has the exact `21b3932` tree. Scoped Windows, Linux runtime and browser jobs pass, while Windows 2022 workspace compile/lint and the focused GTK4 job are skipped. Mac records 46 GPU completions, 44 drawable callbacks and zero positive presentation timestamps; three independent Apple controls each record 60 callbacks and zero positive timestamps. The separate Metal-class browser budgets pass both viewports, without an attributed improvement or native-presentation acceptance. Linux still denies the same three advisories. Earlier 40b24 platform history and the b091 GPUI Kit comparison remain separate frozen-source evidence.
+
+The [earlier native wheel attempt](2026-10-18-native-wheel-21b-validation.json) also fails. One fixed horizontal event reaches the fixture’s AppKit monitor with delta `[-80, 0]` and no assigned window; no Core wheel or Grid offset trace follows. S0 is populated, but S1 does not settle, so no vertical or extra event is posted. Owned process cleanup passes; prior-foreground restoration remains unconfirmed and is not forced over an unrelated app. The evidence does not identify a routing, decoder or Grid cause. The user explicitly defers IME testing; IME, nonzero horizontal wheel delivery, presentation, denied-advisory resolution and all other required acceptance scopes remain open.
+
+The [immutable tree catalog
+experiment](2026-10-18-tree-immutable-catalog-experiment.json) passes its separate
+correctness checks, including six focused cases, all 574 UI tests and three mutation
+oracles, but remains unadopted. Its pre-font 3,177-input cost cohort is INCONCLUSIVE:
+1,624 of 1,628 numeric checks pass; four legacy requested-byte limits fail, and two
+warm-model-wide CPU quality rows exceed the 10% MAD limit at about 10.92%. All numeric
+CPU ratio gates and duration floors pass; those observations establish neither an
+accepted CPU improvement nor an RSS result. Source-path-dependent Icon default-ID
+formatting is an investigation hypothesis, not an allocation-site trace or an adjusted
+pass. No threshold, sample or workload was changed, and this experiment does not replace
+the frozen b091 application comparison.
+
+The [V10 ordinary-session wheel record](2026-10-18-native-wheel-session-validation.json)
+retains its original wrapper **FAIL**: both post-return CGEvent flags are `0x20000000`,
+while send-intent flags and received AppKit modifier flags are zero; the bit’s named
+meaning and cause remain unknown. The new session route is distinct from the historical
+V8/V9 failed PID-addressed attempts. Recorded owned-window AppKit and Core/Grid traces
+show the two fixed H(-80,0)/V(0,-56) events. After the wrapper stopped, an independent
+artifact audit checked the later stable IDs/actions/values, exact geometry, 12
+translated cell-pixel matches, full frozen-column/header-row regions and three 1400×840
+retained GPU PNGs. Prior foreground is confirmed before fixture finish and afterward
+with one activation; normal fixture/helper cleanup and group quiescence pass. Of 79
+independently evaluated predicate groups, only the two outgoing post-flag predicates
+fail; this is not retroactive wrapper acceptance. The evidence is scoped to the recorded
+`21b3932` pre-Icon native source, with no physical mouse, compositor, cost or later-HEAD
+claim. IME remains explicitly deferred.
+
+The adopted [Icon default identity
+optimization](2026-10-18-icon-lazy-default-id-validation.json) defers default Name
+creation until the interactive path while preserving explicit IDs. The same seven
+identity and mounted-action cases pass for both implementations, together with all 575
+UI tests, strict UI Clippy, production and joint-test Wasm typechecks and formatting.
+With precreated owned input, the fixed release control drops from 82 requested bytes and
+three allocation events to zero; the 1,024-constructor bundle saves 83,968 requested
+bytes and 3,072 events. Rendering 64 public named-string icons across 16 draws saves the
+same counts. Icon size remains 1,352 bytes with alignment 8 on the measured host. Input
+retirement is accounted separately; these requested-layout counts establish no CPU, RSS,
+native pixel or application-wide memory result. The exact validated source and seven
+regressions are installed in both checkouts. All 35 validation groups are terminal; the
+two earlier test-fixture compile failures remain distinct from the three intentional
+baseline allocation controls.

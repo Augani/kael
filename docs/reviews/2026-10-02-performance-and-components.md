@@ -594,3 +594,51 @@ and 568 UI tests, strict Core/UI lints, production/test Wasm typechecks and
 formatting pass. Three fixture files are present in the package listing; extracted
 archive builds remain separate. Platform-specific font caches, browser held-width
 revisions, native presentation and comparative performance remain open.
+
+The [font-source package preflight](2026-10-18-font-package-validation.json) verifies one complete set of 39 extracted archives at `21b3932`: 931 Rust files (23,718,715 bytes), exact font fixture/license bytes, 47 internal dependency aliases and 53 required license/notice checks. The underlying build succeeds once. Its original wrapper STOP is preserved because Cargo’s `Verifying` labels name source origins; a separate supplement checks those 39 origins and 39 extracted `Compiling` paths, then completes only the three remaining postchecks. Both 3,182-input maps stay unchanged and known-owned staging cleanup passes; no crate is uploaded.
+
+The [21b platform cohort](2026-10-18-platform-21b-validation.json) remains failed overall. Its distinct PR merge has the exact `21b3932` tree. Scoped Windows, Linux runtime and browser jobs pass, while Windows 2022 workspace compile/lint and the focused GTK4 job are skipped. Mac records 46 GPU completions, 44 drawable callbacks and zero positive presentation timestamps; three independent Apple controls each record 60 callbacks and zero positive timestamps. The separate Metal-class browser budgets pass both viewports, without an attributed improvement or native-presentation acceptance. Linux still denies the same three advisories. Earlier 40b24 platform history and the b091 GPUI Kit comparison remain separate frozen-source evidence.
+
+The [earlier native wheel attempt](2026-10-18-native-wheel-21b-validation.json) also fails. One fixed horizontal event reaches the fixture’s AppKit monitor with delta `[-80, 0]` and no assigned window; no Core wheel or Grid offset trace follows. S0 is populated, but S1 does not settle, so no vertical or extra event is posted. Owned process cleanup passes; prior-foreground restoration remains unconfirmed and is not forced over an unrelated app. The evidence does not identify a routing, decoder or Grid cause. The user explicitly defers IME testing; IME, nonzero horizontal wheel delivery, presentation, denied-advisory resolution and all other required acceptance scopes remain open.
+
+The [immutable tree catalog
+experiment](2026-10-18-tree-immutable-catalog-experiment.json) passes its separate
+correctness checks, including six focused cases, all 574 UI tests and three mutation
+oracles, but remains unadopted. Its pre-font 3,177-input cost cohort is INCONCLUSIVE:
+1,624 of 1,628 numeric checks pass; four legacy requested-byte limits fail, and two
+warm-model-wide CPU quality rows exceed the 10% MAD limit at about 10.92%. All numeric
+CPU ratio gates and duration floors pass; those observations establish neither an
+accepted CPU improvement nor an RSS result. Source-path-dependent Icon default-ID
+formatting is an investigation hypothesis, not an allocation-site trace or an adjusted
+pass. No threshold, sample or workload was changed, and this experiment does not replace
+the frozen b091 application comparison.
+
+The [V10 ordinary-session wheel record](2026-10-18-native-wheel-session-validation.json)
+retains its original wrapper **FAIL**: both post-return CGEvent flags are `0x20000000`,
+while send-intent flags and received AppKit modifier flags are zero; the bit’s named
+meaning and cause remain unknown. The new session route is distinct from the historical
+V8/V9 failed PID-addressed attempts. Recorded owned-window AppKit and Core/Grid traces
+show the two fixed H(-80,0)/V(0,-56) events. After the wrapper stopped, an independent
+artifact audit checked the later stable IDs/actions/values, exact geometry, 12
+translated cell-pixel matches, full frozen-column/header-row regions and three 1400×840
+retained GPU PNGs. Prior foreground is confirmed before fixture finish and afterward
+with one activation; normal fixture/helper cleanup and group quiescence pass. Of 79
+independently evaluated predicate groups, only the two outgoing post-flag predicates
+fail; this is not retroactive wrapper acceptance. The evidence is scoped to the recorded
+`21b3932` pre-Icon native source, with no physical mouse, compositor, cost or later-HEAD
+claim. IME remains explicitly deferred.
+
+The adopted [Icon default identity
+optimization](2026-10-18-icon-lazy-default-id-validation.json) defers default Name
+creation until the interactive path while preserving explicit IDs. The same seven
+identity and mounted-action cases pass for both implementations, together with all 575
+UI tests, strict UI Clippy, production and joint-test Wasm typechecks and formatting.
+With precreated owned input, the fixed release control drops from 82 requested bytes and
+three allocation events to zero; the 1,024-constructor bundle saves 83,968 requested
+bytes and 3,072 events. Rendering 64 public named-string icons across 16 draws saves the
+same counts. Icon size remains 1,352 bytes with alignment 8 on the measured host. Input
+retirement is accounted separately; these requested-layout counts establish no CPU, RSS,
+native pixel or application-wide memory result. The exact validated source and seven
+regressions are installed in both checkouts. All 35 validation groups are terminal; the
+two earlier test-fixture compile failures remain distinct from the three intentional
+baseline allocation controls.

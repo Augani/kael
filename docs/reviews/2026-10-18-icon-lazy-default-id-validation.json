@@ -1,0 +1,271 @@
+{
+  "schema_version": 1,
+  "status": "VALIDATED_ICON_LAZY_DEFAULT_ID_ADOPTED_EXACT_TESTED_SOURCE",
+  "baseline_commit": "21b393294c89148fdba25bad35822c831f6dc0d7",
+  "candidate_scope": "One kael_ui Icon source path; production payload 080e is tested within the common-test V6 payload and the exact tested source has been adopted in both Root-owned checkouts. No future-HEAD claim.",
+  "production_candidate": {
+    "path": ".artifacts/2026-10-18-icon-mounted-api-test-successor-v6/payload/candidate_production/candidate-production.rs",
+    "sha256": "080e2557ce3411d8d5a8e8306f64fbc3e89ee3002b78e5fdb556f18ceff4eb72",
+    "bytes": 13834
+  },
+  "behavior": "Keep the constructor caller as a private static location and materialize the same default Name identity on the interactive path. Explicit ElementId overrides retain their original values; no cache/interner/history owner is introduced.",
+  "source_preimage": {
+    "path": ".artifacts/2026-10-18-icon-lazy-default-identity-source-v3/preimages/crates/kael_ui/src/components/icon.rs",
+    "sha256": "9bbf75f05ffb70f1fd544d152effa73adae2b1f27eab88e32fbe0886ca24edbc",
+    "bytes": 13155
+  },
+  "recorded_validation": {
+    "commands": 35,
+    "unique_owned_groups": 35,
+    "all_groups_terminal_and_quiescent": true,
+    "functional_cases_per_variant": 7,
+    "functional_invocations_total": 14,
+    "functional_scope": "Same seven assertions/bodies on baseline and candidate: original identity display/hash/conversion, same/distinct callsites, exact file/line/column namespace, explicit Name/CodeLocation overrides, clickable transitions, mounted semantic identity/actions and exactly one activation.",
+    "UI_inventory_per_variant": 575,
+    "full_candidate_UI": {
+      "passed": 575,
+      "failed": 0,
+      "ignored": 0,
+      "unfiltered": true,
+      "RUST_TEST_THREADS": null,
+      "default_parallel": true
+    },
+    "focused_cases_included_in_full_inventory": true,
+    "strict_UI_all_targets": "PASS_-D_warnings",
+    "production_UI_Wasm": "PASS_TYPECHECK_ONLY",
+    "joint_Core_UI_tests_Wasm": "PASS_TYPECHECK_ONLY",
+    "format_workspace": "PASS",
+    "fresh_full_Core_suite_claim": false
+  },
+  "requested_layout_allocation_control": {
+    "allocator": "Identical mandatory allocation-stats Counted System allocator, ordinary cfg(test=false) release bins. Successful requested Layout bytes and alloc/alloc_zeroed/realloc events; realloc charges new requested size and releases original size.",
+    "Icon_layout_bytes": {
+      "baseline": 1352,
+      "candidate": 1352
+    },
+    "Icon_alignment_bytes": {
+      "baseline": 8,
+      "candidate": 8
+    },
+    "layout_lte_baseline_checked_before_candidate_acceptance": true,
+    "observations": {
+      "baseline": {
+        "cold-constructor": {
+          "iterations": 1,
+          "requested_bytes": 82,
+          "allocation_events": 3,
+          "released_bytes": 95,
+          "live_delta_bytes": -13
+        },
+        "constructor-bundle": {
+          "iterations": 1024,
+          "requested_bytes": 83968,
+          "allocation_events": 3072,
+          "released_bytes": 130048,
+          "live_delta_bytes": -46080
+        },
+        "explicit-override-constructor": {
+          "iterations": 1,
+          "requested_bytes": 82,
+          "allocation_events": 3,
+          "released_bytes": 95,
+          "live_delta_bytes": -13
+        },
+        "nonclickable-render": {
+          "iterations": 1024,
+          "requested_bytes": 2167088,
+          "allocation_events": 11620,
+          "released_bytes": 2166912,
+          "live_delta_bytes": 176
+        }
+      },
+      "candidate": {
+        "cold-constructor": {
+          "iterations": 1,
+          "requested_bytes": 0,
+          "allocation_events": 0,
+          "released_bytes": 13,
+          "live_delta_bytes": -13
+        },
+        "constructor-bundle": {
+          "iterations": 1024,
+          "requested_bytes": 0,
+          "allocation_events": 0,
+          "released_bytes": 46080,
+          "live_delta_bytes": -46080
+        },
+        "explicit-override-constructor": {
+          "iterations": 1,
+          "requested_bytes": 0,
+          "allocation_events": 0,
+          "released_bytes": 13,
+          "live_delta_bytes": -13
+        },
+        "nonclickable-render": {
+          "iterations": 1024,
+          "requested_bytes": 2083120,
+          "allocation_events": 8548,
+          "released_bytes": 2082944,
+          "live_delta_bytes": 176
+        }
+      }
+    },
+    "three_baseline_RED": "Exactly three runtime101 failures at the designated requested_delta==0 assertion, with positive82/83968/82 requested bytes and3/3072/3 events. These are not compiler/setup failures.",
+    "three_candidate_GREEN": "All three constructor spans request zero bytes and zero allocation events; release/live changes still include consuming/dropping prebuilt inputs.",
+    "precreated_input_scope": "IconSource conversion and source Vec construction are outside constructor observation spans. Each owned source is moved exactly once; dropping inputs and the source Vec remains within release/live accounting. Explicit user-icon ID conversion remains in the measured explicit override operation.",
+    "named_public_string_render": {
+      "icons_per_draw": 64,
+      "warmup_draws": 3,
+      "measured_draws": 16,
+      "measured_icon_constructions": 1024,
+      "baseline_requested_bytes": 2167088,
+      "candidate_requested_bytes": 2083120,
+      "requested_reduction_bytes": 83968,
+      "baseline_allocation_events": 11620,
+      "candidate_allocation_events": 8548,
+      "event_reduction": 3072,
+      "measurement_scope": "Public Icon::new(&str) within actual headless view redraw, notification and ready-dispatcher drain. Not decode-only, asset/pixel, native rendering or Icon-only allocator attribution."
+    },
+    "counter_validation": "Every raw before/after pair has no invalid/failed increments; requested/event deltas and live_before+requested-released=live_after independently recomputed. Equal release/live balances do not assert whole-process all-free or a lower retained/RSS peak."
+  },
+  "release_producer_provenance": {
+    "baseline_Core_fresh": false,
+    "baseline_UI_fresh": false,
+    "baseline_main_fresh": false,
+    "candidate_UI_fresh": false,
+    "candidate_main_fresh": false,
+    "candidate_Core_fresh": true,
+    "fresh_field_interpretation": "Cargo fresh=false is a fresh compilation; candidate Core fresh=true is cached and is not relabeled a second fresh compile.",
+    "candidate_cached_Core_contract": "Exact same baseline freshly produced package/target/profile/features/rlib+rmeta identities and independently verified file hashes.",
+    "Core_profile": {
+      "opt_level": "3",
+      "debuginfo": 1,
+      "debug_assertions": false,
+      "overflow_checks": false,
+      "test": false
+    },
+    "Core_features": [
+      "backtrace",
+      "font-kit",
+      "icons",
+      "leak-detection",
+      "rand",
+      "test-support"
+    ],
+    "UI_profile": {
+      "opt_level": "3",
+      "debuginfo": 1,
+      "debug_assertions": false,
+      "overflow_checks": false,
+      "test": false
+    },
+    "UI_features": [],
+    "main_profile": {
+      "opt_level": "3",
+      "debuginfo": 1,
+      "debug_assertions": false,
+      "overflow_checks": false,
+      "test": false
+    },
+    "main_features": [
+      "allocation-stats",
+      "default"
+    ],
+    "release_manifest": {
+      "codegen-units": 1,
+      "lto": "fat",
+      "debug": 1
+    },
+    "copied_executable_count": 4,
+    "copied_executable_hashes_independently_checked": true,
+    "locked_metadata": {
+      "equal_normalized_packages": 438,
+      "equal_normalized_nodes": 438,
+      "same_lock_bytes": true,
+      "registry_tuple_subset_of_frozen_root_graph": true,
+      "scope": "Normal/build/dev metadata over-approximation; selected producer profile/features separately checked."
+    },
+    "debug_UI_Core": "Both fresh UI test binaries link the recorded cached Core profile/features; no fresh debug Core producer or complete transitive-cache hermeticity claim."
+  },
+  "source_restoration": {
+    "eligible_inputs_each_checkout": 3182,
+    "full_saved_before_after_maps_exact": true,
+    "current_mtime_restoration": true,
+    "restoration_after_all_owned_groups_quiescent": true,
+    "independent_live_source_recapture": false
+  },
+  "historical_fixture_compile_failures": [
+    {
+      "reference": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-icon-lazy-id-actual-v3/result.json",
+        "sha256": "055d53f34a96360672acab690699386021476fffbd1a3a41c00d2d0186a03409",
+        "bytes": 3159063
+      },
+      "status": "STOP_FIRST_UNEXPECTED_FAILURE_PRESERVED_NO_RETRY",
+      "commands": 1,
+      "executed_functional_cases": 0,
+      "classification": "Fixture compile failure, separate from designated runtime allocation RED."
+    },
+    {
+      "reference": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-icon-lazy-id-actual-v4/result.json",
+        "sha256": "8264a4a1d0a7b9f2f25a6cafa06142b7670f14956e029c877a5a70b3a3773ae5",
+        "bytes": 3159022
+      },
+      "status": "STOP_FIRST_UNEXPECTED_FAILURE_PRESERVED_NO_RETRY",
+      "commands": 1,
+      "executed_functional_cases": 0,
+      "classification": "Fixture compile failure, separate from designated runtime allocation RED."
+    }
+  ],
+  "evidence": {
+    "actual": {
+      "path": ".artifacts/2026-10-18-icon-lazy-id-actual-v5/result.json",
+      "sha256": "2b6ea7bc06ad74eeb0e6711d4507e14efddcab176a4af9cdd50a652a7dca31bd",
+      "bytes": 6653348
+    },
+    "independent_actual_audit": {
+      "path": ".artifacts/2026-10-18-icon-v6-actual-independent-memory-audit/review.json",
+      "sha256": "aeef5ccf8ace09563e370b8d00ad471e3070565c1c5483b0f50abaf6875d015e",
+      "bytes": 77141
+    },
+    "production_prefix_and_common_test_supplement": {
+      "path": ".artifacts/2026-10-18-icon-v6-actual-independent-memory-audit/source-prefix-supplement.json",
+      "sha256": "2ff0a703a49a9158a5eb115cf1a5e3a9beaf040c607ada1d29b1093aeb0e5ec4",
+      "bytes": 2136
+    },
+    "source_preparation": {
+      "path": ".artifacts/2026-10-18-icon-mounted-api-test-successor-v6/preparation.json",
+      "sha256": "e84309dc069ed9826e9021ae83278d5b1a612986757562614266960346eb1980",
+      "bytes": 5123
+    },
+    "actual_driver": {
+      "path": ".artifacts/2026-10-18-icon-v6-validation-plan-v5/run.py",
+      "sha256": "f728e7a9611f112621c4bf5205b1a306dc580ff3613319d61d6ad085583d70fd",
+      "bytes": 26957
+    },
+    "actual_ready_config": {
+      "path": ".artifacts/2026-10-18-icon-root-ready-v5/config-reviewed.json",
+      "sha256": "9492d2b79dbc5516157f65031e09ad3690defbf40c63f420386fceda99fe582f",
+      "bytes": 22790
+    }
+  },
+  "limits": [
+    "The exact tested source has been adopted in both Root-owned checkouts. This report publication remains pending; adoption adds no new compiler, runtime, or future-HEAD proof.",
+    "No zero-allocation promise for source conversion, every Icon input, clickable rendering, full frame or application. Interactive defaults still materialize the same owned public identity.",
+    "No CPU/latency, RSS/allocator usable size, global retained-memory bound, GPU/native asset pixels, presentation, power, platform/physical input or comparative framework claim.",
+    "Wasm evidence is typechecking only; headless TestAppContext uses the deterministic test platform rather than real native window/renderer.",
+    "Full UI575 includes the same seven focused tests;14 focused invocations are not14 additional unique cases. No full fresh Core suite, archive/package, native or overall R8 completion claim.",
+    "All predecessor fixture compilation failures and source preparations remain immutable. No retries or relaxed allocation/layout gates are represented as passing baseline proof."
+  ],
+  "audit_method": "Independent review used frozen JSON/raw logs/compiler events and streamed artifact hashes only; no frozen helper/driver import, Cargo/compiler/Git/native runtime, live Root/Managed source capture or maintained write.",
+  "exact_code_adoption": {
+    "receipt": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-icon-exact-root-adoption-v1/result.json",
+      "sha256": "b7f434fc2d3422deaa1e9f1ce02f3668b57389c6f8282614a99fe5edeee1c699",
+      "bytes": 3449
+    },
+    "roots": "Primary and Managed",
+    "scope": "Exact tested common-test candidate bytes installed in both roots after all recorded actual processes quiesced. This doc publication adds no new compiler, runtime, package/platform or comparative performance result."
+  }
+}
