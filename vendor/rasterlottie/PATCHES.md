@@ -7,7 +7,7 @@ library name `rasterlottie`. Existing entrypoints and features remain available;
 the fork adds archive and image admission policies with finite defaults and
 exact cached-image payload statistics.
 Original README, copyright notices, MIT/Apache-2.0 licenses, corpus/golden tests,
-and fixtures are preserved. Nine upstream Rust files have reviewed changes.
+and fixtures are preserved. Ten upstream Rust files have reviewed changes.
 
 ## Distribution and ZIP dependency
 
@@ -174,6 +174,7 @@ The exact intentionally modified original files are:
 - `src/render/mod.rs` and `src/render/renderer/mod.rs`: policy exports.
 - `src/render/renderer/prepare.rs`: renderer policy selection and retention,
   additive prepared-image payload statistics and no-images counter regression.
+- `src/render/layer_effects.rs`: clip Simple Choker radii before unsigned coordinate arithmetic, preserving the existing clipped alpha kernel and numeric guards.
 - `src/render/renderer_types.rs`: image policy types/defaults and renderer field.
 - `src/render/renderer/raster.rs`: transfer the completed pixmap vector into
   `RasterFrame` without a duplicate output allocation.
@@ -224,3 +225,10 @@ CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
   --features dotlottie,images,text --target wasm32-unknown-unknown \
   --test zip9_compatibility
 ```
+
+The Simple Choker correction preserves finite rounding/sign and clipped-edge
+semantics while avoiding signed-radius and coordinate overflow. Tiny asymmetric
+native pixel oracles and a portable 2×2 public-render regression cover both
+numeric boundaries. It preserves the existing alpha-only behavior; source
+scratch and worst-case quadratic sampling remain additional, without broader
+premultiplication, memory or performance claims.

@@ -13,6 +13,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 PORTABLE_TESTS = (
+    "prepared_choker_numeric_limits_render_tiny_frames",
     "admission_archive_limits_are_inclusive_and_ignore_unselected_contents",
     "admission_charges_each_repeated_image_embedding",
     "admission_prepared_policy_guards_late_images_without_charging_cache_hits",
@@ -29,6 +30,8 @@ PORTABLE_TESTS = (
     "stored_and_deflated_manifest_select_the_initial_animation",
 )
 NATIVE_TESTS = PORTABLE_TESTS + (
+    "choker_finite_boundaries_match_geometric_alpha_oracle",
+    "prepared_choker_boundaries_preserve_small_asymmetric_pixels",
     "public_prepared_frame_transfers_canvas_without_duplicate_allocation",
     "bounded_reader_rejects_headers_without_reading_and_limits_actual_output",
     "admission_checks_encoded_native_rgba_target_and_aggregate_before_pixels",
@@ -65,7 +68,7 @@ def validate_runtime(text, backend):
         raise RuntimeError(f"{backend}: runtime reported skipped tests")
     if any(int(count) for count in re.findall(r"(\d+) filtered out", text)):
         raise RuntimeError(f"{backend}: a filtered test suite is not complete")
-    minimums = (116, 1, 1, 1, 14, 2) if backend == "native" else (15,)
+    minimums = (119, 1, 1, 1, 16, 2) if backend == "native" else (17,)
     if any(passed < minimum for (passed, _, _), minimum in zip(suites, minimums)):
         raise RuntimeError(f"{backend}: expected suite pass counts >= {minimums}, got {suites}")
     required = NATIVE_TESTS if backend == "native" else CHROME_TESTS

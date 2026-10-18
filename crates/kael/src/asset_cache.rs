@@ -102,6 +102,208 @@ pub fn hash<T: Hash>(data: &T) -> u64 {
     hasher.finish()
 }
 
+// These registries contain weak frame consumers, never pending task owners.
+pub(crate) type AssetReadySubscribers =
+    crate::SubscriberSet<(), Box<dyn FnMut(&dyn std::any::Any, &Arc<()>, &mut App)>>;
+pub(crate) type AssetInvalidationSubscribers =
+    crate::SubscriberSet<(std::any::TypeId, u64), Box<dyn FnMut(&mut App)>>;
+
+pub(crate) struct AssetConsumerRequest<A: Asset> {
+    pub(crate) task: futures::future::Shared<crate::Task<A::Output>>,
+    pub(crate) generation: Arc<()>,
+    pub(crate) subscribers: AssetReadySubscribers,
+}
+
+/// Active drawing ownership is separate from completed LRU retention. Only a
+/// finished Shared task may enter `ready`; pending delivery captures this cell
+/// weakly and therefore cannot defeat removal/cancellation of cache-only work.
+pub(crate) struct AssetConsumer<A: Asset> {
+    state: std::rc::Rc<std::cell::RefCell<AssetConsumerState<A>>>,
+    _invalidation: crate::Subscription,
+}
+
+struct AssetConsumerState<A: Asset> {
+    epoch: std::rc::Rc<()>,
+    generation: Option<Arc<()>>,
+    ready: Option<futures::future::Shared<crate::Task<A::Output>>>,
+    completion: Option<crate::Subscription>,
+    wake_view: Option<crate::EntityId>,
+}
+
+impl<A: Asset> AssetConsumer<A> {
+    pub(crate) fn new(key: (std::any::TypeId, u64), cx: &mut App) -> Self {
+        let state = std::rc::Rc::new(std::cell::RefCell::new(AssetConsumerState {
+            epoch: std::rc::Rc::new(()),
+            generation: None,
+            ready: None,
+            completion: None,
+            wake_view: None,
+        }));
+        let weak = std::rc::Rc::downgrade(&state);
+        let invalidation = cx.observe_asset_consumer_invalidation(key, move |cx| {
+            let Some(state) = weak.upgrade() else {
+                return;
+            };
+            let (retired_ready, retired_subscription, wake_view) = {
+                let mut state = state.borrow_mut();
+                state.epoch = std::rc::Rc::new(());
+                state.generation = None;
+                (state.ready.take(), state.completion.take(), state.wake_view)
+            };
+            // Shared output destruction and subscription removal must not run
+            // while a consumer borrow is outstanding.
+            drop(retired_ready);
+            drop(retired_subscription);
+            if let Some(view) = wake_view
+                && cx.entities.generation(view).is_some()
+            {
+                cx.notify(view);
+            }
+        });
+        Self {
+            state,
+            _invalidation: invalidation,
+        }
+    }
+
+    pub(crate) fn poll(
+        &self,
+        source: &A::Source,
+        key: (std::any::TypeId, u64),
+        wake_view: Option<crate::EntityId>,
+        initial_request: Option<AssetConsumerRequest<A>>,
+        cx: &mut App,
+    ) -> anyhow::Result<Option<A::Output>> {
+        use futures::FutureExt as _;
+        let ready = {
+            let mut state = self.state.borrow_mut();
+            if wake_view.is_some() {
+                state.wake_view = wake_view;
+            }
+            state.ready.clone()
+        };
+        if let Some(ready) = ready {
+            // This invokes the caller's Output::clone outside the cell borrow.
+            return Ok(ready.now_or_never());
+        }
+
+        // Asset::load and all cache callbacks may reenter App. No consumer or
+        // registry borrow crosses this call or polling the Shared output.
+        let AssetConsumerRequest {
+            task,
+            generation,
+            subscribers,
+        } = match initial_request {
+            Some(request) => request,
+            None => cx.fetch_asset_for_consumer::<A>(source, key)?,
+        };
+        let (epoch, already_subscribed, retired_subscription) = {
+            let mut state = self.state.borrow_mut();
+            let same = state
+                .generation
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &generation));
+            let retired = if same { None } else { state.completion.take() };
+            state.generation = Some(generation.clone());
+            (
+                state.epoch.clone(),
+                same && state.completion.is_some(),
+                retired,
+            )
+        };
+        drop(retired_subscription);
+        if let Some(output) = task.clone().now_or_never() {
+            Self::publish(&self.state, &epoch, &generation, task, false, cx);
+            return Ok(Some(output));
+        }
+        if already_subscribed {
+            return Ok(None);
+        }
+
+        let weak = std::rc::Rc::downgrade(&self.state);
+        let expected_epoch = epoch.clone();
+        let expected_generation = generation.clone();
+        let (subscription, activate) = subscribers.insert(
+            (),
+            Box::new(move |task, current, cx| {
+                if !Arc::ptr_eq(current, &expected_generation) {
+                    return;
+                }
+                let Some(state) = weak.upgrade() else {
+                    return;
+                };
+                let Some(task) =
+                    task.downcast_ref::<futures::future::Shared<crate::Task<A::Output>>>()
+                else {
+                    return;
+                };
+                Self::publish(
+                    &state,
+                    &expected_epoch,
+                    &expected_generation,
+                    task.clone(),
+                    true,
+                    cx,
+                );
+            }),
+        );
+        activate();
+        let retired = {
+            let mut state = self.state.borrow_mut();
+            if std::rc::Rc::ptr_eq(&state.epoch, &epoch)
+                && state
+                    .generation
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &generation))
+                && state.ready.is_none()
+            {
+                state.completion.replace(subscription)
+            } else {
+                Some(subscription)
+            }
+        };
+        drop(retired);
+        Ok(None)
+    }
+
+    fn publish(
+        state: &std::rc::Rc<std::cell::RefCell<AssetConsumerState<A>>>,
+        epoch: &std::rc::Rc<()>,
+        generation: &Arc<()>,
+        task: futures::future::Shared<crate::Task<A::Output>>,
+        notify_owner: bool,
+        cx: &mut App,
+    ) {
+        // The app completion observer has already awaited this task, or poll()
+        // itself observed Ready. A pending Shared is never stored in the frame.
+        debug_assert!(task.peek().is_some());
+        let (retired_ready, retired_subscription, wake_view) = {
+            let mut state = state.borrow_mut();
+            if !std::rc::Rc::ptr_eq(&state.epoch, epoch)
+                || !state
+                    .generation
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, generation))
+            {
+                return;
+            }
+            (
+                state.ready.replace(task),
+                state.completion.take(),
+                state.wake_view,
+            )
+        };
+        drop(retired_ready);
+        drop(retired_subscription);
+        if notify_owner
+            && let Some(view) = wake_view
+            && cx.entities.generation(view).is_some()
+        {
+            cx.notify(view);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -487,5 +689,1001 @@ mod tests {
             assert_eq!(cx.completed_asset_count(), 1);
             assert_eq!(cx.completed_asset_bytes(), 8);
         });
+    }
+}
+
+#[cfg(test)]
+mod active_consumer_regressions {
+    use crate::{
+        App, Asset, Context, IntoElement, ParentElement, Render, TestAppContext, Window, div,
+    };
+    use futures::{Future, FutureExt, channel::oneshot};
+    use std::{
+        collections::VecDeque,
+        hash::{Hash, Hasher},
+        sync::{
+            Arc, Mutex, Weak,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    struct Payload {
+        value: u8,
+        bytes: Box<[u8]>,
+    }
+    fn payload(value: u8) -> (Arc<Payload>, Weak<Payload>) {
+        let output = Arc::new(Payload {
+            value,
+            bytes: vec![value; 4].into_boxed_slice(),
+        });
+        let weak = Arc::downgrade(&output);
+        (output, weak)
+    }
+
+    #[derive(Clone)]
+    struct Source {
+        key: u64,
+        receivers: Arc<Mutex<VecDeque<oneshot::Receiver<Arc<Payload>>>>>,
+        calls: Arc<AtomicUsize>,
+        futures_dropped: Arc<AtomicUsize>,
+    }
+    impl Hash for Source {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.key.hash(state);
+        }
+    }
+    impl Source {
+        fn new() -> Self {
+            Self {
+                key: 1,
+                receivers: Arc::default(),
+                calls: Arc::default(),
+                futures_dropped: Arc::default(),
+            }
+        }
+        fn next(&self) -> oneshot::Sender<Arc<Payload>> {
+            let (sender, receiver) = oneshot::channel();
+            self.receivers.lock().unwrap().push_back(receiver);
+            sender
+        }
+    }
+    struct FutureDropped(Arc<AtomicUsize>);
+    impl Drop for FutureDropped {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    struct ProbeAsset;
+    impl Asset for ProbeAsset {
+        type Source = Source;
+        type Output = Arc<Payload>;
+        fn load(
+            source: Source,
+            _: &mut App,
+        ) -> impl Future<Output = Self::Output> + Send + 'static {
+            source.calls.fetch_add(1, Ordering::SeqCst);
+            let receiver = source.receivers.lock().unwrap().pop_front();
+            let drop_guard = FutureDropped(source.futures_dropped);
+            async move {
+                let _guard = drop_guard;
+                match receiver {
+                    Some(receiver) => match receiver.await {
+                        Ok(output) => output,
+                        // Cleanup after a deliberately failing baseline must
+                        // not introduce an unrelated canceled-sender panic.
+                        Err(_) => futures::future::pending().await,
+                    },
+                    // A baseline reload is observable through calls, not a
+                    // fixture panic or an unbounded automatic reload loop.
+                    None => futures::future::pending().await,
+                }
+            }
+        }
+        fn cache_bytes(output: &Self::Output) -> u64 {
+            assert_ne!(output.value, 255, "controlled byte-accounting panic");
+            output.bytes.len() as u64
+        }
+        fn on_cache_evict(output: &Self::Output, _: &mut App) {
+            assert_ne!(output.value, 254, "controlled eviction-hook panic");
+        }
+    }
+
+    struct Consumer {
+        source: Source,
+        shown: bool,
+        last: Option<u8>,
+        distinct_deliveries: usize,
+    }
+    impl Render for Consumer {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            if !self.shown {
+                return div();
+            }
+            // Executes in Render, before child element layout. Repeated use/get
+            // of the same source in one namespace must not duplicate a request.
+            let output = window.use_asset::<ProbeAsset>(&self.source, cx);
+            let repeated = window.get_asset::<ProbeAsset>(&self.source, cx);
+            if let Some(output) = output {
+                assert!(Arc::ptr_eq(
+                    &output,
+                    &repeated.expect("same ready consumer")
+                ));
+                if self.last != Some(output.value) {
+                    self.distinct_deliveries += 1;
+                    self.last = Some(output.value);
+                }
+                div().child(format!("payload {}", output.value))
+            } else {
+                assert!(repeated.is_none());
+                div().child("waiting")
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn mounted_async_completion_survives_zero_or_undersized_completed_retention() {
+        for max_bytes in [0, 3] {
+            let mut cx = TestAppContext::single();
+            cx.update(|cx| cx.set_completed_asset_cache_limits(8, max_bytes));
+            let source = Source::new();
+            let sender = source.next();
+            let (consumer, window) = cx.add_window_view(|_, _| Consumer {
+                source: source.clone(),
+                shown: true,
+                last: None,
+                distinct_deliveries: 0,
+            });
+            window.update(|window, cx| window.draw(cx).clear());
+            window.run_until_parked();
+            assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+            let (output, weak) = payload(17);
+            assert!(sender.send(output).is_ok());
+            window.run_until_parked();
+            // Do not rescue a missing notification with a forced draw. This
+            // exercises the normal platform callback plus ordinary test effect
+            // flushing, not an isolated production frame-clock measurement.
+            window.simulate_platform_frame();
+            window.run_until_parked();
+            window.update(|_, cx| {
+                assert_eq!(consumer.read(cx).last, Some(17));
+                assert_eq!(consumer.read(cx).distinct_deliveries, 1);
+                assert_eq!(cx.completed_asset_count(), 0);
+                assert_eq!(cx.completed_asset_bytes(), 0);
+            });
+            // Continued active use owns the same output independently of LRU.
+            for _ in 0..3 {
+                window.update(|window, cx| window.draw(cx).clear());
+            }
+            assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+            assert!(weak.upgrade().is_some());
+            window.update(|window, cx| {
+                consumer.update(cx, |consumer, cx| {
+                    consumer.shown = false;
+                    cx.notify();
+                });
+                window.draw(cx).clear();
+            });
+            window.run_until_parked();
+            assert!(
+                weak.upgrade().is_none(),
+                "no output owner remains after unmount"
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn window_teardown_releases_ready_consumer_output() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| cx.set_completed_asset_cache_limits(8, 0));
+        let source = Source::new();
+        let sender = source.next();
+        let (consumer, window) = cx.add_window_view(|_, _| Consumer {
+            source: source.clone(),
+            shown: true,
+            last: None,
+            distinct_deliveries: 0,
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        window.run_until_parked();
+        let (output, weak) = payload(17);
+        assert!(sender.send(output).is_ok());
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(consumer.read(cx).last, Some(17));
+            assert_eq!(cx.completed_asset_count(), 0);
+        });
+        drop(consumer);
+        window.update(|window, _| window.remove_window());
+        cx.run_until_parked();
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[::core::prelude::v1::test]
+    fn explicit_remove_reloads_after_the_lru_entry_is_already_gone() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| cx.set_completed_asset_cache_limits(8, 0));
+        let source = Source::new();
+        let first_sender = source.next();
+        let next_sender = source.next();
+        let (consumer, window) = cx.add_window_view(|_, _| Consumer {
+            source: source.clone(),
+            shown: true,
+            last: None,
+            distinct_deliveries: 0,
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        window.run_until_parked();
+        let (first, old_weak) = payload(17);
+        assert!(first_sender.send(first).is_ok());
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(consumer.read(cx).last, Some(17));
+            assert_eq!(cx.completed_asset_count(), 0);
+            cx.remove_asset::<ProbeAsset>(&source);
+            window.draw(cx).clear();
+        });
+        window.run_until_parked();
+        assert!(old_weak.upgrade().is_none());
+        assert_eq!(source.calls.load(Ordering::SeqCst), 2);
+        let (next, next_weak) = payload(29);
+        assert!(next_sender.send(next).is_ok());
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(consumer.read(cx).last, Some(29));
+            assert_eq!(consumer.read(cx).distinct_deliveries, 2);
+        });
+        assert_eq!(source.calls.load(Ordering::SeqCst), 2);
+        assert!(next_weak.upgrade().is_some());
+    }
+
+    #[::core::prelude::v1::test]
+    fn dropped_window_does_not_hide_a_pending_shared_owner() {
+        let mut cx = TestAppContext::single();
+        let source = Source::new();
+        let _sender = source.next();
+        let (consumer, window) = cx.add_window_view(|_, _| Consumer {
+            source: source.clone(),
+            shown: true,
+            last: None,
+            distinct_deliveries: 0,
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        window.run_until_parked();
+        assert_eq!(source.futures_dropped.load(Ordering::SeqCst), 0);
+        drop(consumer);
+        window.update(|window, _| window.remove_window());
+        cx.run_until_parked();
+        // The app intentionally owns pending work. After explicit cache removal
+        // no weak consumer callback may keep the Task alive independently.
+        cx.update(|cx| cx.remove_asset::<ProbeAsset>(&source));
+        cx.run_until_parked();
+        assert_eq!(source.futures_dropped.load(Ordering::SeqCst), 1);
+    }
+
+    #[::core::prelude::v1::test]
+    fn ready_handoff_precedes_accounting_and_eviction_hook_panics() {
+        for value in [254, 255] {
+            let mut cx = TestAppContext::single();
+            cx.update(|cx| cx.set_completed_asset_cache_limits(8, 0));
+            let source = Source::new();
+            let sender = source.next();
+            let (consumer, window) = cx.add_window_view(|_, _| Consumer {
+                source: source.clone(),
+                shown: true,
+                last: None,
+                distinct_deliveries: 0,
+            });
+            window.update(|window, cx| window.draw(cx).clear());
+            window.run_until_parked();
+            let (output, weak) = payload(value);
+            assert!(sender.send(output).is_ok());
+            window.run_until_parked();
+            window.simulate_platform_frame();
+            window.run_until_parked();
+            window.update(|_, cx| {
+                assert_eq!(consumer.read(cx).last, Some(value));
+                assert_eq!(consumer.read(cx).distinct_deliveries, 1);
+                assert_eq!(cx.completed_asset_count(), 0);
+                assert_eq!(cx.completed_asset_bytes(), 0);
+            });
+            assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+            window.update(|window, cx| {
+                consumer.update(cx, |consumer, cx| {
+                    consumer.shown = false;
+                    cx.notify();
+                });
+                window.draw(cx).clear();
+            });
+            window.run_until_parked();
+            assert!(weak.upgrade().is_none());
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn external_old_generation_cannot_publish_into_replacement_consumer() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| cx.set_completed_asset_cache_limits(8, 0));
+        let source = Source::new();
+        let old_sender = source.next();
+        let next_sender = source.next();
+        let (consumer, window) = cx.add_window_view(|_, _| Consumer {
+            source: source.clone(),
+            shown: true,
+            last: None,
+            distinct_deliveries: 0,
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        window.run_until_parked();
+        let external = window.update(|window, cx| {
+            let external = cx.fetch_asset_checked::<ProbeAsset>(&source).unwrap().0;
+            cx.remove_asset::<ProbeAsset>(&source);
+            window.draw(cx).clear();
+            external
+        });
+        window.run_until_parked();
+        assert_eq!(source.calls.load(Ordering::SeqCst), 2);
+        let (old, old_weak) = payload(17);
+        assert!(old_sender.send(old).is_ok());
+        window.run_until_parked();
+        assert_eq!(external.clone().now_or_never().unwrap().value, 17);
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(consumer.read(cx).last, None);
+            assert_eq!(consumer.read(cx).distinct_deliveries, 0);
+        });
+        drop(external);
+        window.run_until_parked();
+        assert!(old_weak.upgrade().is_none());
+        let (next, _) = payload(29);
+        assert!(next_sender.send(next).is_ok());
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(consumer.read(cx).last, Some(29));
+            assert_eq!(consumer.read(cx).distinct_deliveries, 1);
+        });
+        assert_eq!(source.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[::core::prelude::v1::test]
+    fn get_asset_outside_drawing_keeps_legacy_pending_and_ready_polling() {
+        let mut cx = TestAppContext::single();
+        let source = Source::new();
+        let sender = source.next();
+        let (_, window) = cx.add_window_view(|_, _| Consumer {
+            source: source.clone(),
+            shown: false,
+            last: None,
+            distinct_deliveries: 0,
+        });
+        window.update(|window, cx| {
+            assert!(window.get_asset::<ProbeAsset>(&source, cx).is_none());
+        });
+        window.run_until_parked();
+        let (output, _) = payload(17);
+        assert!(sender.send(output).is_ok());
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert_eq!(
+                window.get_asset::<ProbeAsset>(&source, cx).unwrap().value,
+                17
+            );
+        });
+        assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+    }
+
+    struct ErrorProbeAsset;
+    impl Asset for ErrorProbeAsset {
+        type Source = Source;
+        type Output = Result<(), Arc<Payload>>;
+        fn load(
+            source: Source,
+            cx: &mut App,
+        ) -> impl Future<Output = Self::Output> + Send + 'static {
+            let load = ProbeAsset::load(source, cx);
+            async move { Err(load.await) }
+        }
+        fn cache_bytes(output: &Self::Output) -> u64 {
+            output
+                .as_ref()
+                .err()
+                .map_or(0, |error| error.bytes.len() as u64)
+        }
+    }
+    struct ErrorConsumer {
+        source: Source,
+        last: Option<u8>,
+        distinct_deliveries: usize,
+    }
+    impl Render for ErrorConsumer {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            if let Some(Err(output)) = window.use_asset::<ErrorProbeAsset>(&self.source, cx) {
+                if self.last != Some(output.value) {
+                    self.last = Some(output.value);
+                    self.distinct_deliveries += 1;
+                }
+            }
+            div()
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn active_error_result_survives_lru_and_clear_until_explicit_remove_retries() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| cx.set_completed_asset_cache_limits(0, 0));
+        let source = Source::new();
+        let first_sender = source.next();
+        let next_sender = source.next();
+        let (consumer, window) = cx.add_window_view(|_, _| ErrorConsumer {
+            source: source.clone(),
+            last: None,
+            distinct_deliveries: 0,
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        window.run_until_parked();
+        let (first_error, first_weak) = payload(17);
+        assert!(first_sender.send(first_error).is_ok());
+        window.run_until_parked();
+        window.simulate_platform_frame();
+        window.run_until_parked();
+        window.update(|_, cx| {
+            assert_eq!(consumer.read(cx).last, Some(17));
+            assert_eq!(cx.completed_asset_count(), 0);
+            cx.clear_completed_asset_cache_checked().unwrap();
+        });
+        for _ in 0..3 {
+            window.update(|window, cx| window.draw(cx).clear());
+        }
+        assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+        assert!(first_weak.upgrade().is_some());
+        window.update(|window, cx| {
+            cx.remove_asset::<ErrorProbeAsset>(&source);
+            window.draw(cx).clear();
+        });
+        window.run_until_parked();
+        assert!(first_weak.upgrade().is_none());
+        assert_eq!(source.calls.load(Ordering::SeqCst), 2);
+        let (next_error, _) = payload(29);
+        assert!(next_sender.send(next_error).is_ok());
+        window.run_until_parked();
+        window.simulate_platform_frame();
+        window.run_until_parked();
+        window.update(|_, cx| {
+            assert_eq!(consumer.read(cx).last, Some(29));
+            assert_eq!(consumer.read(cx).distinct_deliveries, 2);
+        });
+        assert_eq!(source.calls.load(Ordering::SeqCst), 2);
+    }
+
+    fn probe_consumer_cells(window: &Window) -> usize {
+        [&window.rendered_frame, &window.next_frame]
+            .into_iter()
+            .flat_map(|frame| frame.element_states.keys())
+            .filter(|(_, state_type)| {
+                *state_type == std::any::TypeId::of::<super::AssetConsumer<ProbeAsset>>()
+            })
+            .count()
+    }
+
+    struct CountingConsumer {
+        source: Source,
+        renders: std::rc::Rc<std::cell::Cell<usize>>,
+        last: Option<u8>,
+    }
+
+    impl Render for CountingConsumer {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            use crate::Styled as _;
+            self.renders.set(self.renders.get() + 1);
+            if let Some(output) = window.use_asset::<ProbeAsset>(&self.source, cx) {
+                self.last = Some(output.value);
+            }
+            div().size_full().child("cached consumer")
+        }
+    }
+
+    struct CachedConsumerHost {
+        child: crate::Entity<CountingConsumer>,
+        mounted: bool,
+        revision: usize,
+    }
+
+    impl Render for CachedConsumerHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            use crate::Styled as _;
+            let mut style = crate::StyleRefinement::default();
+            style.size.width = Some(crate::px(200.0).into());
+            style.size.height = Some(crate::px(40.0).into());
+            let root = div()
+                .flex()
+                .flex_col()
+                .child(format!("revision {}", self.revision));
+            if self.mounted {
+                root.child(crate::AnyView::from(self.child.clone()).cached(style))
+            } else {
+                root
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn cached_view_skip_keeps_ready_consumer_until_subtree_unmount() {
+        use crate::AppContext as _;
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| cx.set_completed_asset_cache_limits(0, 0));
+        let source = Source::new();
+        let sender = source.next();
+        let renders = std::rc::Rc::new(std::cell::Cell::new(0));
+        let child = cx.new(|_| CountingConsumer {
+            source: source.clone(),
+            renders: renders.clone(),
+            last: None,
+        });
+        let (host, window) = cx.add_window_view(|_, _| CachedConsumerHost {
+            child: child.clone(),
+            mounted: true,
+            revision: 0,
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        window.run_until_parked();
+        let (output, weak) = payload(17);
+        assert!(sender.send(output).is_ok());
+        window.run_until_parked();
+        window.simulate_platform_frame();
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert_eq!(child.read(cx).last, Some(17));
+            assert_eq!(probe_consumer_cells(window), 1);
+            assert_eq!(cx.asset_consumer_subscription_stats(), (1, 1, 0, 0));
+        });
+        let warm_renders = renders.get();
+        for revision in 1..=4 {
+            window.update(|window, cx| {
+                host.update(cx, |host, cx| {
+                    host.revision = revision;
+                    cx.notify();
+                });
+                window.draw(cx).clear();
+                assert_eq!(
+                    renders.get(),
+                    warm_renders,
+                    "cached child Render must actually be skipped"
+                );
+                assert_eq!(probe_consumer_cells(window), 1);
+                assert_eq!(cx.asset_consumer_subscription_stats(), (1, 1, 0, 0));
+            });
+            assert!(weak.upgrade().is_some());
+        }
+        assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+        window.update(|window, cx| {
+            host.update(cx, |host, cx| {
+                host.mounted = false;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            assert_eq!(probe_consumer_cells(window), 0);
+            assert_eq!(cx.asset_consumer_subscription_stats(), (0, 0, 0, 0));
+        });
+        window.run_until_parked();
+        assert!(
+            weak.upgrade().is_none(),
+            "retained Entity handle does not own the frame payload"
+        );
+    }
+
+    struct NamespacedConsumer {
+        source: Source,
+        mounted: [bool; 2],
+        last: [Option<u8>; 2],
+    }
+
+    impl Render for NamespacedConsumer {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            for (index, name) in ["left", "right"].into_iter().enumerate() {
+                if self.mounted[index] {
+                    let output = window.with_element_namespace(name, |window| {
+                        window.use_asset::<ProbeAsset>(&self.source, cx)
+                    });
+                    if let Some(output) = output {
+                        self.last[index] = Some(output.value);
+                    }
+                }
+            }
+            div().child("namespaced consumers")
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn same_source_in_separate_namespaces_has_independent_frame_ownership() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| cx.set_completed_asset_cache_limits(0, 0));
+        let source = Source::new();
+        let sender = source.next();
+        let (host, window) = cx.add_window_view(|_, _| NamespacedConsumer {
+            source: source.clone(),
+            mounted: [true, true],
+            last: [None, None],
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(probe_consumer_cells(window), 2);
+            assert_eq!(cx.asset_consumer_subscription_stats(), (1, 2, 1, 2));
+        });
+        window.run_until_parked();
+        let (output, weak) = payload(17);
+        assert!(sender.send(output).is_ok());
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(host.read(cx).last, [Some(17), Some(17)]);
+            host.update(cx, |host, cx| {
+                host.mounted[0] = false;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            assert_eq!(probe_consumer_cells(window), 1);
+            assert_eq!(cx.asset_consumer_subscription_stats(), (1, 1, 0, 0));
+        });
+        assert!(weak.upgrade().is_some());
+        assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+        window.update(|window, cx| {
+            host.update(cx, |host, cx| {
+                host.mounted[1] = false;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            assert_eq!(probe_consumer_cells(window), 0);
+            assert_eq!(cx.asset_consumer_subscription_stats(), (0, 0, 0, 0));
+        });
+        window.run_until_parked();
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[::core::prelude::v1::test]
+    fn repeated_pending_and_ready_mounts_retire_frame_and_subscriber_metadata() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| cx.set_completed_asset_cache_limits(0, 0));
+        let first = Source::new();
+        let (consumer, window) = cx.add_window_view(|_, _| Consumer {
+            source: first,
+            shown: false,
+            last: None,
+            distinct_deliveries: 0,
+        });
+        for cycle in 0..16 {
+            let mut source = Source::new();
+            source.key = cycle + 100;
+            let sender = source.next();
+            window.update(|window, cx| {
+                consumer.update(cx, |consumer, cx| {
+                    consumer.source = source.clone();
+                    consumer.shown = true;
+                    consumer.last = None;
+                    cx.notify();
+                });
+                for _ in 0..3 {
+                    window.draw(cx).clear();
+                }
+                assert_eq!(probe_consumer_cells(window), 1);
+                assert_eq!(cx.asset_consumer_subscription_stats(), (1, 1, 1, 1));
+            });
+            window.run_until_parked();
+            let weak = if cycle % 2 == 0 {
+                let (output, weak) = payload(17);
+                assert!(sender.send(output).is_ok());
+                window.run_until_parked();
+                window.update(|window, cx| {
+                    window.draw(cx).clear();
+                    assert_eq!(consumer.read(cx).last, Some(17));
+                    assert_eq!(cx.asset_consumer_subscription_stats(), (1, 1, 0, 0));
+                });
+                Some(weak)
+            } else {
+                drop(sender);
+                None
+            };
+            window.update(|window, cx| {
+                consumer.update(cx, |consumer, cx| {
+                    consumer.shown = false;
+                    cx.notify();
+                });
+                window.draw(cx).clear();
+                assert_eq!(probe_consumer_cells(window), 0);
+                assert_eq!(
+                    cx.asset_consumer_subscription_stats(),
+                    (0, 0, 0, 0),
+                    "retired keys must not accumulate tombstones"
+                );
+                cx.remove_asset::<ProbeAsset>(&source);
+            });
+            window.run_until_parked();
+            assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(source.futures_dropped.load(Ordering::SeqCst), 1);
+            if let Some(weak) = weak {
+                assert!(weak.upgrade().is_none());
+            }
+        }
+    }
+
+    struct GetOnlyConsumer {
+        source: Source,
+        last: Option<u8>,
+    }
+    impl Render for GetOnlyConsumer {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            if let Some(output) = window.get_asset::<ProbeAsset>(&self.source, cx) {
+                self.last = Some(output.value);
+            }
+            div().child("get-only consumer")
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn get_only_consumer_receives_on_repaint_without_requesting_view_notifications() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| cx.set_completed_asset_cache_limits(0, 0));
+        let source = Source::new();
+        let sender = source.next();
+        let (consumer, window) = cx.add_window_view(|_, _| GetOnlyConsumer {
+            source: source.clone(),
+            last: None,
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        window.run_until_parked();
+        let notifications = std::rc::Rc::new(std::cell::Cell::new(0));
+        let _subscription = window.update(|_, cx| {
+            let notifications = notifications.clone();
+            cx.observe(&consumer, move |_, _| {
+                notifications.set(notifications.get() + 1)
+            })
+        });
+        let (output, weak) = payload(17);
+        assert!(sender.send(output).is_ok());
+        window.run_until_parked();
+        window.simulate_platform_frame();
+        window.run_until_parked();
+        assert_eq!(
+            notifications.get(),
+            0,
+            "get_asset does not opt into ready notifications"
+        );
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(consumer.read(cx).last, Some(17));
+            assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+            cx.remove_asset::<ProbeAsset>(&source);
+        });
+        window.run_until_parked();
+        assert_eq!(
+            notifications.get(),
+            0,
+            "get-only explicit invalidation also remains opt-out"
+        );
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[::core::prelude::v1::test]
+    fn critical_pressure_preserves_active_ready_and_cancels_only_pending_cache_owners() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| cx.set_completed_asset_cache_limits(0, 0));
+        let ready_source = Source::new();
+        let sender = ready_source.next();
+        let (consumer, window) = cx.add_window_view(|_, _| Consumer {
+            source: ready_source.clone(),
+            shown: true,
+            last: None,
+            distinct_deliveries: 0,
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        window.run_until_parked();
+        let (output, weak) = payload(17);
+        assert!(sender.send(output).is_ok());
+        window.run_until_parked();
+        window.update(|window, cx| {
+            cx.notify_memory_pressure_checked(crate::MemoryPressureLevel::Critical)
+                .unwrap();
+            window.draw(cx).clear();
+            assert_eq!(consumer.read(cx).last, Some(17));
+        });
+        assert!(weak.upgrade().is_some());
+        assert_eq!(ready_source.calls.load(Ordering::SeqCst), 1);
+        let mut pending = Source::new();
+        pending.key = 2;
+        let old_sender = pending.next();
+        let replacement_sender = pending.next();
+        window.update(|window, cx| {
+            consumer.update(cx, |consumer, cx| {
+                consumer.source = pending.clone();
+                consumer.last = None;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+        });
+        window.run_until_parked();
+        assert!(weak.upgrade().is_none());
+        window.update(|_, cx| {
+            cx.notify_memory_pressure_checked(crate::MemoryPressureLevel::Critical)
+                .unwrap();
+        });
+        window.run_until_parked();
+        window.simulate_platform_frame();
+        window.run_until_parked();
+        assert_eq!(
+            pending.futures_dropped.load(Ordering::SeqCst),
+            1,
+            "cache-only retired load must cancel"
+        );
+        assert_eq!(
+            pending.calls.load(Ordering::SeqCst),
+            2,
+            "current consumer must progress with a fresh request"
+        );
+        let (old, old_weak) = payload(23);
+        assert!(old_sender.send(old).is_err());
+        assert!(old_weak.upgrade().is_none());
+        let (replacement, replacement_weak) = payload(29);
+        assert!(replacement_sender.send(replacement).is_ok());
+        window.run_until_parked();
+        window.simulate_platform_frame();
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(consumer.read(cx).last, Some(29));
+        });
+        assert!(replacement_weak.upgrade().is_some());
+        window.update(|window, cx| {
+            consumer.update(cx, |consumer, cx| {
+                consumer.shown = false;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+        });
+        window.run_until_parked();
+        assert!(replacement_weak.upgrade().is_none());
+    }
+
+    #[derive(Clone)]
+    struct ReentrantSource {
+        source: Source,
+        evictions: Arc<AtomicUsize>,
+    }
+    impl Hash for ReentrantSource {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.source.hash(state);
+        }
+    }
+    struct ReentrantAsset;
+    impl Asset for ReentrantAsset {
+        type Source = ReentrantSource;
+        type Output = (Arc<Payload>, ReentrantSource);
+        fn load(
+            source: Self::Source,
+            cx: &mut App,
+        ) -> impl Future<Output = Self::Output> + Send + 'static {
+            let load = ProbeAsset::load(source.source.clone(), cx);
+            async move { (load.await, source) }
+        }
+        fn cache_bytes(output: &Self::Output) -> u64 {
+            output.0.bytes.len() as u64
+        }
+        fn on_cache_evict(output: &Self::Output, cx: &mut App) {
+            if output.1.evictions.fetch_add(1, Ordering::SeqCst) == 0 {
+                cx.remove_asset::<Self>(&output.1);
+                drop(cx.fetch_asset_checked::<Self>(&output.1).unwrap().0);
+            }
+        }
+    }
+    struct ReentrantConsumer {
+        source: ReentrantSource,
+        last: Option<u8>,
+    }
+    impl Render for ReentrantConsumer {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            if let Some((output, _)) = window.use_asset::<ReentrantAsset>(&self.source, cx) {
+                self.last = Some(output.value);
+            }
+            div().child("reentrant consumer")
+        }
+    }
+    #[::core::prelude::v1::test]
+    fn reentrant_eviction_explicitly_invalidates_old_ready_and_admits_replacement_generation() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| cx.set_completed_asset_cache_limits(0, 0));
+        let source = ReentrantSource {
+            source: Source::new(),
+            evictions: Arc::new(AtomicUsize::new(0)),
+        };
+        let first_sender = source.source.next();
+        let second_sender = source.source.next();
+        let (consumer, window) = cx.add_window_view(|_, _| ReentrantConsumer {
+            source: source.clone(),
+            last: None,
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        window.run_until_parked();
+        let (first, first_weak) = payload(17);
+        assert!(first_sender.send(first).is_ok());
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(
+                consumer.read(cx).last,
+                None,
+                "explicit reentrant remove invalidates old ready before repaint"
+            );
+        });
+        assert!(first_weak.upgrade().is_none());
+        assert_eq!(source.source.calls.load(Ordering::SeqCst), 2);
+        let (second, second_weak) = payload(29);
+        assert!(second_sender.send(second).is_ok());
+        window.run_until_parked();
+        window.simulate_platform_frame();
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(consumer.read(cx).last, Some(29));
+            assert_eq!(cx.completed_asset_count(), 0);
+            assert_eq!(cx.asset_consumer_subscription_stats(), (1, 1, 0, 0));
+        });
+        assert_eq!(source.evictions.load(Ordering::SeqCst), 2);
+        assert!(second_weak.upgrade().is_some());
+    }
+
+    #[::core::prelude::v1::test]
+    fn preloaded_ready_asset_is_delivered_inline_without_notifying_rendering_owner() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| cx.set_completed_asset_cache_limits(8, 8));
+        let source = Source::new();
+        let sender = source.next();
+        let _external = cx.update(|cx| cx.fetch_asset_checked::<ProbeAsset>(&source).unwrap().0);
+        cx.run_until_parked();
+        let (output, _) = payload(17);
+        assert!(sender.send(output).is_ok());
+        cx.run_until_parked();
+        cx.update(|cx| assert_eq!(cx.completed_asset_count(), 1));
+        let notifications = std::rc::Rc::new(std::cell::Cell::new(0));
+        let renders = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut subscription = None;
+        let (consumer, window) = cx.add_window_view(|_, cx| {
+            let notifications = notifications.clone();
+            subscription = Some(cx.observe_self(move |_, _| {
+                notifications.set(notifications.get() + 1);
+            }));
+            CountingConsumer {
+                source: source.clone(),
+                renders: renders.clone(),
+                last: None,
+            }
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(consumer.read(cx).last, Some(17));
+        });
+        window.run_until_parked();
+        eprintln!(
+            "inline-ready owner-notifications={} renders={}",
+            notifications.get(),
+            renders.get()
+        );
+        assert_eq!(
+            notifications.get(),
+            0,
+            "an inline ready result needs no owner invalidation"
+        );
+        let settled_renders = renders.get();
+        for _ in 0..2 {
+            window.simulate_platform_frame();
+            window.run_until_parked();
+        }
+        assert_eq!(
+            renders.get(),
+            settled_renders,
+            "a clean ordinary frame must not render again"
+        );
+        assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+        drop(subscription);
     }
 }

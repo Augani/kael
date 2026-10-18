@@ -812,8 +812,8 @@ scrolling preserves that offset with header/cell alignment and footer clearance.
 These are native pointer/keyboard controls. The available client does not expose
 secondary scrollbar actions and its string setter is not numeric-NSNumber
 acceptance proof. Nonzero native horizontal wheel delivery and current native
-resize acceptance remain unproven. The fixed 160-pixel default scrollbar track
-is a separate next quality target; its sizing proposal has not changed the
+resize acceptance remain unproven. At that earlier checkpoint, the fixed 160-pixel default scrollbar track
+remained a separate quality target; its sizing proposal had not changed that
 frozen source.
 
 The [output ownership checkpoint](2026-10-17-animation-output-ownership-validation.json)
@@ -826,3 +826,84 @@ or a unified memory limit. The current exact GPUI Kit 0.7.3 pin compiles all fiv
 unchanged workloads in both instrumentation modes. Release-byte freezing,
 fresh hosted collection and complete latest-source platform acceptance remain
 separate from this compilation and the historical hundred-capture results.
+
+The next [exact-tag release/runtime checkpoint](2026-10-18-gpui073-local-runtime-validation.json)
+freezes all twenty optimized executables against GPUI Kit 0.7.3 at `67265a36`.
+Actual Cargo compiler inventories, features, binary bytes and 3,009 Kael source
+files are independently checked against the frozen Git source. All 3,662
+competitor files match its immutable revision. The original source archive
+contains only the 38-file `crates/kit` projection because Git applied its working
+directory prefix. It remains untouched; an additional complete repository
+archive is independently verified against all 3,662 files.
+
+On the unlocked physical Mac, all twenty executables pass their first native
+oracle attempt, with 160 actual geometry boundaries and ten engine/mode pairs
+matching 1100×760 logical pixels at scale 2. Four navigation runs use the full
+original duration. Sixteen component runs use custom quick smokes with the
+original fixtures and operations; these do not establish full-duration acceptance
+or comparative performance. All ninety raw files and before/after executable
+hashes are independently verified. No CPU/RSS, presentation, power or overall
+ranking follows. The separate full hundred-capture hosted collection at
+`0d15aff` remains running and unaudited at this checkpoint. These frozen
+executables predate the subsequent track-width and animation arithmetic fixes.
+
+The [next sizing/animation checkpoint](2026-10-18-track-and-animation-validation.json)
+adopts the reviewed width fix: `ScrollBar` forwards styling to its existing base
+style and the table requests full horizontal width. Default primitive sizes
+remain unchanged. Mounted regressions measure changing actual track widths,
+stable native identities and independent offsets. In a real constrained records
+window, a click beyond the former track reaches 198, Left moves back to 158,
+and vertical scrolling preserves 158. An exposed native zoom action grows the
+outer capture from 1800×1264 to 3456×2168 with bounded body/header/footer layout;
+this does not establish arbitrary edge dragging or numeric native SetValue.
+
+The same checkpoint fixes signed Choker radius/coordinate overflow while
+preserving finite/no-op thresholds and the clipped alpha-only kernel. The tiny
+oracle moves from 39 exact passes plus six actual debug panics to 45 exact
+passes without panics. The byte-identical isolated fork passes 140 native and
+17 actual Chrome tests. Provenance reconstructs all 81 files from 74 originals
+with ten reviewed original Rust paths and the unchanged 128 KiB patch cap.
+Combined primary validation passes 2,199 core tests and all 538 UI tests before
+the later asset changes. Worst-case kernel work and scratch remain separate.
+
+The [active asset handoff](2026-10-18-asset-lifecycle-validation.json) then gives
+mounted drawing consumers completed-result ownership independently of the LRU.
+Zero/below-output retention no longer loses a delivered result or reloads it on
+every draw. Pending publication stays weak; explicit removal invalidates ready
+owners even after LRU eviction, and generations prevent stale delivery. Actual
+cached-render skipping, separate namespaces, 16 retirement cycles, reentrant
+hooks and critical pressure pass. Review also reproduced and corrected an
+unnecessary synchronous-ready notification; the final test observes zero owner
+notifications and no clean-frame rerender. Lottie charges its source and decoded
+poster. All 54 focused lifecycle tests and the broader nineteen-file primary
+batch pass: 2,216 core tests, all 538 UI tests, strict all-target lint, Wasm,
+example tests/build, twenty benchmark compile targets, parser tests, provenance,
+formatting and docs. The two existing core opt-in diagnostics remain separate.
+
+Active ready results, including errors, survive ordinary LRU/clear until their
+frame state retires or `remove_asset` requests a reload. Their payload and
+metadata remain additional to completed-cache budgets. Global memory accounting,
+loader concurrency, native OS action-client limits and newer-source packaging/
+platform acceptance are not closed by this checkpoint.
+
+The [final `0d15aff` platform audit](2026-10-18-platform-0d15-final.json)
+independently rehashes all ten archives and 232 extracted files. Both Windows
+jobs, Linux renderer/WebView and the three-browser job pass; the overall run
+correctly fails hosted positive presentation and three unmaintained D-Bus
+advisories. Mac callbacks arrive with zero presentation times. Browser WebKit
+capture supplies lifecycle/bounds proof but zero decoded frames; capture pickers
+are not automated and software-fallback latency budgets are not enforced.
+These results predate the nineteen-file follow-up. Its new independent Apple
+controls run after the original required gate and retain bounded diagnostics;
+physical validation supplies 59 positive timestamps in each control variant.
+A control pass never turns a failed Kael presentation gate green.
+
+The [current physical Metal check](2026-10-18-native-desktop-quality-validation.json)
+then passes on the same nineteen-file source: 59 GPU invocations cover 58 distinct
+tests, and the window reports 58 completed frames with positive presentation
+timestamps. Requested client sizing, resize, a 1,250 ms idle model wake and the
+complete six-tile readback pass. An initial recorder expected seven GPU groups
+instead of six; its failed receipt remains preserved, and the continuation reused
+the successful GPU logs before building and running the window once. The older
+hosted Mac cohort has the same 59/58 distinction and still fails presentation.
+Fresh packaging and hosted acceptance remain separate.

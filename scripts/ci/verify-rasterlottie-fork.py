@@ -35,6 +35,7 @@ MODIFIED_RUST_ORIGINALS = frozenset({
     "src/lib.rs",
     "src/model.rs",
     "src/render/assets.rs",
+    "src/render/layer_effects.rs",
     "src/render/mod.rs",
     "src/render/renderer/mod.rs",
     "src/render/renderer/prepare.rs",

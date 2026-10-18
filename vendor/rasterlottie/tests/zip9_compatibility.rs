@@ -575,4 +575,38 @@ mod tests {
         );
         assert!(Animation::from_dotlottie_bytes(&bytes[..bytes.len() / 2]).is_err());
     }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn prepared_choker_numeric_limits_render_tiny_frames() {
+        for amount in [
+            0.0,
+            1.0,
+            -1.0,
+            2_147_483_648.0,
+            -2_147_483_648.0,
+            2_147_483_904.0,
+            -2_147_483_904.0,
+        ] {
+            let value = serde_json::json!({
+                "v":"5.7.6", "fr":30, "ip":0, "op":2, "w":2, "h":2,
+                "layers":[{"ind":1, "ty":4, "shapes":[], "ef":[{
+                    "mn":"ADBE Simple Choker", "en":1, "ef":[
+                        {"mn":"ADBE Simple Choker-0001", "v":{"a":0,"k":1}},
+                        {"mn":"ADBE Simple Choker-0002", "v":{"a":0,"k":amount}}
+                    ]
+                }]}]
+            });
+            let animation = Animation::from_json_str(&value.to_string()).unwrap();
+            let renderer = Renderer::target_corpus();
+            assert!(renderer.analyze(&animation).is_supported());
+            let frame = renderer
+                .prepare(&animation)
+                .unwrap()
+                .render_frame(0.0, RenderConfig::default())
+                .unwrap();
+            assert_eq!((frame.width, frame.height), (2, 2));
+            assert_eq!(frame.pixels, [0; 16], "amount={amount}");
+        }
+    }
 }

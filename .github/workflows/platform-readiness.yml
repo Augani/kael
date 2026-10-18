@@ -220,6 +220,20 @@ jobs:
         timeout-minutes: 30
         run: bash scripts/ci/verify-macos-native-renderer.sh
 
+      # Independent controls diagnose runner/session presentation capability.
+      # The required Kael step above is unchanged and must still pass itself.
+      - name: Diagnose same-job Apple drawable presentation
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        shell: bash
+        timeout-minutes: 5
+        env:
+          METAL_CONTROL_EVIDENCE: target/native-renderer-smoke/macos/presentation-controls
+        run: |
+          set -euo pipefail
+          mkdir -p target/native-renderer-smoke/macos
+          python3 -m unittest discover -s diagnostics/metal-presentation -p 'test_run_controls.py' -v 2>&1 | tee target/native-renderer-smoke/macos/presentation-controls-parser.log
+          python3 diagnostics/metal-presentation/run-controls.py
+
       - name: Execute native macOS outline accessibility protocol
         if: ${{ !cancelled() && runner.os == 'macOS' }}
         shell: bash

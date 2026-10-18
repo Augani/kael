@@ -1,3 +1,6 @@
+use crate::asset_cache::{
+    AssetConsumerRequest, AssetInvalidationSubscribers, AssetReadySubscribers,
+};
 use std::{
     any::{TypeId, type_name},
     cell::{BorrowMutError, Ref, RefCell, RefMut},
@@ -34348,6 +34351,7 @@ impl LayoutStylingHandoffBuilder {
 
 pub(crate) struct CachedAssetTask {
     task: Box<dyn Any>,
+    ready_consumers: AssetReadySubscribers,
     generation: Arc<()>,
     last_used: u64,
     completed_bytes: Option<u64>,
@@ -34376,6 +34380,7 @@ pub struct App {
     asset_cache_max_bytes: u64,
     asset_cache_max_pending: usize,
     asset_cache_waiters: FxHashSet<EntityId>,
+    asset_consumer_invalidations: AssetInvalidationSubscribers,
     pub(crate) image_load_slots: Arc<async_lock::Semaphore>,
     asset_source: Arc<dyn AssetSource>,
     pub(crate) svg_renderer: SvgRenderer,
@@ -34482,6 +34487,7 @@ impl App {
                 asset_cache_max_bytes: 64 * 1024 * 1024,
                 asset_cache_max_pending: 64,
                 asset_cache_waiters: FxHashSet::default(),
+                asset_consumer_invalidations: SubscriberSet::new(),
                 image_load_slots: Arc::new(async_lock::Semaphore::new(4)),
                 asset_source,
                 http_client,
@@ -39145,13 +39151,25 @@ impl App {
         })
     }
 
-    /// Remove an asset from GPUI's cache
+    /// Remove an asset's cached task and invalidate its active drawing consumers.
+    /// Active results are invalidated even after ordinary LRU eviction removed
+    /// the cache entry. A later request reloads the asset.
     pub fn remove_asset<A: Asset>(&mut self, source: &A::Source) {
         let asset_id = (TypeId::of::<A>(), hash(source));
-        if let Some(entry) = self.loading_assets.remove(&asset_id) {
+        let retired = self.loading_assets.remove(&asset_id);
+        // Live consumers can outlast ordinary LRU retention. Invalidate them
+        // even when the cache entry is absent, with no historical key registry.
+        let consumers = self.asset_consumer_invalidations.clone();
+        consumers.retain(&asset_id, |consumer| {
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consumer(self))).is_err() {
+                log::error!("asset consumer invalidation panicked");
+            }
+            true
+        });
+        if let Some(entry) = retired {
             self.release_cached_asset(entry);
-            self.resume_deferred_asset_requests();
         }
+        self.resume_deferred_asset_requests();
         if self.loading_assets.is_empty() {
             self.loading_assets = FxHashMap::default();
         }
@@ -39161,7 +39179,10 @@ impl App {
     /// Defaults to 256 entries and 64 MiB. Pending single-flight tasks are not
     /// evicted by this policy; dropping their final shared owner cancels them.
     /// A zero limit disables completed retention. Heap-backed custom assets
-    /// should implement [`Asset::cache_bytes`].
+    /// should implement [`Asset::cache_bytes`]. Active rendering consumers own
+    /// their ready outputs separately until their frame/view state retires.
+    /// This includes error results; [`Self::remove_asset`] explicitly invalidates
+    /// active consumers, even after their LRU entry has already been evicted.
     pub fn set_completed_asset_cache_limits(&mut self, max_entries: usize, max_bytes: u64) {
         self.asset_cache_max_entries = max_entries;
         self.asset_cache_max_bytes = max_bytes;
@@ -39192,12 +39213,59 @@ impl App {
         source: &A::Source,
     ) -> Result<(Shared<Task<A::Output>>, bool)> {
         let key = (TypeId::of::<A>(), hash(source));
+        self.fetch_asset_checked_with_key::<A>(source, key)
+    }
+
+    fn fetch_asset_checked_with_key<A: Asset>(
+        &mut self,
+        source: &A::Source,
+        key: (TypeId, u64),
+    ) -> Result<(Shared<Task<A::Output>>, bool)> {
         anyhow::ensure!(
             self.loading_assets.contains_key(&key)
                 || self.pending_asset_count() < self.asset_cache_max_pending,
             "asset cache pending-load limit reached; retry after a load completes"
         );
-        Ok(self.fetch_asset::<A>(source))
+        Ok(self.fetch_asset_with_key::<A>(source, key))
+    }
+
+    pub(crate) fn observe_asset_consumer_invalidation(
+        &mut self,
+        key: (TypeId, u64),
+        callback: impl FnMut(&mut App) + 'static,
+    ) -> Subscription {
+        let (subscription, activate) = self
+            .asset_consumer_invalidations
+            .insert(key, Box::new(callback));
+        activate();
+        subscription
+    }
+
+    #[cfg(test)]
+    pub(crate) fn asset_consumer_subscription_stats(&self) -> (usize, usize, usize, usize) {
+        let (keys, callbacks) = self.asset_consumer_invalidations.stats();
+        let (ready_keys, ready_callbacks) = self
+            .loading_assets
+            .values()
+            .map(|entry| entry.ready_consumers.stats())
+            .fold((0, 0), |(keys, callbacks), (next_keys, next_callbacks)| {
+                (keys + next_keys, callbacks + next_callbacks)
+            });
+        (keys, callbacks, ready_keys, ready_callbacks)
+    }
+
+    pub(crate) fn fetch_asset_for_consumer<A: Asset>(
+        &mut self,
+        source: &A::Source,
+        key: (TypeId, u64),
+    ) -> Result<AssetConsumerRequest<A>> {
+        let (task, _) = self.fetch_asset_checked_with_key::<A>(source, key)?;
+        let entry = self.loading_assets.get(&key).expect("fetched asset entry");
+        Ok(AssetConsumerRequest {
+            task,
+            generation: entry.generation.clone(),
+            subscribers: entry.ready_consumers.clone(),
+        })
     }
 
     pub(crate) fn defer_asset_retry(&mut self, entity: EntityId) {
@@ -39236,12 +39304,16 @@ impl App {
     }
 
     /// Release completed cached outputs without interrupting shared pending loads.
+    /// Active drawing consumers keep their ready results, including errors;
+    /// use [`Self::remove_asset`] to invalidate those results for a reload.
     pub fn clear_completed_asset_cache(&mut self) {
         let _ = self.clear_completed_asset_cache_checked();
     }
 
     /// Clear completed outputs while reporting and containing eviction-hook panics.
-    /// Every completed output is removed even if another owner's hook panics.
+    /// Every completed cache entry is removed even if another owner's hook panics.
+    /// Active drawing consumers keep their ready results, including errors;
+    /// use [`Self::remove_asset`] to invalidate those results for a reload.
     pub fn clear_completed_asset_cache_checked(&mut self) -> Result<usize> {
         let mut evicted = 0;
         let mut hook_panicked = false;
@@ -39382,7 +39454,14 @@ impl App {
     /// API admits pending loads without a cap; framework-owned requests use
     /// [`Self::fetch_asset_checked`] to bound admission before invoking the loader.
     pub fn fetch_asset<A: Asset>(&mut self, source: &A::Source) -> (Shared<Task<A::Output>>, bool) {
-        let asset_id = (TypeId::of::<A>(), hash(source));
+        self.fetch_asset_with_key::<A>(source, (TypeId::of::<A>(), hash(source)))
+    }
+
+    fn fetch_asset_with_key<A: Asset>(
+        &mut self,
+        source: &A::Source,
+        asset_id: (TypeId, u64),
+    ) -> (Shared<Task<A::Output>>, bool) {
         let tick = self.next_asset_cache_tick();
         if let Some(entry) = self.loading_assets.get_mut(&asset_id) {
             entry.last_used = tick;
@@ -39402,20 +39481,59 @@ impl App {
             let task = task.clone();
             let generation = generation.clone();
             async move |cx| {
+                let ready = task.clone();
                 let output = task.await;
                 let _ = cx.update(|cx| {
-                    if let Some(entry) = cx.loading_assets.get_mut(&asset_id)
-                        && Arc::ptr_eq(&entry.generation, &generation)
-                    {
-                        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| A::cache_bytes(&output))) {
-                            Ok(bytes) => { entry.completed_bytes = Some(bytes); cx.trim_completed_assets(); }
-                            Err(_) => {
-                                log::error!("asset cache byte-accounting hook panicked; output is not retained");
-                                if let Some(entry) = cx.loading_assets.remove(&asset_id) { cx.release_cached_asset(entry); }
+                    let consumers = cx
+                        .loading_assets
+                        .get(&asset_id)
+                        .filter(|entry| Arc::ptr_eq(&entry.generation, &generation))
+                        .map(|entry| entry.ready_consumers.clone());
+                    let Some(consumers) = consumers else {
+                        return;
+                    };
+                    // Publish active ownership before accounting or eviction.
+                    // Neither callback dispatch nor caller code holds a map borrow.
+                    for mut consumer in consumers.remove(&()) {
+                        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            consumer(&ready, &generation, cx);
+                        }))
+                        .is_err()
+                        {
+                            log::error!("asset ready consumer panicked");
+                        }
+                    }
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        A::cache_bytes(&output)
+                    })) {
+                        Ok(bytes) => {
+                            let current = if let Some(entry) = cx.loading_assets.get_mut(&asset_id)
+                                && Arc::ptr_eq(&entry.generation, &generation)
+                            {
+                                entry.completed_bytes = Some(bytes);
+                                true
+                            } else {
+                                false
+                            };
+                            if current {
+                                cx.trim_completed_assets();
                             }
                         }
-                        cx.resume_deferred_asset_requests();
+                        Err(_) => {
+                            log::error!(
+                                "asset cache byte-accounting hook panicked; output is not retained"
+                            );
+                            if cx
+                                .loading_assets
+                                .get(&asset_id)
+                                .is_some_and(|entry| Arc::ptr_eq(&entry.generation, &generation))
+                                && let Some(entry) = cx.loading_assets.remove(&asset_id)
+                            {
+                                cx.release_cached_asset(entry);
+                            }
+                        }
                     }
+                    cx.resume_deferred_asset_requests();
                 });
             }
         });
@@ -39423,6 +39541,7 @@ impl App {
             asset_id,
             CachedAssetTask {
                 task: Box::new(task.clone()),
+                ready_consumers: SubscriberSet::new(),
                 generation,
                 last_used: tick,
                 completed_bytes: None,

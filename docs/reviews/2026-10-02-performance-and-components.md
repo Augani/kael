@@ -77,6 +77,37 @@ release. Primary fork validation passes 137 native tests and 16 actual Chrome
 cases. Native OS action-client limitations, unified memory accounting and fresh
 latest-competitor/platform execution remain explicit open scopes.
 
+The [exact-tag local runtime checkpoint](2026-10-18-gpui073-local-runtime-validation.json)
+then freezes all twenty Kael/GPUI Kit 0.7.3 release executables and verifies their
+source and compiler inventories. All twenty native attempts pass with equal
+1100×760 logical client sizes at scale 2. Four navigation runs use the original
+duration; sixteen component cases are quick correctness smokes. The full hosted
+comparison remains separate and unaudited here; these checks establish no
+comparative performance, presentation or power result.
+
+The [October 18 sizing/animation checkpoint](2026-10-18-track-and-animation-validation.json)
+extends table scrollbars across their actual parent width and prevents Choker
+integer overflow at extreme finite effect values. Native track clicks, keyboard
+steps, independent scrolling and window zoom pass. The later
+[asset lifecycle checkpoint](2026-10-18-asset-lifecycle-validation.json) preserves
+ready drawing results under zero completed-cache retention, retires unmounted
+owners and avoids redundant ready-hit notifications. Its combined primary checks
+pass 2,216 core tests and all 538 UI tests; active output ownership remains
+separate from completed-cache budgets.
+
+The [completed platform run at `0d15aff`](2026-10-18-platform-0d15-final.json)
+passes Windows, Linux renderer and browser jobs, while hosted Mac presentation
+and three denied dependency advisories remain failed. Browser capture and
+software-rendering limits remain explicit. These captures predate the later
+nineteen-file follow-up; same-job independent Apple controls now improve future
+diagnostics without replacing the required Kael presentation gate.
+
+The [current physical Metal check](2026-10-18-native-desktop-quality-validation.json)
+passes the same nineteen-file source: 58 distinct GPU tests, correct client
+sizing and resize, idle model wake, and 58 frames with positive presentation
+timestamps. The complete readback passes visual inspection. This local proof
+leaves the hosted presentation failure and fresh packaging separate.
+
 ## Component coverage and gaps
 
 The library already contains most common controls, so component count alone is

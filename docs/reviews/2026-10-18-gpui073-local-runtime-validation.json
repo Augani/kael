@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-10-18T00:03:58.551442+00:00",
+  "status": "RELEASE_AND_LOCAL_NATIVE_ORACLES_PASS_HOSTED_FULL_COMPARISON_PENDING",
+  "source": {
+    "head_at_freeze": "0d15aff4288e8e98a54032e6ed149e080ea13104",
+    "compiled_source_commit": "d766b5dc1c3f061944fbf6b0c24fc00cb49f8621",
+    "compiled_inputs_byte_identical_across_heads": true,
+    "gpui_kit_version": "0.7.3",
+    "gpui_kit_revision": "67265a36e260ffe03c5aaebdcd8d654dbf892eab",
+    "changed_workload_or_fixture_sources": false
+  },
+  "release": {
+    "profiles": [
+      {
+        "profile": "kael-timing",
+        "executables": 5,
+        "compiler_packages": 447,
+        "features_exact": true,
+        "frozen_bytes_rehashed": true
+      },
+      {
+        "profile": "gpui-timing",
+        "executables": 5,
+        "compiler_packages": 415,
+        "features_exact": true,
+        "frozen_bytes_rehashed": true
+      },
+      {
+        "profile": "kael-no-timing",
+        "executables": 5,
+        "compiler_packages": 447,
+        "features_exact": true,
+        "frozen_bytes_rehashed": true
+      },
+      {
+        "profile": "gpui-no-timing",
+        "executables": 5,
+        "compiler_packages": 414,
+        "features_exact": true,
+        "frozen_bytes_rehashed": true
+      }
+    ],
+    "binaries": 20,
+    "distinct_binary_hashes": 20,
+    "total_binary_bytes": 275302736,
+    "primary_source_files_verified_against_git": 3009,
+    "gpui_tracked_files_verified_against_git": 3662,
+    "cargo_locked": true,
+    "build_jobs": 1,
+    "unexpected_tracked_source_changes": false,
+    "sole_allowed_cargo_marker": "Regular, non-symlink, empty .cargo-ok; actual marker mode/digest preserved.",
+    "metadata_dependency_edges": "Approximate only; actual compiler package inventories and root features verified separately.",
+    "archive_scope_correction": {
+      "original_package_archive_files": 38,
+      "original_scope": "crates/kit; implicit git archive working-directory prefix",
+      "original_sha256": "71540bcdc1cb40474c6aa38512319f71ac70ac8dbb88fd37e15e2254e5bc8840",
+      "original_preserved_unchanged": true,
+      "supplement_full_repository_files": 3662,
+      "supplement_sha256": "a68356d0cd98719b088df6de727722325449bd5920a75e3b296747c2a149fef8",
+      "full_archive_checked_against_immutable_git": true,
+      "source_or_build_drift": false
+    }
+  },
+  "local_native": {
+    "attempts": 20,
+    "retries": 0,
+    "failures": 0,
+    "full_duration_navigation": 4,
+    "quick_custom_component_smokes": 16,
+    "geometry_boundaries": 160,
+    "matched_pairs": 10,
+    "actual_geometry": {
+      "scale_factor": 2.0,
+      "viewport_height_px": 760.0,
+      "viewport_width_px": 1100.0
+    },
+    "raw_files_independently_rehashed": 90,
+    "binary_hashes_before_after_identical": true,
+    "compiled_source_config_unchanged": true,
+    "official_full_duration_acceptance_for_quick_cases": false,
+    "process_counter_sampling": false,
+    "performance_comparison_claimed": false,
+    "selected_adapter_identity_or_presentation_claimed": false
+  },
+  "hosted_full_comparison": {
+    "run_url": "https://github.com/Augani/kael/actions/runs/39079038200",
+    "source_head": "0d15aff4288e8e98a54032e6ed149e080ea13104",
+    "state_at_record": "RUNNING_NOT_YET_AUDITED",
+    "required_captures": 100,
+    "original_schema_3_gates_retained": true
+  },
+  "evidence": [
+    {
+      "path": ".artifacts/2026-10-17-benchmark-release-gpui073-v3/proof.json",
+      "sha256": "cebe9a1f905cfad08a02fae7b46278ce8666a1e257323144ba7eafd919b3ab4e",
+      "bytes": 567604
+    },
+    {
+      "path": ".artifacts/2026-10-17-benchmark-release-gpui073-v3/executables-verified.json",
+      "sha256": "129602beca902d30c5178579758bc2a1695124f83d2f5c2a94f1647a2a45bf5c",
+      "bytes": 18063
+    },
+    {
+      "path": ".artifacts/2026-10-17-benchmark-release-independent-audit/result.json",
+      "sha256": "173b2209a4f4ce802582a923ef45fbfa1efb835c930a17d89737a710257b574a",
+      "bytes": 1668
+    },
+    {
+      "path": ".artifacts/2026-10-17-benchmark-release-independent-audit/archive-supplement.json",
+      "sha256": "a00fffd3f48e147038f9899f904f15019aa6dad8333cc0de2c276ac926be4445",
+      "bytes": 1153
+    },
+    {
+      "path": ".artifacts/2026-10-17-benchmark-runtime-gpui073/run/summary.json",
+      "sha256": "7813ab094409957b121a2195dc634e5fe8f1a9b9edbd4ddc088b8458ee5fe3df",
+      "bytes": 90733
+    },
+    {
+      "path": ".artifacts/2026-10-17-benchmark-runtime-gpui073/independent-runtime-review.json",
+      "sha256": "871ca6caf6082276a6b0b48aef9f68a10212d2c37539679e7176574683d8c6db",
+      "bytes": 523
+    },
+    {
+      "path": ".artifacts/2026-10-17-benchmark-runtime-gpui073/run-independent-verification.json",
+      "sha256": "a232d7bd3315a6654c56c20b2be221dfc5b2a0aac28fda537000e7821fd7a528",
+      "bytes": 9735
+    }
+  ],
+  "limitations": [
+    "Local quick cases are custom runtime/oracle smokes, not complete unchanged duration acceptance or comparative performance results.",
+    "Default Metal-device allocation queries do not identify the renderer-selected adapter or establish GPU completion/presentation.",
+    "No CPU/RSS/latency/power or overall framework ranking follows.",
+    "These binaries predate subsequent scrollbar, Choker and asset changes; new-source validation remains separate.",
+    "Original failed setup attempts and original package-only archive are preserved; the full archive is an additional independently verified supplement."
+  ]
+}

@@ -629,7 +629,7 @@ mod native {
                             let _ = window.update(cx, |_, window, _| {
                                 eprintln!("NATIVE_RENDERER_WINDOW_STATE: {:?}", window.runtime_snapshot());
                             });
-                            eprintln!("NATIVE_RENDERER_SMOKE_FAIL: no drawable presentation callback within two seconds");
+                            eprintln!("NATIVE_RENDERER_SMOKE_FAIL: no positive drawable presentation timestamp within two seconds");
                             outcome.store(2, Ordering::Release);
                             let _ = cx.update(|cx| cx.quit());
                             return;

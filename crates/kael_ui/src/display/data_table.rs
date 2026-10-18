@@ -3963,7 +3963,8 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                             ),
                             horizontal_scroll_handle,
                         )
-                        .horizontal(),
+                        .horizontal()
+                        .w_full(),
                     ),
             );
 
@@ -4767,6 +4768,74 @@ mod mounted_parent_layout_regression_tests {
                 let header = tree.nodes.values().find(|node| node.role == AccessibilityRole::ColumnHeader && node.column_index == Some(1)).unwrap().bounds.unwrap();
                 assert_eq!(header.x, first_header_x - f64::from(expected), "native action must move the actual painted header with the shared handle");
             });
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn horizontal_scrollbar_track_fills_table_viewport_after_shrink_and_grow() {
+        let (host, mut window) = fixture_with(1_000, true, false, true);
+        draw_at(&mut window, 500.0, 600.0);
+        window.update(|_, cx| {
+            let table = host.read(cx).table.clone();
+            table.update(cx, |table, cx| {
+                let request = table.state.virtual_requests_for_range(0..64).remove(0);
+                assert!(table.set_page_data_for(request, (0..64).map(Row).collect(), cx));
+                table
+                    .horizontal_scroll_handle
+                    .set_offset(point(px(-40.0), px(0.0)));
+                table.scroll_handle.set_offset(point(px(0.0), px(-96.0)));
+                cx.notify();
+            });
+        });
+
+        // All sizes keep both axes overflowing and the chosen offsets in range,
+        // so resizing the track must not move columns or change the visible rows.
+        let mut observations = Vec::new();
+        for width in [500.0, 350.0, 480.0] {
+            draw_at(&mut window, width, 600.0);
+            observations.push(window.update(|window, cx| {
+                let table = host.read(cx).table.read(cx);
+                assert_eq!(table.cached_row_count(), 64);
+                let horizontal = &table.horizontal_scroll_handle;
+                let viewport = horizontal.bounds();
+                assert!(horizontal.max_offset().width >= px(40.0));
+                assert_eq!(horizontal.offset(), point(px(-40.0), px(0.0)));
+                assert_eq!(table.scroll_handle.offset(), point(px(0.0), px(-96.0)));
+                assert_eq!(viewport.size.width, table.scroll_handle.bounds().size.width);
+                let bar = window
+                    .accessibility_tree()
+                    .nodes
+                    .values()
+                    .find(|node| node.role == AccessibilityRole::ScrollBar)
+                    .expect("the table exports its horizontal scrollbar");
+                let bounds = bar.bounds.expect("the scrollbar has actual painted bounds");
+                assert!(matches!(
+                    bar.value,
+                    Some(AccessibilityValue::Range { current: 40.0, .. })
+                ));
+                eprintln!(
+                    "table-track-width window={width} viewport={viewport:?} bar={bounds:?} x={:?} y={:?}",
+                    horizontal.offset(),
+                    table.scroll_handle.offset()
+                );
+                (width, viewport, bar.id, bounds)
+            }));
+        }
+        assert!(observations[1].1.size.width < observations[0].1.size.width);
+        assert!(observations[2].1.size.width > observations[1].1.size.width);
+        let stable_id = observations[0].2;
+        for (width, viewport, id, bounds) in observations {
+            assert_eq!(
+                id, stable_id,
+                "resizing must preserve the bar's native identity"
+            );
+            assert_eq!(bounds.x, f64::from(f32::from(viewport.left())));
+            assert_eq!(bounds.height, 12.0);
+            assert_eq!(
+                bounds.width,
+                f64::from(f32::from(viewport.size.width)),
+                "the actual horizontal track must span the table viewport at window width {width}"
+            );
         }
     }
 }

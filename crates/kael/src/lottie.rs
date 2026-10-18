@@ -860,6 +860,13 @@ impl Asset for LottieAssetLoader {
     type Source = LottieAssetSource;
     type Output = Result<Arc<LottieAnimation>, LottieError>;
 
+    fn cache_bytes(output: &Self::Output) -> u64 {
+        output.as_ref().map_or(0, |animation| {
+            (animation.data.bytes.len() as u64)
+                .saturating_add(animation.data.poster_frame.decoded_bytes())
+        })
+    }
+
     fn load(
         source: Self::Source,
         cx: &mut App,
@@ -2008,5 +2015,76 @@ mod tests {
         assert!(!text.contains("example.com"));
         assert!(!text.contains("private"));
         assert!(text.contains("400"));
+    }
+}
+
+#[cfg(test)]
+mod asset_payload_tests {
+    use super::*;
+    use crate::TestAppContext;
+    use futures::FutureExt as _;
+
+    const TINY: &[u8] = br#"{"fr":30,"ip":0,"op":2,"w":1,"h":1,"nm":"A","layers":[]}"#;
+
+    #[test]
+    fn lottie_loader_and_logger_charge_source_plus_native_poster() {
+        let output = Ok(Arc::new(
+            LottieAnimation::from_bytes(Arc::<[u8]>::from(TINY)).unwrap(),
+        ));
+        let expected = TINY.len() as u64 + 4;
+        assert_eq!(LottieAssetLoader::cache_bytes(&output), expected);
+        assert_eq!(LottieResourceLoader::cache_bytes(&output), expected);
+    }
+
+    #[test]
+    fn completed_lottie_payload_obeys_exact_shared_cache_budget() {
+        let mut cx = TestAppContext::single();
+        let first = LottieAssetSource::Bytes(Arc::from(TINY));
+        let mut next_bytes = TINY.to_vec();
+        let offset = next_bytes.iter().position(|byte| *byte == b'A').unwrap();
+        next_bytes[offset] = b'B';
+        let next = LottieAssetSource::Bytes(next_bytes.into());
+        let charge = TINY.len() as u64 + 4;
+        cx.update(|cx| cx.set_completed_asset_cache_limits(8, charge));
+        let first_task = cx.update(|cx| {
+            cx.fetch_asset_checked::<LottieResourceLoader>(&first)
+                .unwrap()
+                .0
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(cx.completed_asset_count(), 1);
+            assert_eq!(cx.completed_asset_bytes(), charge);
+        });
+        let next_task = cx.update(|cx| {
+            cx.fetch_asset_checked::<LottieResourceLoader>(&next)
+                .unwrap()
+                .0
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(cx.completed_asset_count(), 1);
+            assert_eq!(cx.completed_asset_bytes(), charge);
+            assert!(!cx.fetch_asset::<LottieResourceLoader>(&next).1);
+            assert!(cx.fetch_asset::<LottieResourceLoader>(&first).1);
+        });
+        assert_eq!(
+            first_task
+                .now_or_never()
+                .unwrap()
+                .unwrap()
+                .poster_frame()
+                .decoded_bytes(),
+            4
+        );
+        assert_eq!(
+            next_task
+                .now_or_never()
+                .unwrap()
+                .unwrap()
+                .poster_frame()
+                .decoded_bytes(),
+            4
+        );
     }
 }

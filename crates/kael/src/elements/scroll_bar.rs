@@ -230,6 +230,12 @@ impl ScrollBar {
     }
 }
 
+impl crate::Styled for ScrollBar {
+    fn style(&mut self) -> &mut crate::StyleRefinement {
+        &mut self.interactivity.base_style
+    }
+}
+
 impl Element for ScrollBar {
     type RequestLayoutState = ();
     type PrepaintState = ScrollBarPrepaintState;
@@ -1492,5 +1498,81 @@ mod tests {
                 .step,
             px(7.0)
         );
+    }
+
+    struct StyledBarsView {
+        handle: ScrollHandle,
+    }
+
+    impl Render for StyledBarsView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(scroll_bar("default-vertical", self.handle.clone()))
+                .child(scroll_bar("default-horizontal", self.handle.clone()).horizontal())
+                .child(
+                    div().w_full().h(px(24.0)).flex_shrink_0().child(
+                        scroll_bar("styled-horizontal", self.handle.clone())
+                            .horizontal()
+                            .w_full()
+                            .h(px(9.0)),
+                    ),
+                )
+                .child(
+                    div().w(px(30.0)).h(px(220.0)).flex_shrink_0().child(
+                        scroll_bar("styled-vertical", self.handle.clone())
+                            .w(px(8.0))
+                            .h_full(),
+                    ),
+                )
+        }
+    }
+
+    #[crate::test]
+    fn scroll_bar_styled_sizes_follow_parent_without_changing_primitive_defaults(
+        cx: &mut TestAppContext,
+    ) {
+        let (_view, mut window) = cx.add_window_view(|_, _| StyledBarsView {
+            handle: ScrollHandle::new(),
+        });
+        let mut original_ids = None;
+        for width in [340.0, 520.0, 280.0] {
+            window.simulate_resize(size(px(width), px(700.0)));
+            window.run_until_parked();
+            window.update(|window, cx| {
+                window.draw(cx).clear();
+                let mut bars = native_nodes(window);
+                bars.sort_by(|a, b| a.bounds.unwrap().y.total_cmp(&b.bounds.unwrap().y));
+                assert_eq!(bars.len(), 4);
+                let dimensions = bars
+                    .iter()
+                    .map(|bar| {
+                        let bounds = bar.bounds.unwrap();
+                        (bounds.width, bounds.height)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    dimensions,
+                    [
+                        (12.0, 160.0),
+                        (160.0, 12.0),
+                        (f64::from(width), 9.0),
+                        (8.0, 220.0)
+                    ],
+                    "actual layout must preserve defaults and resolve both-axis style overrides"
+                );
+                let ids = bars.iter().map(|bar| bar.id).collect::<Vec<_>>();
+                if let Some(original_ids) = &original_ids {
+                    assert_eq!(
+                        &ids, original_ids,
+                        "style-only resize keeps bound native IDs"
+                    );
+                } else {
+                    original_ids = Some(ids);
+                }
+            });
+        }
     }
 }

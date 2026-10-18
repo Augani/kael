@@ -1,5 +1,6 @@
 #[cfg(any(feature = "inspector", debug_assertions))]
 use crate::Inspector;
+use crate::asset_cache::AssetConsumer;
 use crate::{
     AbsoluteLength, Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App,
     AppContext, Arena, Asset, AsyncWindowContext, AvailableSpace, Background, BlendMode,
@@ -6743,10 +6744,30 @@ impl Window {
 
     /// Asynchronously load an asset, if the asset hasn't finished loading this will return None.
     /// Your view will be re-drawn once the asset has finished loading.
+    /// During drawing, a completed result is owned by the active keyed consumer
+    /// independently of completed-cache retention. That ready ownership retires
+    /// when its element/view leaves the frame; pending delivery remains weak.
+    /// Ready results include errors: ordinary LRU/clear does not retry them.
+    /// Call [`App::remove_asset`] to invalidate active consumers and retry.
     ///
     /// Note that the multiple calls to this method will only result in one `Asset::load` call at a
     /// time.
     pub fn use_asset<A: Asset>(&mut self, source: &A::Source, cx: &mut App) -> Option<A::Output> {
+        if self.has_asset_consumer_frame() {
+            match self.poll_frame_asset::<A>(source, true, cx) {
+                Ok(output) => {
+                    if output.is_none() {
+                        cx.defer_asset_retry(self.current_view());
+                    }
+                    return output;
+                }
+                Err(error) => {
+                    log::warn!("asset request deferred: {error}");
+                    cx.defer_asset_retry(self.current_view());
+                    return None;
+                }
+            }
+        }
         let (task, _) = match cx.fetch_asset_checked::<A>(source) {
             Ok(request) => request,
             Err(error) => {
@@ -6766,10 +6787,23 @@ impl Window {
 
     /// Asynchronously load an asset, if the asset hasn't finished loading or doesn't exist this will return None.
     /// Your view will not be re-drawn once the asset has finished loading.
+    /// During drawing, ready ownership follows [`Self::use_asset`], including
+    /// error results, without opting into owner notifications. Outside drawing,
+    /// this retains its legacy cache-polling behavior. Use [`App::remove_asset`]
+    /// to invalidate active ready ownership for a reload.
     ///
     /// Note that the multiple calls to this method will only result in one `Asset::load` call at a
     /// time.
     pub fn get_asset<A: Asset>(&mut self, source: &A::Source, cx: &mut App) -> Option<A::Output> {
+        if self.has_asset_consumer_frame() {
+            return match self.poll_frame_asset::<A>(source, false, cx) {
+                Ok(output) => output,
+                Err(error) => {
+                    log::warn!("asset request deferred: {error}");
+                    None
+                }
+            };
+        }
         let (task, _) = match cx.fetch_asset_checked::<A>(source) {
             Ok(request) => request,
             Err(error) => {
@@ -6779,6 +6813,52 @@ impl Window {
         };
         task.now_or_never()
     }
+    fn has_asset_consumer_frame(&self) -> bool {
+        matches!(
+            self.invalidator.inner.borrow().draw_phase,
+            DrawPhase::Prepaint | DrawPhase::Paint
+        ) && !self.rendered_entity_stack.is_empty()
+    }
+
+    fn poll_frame_asset<A: Asset>(
+        &mut self,
+        source: &A::Source,
+        wake: bool,
+        cx: &mut App,
+    ) -> Result<Option<A::Output>> {
+        let source_hash = crate::hash(source);
+        let key = (TypeId::of::<A>(), source_hash);
+        let wake_view = wake.then(|| self.current_view());
+        // The generic state TypeId separates Asset implementations. Full keyed
+        // view/element namespaces separate consumers; repeated same-source calls
+        // inside one namespace intentionally share a single ready owner.
+        let id =
+            ElementId::NamedInteger(SharedString::new_static("kael-asset-consumer"), source_hash);
+        self.with_global_id(id, |global_id, window| {
+            let state_key = (
+                GlobalElementId(global_id.0.clone()),
+                TypeId::of::<AssetConsumer<A>>(),
+            );
+            let existing = window.next_frame.element_states.contains_key(&state_key)
+                || window
+                    .rendered_frame
+                    .element_states
+                    .contains_key(&state_key);
+            // Reject a new source before allocating a persistent frame cell or
+            // active-key subscription. Existing ready owners need no admission.
+            let initial_request = if existing {
+                None
+            } else {
+                Some(cx.fetch_asset_for_consumer::<A>(source, key)?)
+            };
+            window.with_element_state::<AssetConsumer<A>, _>(global_id, |consumer, _| {
+                let consumer = consumer.unwrap_or_else(|| AssetConsumer::new(key, cx));
+                let result = consumer.poll(source, key, wake_view, initial_request, cx);
+                (result, consumer)
+            })
+        })
+    }
+
     /// Obtain the current element offset. This method should only be called during the
     /// prepaint phase of element drawing.
     pub fn element_offset(&self) -> Point<Pixels> {

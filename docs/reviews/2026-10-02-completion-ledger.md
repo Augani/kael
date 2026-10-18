@@ -270,3 +270,48 @@ cases. Layer/image/effect scratch, models, ready/cache ownership and concurrent
 callers remain additional. This is requested Rust payload evidence, without
 native RSS, application-performance or unified R8 closure. The existing three
 strictly denied Zbus-family advisories remain open without new ignores.
+
+The subsequent [GPUI Kit 0.7.3 release/runtime checkpoint](2026-10-18-gpui073-local-runtime-validation.json)
+independently verifies twenty actual release binaries, compiler inventories,
+3,009 Kael source files and all 3,662 competitor files against their immutable
+Git revisions. A preserved 38-file package archive has an additional verified
+full-repository supplement. All twenty native oracle attempts pass, including
+160 equal actual geometry boundaries at 1100×760 logical pixels, scale 2.
+Four navigation cases use the full original duration; sixteen component cases
+are custom quick smokes. The full hundred-capture hosted collection remains
+running and unaudited at this record. No performance, presentation, power or
+overall ranking is inferred, and later implementation changes need separate
+validation.
+
+The [October 18 track/animation correction](2026-10-18-track-and-animation-validation.json)
+adds actual full-parent table scrollbar sizing, preserves primitive defaults and
+fixes finite Choker arithmetic overflow. Real pointer/keyboard scrolling and
+native zoom growth pass. The later [asset lifecycle change](2026-10-18-asset-lifecycle-validation.json)
+delivers ready drawing results independently of completed LRU retention, keeps
+pending consumers weak and retires unmounted metadata. Cached-view reuse,
+namespaces, pressure, removal/generations, reentrant hooks and zero ready-hit
+notifications have 54 unique focused passes. Broader primary validation passes
+2,216 core and all 538 UI tests plus strict native lint, Wasm, examples, twenty
+benchmark compile targets, parser/provenance, formatting and docs. The two
+existing opt-in core probes remain separate. Active/error ownership and global
+memory accounting remain explicit R8 boundaries; fresh packaging/native/platform
+proof remains separate from this headless combined pass.
+
+The [completed `0d15aff` platform run](2026-10-18-platform-0d15-final.json)
+passes Windows, Linux runtime and browser jobs but retains Mac positive-display
+and strict three-advisory failures. All ten archives and 232 extracted files are
+rehash-verified. WebKit supplies no decoded capture frames, trusted capture
+pickers are not automated, and browser latency budgets are disabled in software
+fallback. Same-job independent Apple controls are added for later diagnosis
+without changing the required Kael gate. Neither the old platform run nor its
+later diagnostics establish current complete R12 acceptance.
+
+The [current physical Metal check](2026-10-18-native-desktop-quality-validation.json)
+then passes on the same nineteen-file source: 59 GPU invocations cover 58 distinct
+tests, and the window reports 58 completed frames with positive presentation
+timestamps. Requested client sizing, resize, a 1,250 ms idle model wake and the
+complete six-tile readback pass. An initial recorder expected seven GPU groups
+instead of six; its failed receipt remains preserved, and the continuation reused
+the successful GPU logs before building and running the window once. The older
+hosted Mac cohort has the same 59/58 distinction and still fails presentation.
+Fresh packaging and hosted acceptance remain separate.
