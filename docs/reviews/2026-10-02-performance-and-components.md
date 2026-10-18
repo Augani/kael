@@ -134,6 +134,14 @@ with exact pixels and actual Chrome17 acceptance. Global byte accounting,
 fresh packages, platform CI and later-source comparative measurements remain
 separate from this headless checkpoint.
 
+The same committed `4bb5a44` source subsequently passes
+[fresh packaging](2026-10-18-admission-package-source-validation.json): all 39
+extracted package builds succeed, and all 930 included Rust files (23,517,476
+bytes) match Git, including the public loader-policy regression. All 3,014 combined
+validation inputs remain unchanged. No crates are uploaded. This closes the
+fresh-package follow-up for that batch; current platform and later-source
+comparative measurements remain open.
+
 ## Component coverage and gaps
 
 The library already contains most common controls, so component count alone is

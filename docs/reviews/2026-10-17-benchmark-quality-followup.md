@@ -934,3 +934,11 @@ also removes a whole-image scratch copy with paired actual pixel/allocation
 proof and actual Chrome17 acceptance. These are correctness and scoped ownership
 results. The full GPUI Kit comparison still names its earlier immutable source;
 new package/platform and later-source performance remain separate.
+
+The [admission-source package check](2026-10-18-admission-package-source-validation.json)
+then passes all 39 fresh extracted builds at `4bb5a44`. Independent archive
+verification matches 930 included Rust files and 23,517,476 bytes to Git, including
+the maintained public loader-policy test. Compressed archives total 6,077,870
+bytes; all 3,014 combined-validation inputs still match. No registry upload occurs.
+The hosted comparison retains its earlier source identity, and current platform
+execution and remaining physical acceptance stay open.
