@@ -563,3 +563,14 @@ Linux still denies three advisories. Mac presentation timestamps remain zero,
 and its distinct hardware-browser timing test exceeds both p95 and p99 budgets.
 The merge checkout has the b091 Git tree with a different commit identity. This
 cohort precedes the label fix and does not establish current platform acceptance.
+
+The [completed b091 comparison](2026-10-18-b091-gpui073-hosted-comparison.md)
+passes all 100 captures, 800 equal actual geometry boundaries, 50 pairs and 20
+executable identities against GPUI Kit 0.7.3. Timing-disabled Kael/Kit active CPU
+medians are 8.76%/11.62% for navigation, 24.65%/17.25% for tables,
+46.97%/11.71% for trees and 15.03%/16.06% for docking. Table/tree RSS remains
+substantially higher. Unequal work and sampled-memory limits stay explicit.
+All 10,922 samples use V6 but return zero energy fields; capability and deltas
+remain unknown/null. No power or overall ranking follows. This direct b091
+checkout precedes the label fix; the separate failed platform job uses a distinct
+merge commit with the same tree.

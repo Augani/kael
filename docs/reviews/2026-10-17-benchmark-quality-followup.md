@@ -1029,3 +1029,12 @@ baseline CPU in the separate 1,024-key churn check. The
 [b091 platform run](2026-10-18-platform-b091-validation.json) still fails Linux
 dependency audit, native Mac presentation and distinct Mac browser timing gates.
 No overall framework ranking or later-source platform acceptance follows.
+
+The subsequent [b091 hundred-capture comparison](2026-10-18-b091-gpui073-hosted-comparison.md)
+passes the unchanged original gates, 800 actual geometry checks, 50 pairs and 20
+executable identities. Navigation/docking active CPU is lower in this cohort;
+table/tree CPU and RSS remain concrete targets. Both timing modes, complete
+operation totals and Editor supplement are retained. All 10,922 V6 energy samples
+are zero and all phase capability/deltas remain unknown/null; synthetic fallback
+checks pass but no actual V4 fallback occurs. The run directly checks out b091
+and excludes the later label fix. It does not waive the failed platform cohort.
