@@ -373,3 +373,9 @@ compilation and formatting. Existing optional-Lottie test portability and
 standalone UI Wasm test-feature limitations are recorded separately. This is
 requested-payload and headless CPU evidence; latest-source native RSS, platform
 acceptance and the matched GPUI Kit comparison remain separate.
+
+The separate [Lottie test portability fix](2026-10-18-lottie-test-portability-validation.json)
+resolves the additional Wasm test compilation failure by matching the existing
+production clock type. All eight affected native tests, strict core lint and
+combined core/UI Wasm test compilation with Lottie pass. Production code and
+test assertions are unchanged; this adds no browser-runtime or performance claim.

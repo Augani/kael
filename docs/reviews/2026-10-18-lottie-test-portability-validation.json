@@ -1,0 +1,113 @@
+{
+  "schema": 1,
+  "status": "EXACT_TEST_IMPORT_FIX_PROMOTED",
+  "recorded_at_utc": "2026-10-18T04:08:06.469458+00:00",
+  "scope": "Use web_time::Instant in the Lottie test module, matching the production implementation on native and Wasm. Production and every test body/assertion remain unchanged.",
+  "source_file": {
+    "path": "crates/kael/src/elements/lottie.rs",
+    "sha256": "fb8aa8f3b2d8f0d48352e9819e410792894f11f3982ee0f26996bcbddb228ac8"
+  },
+  "preimage_sha256": "aed398e6ee0cc81a5c93f53d932055f8a4023c98dea785ef9c80d8d47a67f249",
+  "preparation": {
+    "sha256": "3fc40078788f55045de779391e5c1c4dffad11084645f596e9f33d5e50427551"
+  },
+  "actual_receipt_sha256": "4460ebd7227b9675757bf12f6c0a3631286d19439d243a6b053b6fb1afbd0bce",
+  "compiled_managed_inputs_match_primary_before_documentation_updates": 3154,
+  "primary_Cargo_rebuild_claim": false,
+  "actual_native": {
+    "passed": 8,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 2235,
+    "fresh_Cargo_owned_binary": true,
+    "binary_sha256": "d1f9c14e63039bf0892f5500775b4be56146c30c9c49915dfc96bc181d6ec782",
+    "names": [
+      "elements::lottie::tests::admitted_prefetch_clips_real_plans_and_cache_while_frames_advance",
+      "elements::lottie::tests::dropped_element_cancels_queued_work_and_releases_source",
+      "elements::lottie::tests::lottie_element_summary_is_content_safe",
+      "elements::lottie::tests::ready_batch_for_previous_geometry_is_discarded",
+      "elements::lottie::tests::running_retired_worker_holds_admission_until_its_current_frame_returns",
+      "elements::lottie::tests::shared_slots_bound_workers_without_blocking_foreground_or_starving_waiters",
+      "elements::lottie::tests::source_and_size_replacements_retire_work_before_current_geometry_is_polled",
+      "elements::lottie::tests::sync_animation_stops_when_animations_are_disabled"
+    ]
+  },
+  "checks": [
+    {
+      "name": "core-strict-clippy",
+      "argv": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "kael",
+        "--all-targets",
+        "--no-default-features",
+        "--features",
+        "font-kit,test-support,lottie,icons",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "environment": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_TARGET_DIR": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-control-identity-baseline/target",
+        "KAEL_HEADLESS": "1"
+      }
+    },
+    {
+      "name": "combined-wasm-lottie-tests",
+      "argv": [
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "kael",
+        "-p",
+        "kael_ui",
+        "--tests",
+        "--target",
+        "wasm32-unknown-unknown",
+        "--no-default-features",
+        "--features",
+        "kael/browser,kael/test-support,kael/lottie,kael_ui/browser"
+      ],
+      "exit_code": 0,
+      "environment": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_TARGET_DIR": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-control-identity-baseline/target",
+        "KAEL_HEADLESS": "1",
+        "RUSTFLAGS": "--cfg getrandom_backend=\"wasm_js\""
+      }
+    },
+    {
+      "name": "format-all",
+      "argv": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "environment": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_TARGET_DIR": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-control-identity-baseline/target",
+        "KAEL_HEADLESS": "1"
+      }
+    }
+  ],
+  "original_failure": {
+    "command_sha256": "5afc427dfa06473d2de7f35a8415e63c6f040178aefc1acde5cc628d9aeb6282",
+    "stderr_sha256": "b28a3868aade7f8fd7909cb493f4f986010a670613a5e90639b437816c2cd7ea",
+    "errors": 8,
+    "finding": "Unchanged old test module imported std::time::Instant, distinct from web_time::Instant on Wasm."
+  },
+  "boundaries": [
+    "Wasm checks compile tests; they do not execute a browser.",
+    "The joint core/UI selection enables the existing core getrandom/wasm_js dev dependency; standalone UI test feature setup remains separate.",
+    "The existing safe_gpu_dimension dead-code warning remains on Wasm test compilation. Native strict Clippy passes.",
+    "The complete core/UI suites were not rerun for this test-import-only change; prior tree broad-suite proof remains at its recorded source."
+  ]
+}

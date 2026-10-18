@@ -863,8 +863,9 @@ mod tests {
             atomic::{AtomicBool, AtomicUsize, Ordering},
             mpsc,
         },
-        time::{Duration, Instant},
+        time::Duration,
     };
+    use web_time::Instant;
 
     const SIMPLE_LOTTIE: &str = r#"{
         "v":"5.7.6",
