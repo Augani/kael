@@ -1,0 +1,673 @@
+{
+  "schema_version": 1,
+  "status": "maintained_adoption_and_collector_ci_commands_pass",
+  "title": "Additive macOS RUSAGE_INFO_V6 collector validation",
+  "evidence": {
+    "actual_isolated_result": {
+      "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/result.json",
+      "sha256": "ac554c3f89d92423853827774da946623abe3695a29c0325c27481f8c3304e23",
+      "bytes": 3148425
+    },
+    "independent_actual_audit": {
+      "path": ".artifacts/2026-10-18-rusage-v6-actual-independent-renderer-audit/review.json",
+      "sha256": "1bca95d9bf4a43f0b6eb594eb680939cc6d1199d7725364075eb5a1341039c4b",
+      "bytes": 25179
+    },
+    "prospective_adoption_payload": {
+      "path": ".artifacts/2026-10-18-rusage-v6-adoption-payload/preparation.json",
+      "sha256": "5f47aa3e9d6a3d889773342db080c4d6e3a1ee35d6ab99aa1fa732a7627c2cb6",
+      "bytes": 5545
+    },
+    "original_proposal": {
+      "path": ".artifacts/2026-10-18-macos-rusage-v6-collector-proposal-v1/preparation.json",
+      "sha256": "3f1042d59f478e83c288a15d51636ed36b468a717c3c3f2eda83db2a08a2e4df",
+      "bytes": 12477
+    },
+    "independent_source_peer": {
+      "path": ".artifacts/2026-10-18-macos-rusage-v6-independent-memory-review/review.json",
+      "sha256": "bbf90f18ca46f0d80a0b7c0bba04203a440328b5a4ea6ab7459a3a20faa5292c",
+      "bytes": 10633
+    },
+    "validation_driver": {
+      "path": ".artifacts/2026-10-18-rusage-v6-root-validation-plan/run.py",
+      "sha256": "b3ed6fab9129e6ee7f0102eca26c6fa1e2ebc9924f6ddbdefacca231e23b863e",
+      "bytes": 7956
+    }
+  },
+  "adoption": {
+    "performed": true,
+    "tested_code_payload_exact": true,
+    "actual_tested_code_files": [
+      {
+        "relative_path": "benchmarks/desktop-comparison/process_metrics_macos.c",
+        "adoption_payload": {
+          "path": ".artifacts/2026-10-18-rusage-v6-adoption-payload/payload/benchmarks/desktop-comparison/process_metrics_macos.c",
+          "sha256": "52dc52b5a2271a7d99bf3c184599296cc15416927094d4c8bbc30511b861d9f5",
+          "bytes": 4022
+        },
+        "original_proposal_file": {
+          "path": ".artifacts/2026-10-18-macos-rusage-v6-collector-proposal-v1/candidate/benchmarks/desktop-comparison/process_metrics_macos.c",
+          "sha256": "52dc52b5a2271a7d99bf3c184599296cc15416927094d4c8bbc30511b861d9f5",
+          "bytes": 4022
+        },
+        "actually_tested_stage_file": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/stage/process_metrics_macos.c",
+          "sha256": "52dc52b5a2271a7d99bf3c184599296cc15416927094d4c8bbc30511b861d9f5",
+          "bytes": 4022
+        }
+      },
+      {
+        "relative_path": "benchmarks/desktop-comparison/measure.py",
+        "adoption_payload": {
+          "path": ".artifacts/2026-10-18-rusage-v6-adoption-payload/payload/benchmarks/desktop-comparison/measure.py",
+          "sha256": "a6b3c0ad8f001b96a3901559be4df547ff14ef916f1ed2abff5104e736cb6a4d",
+          "bytes": 25665
+        },
+        "original_proposal_file": {
+          "path": ".artifacts/2026-10-18-macos-rusage-v6-collector-proposal-v1/candidate/benchmarks/desktop-comparison/measure.py",
+          "sha256": "a6b3c0ad8f001b96a3901559be4df547ff14ef916f1ed2abff5104e736cb6a4d",
+          "bytes": 25665
+        },
+        "actually_tested_stage_file": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/stage/measure.py",
+          "sha256": "a6b3c0ad8f001b96a3901559be4df547ff14ef916f1ed2abff5104e736cb6a4d",
+          "bytes": 25665
+        }
+      },
+      {
+        "relative_path": "benchmarks/desktop-comparison/rusage_energy.py",
+        "adoption_payload": {
+          "path": ".artifacts/2026-10-18-rusage-v6-adoption-payload/payload/benchmarks/desktop-comparison/rusage_energy.py",
+          "sha256": "0098b56271c0aa485e49eed316526b870d6f6a8790e6aa40ea68da508bde974c",
+          "bytes": 3617
+        },
+        "original_proposal_file": {
+          "path": ".artifacts/2026-10-18-macos-rusage-v6-collector-proposal-v1/candidate/benchmarks/desktop-comparison/rusage_energy.py",
+          "sha256": "0098b56271c0aa485e49eed316526b870d6f6a8790e6aa40ea68da508bde974c",
+          "bytes": 3617
+        },
+        "actually_tested_stage_file": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/stage/rusage_energy.py",
+          "sha256": "0098b56271c0aa485e49eed316526b870d6f6a8790e6aa40ea68da508bde974c",
+          "bytes": 3617
+        }
+      },
+      {
+        "relative_path": "benchmarks/desktop-comparison/test_rusage_energy.py",
+        "adoption_payload": {
+          "path": ".artifacts/2026-10-18-rusage-v6-adoption-payload/payload/benchmarks/desktop-comparison/test_rusage_energy.py",
+          "sha256": "4dd28ed545f0e2a33a933d9dcbd210e93b6a94e2062d8d14fd4c88ecddaf70eb",
+          "bytes": 4927
+        },
+        "original_proposal_file": {
+          "path": ".artifacts/2026-10-18-macos-rusage-v6-collector-proposal-v1/candidate/benchmarks/desktop-comparison/test_rusage_energy.py",
+          "sha256": "4dd28ed545f0e2a33a933d9dcbd210e93b6a94e2062d8d14fd4c88ecddaf70eb",
+          "bytes": 4927
+        },
+        "actually_tested_stage_file": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/stage/test_rusage_energy.py",
+          "sha256": "4dd28ed545f0e2a33a933d9dcbd210e93b6a94e2062d8d14fd4c88ecddaf70eb",
+          "bytes": 4927
+        }
+      },
+      {
+        "relative_path": "benchmarks/desktop-comparison/test_process_metrics_macos.c",
+        "adoption_payload": {
+          "path": ".artifacts/2026-10-18-rusage-v6-adoption-payload/payload/benchmarks/desktop-comparison/test_process_metrics_macos.c",
+          "sha256": "4f90c7158d16118ab01fb216c234432d34717e2c97cf535d3fd70a4e29d8f286",
+          "bytes": 3191
+        },
+        "original_proposal_file": {
+          "path": ".artifacts/2026-10-18-macos-rusage-v6-collector-proposal-v1/candidate/benchmarks/desktop-comparison/test_process_metrics_macos.c",
+          "sha256": "4f90c7158d16118ab01fb216c234432d34717e2c97cf535d3fd70a4e29d8f286",
+          "bytes": 3191
+        },
+        "actually_tested_stage_file": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/stage/test_process_metrics_macos.c",
+          "sha256": "4f90c7158d16118ab01fb216c234432d34717e2c97cf535d3fd70a4e29d8f286",
+          "bytes": 3191
+        }
+      }
+    ],
+    "README_delta_not_code_revalidation": {
+      "relative_path": "benchmarks/desktop-comparison/README.md",
+      "file": {
+        "path": ".artifacts/2026-10-18-rusage-v6-adoption-payload/payload/benchmarks/desktop-comparison/README.md",
+        "sha256": "e764e35e72a73d25477d7f1f7e1d09e3f07d9ac2e7e1e9fe25735f85c908837e",
+        "bytes": 14974
+      },
+      "tested_code_exact": false,
+      "original_proposal_file": {
+        "path": ".artifacts/2026-10-18-macos-rusage-v6-collector-proposal-v1/candidate/benchmarks/desktop-comparison/README.md",
+        "sha256": "41250a7cd42c6710ba99c5c47a4eb3f91fc397855a020e13d3f7e327bcc80ac2",
+        "bytes": 15809
+      }
+    },
+    "scope": "Five tested C/Python/test payloads are byte-exact to isolated validation; README wording only. Maintained checkout now passes32Python discovery,3strictCcompiles and2syntheticexecutions. The completed e205 application cohort still uses V4 and is not reclassified.",
+    "source_write_receipt": {
+      "path": ".artifacts/2026-10-18-tree-and-metrics-source-adoption/result.json",
+      "sha256": "ff8800db39c05fd2b16f652f9aff58b689984b3dcfa0197b9b284f39ae5f0dc8",
+      "bytes": 3153919
+    },
+    "maintained_collector_validation": {
+      "path": ".artifacts/2026-10-18-maintained-energy-collector-validation/result.json",
+      "sha256": "1fa7f38618c4d2674fdf6c852cd3d3358d21230b7d5c4ec03e1be0c3c4826c31",
+      "bytes": 1577347
+    },
+    "CI_source_review": {
+      "path": ".artifacts/2026-10-18-rusage-v6-ci-independent-renderer-review/review.json",
+      "sha256": "3efac1944896f49cec1b325978f28b26cc88065ea537ec318990a0bf0815e5d8",
+      "bytes": 5778
+    },
+    "current_CI_workflow": {
+      "path": ".github/workflows/performance.yml",
+      "sha256": "5e3f45a3b1899428d7b40ab6acef23db2fa12f1b6a32b42b5f2fc97cedc84bce"
+    }
+  },
+  "validation": {
+    "Python": {
+      "original": 21,
+      "new": 11,
+      "passed": 32,
+      "skipped": 0,
+      "exact_names": [
+        [
+          "test_complete_capture_and_disabled_instrumentation_are_accepted",
+          "test_measure.ComparisonEvidenceTests.test_complete_capture_and_disabled_instrumentation_are_accepted"
+        ],
+        [
+          "test_data_altered_geometry_theme_and_unexecuted_operations_are_rejected",
+          "test_measure.ComparisonEvidenceTests.test_data_altered_geometry_theme_and_unexecuted_operations_are_rejected"
+        ],
+        [
+          "test_data_missing_cells_stale_identity_and_unbounded_viewport_are_rejected",
+          "test_measure.ComparisonEvidenceTests.test_data_missing_cells_stale_identity_and_unbounded_viewport_are_rejected"
+        ],
+        [
+          "test_data_native_geometry_and_oracles_are_accepted_for_both_engines",
+          "test_measure.ComparisonEvidenceTests.test_data_native_geometry_and_oracles_are_accepted_for_both_engines"
+        ],
+        [
+          "test_disabled_instrumentation_still_requires_measured_application_frames",
+          "test_measure.ComparisonEvidenceTests.test_disabled_instrumentation_still_requires_measured_application_frames"
+        ],
+        [
+          "test_equal_constrained_geometry_is_accepted",
+          "test_measure.ComparisonEvidenceTests.test_equal_constrained_geometry_is_accepted"
+        ],
+        [
+          "test_every_editor_operation_must_have_executed",
+          "test_measure.ComparisonEvidenceTests.test_every_editor_operation_must_have_executed"
+        ],
+        [
+          "test_missing_failed_or_reordered_document_checks_are_rejected",
+          "test_measure.ComparisonEvidenceTests.test_missing_failed_or_reordered_document_checks_are_rejected"
+        ],
+        [
+          "test_mode_mismatch_and_missing_frame_measurements_are_rejected",
+          "test_measure.ComparisonEvidenceTests.test_mode_mismatch_and_missing_frame_measurements_are_rejected"
+        ],
+        [
+          "test_native_geometry_missing_invalid_or_boundary_loss_is_rejected",
+          "test_measure.ComparisonEvidenceTests.test_native_geometry_missing_invalid_or_boundary_loss_is_rejected"
+        ],
+        [
+          "test_native_resize_and_display_scale_changes_are_rejected",
+          "test_measure.ComparisonEvidenceTests.test_native_resize_and_display_scale_changes_are_rejected"
+        ],
+        [
+          "test_nonfinite_negative_and_unbounded_frame_captures_are_rejected",
+          "test_measure.ComparisonEvidenceTests.test_nonfinite_negative_and_unbounded_frame_captures_are_rejected"
+        ],
+        [
+          "test_oracle_cpu_cannot_extend_a_short_measured_phase",
+          "test_measure.ComparisonEvidenceTests.test_oracle_cpu_cannot_extend_a_short_measured_phase"
+        ],
+        [
+          "test_paired_native_geometry_must_match_both_engines",
+          "test_measure.ComparisonEvidenceTests.test_paired_native_geometry_must_match_both_engines"
+        ],
+        [
+          "test_phase_loss_duplicate_reorder_and_shortening_are_rejected",
+          "test_measure.ComparisonEvidenceTests.test_phase_loss_duplicate_reorder_and_shortening_are_rejected"
+        ],
+        [
+          "test_startup_only_or_paused_native_frames_cannot_satisfy_active_phases",
+          "test_measure.ComparisonEvidenceTests.test_startup_only_or_paused_native_frames_cannot_satisfy_active_phases"
+        ],
+        [
+          "test_tree_fixture_hash_and_both_native_controls_are_accepted",
+          "test_measure.ComparisonEvidenceTests.test_tree_fixture_hash_and_both_native_controls_are_accepted"
+        ],
+        [
+          "test_tree_stale_projection_and_unmounted_reveal_are_rejected",
+          "test_measure.ComparisonEvidenceTests.test_tree_stale_projection_and_unmounted_reveal_are_rejected"
+        ],
+        [
+          "test_workspace_lost_panes_stale_content_and_fake_persistence_are_rejected",
+          "test_measure.ComparisonEvidenceTests.test_workspace_lost_panes_stale_content_and_fake_persistence_are_rejected"
+        ],
+        [
+          "test_workspace_native_layouts_and_zoom_are_accepted_for_both_engines",
+          "test_measure.ComparisonEvidenceTests.test_workspace_native_layouts_and_zoom_are_accepted_for_both_engines"
+        ],
+        [
+          "test_wrong_engine_fixture_typography_and_smoke_are_rejected",
+          "test_measure.ComparisonEvidenceTests.test_wrong_engine_fixture_typography_and_smoke_are_rejected"
+        ],
+        [
+          "test_every_observation_is_monotonic_even_when_endpoints_increase",
+          "test_rusage_energy.RusageEnergyExtensionTests.test_every_observation_is_monotonic_even_when_endpoints_increase"
+        ],
+        [
+          "test_full_window_endpoint_delta_is_not_sum_of_cumulative_counters",
+          "test_rusage_energy.RusageEnergyExtensionTests.test_full_window_endpoint_delta_is_not_sum_of_cumulative_counters"
+        ],
+        [
+          "test_independent_field_capability_and_known_idle_zero_delta",
+          "test_rusage_energy.RusageEnergyExtensionTests.test_independent_field_capability_and_known_idle_zero_delta"
+        ],
+        [
+          "test_invalid_or_single_sample_window_is_not_a_delta",
+          "test_rusage_energy.RusageEnergyExtensionTests.test_invalid_or_single_sample_window_is_not_a_delta"
+        ],
+        [
+          "test_legacy_schema3_has_unknown_capability",
+          "test_rusage_energy.RusageEnergyExtensionTests.test_legacy_schema3_has_unknown_capability"
+        ],
+        [
+          "test_mixed_window_never_aggregates_only_available_subset",
+          "test_rusage_energy.RusageEnergyExtensionTests.test_mixed_window_never_aggregates_only_available_subset"
+        ],
+        [
+          "test_non_unsigned_integer_counters_are_rejected",
+          "test_rusage_energy.RusageEnergyExtensionTests.test_non_unsigned_integer_counters_are_rejected"
+        ],
+        [
+          "test_old_sdk_and_unsupported_kernel_fallbacks_are_explicit",
+          "test_rusage_energy.RusageEnergyExtensionTests.test_old_sdk_and_unsupported_kernel_fallbacks_are_explicit"
+        ],
+        [
+          "test_partial_inconsistent_and_permission_error_metadata_is_rejected",
+          "test_rusage_energy.RusageEnergyExtensionTests.test_partial_inconsistent_and_permission_error_metadata_is_rejected"
+        ],
+        [
+          "test_raw_samples_and_existing_counters_are_never_mutated",
+          "test_rusage_energy.RusageEnergyExtensionTests.test_raw_samples_and_existing_counters_are_never_mutated"
+        ],
+        [
+          "test_zero_filled_v6_is_unknown_not_zero_energy_evidence",
+          "test_rusage_energy.RusageEnergyExtensionTests.test_zero_filled_v6_is_unknown_not_zero_energy_evidence"
+        ]
+      ]
+    },
+    "C": {
+      "strict_compiles": 3,
+      "flags": [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-O2"
+      ],
+      "binaries": [
+        {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/process-metrics",
+          "sha256": "ed9f0e6162dd3e2bbf837b6ddd27b53778650506f39e9036bb19244d65c3a83a",
+          "bytes": 33920
+        },
+        {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/test-fallback",
+          "sha256": "0d8a26021e5b2d22759478255842e2527108d6248dbb3b789dfce7876b12d633",
+          "bytes": 34848
+        },
+        {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/test-sdk-v4",
+          "sha256": "8f4540d5f4962fa79d4c15570a6a0ac08ef2d42e1e587a5a91c25edaf00b36d4",
+          "bytes": 34152
+        }
+      ],
+      "synthetic_variants": 2,
+      "old_SDK_scope": "Macro-disabled branch simulation against current SDK; not an actual old SDK/kernel run."
+    },
+    "own_process_queries": 2,
+    "owned_command_count": 8,
+    "all_commands_exit0_no_timeout_interruption_and_group_quiescence": true,
+    "exact_commands_and_logs": [
+      {
+        "argv": [
+          "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3",
+          "-B",
+          "-m",
+          "unittest",
+          "-v",
+          "test_measure",
+          "test_rusage_energy"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/python-tests/stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/python-tests/stderr",
+          "sha256": "d42bb019373ff4c2041e49850f6bcbe3cf8b25ba7937e60429a7a66c9d5904e0",
+          "bytes": 5574
+        }
+      },
+      {
+        "argv": [
+          "/usr/bin/cc",
+          "-std=c11",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-O2",
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-rusage-v6-isolated-validation/stage/process_metrics_macos.c",
+          "-o",
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-rusage-v6-isolated-validation/process-metrics"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/compile-process-metrics/stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/compile-process-metrics/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "argv": [
+          "/usr/bin/cc",
+          "-std=c11",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-O2",
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-rusage-v6-isolated-validation/stage/test_process_metrics_macos.c",
+          "-o",
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-rusage-v6-isolated-validation/test-fallback"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/compile-test-fallback/stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/compile-test-fallback/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "argv": [
+          "/usr/bin/cc",
+          "-std=c11",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-O2",
+          "-DTEST_SDK_WITHOUT_V6",
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-rusage-v6-isolated-validation/stage/test_process_metrics_macos.c",
+          "-o",
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-rusage-v6-isolated-validation/test-sdk-v4"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/compile-test-sdk-v4/stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/compile-test-sdk-v4/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "argv": [
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-rusage-v6-isolated-validation/test-fallback"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/run-test-fallback/stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/run-test-fallback/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "argv": [
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-rusage-v6-isolated-validation/test-sdk-v4"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/run-test-sdk-v4/stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/run-test-sdk-v4/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "argv": [
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-rusage-v6-isolated-validation/process-metrics",
+          "2743"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/own-pid-before/stdout",
+          "sha256": "2401ca4881f6b64122aa68757df492f0061a27181be9f170c7bbb540df14cd3a",
+          "bytes": 528
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/own-pid-before/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "argv": [
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-rusage-v6-isolated-validation/process-metrics",
+          "2743"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/own-pid-after/stdout",
+          "sha256": "fcc9a9f6d00039e430054d11aaa31d2c546538a965e373773460e3c65b8c01a2",
+          "bytes": 529
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/own-pid-after/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      }
+    ],
+    "both_saved3163_source_maps_unchanged": true,
+    "new_current_source_capture_by_this_projector": false
+  },
+  "original_schema3_contract_preservation": {
+    "schema_version_remains": 3,
+    "original_21_tests_and_validator_helpers_byte_exact": [
+      {
+        "original": {
+          "path": ".artifacts/2026-10-18-macos-rusage-v6-collector-proposal-v1/preimage/benchmarks/desktop-comparison/test_measure.py",
+          "sha256": "4789e6fe38a2d33b6de839b170f0694412ad2e5b664071d9cce2caf799ef53e1",
+          "bytes": 21500
+        },
+        "actually_tested_copy": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/stage/test_measure.py",
+          "sha256": "4789e6fe38a2d33b6de839b170f0694412ad2e5b664071d9cce2caf799ef53e1",
+          "bytes": 21500
+        },
+        "byte_exact": true
+      },
+      {
+        "original": {
+          "path": ".artifacts/2026-10-18-macos-rusage-v6-collector-proposal-v1/preimage/benchmarks/desktop-comparison/workload_validation.py",
+          "sha256": "c731abdb551a6a48187bf4bd6d8e79f44abe6a1e483e02b4d2b4ceb8ad5232b6",
+          "bytes": 6990
+        },
+        "actually_tested_copy": {
+          "path": ".artifacts/2026-10-18-rusage-v6-isolated-validation/stage/workload_validation.py",
+          "sha256": "c731abdb551a6a48187bf4bd6d8e79f44abe6a1e483e02b4d2b4ceb8ad5232b6",
+          "bytes": 6990
+        },
+        "byte_exact": true
+      }
+    ],
+    "all_original_workload_geometry_phase_frame_and_legacy_counter_gates_retained": true,
+    "sample_selection_unchanged": "Original stable window [1:-1] for each phase; no startup/oracle/sample-selection extension.",
+    "legacy_V4_prefix_and17_legacy_fields_unchanged": true,
+    "Mach_ticks_to_nanoseconds_conversion_unchanged": true,
+    "additive_extension_version": 1,
+    "energy_rates_not_added": true
+  },
+  "fallback_and_capability": {
+    "SDK_without_V6": "Compile guarded V4 path; explicit unsupported SDK metadata and null new energy fields.",
+    "kernel_unsupported_V6": "Only proc_pid_rusage failure with errno EINVAL permits one V4 fallback. EPERM, ESRCH and other errors remain failures; no silent fallback.",
+    "V6_success": "Preserve all original V4-prefix fields; additionally retain OS energy_nj and penergy_nj unsigned64 raw counters.",
+    "V4_fallback_energy_fields": null,
+    "legacy_V4_or_mixed_mode_window": "Capability unknown or unavailable as declared; never aggregate only the available subset.",
+    "all_zero_V6_fields": "Raw zeros preserved. Capability and phase energy delta remain unknown/null, never zero-energy proof.",
+    "observed_positive_cumulative_V6_counter": "Per-field capability may be true; a subsequent valid idle interval may have delta0.",
+    "aggregation": "Validate every observation as uint64 and monotonic before computing the complete-window endpoint difference. Interior decreases fail even if endpoints increase; no clamp, cumulative sum, or per-subset result.",
+    "penergy_interpretation": "Exact OS field name only; no physical CPU core-class meaning asserted."
+  },
+  "synthetic_scope": {
+    "Python_new_tests": 11,
+    "C_variants": 2,
+    "cases": [
+      "V6 success and exact common prefix",
+      "EINVAL-only V4 fallback",
+      "EPERM and ESRCH failure without fallback",
+      "V4 failure propagation",
+      "SDK-macro-disabled V4 branch",
+      "Legacy schema3 compatibility",
+      "Independent nullable capability and known idle zero delta",
+      "Mixed/partial metadata rejection and no available-subset aggregate",
+      "All-zero V6 capability unknown",
+      "Every-observation monotonicity including interior decreases",
+      "Raw sample and legacy-counter immutability"
+    ],
+    "old_SDK_limit": "Macro-disabled branch simulation against current SDK, not an actual old SDK/kernel execution."
+  },
+  "own_process_protocol": {
+    "sampled_parent_pid": 2743,
+    "samples": [
+      {
+        "user_ns": 1627125166,
+        "system_ns": 1873302541,
+        "rss_bytes": 41123840,
+        "footprint_bytes": 30294520,
+        "idle_wakeups": 18,
+        "interrupt_wakeups": 201,
+        "pageins": 10,
+        "read_bytes": 950272,
+        "written_bytes": 9580544,
+        "billed_energy_raw": 52248,
+        "serviced_energy_raw": 0,
+        "instructions": 40136795924,
+        "cycles": 12114590698,
+        "user_ticks": 39051004,
+        "system_ticks": 44959261,
+        "timebase_numer": 125,
+        "timebase_denom": 3,
+        "rusage_flavor": 6,
+        "rusage_v6_sdk_available": true,
+        "rusage_v6_errno": null,
+        "rusage_fallback_reason": null,
+        "energy_nj": 14266642747,
+        "penergy_nj": 14266482788
+      },
+      {
+        "user_ns": 1966607166,
+        "system_ns": 2281995458,
+        "rss_bytes": 42123264,
+        "footprint_bytes": 31293944,
+        "idle_wakeups": 18,
+        "interrupt_wakeups": 225,
+        "pageins": 10,
+        "read_bytes": 950272,
+        "written_bytes": 11169792,
+        "billed_energy_raw": 52248,
+        "serviced_energy_raw": 0,
+        "instructions": 49204195751,
+        "cycles": 14663456273,
+        "user_ticks": 47198572,
+        "system_ticks": 54767891,
+        "timebase_numer": 125,
+        "timebase_denom": 3,
+        "rusage_flavor": 6,
+        "rusage_v6_sdk_available": true,
+        "rusage_v6_errno": null,
+        "rusage_fallback_reason": null,
+        "energy_nj": 17306719190,
+        "penergy_nj": 17306157941
+      }
+    ],
+    "energy_nj_delta": 3040076443,
+    "penergy_nj_delta": 3039675153,
+    "CPU_ns_delta": 748174917,
+    "billed_raw_delta": 0,
+    "scope": "Own live validation/orchestration Python PID only. Interval includes inventory/guard/child-orchestration work as well as intended250ms CPU work; observed748174917ns process CPU is not a250ms isolated application stage. Energy deltas are capability/protocol evidence, not per-stage, framework or app energy."
+  },
+  "primary_semantics": {
+    "pinned_Apple_XNU_commit": "f6217f891ac0bb64f3d375211650a4c1ff8ca1ea",
+    "SDK_and_primary_source_provenance": {
+      "path": ".artifacts/2026-10-18-macos-rusage-v6-collector-proposal-v1/primary-fetch-provenance.json",
+      "sha256": "ac2d7847f8d6739347c28cc3b7f4eb38e213d68e4e09e6b08211f69bb9e72d4f",
+      "bytes": 3362
+    },
+    "semantics_record": {
+      "path": ".artifacts/2026-10-18-macos-rusage-v6-collector-proposal-v1/primary-semantics.json",
+      "sha256": "5cfd51e7c17d354708aa5c127236bfb8d491bd3927af98192df96dba7a2d69a0",
+      "bytes": 5119
+    },
+    "units": "OS-reported nanjoules for new V6 fields; legacy billed/serviced values remain distinct raw OS counters.",
+    "availability_limit": "Published source semantics and observed own-process capability do not attest the exact running-kernel source or hardware calibration."
+  },
+  "limits": [
+    "No app comparison, performance acceptance, watts, wall-plug/GPU/display power or calibrated hardware-accuracy result.",
+    "No application/framework energy-efficiency advantage, physical input/native presentation proof, P-core interpretation or overall framework ranking.",
+    "All eight actual commands are already completed isolated validation; this public projection only hashes/parses preserved artifacts.",
+    "No new benchmark/CI dispatch, Cargo/native/compiler process, current root inventory or maintained/Managed/Git write occurs here."
+  ]
+}

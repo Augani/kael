@@ -96,7 +96,8 @@ impl<T: Clone + Eq + Hash + 'static> VirtualTreeModel<T> {
             .zip(&model.data.expanded)
             .any(|(row, expanded)| row.has_children && !*expanded)
         {
-            model.set_accessibility_catalog_ids(source_ids(nodes))?;
+            let displayed_rows = model.len();
+            model.set_accessibility_catalog_ids_with_capacity(source_ids(nodes), displayed_rows)?;
         }
         Ok(model)
     }
@@ -118,7 +119,8 @@ impl<T: Clone + Eq + Hash + 'static> VirtualTreeModel<T> {
             expanded_ids,
             auto_expand_matches,
         )?;
-        model.set_accessibility_catalog_ids(source_ids(nodes))?;
+        let displayed_rows = model.len();
+        model.set_accessibility_catalog_ids_with_capacity(source_ids(nodes), displayed_rows)?;
         Ok(model)
     }
 
@@ -170,10 +172,20 @@ impl<T: Clone + Eq + Hash + 'static> VirtualTreeModel<T> {
         &mut self,
         ids: impl IntoIterator<Item = T>,
     ) -> Result<(), VirtualTreeModelError> {
+        self.set_accessibility_catalog_ids_with_capacity(ids, 0)
+    }
+
+    // Factories know every validated displayed ID belongs to the source catalog.
+    // Public arbitrary catalogs keep their existing zero-capacity/error path.
+    fn set_accessibility_catalog_ids_with_capacity(
+        &mut self,
+        ids: impl IntoIterator<Item = T>,
+        capacity: usize,
+    ) -> Result<(), VirtualTreeModelError> {
         let data = Arc::get_mut(&mut self.data)
             .filter(|data| data.accessibility.is_none())
             .ok_or(VirtualTreeModelError::SharedPreparation)?;
-        let mut catalog = HashMap::new();
+        let mut catalog = HashMap::with_capacity(capacity);
         for (index, id) in ids.into_iter().enumerate() {
             if catalog.insert(id, index).is_some() {
                 return Err(VirtualTreeModelError::DuplicateId);
@@ -2725,5 +2737,76 @@ mod tests {
             assert!(old_prepared.upgrade().is_none());
             assert!(old_snapshot.upgrade().is_none());
         }
+    }
+}
+
+// Functional coverage for arbitrary public catalogs. No capacity, hash-count or
+// latency assertion is a maintained public contract.
+#[cfg(test)]
+mod catalog_reserve_regressions {
+    use super::*;
+
+    struct LooseUpperCatalog {
+        ids: std::vec::IntoIter<usize>,
+    }
+
+    impl Iterator for LooseUpperCatalog {
+        type Item = usize;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            self.ids.next()
+        }
+
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            // This is a legal loose upper bound, including for an empty input.
+            (0, Some(usize::MAX))
+        }
+    }
+
+    fn loose(ids: Vec<usize>) -> LooseUpperCatalog {
+        LooseUpperCatalog {
+            ids: ids.into_iter(),
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn arbitrary_catalog_loose_upper_bound_keeps_validation_and_previous_metadata() {
+        let nodes = vec![TreeNode::new(10, "Workspace 日本語").with_children(vec![
+            TreeNode::new(11, "inactive child").disabled(true),
+            TreeNode::new(12, "資料"),
+        ])];
+        let mut model = VirtualTreeModel::new(&nodes, &HashSet::new()).unwrap();
+        assert_eq!(model.len(), 1);
+        assert_eq!(model.id_at(0), Some(&10));
+        assert_eq!(
+            model.label_at(0).map(AsRef::<str>::as_ref),
+            Some("Workspace 日本語")
+        );
+        model
+            .set_accessibility_catalog_ids(loose(vec![12, 10, 11]))
+            .unwrap();
+        let original = model.data.catalog_indices.clone();
+        for (ids, error) in [
+            (vec![], VirtualTreeModelError::IncompleteCatalog),
+            (vec![12, 11], VirtualTreeModelError::IncompleteCatalog),
+            (vec![12, 10, 11, 12], VirtualTreeModelError::DuplicateId),
+        ] {
+            assert_eq!(model.set_accessibility_catalog_ids(loose(ids)), Err(error));
+            assert!(Arc::ptr_eq(&original, &model.data.catalog_indices));
+            assert_eq!(model.len(), 1);
+            assert_eq!(model.id_at(0), Some(&10));
+            for (index, id) in [12, 10, 11].into_iter().enumerate() {
+                assert_eq!(model.data.catalog_indices.get(&id), Some(&index));
+            }
+        }
+        model
+            .set_accessibility_catalog_ids(loose(vec![10]))
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            &model.data.indices,
+            &model.data.catalog_indices
+        ));
+        assert_eq!(model.index_of(&10), Some(0));
+        assert_eq!(model.index_of(&11), None);
     }
 }

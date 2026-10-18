@@ -1,0 +1,2872 @@
+{
+  "schema_version": 1,
+  "status": "narrow_factory_cost_and_full_UI_quality_pass_adopted",
+  "recorded_at_utc": "2026-10-18T07:59:06.218677+00:00",
+  "adoption_performed": true,
+  "scope": "Trusted-factory catalog reserve with actual fixed14-process cost acceptance, complete566-test UI/strict lint/production and test Wasm/format validation, independent raw and restoration audits, and exact formatted maintained-source adoption. These scoped headless results do not establish native/application/RSS/cross-framework gains.",
+  "production": {
+    "path": "crates/kael_ui/src/navigation/virtual_tree.rs",
+    "preimage": {
+      "path": ".artifacts/2026-10-18-tree-factory-catalog-reserve-candidate-v1/preimage/crates/kael_ui/src/navigation/virtual_tree.rs",
+      "sha256": "0b1cd677b9790675f8a651aebd185e22fbfe291d86187413ec24bd1f9bec0c74",
+      "bytes": 109834
+    },
+    "candidate": {
+      "path": ".artifacts/2026-10-18-tree-factory-catalog-reserve-candidate-v1/candidate-production/crates/kael_ui/src/navigation/virtual_tree.rs",
+      "sha256": "6940ec4afe0ddb0bc9a067f2d6b5db1745a5eec952825bd4641707c79a0e7ce0",
+      "bytes": 110416
+    },
+    "proposal": {
+      "path": ".artifacts/2026-10-18-tree-factory-catalog-reserve-candidate-v1/preparation.json",
+      "sha256": "f033486138f075434a15dcfeda6b3cef89f748462ac22dcda9655b3c88ab5437",
+      "bytes": 5066
+    },
+    "behavior": "new/filtered factories reserve from already validated displayed model length. Arbitrary public setter does not reserve from iterator upper/lower hints and preserves original duplicate/incomplete validation and previous metadata. Full logical accessibility remains required."
+  },
+  "evidence": {
+    "actual_evaluation_result": {
+      "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-evaluation/result.json",
+      "sha256": "138fecd4b9d900ff618eb20981376eda3149761ae55c9026678be15cf630bd95",
+      "bytes": 1537
+    },
+    "actual_evaluation": {
+      "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-evaluation/evaluation.json",
+      "sha256": "65a72151a66c3b3937fe0dac78fbdc63a397c9527062dab049bc749da602d7d8",
+      "bytes": 47714
+    },
+    "actual_fixed14_run": {
+      "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/run.json",
+      "sha256": "c167f3c72ad10bb6e4adc05ae95b538fb28296455347fc723ae34338d4f42a5b",
+      "bytes": 4723977
+    },
+    "measure_result": {
+      "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/result.json",
+      "sha256": "c87a5d3963b70840b26cfd5de16619661d15cf6cf1fd9318415de06e7f3403a9",
+      "bytes": 3138060
+    },
+    "actual_build": {
+      "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-build/result.json",
+      "sha256": "8da62cff7a3c21a6a0ee8191ba8f3eb2a38ca1b3ef07e685e829c9b0955f2d6c",
+      "bytes": 3194574
+    },
+    "actual_six_binary_receipt": {
+      "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-build/build-receipt.json",
+      "sha256": "3477ca8064e33ada1c95deaabea7d853f47e010f3b00ec643d9a814d879d2553",
+      "bytes": 3176831
+    },
+    "source_restoration": {
+      "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/restoration.json",
+      "sha256": "2c66941e523a02e70ce088a6046cdf577cca3613f8cc0b9e295db2fa9a6c2031",
+      "bytes": 3135820
+    },
+    "Root_quiet_completion": {
+      "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-root-ready/quiet-completion.json",
+      "sha256": "2a68819f9c6744281551addbd4cdbfd6803709738be7d4a8e2d447b211d7ce3c",
+      "bytes": 746
+    },
+    "frozen_harness": {
+      "path": ".artifacts/2026-10-18-tree-catalog-reserve-validation-harness-v3/preparation.json",
+      "sha256": "b1715467f7ea4d980dab40ebec9405e96158e516385bb5a55499f10706858f12",
+      "bytes": 12264
+    },
+    "frozen_gates": {
+      "path": ".artifacts/2026-10-18-tree-catalog-reserve-validation-harness-v3/gates.json",
+      "sha256": "1d3fd4acf84a311d0c700473ad4c3c599f375892417416ee61fe10a3db04b2a3",
+      "bytes": 5028
+    },
+    "source_successor_peer": {
+      "path": ".artifacts/2026-10-18-tree-reserve-duration-successor-independent-renderer-review/review.json",
+      "sha256": "3f719ec26ade3aaf7af43f410955b0dc53772cbf83ea749b02a5823b9ab45d36",
+      "bytes": 14571
+    },
+    "documentation_erratum": {
+      "path": ".artifacts/2026-10-18-tree-reserve-duration-documentation-erratum/erratum.json",
+      "sha256": "511ba473e59251b3a0df264e2d109d518eb0a265c9b445849785d563e62b019c",
+      "bytes": 2399
+    },
+    "actual42_functional_proof": {
+      "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/result.json",
+      "sha256": "9373fdb0e218203f0ded7fa5d6d2b501edbe6e65b9305a7f0860c8cf71647b2c",
+      "bytes": 1819080
+    }
+  },
+  "acceptance": {
+    "actual_narrow_status": "PASS_FROZEN_NARROW_TREE_FACTORY_GATES_ONLY",
+    "gates_passed": 58,
+    "gates_total": 58,
+    "failed_gates": [],
+    "fixed_processes": 14,
+    "process_kinds": {
+      "full_logical": 2,
+      "direct_System_CPU": 10,
+      "counted_System_allocation": 2
+    },
+    "fresh_copied_binaries": 6,
+    "fixed_CPU_pairs": 5,
+    "retries": 0,
+    "outliers_removed": 0,
+    "all_raw_observations_preserved": true,
+    "full_source_inputs_per_root": 3163,
+    "Primary_unmodified": true,
+    "Managed_one_path_restored_exact_bytes_modes_current_mtime": true
+  },
+  "fixed_source_fingerprints": {
+    "baseline": "08b6c22b058e57e9b6d9dbfe3a922bd830af8137c0276c121d41232cb3eb6e18",
+    "candidate": "08b6c22b058e57e9b6d9dbfe3a922bd830af8137c0276c121d41232cb3eb6e18"
+  },
+  "frozen_specification": {
+    "status": "FROZEN_PROSPECTIVE_NO_MEASUREMENT",
+    "contract": "tree-catalog-reserve-factory-v1",
+    "input_hash": 811720978405941207,
+    "fixtures": [
+      {
+        "name": "wide-one-collapsed",
+        "iterations": 16,
+        "rows": 96025,
+        "error": null,
+        "semantic_checksum": 980304041794443975,
+        "result_stamp": 13166660330573062413,
+        "bundle_checksum": 8273184054322111765
+      },
+      {
+        "name": "wide-fully-expanded",
+        "iterations": 16,
+        "rows": 100025,
+        "error": null,
+        "semantic_checksum": 13691693496363131947,
+        "result_stamp": 15674582396833605933,
+        "bundle_checksum": 5208303810111887765
+      },
+      {
+        "name": "wide-all-collapsed",
+        "iterations": 16,
+        "rows": 25,
+        "error": null,
+        "semantic_checksum": 3532655041857669279,
+        "result_stamp": 8316557043536633357,
+        "bundle_checksum": 1406741498825185557
+      },
+      {
+        "name": "wide-filter-missing",
+        "iterations": 16,
+        "rows": 0,
+        "error": null,
+        "semantic_checksum": 14695981039346656037,
+        "result_stamp": 0,
+        "bundle_checksum": 9808874869469701221
+      },
+      {
+        "name": "wide-filter-one-project",
+        "iterations": 16,
+        "rows": 1,
+        "error": null,
+        "semantic_checksum": 10114353322233872510,
+        "result_stamp": 11400621105435802645,
+        "bundle_checksum": 2901494150793177845
+      },
+      {
+        "name": "small-partial",
+        "iterations": 4096,
+        "rows": 120,
+        "error": null,
+        "semantic_checksum": 2843875540952456608,
+        "result_stamp": 3026716574366706136,
+        "bundle_checksum": 16927727511656293157
+      },
+      {
+        "name": "external-empty-loose-upper",
+        "iterations": 8000000,
+        "rows": 1,
+        "error": 2,
+        "semantic_checksum": 10,
+        "result_stamp": 3490512898,
+        "bundle_checksum": 16672044035796042533
+      },
+      {
+        "name": "early-hidden-duplicate",
+        "iterations": 16,
+        "rows": 96002,
+        "error": 1,
+        "semantic_checksum": 0,
+        "result_stamp": 3490512897,
+        "bundle_checksum": 15713670262784667669
+      }
+    ],
+    "order": [
+      {
+        "variant": "baseline",
+        "kind": "logical",
+        "sample": 0
+      },
+      {
+        "variant": "candidate",
+        "kind": "logical",
+        "sample": 0
+      },
+      {
+        "variant": "baseline",
+        "kind": "cpu",
+        "sample": 0
+      },
+      {
+        "variant": "candidate",
+        "kind": "cpu",
+        "sample": 0
+      },
+      {
+        "variant": "candidate",
+        "kind": "cpu",
+        "sample": 1
+      },
+      {
+        "variant": "baseline",
+        "kind": "cpu",
+        "sample": 1
+      },
+      {
+        "variant": "baseline",
+        "kind": "cpu",
+        "sample": 2
+      },
+      {
+        "variant": "candidate",
+        "kind": "cpu",
+        "sample": 2
+      },
+      {
+        "variant": "candidate",
+        "kind": "cpu",
+        "sample": 3
+      },
+      {
+        "variant": "baseline",
+        "kind": "cpu",
+        "sample": 3
+      },
+      {
+        "variant": "baseline",
+        "kind": "cpu",
+        "sample": 4
+      },
+      {
+        "variant": "candidate",
+        "kind": "cpu",
+        "sample": 4
+      },
+      {
+        "variant": "baseline",
+        "kind": "allocation",
+        "sample": 0
+      },
+      {
+        "variant": "candidate",
+        "kind": "allocation",
+        "sample": 0
+      }
+    ],
+    "cpu": {
+      "minimum_bundle_ns": 20000000,
+      "maximum_mad_fraction": 0.1,
+      "median_candidate_max_ratio": 1.05,
+      "bundle_additive_ns": 100000,
+      "thread_and_process_separate": true,
+      "retries": 0,
+      "outliers_removed": 0
+    },
+    "allocation": {
+      "large_collapsed_strictly_fewer_allocation_events": true,
+      "normal_fixtures_no_more_construction_events_final_live_or_peak_bytes": true,
+      "all_model_and_caller_fixture_owners_return_exact_requested_live_checkpoint": true,
+      "public_empty_setter_zero_requested_alloc_events_and_live_delta": true,
+      "early_duplicate": {
+        "result": "DuplicateId",
+        "full_lifecycle_requested_live_delta": 0,
+        "additional_peak_and_requested_limit_formula": "baseline +64*validated_displayed_rows+4096",
+        "validated_displayed_rows": 96002,
+        "absolute_additional_allowance_bytes": 6148224,
+        "max_extra_allocation_events": 1,
+        "cpu_same_five_percent_gate": true,
+        "qualification": "This explicitly permits and reports one up-front table reservation before early error. It is not a memory improvement or all-input peak nonregression claim."
+      }
+    },
+    "logical": {
+      "exact_original_consumer": true,
+      "oracles": 53,
+      "pipelines": 50,
+      "spans": 418,
+      "checkpoints": 104,
+      "rows": 100025,
+      "shared_records_expected_both_variants": true,
+      "checked_offscreen_each_disclosure": 2,
+      "witness_target_mask": 2047,
+      "full_payload_inventory_equal": true,
+      "original_timings_not_used_for_cost": true
+    },
+    "qualification": "Original shared-record optimization resource gates are preserved as history; this separately named reserve cohort reuses the unchanged functional consumer, not its unrelated old architecture A/B thresholds."
+  },
+  "observed_results": [
+    {
+      "fixture": "wide-one-collapsed",
+      "iterations_per_CPU_bundle": 16,
+      "rows": 96025,
+      "error": null,
+      "semantic_checksum": 980304041794443975,
+      "bundle_checksum": 8273184054322111765,
+      "CPU": {
+        "thread_ns": {
+          "baseline_median_ns": 174988833,
+          "candidate_median_ns": 148497084,
+          "candidate_over_baseline_ratio": 0.8486089166615564,
+          "candidate_change_percent": -15.139108333844364,
+          "raw_baseline_bundles_ns": [
+            174988833,
+            171617084,
+            172971666,
+            175035791,
+            175337917
+          ],
+          "raw_candidate_bundles_ns": [
+            158794916,
+            143011292,
+            150937583,
+            148497084,
+            148112333
+          ],
+          "MAD_fractions": {
+            "baseline": 0.0019948930112586097,
+            "candidate": 0.01643465941728526
+          }
+        },
+        "process_ns": {
+          "baseline_median_ns": 174988000,
+          "candidate_median_ns": 148497000,
+          "candidate_over_baseline_ratio": 0.8486124762840881,
+          "candidate_change_percent": -15.138752371591192,
+          "raw_baseline_bundles_ns": [
+            174988000,
+            171617000,
+            172972000,
+            175035000,
+            175337000
+          ],
+          "raw_candidate_bundles_ns": [
+            158794000,
+            143011000,
+            150938000,
+            148497000,
+            148112000
+          ],
+          "MAD_fractions": {
+            "baseline": 0.0019944224746839784,
+            "candidate": 0.016438042519377496
+          }
+        }
+      },
+      "requested_allocation": {
+        "gate": "construction_allocation_nonregression",
+        "pass": true,
+        "kind": "cost",
+        "fixture": "wide-one-collapsed",
+        "baseline_events": 44,
+        "candidate_events": 29,
+        "baseline_final_live": 22586009,
+        "candidate_final_live": 22586009,
+        "baseline_peak": 23700129,
+        "candidate_peak": 22586009
+      }
+    },
+    {
+      "fixture": "wide-fully-expanded",
+      "iterations_per_CPU_bundle": 16,
+      "rows": 100025,
+      "error": null,
+      "semantic_checksum": 13691693496363131947,
+      "bundle_checksum": 5208303810111887765,
+      "CPU": {
+        "thread_ns": {
+          "baseline_median_ns": 93791833,
+          "candidate_median_ns": 98172000,
+          "candidate_over_baseline_ratio": 1.0467009425010385,
+          "candidate_change_percent": 4.670094250103851,
+          "raw_baseline_bundles_ns": [
+            94639250,
+            93791833,
+            102562375,
+            91567041,
+            83721667
+          ],
+          "raw_candidate_bundles_ns": [
+            98172000,
+            96945458,
+            99530333,
+            100584000,
+            90297750
+          ],
+          "MAD_fractions": {
+            "baseline": 0.023720530123342402,
+            "candidate": 0.013836256773825531
+          }
+        },
+        "process_ns": {
+          "baseline_median_ns": 93792000,
+          "candidate_median_ns": 98173000,
+          "candidate_over_baseline_ratio": 1.0467097407028318,
+          "candidate_change_percent": 4.670974070283185,
+          "raw_baseline_bundles_ns": [
+            94640000,
+            93792000,
+            102562000,
+            91568000,
+            83722000
+          ],
+          "raw_candidate_bundles_ns": [
+            98173000,
+            96946000,
+            99531000,
+            100584000,
+            90299000
+          ],
+          "MAD_fractions": {
+            "baseline": 0.023712043671102013,
+            "candidate": 0.013832723865013802
+          }
+        }
+      },
+      "requested_allocation": {
+        "gate": "construction_allocation_nonregression",
+        "pass": true,
+        "kind": "cost",
+        "fixture": "wide-fully-expanded",
+        "baseline_events": 25,
+        "candidate_events": 25,
+        "baseline_final_live": 20457713,
+        "candidate_final_live": 20457713,
+        "baseline_peak": 20457713,
+        "candidate_peak": 20457713
+      }
+    },
+    {
+      "fixture": "wide-all-collapsed",
+      "iterations_per_CPU_bundle": 16,
+      "rows": 25,
+      "error": null,
+      "semantic_checksum": 3532655041857669279,
+      "bundle_checksum": 1406741498825185557,
+      "CPU": {
+        "thread_ns": {
+          "baseline_median_ns": 69531542,
+          "candidate_median_ns": 68740375,
+          "candidate_over_baseline_ratio": 0.9886214662116942,
+          "candidate_change_percent": -1.1378533788305778,
+          "raw_baseline_bundles_ns": [
+            69136458,
+            69171500,
+            70059458,
+            69531542,
+            69570250
+          ],
+          "raw_candidate_bundles_ns": [
+            71641292,
+            68740375,
+            71329250,
+            68548917,
+            68228833
+          ],
+          "MAD_fractions": {
+            "baseline": 0.0051781103890950675,
+            "candidate": 0.007441652740474576
+          }
+        },
+        "process_ns": {
+          "baseline_median_ns": 69531000,
+          "candidate_median_ns": 68741000,
+          "candidate_over_baseline_ratio": 0.9886381613956364,
+          "candidate_change_percent": -1.1361838604363572,
+          "raw_baseline_bundles_ns": [
+            69136000,
+            69172000,
+            70060000,
+            69531000,
+            69570000
+          ],
+          "raw_candidate_bundles_ns": [
+            71642000,
+            68741000,
+            71328000,
+            68549000,
+            68229000
+          ],
+          "MAD_fractions": {
+            "baseline": 0.0051631646316031695,
+            "candidate": 0.007448247770617244
+          }
+        }
+      },
+      "requested_allocation": {
+        "gate": "construction_allocation_nonregression",
+        "pass": true,
+        "kind": "cost",
+        "fixture": "wide-all-collapsed",
+        "baseline_events": 31,
+        "candidate_events": 28,
+        "baseline_final_live": 2233529,
+        "candidate_final_live": 2233529,
+        "baseline_peak": 3347649,
+        "candidate_peak": 3347649
+      }
+    },
+    {
+      "fixture": "wide-filter-missing",
+      "iterations_per_CPU_bundle": 16,
+      "rows": 0,
+      "error": null,
+      "semantic_checksum": 14695981039346656037,
+      "bundle_checksum": 9808874869469701221,
+      "CPU": {
+        "thread_ns": {
+          "baseline_median_ns": 588610250,
+          "candidate_median_ns": 593425375,
+          "candidate_over_baseline_ratio": 1.008180498046033,
+          "candidate_change_percent": 0.8180498046032936,
+          "raw_baseline_bundles_ns": [
+            589051667,
+            590475292,
+            588610250,
+            584657333,
+            586113791
+          ],
+          "raw_candidate_bundles_ns": [
+            603928292,
+            593425375,
+            584485917,
+            593471208,
+            588648958
+          ],
+          "MAD_fractions": {
+            "baseline": 0.0031685516859415886,
+            "candidate": 0.008048892415495378
+          }
+        },
+        "process_ns": {
+          "baseline_median_ns": 588609000,
+          "candidate_median_ns": 593425000,
+          "candidate_over_baseline_ratio": 1.0081820019741459,
+          "candidate_change_percent": 0.8182001974145869,
+          "raw_baseline_bundles_ns": [
+            589052000,
+            590475000,
+            588609000,
+            584658000,
+            586114000
+          ],
+          "raw_candidate_bundles_ns": [
+            603930000,
+            593425000,
+            584486000,
+            593472000,
+            588648000
+          ],
+          "MAD_fractions": {
+            "baseline": 0.0031701859808463684,
+            "candidate": 0.008049879934279816
+          }
+        }
+      },
+      "requested_allocation": {
+        "gate": "construction_allocation_nonregression",
+        "pass": true,
+        "kind": "cost",
+        "fixture": "wide-filter-missing",
+        "baseline_events": 400123,
+        "candidate_events": 400123,
+        "baseline_final_live": 2228512,
+        "candidate_final_live": 2228512,
+        "baseline_peak": 3342632,
+        "candidate_peak": 3342632
+      }
+    },
+    {
+      "fixture": "wide-filter-one-project",
+      "iterations_per_CPU_bundle": 16,
+      "rows": 1,
+      "error": null,
+      "semantic_checksum": 10114353322233872510,
+      "bundle_checksum": 2901494150793177845,
+      "CPU": {
+        "thread_ns": {
+          "baseline_median_ns": 446616875,
+          "candidate_median_ns": 449226500,
+          "candidate_over_baseline_ratio": 1.0058430953823678,
+          "candidate_change_percent": 0.5843095382367824,
+          "raw_baseline_bundles_ns": [
+            442953958,
+            451256750,
+            445886458,
+            447371625,
+            446616875
+          ],
+          "raw_candidate_bundles_ns": [
+            464201625,
+            453540791,
+            449226500,
+            448778375,
+            444972708
+          ],
+          "MAD_fractions": {
+            "baseline": 0.0016899271887118013,
+            "candidate": 0.009469147523576638
+          }
+        },
+        "process_ns": {
+          "baseline_median_ns": 446618000,
+          "candidate_median_ns": 449227000,
+          "candidate_over_baseline_ratio": 1.0058416812578086,
+          "candidate_change_percent": 0.5841681257808595,
+          "raw_baseline_bundles_ns": [
+            442955000,
+            451257000,
+            445887000,
+            447372000,
+            446618000
+          ],
+          "raw_candidate_bundles_ns": [
+            464203000,
+            453540000,
+            449227000,
+            448779000,
+            444973000
+          ],
+          "MAD_fractions": {
+            "baseline": 0.001688243644456784,
+            "candidate": 0.009469600001780838
+          }
+        }
+      },
+      "requested_allocation": {
+        "gate": "construction_allocation_nonregression",
+        "pass": true,
+        "kind": "cost",
+        "fixture": "wide-filter-one-project",
+        "baseline_events": 400129,
+        "candidate_events": 400129,
+        "baseline_final_live": 2229109,
+        "candidate_final_live": 2229109,
+        "baseline_peak": 3343517,
+        "candidate_peak": 3343517
+      }
+    },
+    {
+      "fixture": "small-partial",
+      "iterations_per_CPU_bundle": 4096,
+      "rows": 120,
+      "error": null,
+      "semantic_checksum": 2843875540952456608,
+      "bundle_checksum": 16927727511656293157,
+      "CPU": {
+        "thread_ns": {
+          "baseline_median_ns": 49389125,
+          "candidate_median_ns": 35317625,
+          "candidate_over_baseline_ratio": 0.7150891010925988,
+          "candidate_change_percent": -28.491089890740117,
+          "raw_baseline_bundles_ns": [
+            49389125,
+            50075834,
+            51004958,
+            49205542,
+            48653625
+          ],
+          "raw_candidate_bundles_ns": [
+            36232708,
+            35095583,
+            35261834,
+            36363750,
+            35317625
+          ],
+          "MAD_fractions": {
+            "baseline": 0.013904052764652137,
+            "candidate": 0.006287002594313746
+          }
+        },
+        "process_ns": {
+          "baseline_median_ns": 49389000,
+          "candidate_median_ns": 35318000,
+          "candidate_over_baseline_ratio": 0.7150985037154022,
+          "candidate_change_percent": -28.490149628459783,
+          "raw_baseline_bundles_ns": [
+            49389000,
+            50076000,
+            51005000,
+            49206000,
+            48654000
+          ],
+          "raw_candidate_bundles_ns": [
+            36233000,
+            35095000,
+            35265000,
+            36364000,
+            35318000
+          ],
+          "MAD_fractions": {
+            "baseline": 0.01390997995505072,
+            "candidate": 0.0063140608188459145
+          }
+        }
+      },
+      "requested_allocation": {
+        "gate": "construction_allocation_nonregression",
+        "pass": true,
+        "kind": "cost",
+        "fixture": "small-partial",
+        "baseline_events": 25,
+        "candidate_events": 19,
+        "baseline_final_live": 27360,
+        "candidate_final_live": 27360,
+        "baseline_peak": 29544,
+        "candidate_peak": 27360
+      }
+    },
+    {
+      "fixture": "external-empty-loose-upper",
+      "iterations_per_CPU_bundle": 8000000,
+      "rows": 1,
+      "error": 2,
+      "semantic_checksum": 10,
+      "bundle_checksum": 16672044035796042533,
+      "CPU": {
+        "thread_ns": {
+          "baseline_median_ns": 34353125,
+          "candidate_median_ns": 34392542,
+          "candidate_over_baseline_ratio": 1.0011474065314292,
+          "candidate_change_percent": 0.11474065314291959,
+          "raw_baseline_bundles_ns": [
+            34458166,
+            34353125,
+            34345333,
+            34414917,
+            34276542
+          ],
+          "raw_candidate_bundles_ns": [
+            34476666,
+            34370083,
+            34453750,
+            34392542,
+            34215459
+          ],
+          "MAD_fractions": {
+            "baseline": 0.0017987301009733468,
+            "candidate": 0.0017796881661146188
+          }
+        },
+        "process_ns": {
+          "baseline_median_ns": 34354000,
+          "candidate_median_ns": 34393000,
+          "candidate_over_baseline_ratio": 1.0011352389823602,
+          "candidate_change_percent": 0.11352389823602316,
+          "raw_baseline_bundles_ns": [
+            34459000,
+            34354000,
+            34345000,
+            34415000,
+            34277000
+          ],
+          "raw_candidate_bundles_ns": [
+            34477000,
+            34370000,
+            34454000,
+            34393000,
+            34215000
+          ],
+          "MAD_fractions": {
+            "baseline": 0.0017756302031786692,
+            "candidate": 0.00177361672433344
+          }
+        }
+      },
+      "requested_allocation": {
+        "gate": "construction_allocation_nonregression",
+        "pass": true,
+        "kind": "cost",
+        "fixture": "external-empty-loose-upper",
+        "baseline_events": 13,
+        "candidate_events": 13,
+        "baseline_final_live": 937,
+        "candidate_final_live": 937,
+        "baseline_peak": 937,
+        "candidate_peak": 937
+      }
+    },
+    {
+      "fixture": "early-hidden-duplicate",
+      "iterations_per_CPU_bundle": 16,
+      "rows": 96002,
+      "error": 1,
+      "semantic_checksum": 0,
+      "bundle_checksum": 15713670262784667669,
+      "CPU": {
+        "thread_ns": {
+          "baseline_median_ns": 77300667,
+          "candidate_median_ns": 77768458,
+          "candidate_over_baseline_ratio": 1.0060515777955705,
+          "candidate_change_percent": 0.6051577795570529,
+          "raw_baseline_bundles_ns": [
+            76951292,
+            76515334,
+            77355792,
+            77300667,
+            77874625
+          ],
+          "raw_candidate_bundles_ns": [
+            78730583,
+            77645208,
+            77768458,
+            78183666,
+            77754625
+          ],
+          "MAD_fractions": {
+            "baseline": 0.004519689332046772,
+            "candidate": 0.0015848327608604506
+          }
+        },
+        "process_ns": {
+          "baseline_median_ns": 77301000,
+          "candidate_median_ns": 77769000,
+          "candidate_over_baseline_ratio": 1.0060542554430085,
+          "candidate_change_percent": 0.6054255443008527,
+          "raw_baseline_bundles_ns": [
+            76952000,
+            76517000,
+            77356000,
+            77301000,
+            77875000
+          ],
+          "raw_candidate_bundles_ns": [
+            78732000,
+            77646000,
+            77769000,
+            78185000,
+            77754000
+          ],
+          "MAD_fractions": {
+            "baseline": 0.004514818695747791,
+            "candidate": 0.0015816070670832852
+          }
+        }
+      },
+      "requested_allocation": {
+        "gate": "early_duplicate_allocation_tradeoff",
+        "pass": true,
+        "kind": "cost",
+        "fixture": "early-hidden-duplicate",
+        "baseline_events": 28,
+        "candidate_events": 28,
+        "baseline_peak": 20357278,
+        "candidate_peak": 22585434,
+        "baseline_requested": 36085606,
+        "candidate_requested": 38313762,
+        "explicit_extra_bytes_allowance": 6148224,
+        "qualification": "This explicitly permits and reports one up-front table reservation before early error. It is not a memory improvement or all-input peak nonregression claim."
+      }
+    }
+  ],
+  "important_tradeoffs": {
+    "wide_one_collapsed": {
+      "construction_events": [
+        44,
+        29
+      ],
+      "requested_final_live_bytes": [
+        22586009,
+        22586009
+      ],
+      "requested_peak_bytes": [
+        23700129,
+        22586009
+      ]
+    },
+    "fully_expanded": {
+      "thread_CPU_candidate_change_percent": 4.670094250103851,
+      "scope": "About4.67% slower in this fixed factory bundle, within unchanged1.05\u00d7+100\u00b5s gate; no universal speedup."
+    },
+    "early_hidden_duplicate": {
+      "validated_displayed_rows": 96002,
+      "requested_peak_bytes": [
+        20357278,
+        22585434
+      ],
+      "requested_total_bytes": [
+        36085606,
+        38313762
+      ],
+      "extra_requested_and_peak_bytes": 2228156,
+      "allowed_extra_bytes": 6148224,
+      "scope": "Trusted reservation can precede duplicate rejection, increasing requested peak/total for this input. No all-input memory improvement/nonregression claim."
+    },
+    "external_empty_public_setter": {
+      "actual_fixed_operations_per_CPU_and_allocation_case": 8000000,
+      "bundle_checksum": 16672044035796042533,
+      "minimum_bundle_ns": 20000000,
+      "scope": "Original error/previous metadata and zero requested setter allocations retained. Shared Spec is8M in both modes; inherited README2M sentence is separately corrected by frozen erratum."
+    }
+  },
+  "full_logical_accessibility": {
+    "logical_rows": 100025,
+    "oracles": 53,
+    "pipelines": 50,
+    "spans": 418,
+    "checkpoints": 104,
+    "address_witness_mask": 2047,
+    "full_baseline_candidate_payload_inventory_equal": true,
+    "inventory": [
+      {
+        "op": {
+          "kind": "cold",
+          "branch": null,
+          "iteration": 0
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "collapse",
+          "branch": 0,
+          "iteration": 0
+        },
+        "rows": 96025,
+        "tree_nodes": 96026,
+        "logical_node_value_bytes": 36873984,
+        "logical_label_utf8_bytes": 3936751,
+        "logical_action_slots": 288101,
+        "logical_child_slots": 96025
+      },
+      {
+        "op": {
+          "kind": "expand",
+          "branch": 0,
+          "iteration": 0
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "collapse",
+          "branch": 12,
+          "iteration": 0
+        },
+        "rows": 96025,
+        "tree_nodes": 96026,
+        "logical_node_value_bytes": 36873984,
+        "logical_label_utf8_bytes": 3936751,
+        "logical_action_slots": 288101,
+        "logical_child_slots": 96025
+      },
+      {
+        "op": {
+          "kind": "expand",
+          "branch": 12,
+          "iteration": 0
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "collapse",
+          "branch": 24,
+          "iteration": 0
+        },
+        "rows": 96025,
+        "tree_nodes": 96026,
+        "logical_node_value_bytes": 36873984,
+        "logical_label_utf8_bytes": 3936751,
+        "logical_action_slots": 288101,
+        "logical_child_slots": 96025
+      },
+      {
+        "op": {
+          "kind": "expand",
+          "branch": 24,
+          "iteration": 0
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "focus",
+          "branch": null,
+          "iteration": 0
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "scroll",
+          "branch": null,
+          "iteration": 0
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "paint",
+          "branch": null,
+          "iteration": 0
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "single_label",
+          "branch": 12,
+          "iteration": 0
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "restore_single_label",
+          "branch": null,
+          "iteration": 0
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "replace_all",
+          "branch": null,
+          "iteration": 1
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "replace_all",
+          "branch": null,
+          "iteration": 0
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 0
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 1
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 2
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 3
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 4
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 5
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 6
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 7
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 8
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 9
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 10
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 11
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 12
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 13
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 14
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 15
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 16
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 17
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 18
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 19
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 20
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 21
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 22
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 23
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 24
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 25
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 26
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 27
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 28
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 29
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 30
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "steady",
+          "branch": null,
+          "iteration": 31
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "diagnostic_cold",
+          "branch": null,
+          "iteration": 0
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "diagnostic_collapse",
+          "branch": 0,
+          "iteration": 0
+        },
+        "rows": 96025,
+        "tree_nodes": 96026,
+        "logical_node_value_bytes": 36873984,
+        "logical_label_utf8_bytes": 3936751,
+        "logical_action_slots": 288101,
+        "logical_child_slots": 96025
+      },
+      {
+        "op": {
+          "kind": "diagnostic_expand",
+          "branch": 0,
+          "iteration": 0
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "diagnostic_collapse",
+          "branch": 12,
+          "iteration": 0
+        },
+        "rows": 96025,
+        "tree_nodes": 96026,
+        "logical_node_value_bytes": 36873984,
+        "logical_label_utf8_bytes": 3936751,
+        "logical_action_slots": 288101,
+        "logical_child_slots": 96025
+      },
+      {
+        "op": {
+          "kind": "diagnostic_expand",
+          "branch": 12,
+          "iteration": 0
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      },
+      {
+        "op": {
+          "kind": "diagnostic_collapse",
+          "branch": 24,
+          "iteration": 0
+        },
+        "rows": 96025,
+        "tree_nodes": 96026,
+        "logical_node_value_bytes": 36873984,
+        "logical_label_utf8_bytes": 3936751,
+        "logical_action_slots": 288101,
+        "logical_child_slots": 96025
+      },
+      {
+        "op": {
+          "kind": "diagnostic_expand",
+          "branch": 24,
+          "iteration": 0
+        },
+        "rows": 100025,
+        "tree_nodes": 100026,
+        "logical_node_value_bytes": 38409984,
+        "logical_label_utf8_bytes": 4100751,
+        "logical_action_slots": 300101,
+        "logical_child_slots": 100025
+      }
+    ],
+    "logical_timings_not_factory_cost_evidence": true,
+    "native_semantic_IDs_actions_offscreen_nodes_and_owned_public_values_preserved": true
+  },
+  "functional_regressions": {
+    "same_cases_per_variant": 21,
+    "original_cases_per_variant": 20,
+    "new_identical_body_cases_per_variant": 1,
+    "actual_passes": 42,
+    "ignored": 0,
+    "compiler_failure_not_expected_RED": true,
+    "new_case": "navigation::virtual_tree::catalog_reserve_regressions::arbitrary_catalog_loose_upper_bound_keeps_validation_and_previous_metadata",
+    "actual_driver": {
+      "path": ".artifacts/2026-10-18-tree-catalog-reserve-validation-harness-v2/regressions.py",
+      "sha256": "057f5cab10050424a18bf2c4665fd1ce77dd6f89e2c09f991e16bbc6f5361af4",
+      "bytes": 12378
+    },
+    "actual_config": {
+      "path": ".artifacts/2026-10-18-tree-catalog-reserve-root-ready/regression-config.json",
+      "sha256": "93f5a9c8b76205e7440ad3a6d685135425e713446fdcc5ccf81f2e5306b338fc",
+      "bytes": 13131
+    },
+    "verdicts": [
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::catalog_accepts_arbitrary_order_and_hidden_ids",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-00/stdout",
+          "sha256": "fa67b97a930db13c2fa65e76c7289beb470fbe9a5e10242799c3432832f02adc",
+          "bytes": 206
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-00/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::disclosure_shares_records_by_semantics_not_shifted_positions_or_hidden_history",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-01/stdout",
+          "sha256": "e0568453415f3554d577a668818a5b6fb918d706951668943f3a07e2439e4fa5",
+          "bytes": 238
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-01/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::filtering_auto_expands_ancestors_and_preserves_unicode_highlights",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-02/stdout",
+          "sha256": "6918cdc01c9e89b9f93335470d60716c11d528b88eefa5fd3253d120a0bd4794",
+          "bytes": 225
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-02/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::fully_displayed_factory_reuses_validated_index_without_recloning_catalog",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-03/stdout",
+          "sha256": "1f9613fab5d5e2e35a88a7fa3905c307200f14520ad551b8eaccffc63f8c234f",
+          "bytes": 232
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-03/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::hidden_duplicate_source_ids_are_rejected_after_matching_prefix",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-04/stdout",
+          "sha256": "addd79755eeee7466ee18ea8503506bbf8858f2d1215c4c495b38dd5a612d8e8",
+          "bytes": 222
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-04/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::hundred_thousand_disclosure_records_share_full_offscreen_hierarchy",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-05/stdout",
+          "sha256": "c86c6e50fb760659d3d3b1d501a1cd91933409d52051a826b6c350df9f436d33",
+          "bytes": 226
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-05/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::hundred_thousand_rows_mount_only_the_viewport_and_end_scrolls_into_view",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-06/stdout",
+          "sha256": "8d61903c19eee0196ffafae5d1813c33583284a7340c2c9851db4953c1073c06",
+          "bytes": 231
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-06/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::initial_selected_row_below_the_viewport_is_activated_and_scrolled",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-07/stdout",
+          "sha256": "12d0043099dda175bb379304032f704bc13b1fa6b835c9487ce688f8c6197368",
+          "bytes": 225
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-07/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::invalid_catalog_does_not_replace_previous_metadata",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-08/stdout",
+          "sha256": "325e77f1372e7bcb5ca28f4c3e1b70de17fa4617b5212ea0f7c0603be1a2d11d",
+          "bytes": 210
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-08/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::keyboard_navigation_skips_disabled_rows_and_preserves_hierarchy",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-09/stdout",
+          "sha256": "9d1cd4c92a296d8f4dfabf0acc18dabf1d73b8fb6ed20f987879bb6a589fade2",
+          "bytes": 223
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-09/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::logical_focus_survives_insertions_and_falls_back_to_collapsed_ancestors",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-10/stdout",
+          "sha256": "1820b487297e8c7e7de525995d9a55003d2333cafbef449e9c4a0557b512d892",
+          "bytes": 231
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-10/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::logical_tree_record_matching_checks_every_generated_and_default_field",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-11/stdout",
+          "sha256": "af93040609c61b221c97e36d3d56fcb54146cf3f993e3f8c864ad050bedba9ea",
+          "bytes": 229
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-11/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::model_reuses_storage_and_rejects_duplicate_visible_ids",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-12/stdout",
+          "sha256": "e2a08b3fe8fe84c7cadb7f65fafa4b42c1d6da0385b2db656cbeb7067c6e8fcd",
+          "bytes": 214
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-12/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::mounted_accessibility_actions_are_wired_and_disabled_rows_are_inert",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-13/stdout",
+          "sha256": "ae73726aaa639467c587326299525077080ad3a732310406fdefea57624727f6",
+          "bytes": 227
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-13/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::native_fixture_hierarchy_retains_twenty_five_projects_and_four_thousand_children",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-14/stdout",
+          "sha256": "306c64ce1a544defd5dca4dbebb451e36989e06de929830d46229423b2a285a8",
+          "bytes": 240
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-14/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::offscreen_actions_focus_survives_scroll_and_queued_actions_resolve_current_ids",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-15/stdout",
+          "sha256": "5748990862e854b3bcd4aa7e45040e5993e70b8f4e91f135638cc4de57269f45",
+          "bytes": 238
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-15/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::outgoing_models_retire_when_rows_scroll_out_of_view",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-16/stdout",
+          "sha256": "f566c80a2002646c92741574ff6cfc75f911188b5d3ef8461b816e66485c921d",
+          "bytes": 211
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-16/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::semantic_identity_survives_disclosure_and_filter_but_retires_deleted_catalog_ids",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-17/stdout",
+          "sha256": "0a1a86037e886c0fed29567d961a51e5ff3399f24ccf0a44a4aad46cbcde84bd",
+          "bytes": 240
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-17/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::shared_tree_preparation_preserves_legacy_owned_fallback_and_retires_old_generations",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-18/stdout",
+          "sha256": "4609f7cef865d1bc2415ee696f779138efb67b089bc498eea2aa217059430f72",
+          "bytes": 243
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-18/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::tests::shared_tree_records_rebuild_changed_labels_topology_policy_and_defaults",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-19/stdout",
+          "sha256": "2f0f93959b3b8ef67c84d4b19ac468d94a1270fd17c6d220772d0c04c2f7f1ac",
+          "bytes": 231
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-19/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "name": "navigation::virtual_tree::catalog_reserve_regressions::arbitrary_catalog_loose_upper_bound_keeps_validation_and_previous_metadata",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-20/stdout",
+          "sha256": "0e16d792e08ba2f0f55b2e94b72f12c4944cfa0fe90011ba03774c37575bfdf3",
+          "bytes": 256
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/baseline-case-20/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::catalog_accepts_arbitrary_order_and_hidden_ids",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-00/stdout",
+          "sha256": "fa67b97a930db13c2fa65e76c7289beb470fbe9a5e10242799c3432832f02adc",
+          "bytes": 206
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-00/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::disclosure_shares_records_by_semantics_not_shifted_positions_or_hidden_history",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-01/stdout",
+          "sha256": "e0568453415f3554d577a668818a5b6fb918d706951668943f3a07e2439e4fa5",
+          "bytes": 238
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-01/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::filtering_auto_expands_ancestors_and_preserves_unicode_highlights",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-02/stdout",
+          "sha256": "6918cdc01c9e89b9f93335470d60716c11d528b88eefa5fd3253d120a0bd4794",
+          "bytes": 225
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-02/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::fully_displayed_factory_reuses_validated_index_without_recloning_catalog",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-03/stdout",
+          "sha256": "1f9613fab5d5e2e35a88a7fa3905c307200f14520ad551b8eaccffc63f8c234f",
+          "bytes": 232
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-03/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::hidden_duplicate_source_ids_are_rejected_after_matching_prefix",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-04/stdout",
+          "sha256": "addd79755eeee7466ee18ea8503506bbf8858f2d1215c4c495b38dd5a612d8e8",
+          "bytes": 222
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-04/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::hundred_thousand_disclosure_records_share_full_offscreen_hierarchy",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-05/stdout",
+          "sha256": "c127a3a8de01fc6c086cc504524114eda3815743bc23b694300f6cd781553636",
+          "bytes": 226
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-05/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::hundred_thousand_rows_mount_only_the_viewport_and_end_scrolls_into_view",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-06/stdout",
+          "sha256": "8d61903c19eee0196ffafae5d1813c33583284a7340c2c9851db4953c1073c06",
+          "bytes": 231
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-06/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::initial_selected_row_below_the_viewport_is_activated_and_scrolled",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-07/stdout",
+          "sha256": "12d0043099dda175bb379304032f704bc13b1fa6b835c9487ce688f8c6197368",
+          "bytes": 225
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-07/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::invalid_catalog_does_not_replace_previous_metadata",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-08/stdout",
+          "sha256": "325e77f1372e7bcb5ca28f4c3e1b70de17fa4617b5212ea0f7c0603be1a2d11d",
+          "bytes": 210
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-08/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::keyboard_navigation_skips_disabled_rows_and_preserves_hierarchy",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-09/stdout",
+          "sha256": "9d1cd4c92a296d8f4dfabf0acc18dabf1d73b8fb6ed20f987879bb6a589fade2",
+          "bytes": 223
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-09/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::logical_focus_survives_insertions_and_falls_back_to_collapsed_ancestors",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-10/stdout",
+          "sha256": "1820b487297e8c7e7de525995d9a55003d2333cafbef449e9c4a0557b512d892",
+          "bytes": 231
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-10/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::logical_tree_record_matching_checks_every_generated_and_default_field",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-11/stdout",
+          "sha256": "af93040609c61b221c97e36d3d56fcb54146cf3f993e3f8c864ad050bedba9ea",
+          "bytes": 229
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-11/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::model_reuses_storage_and_rejects_duplicate_visible_ids",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-12/stdout",
+          "sha256": "e2a08b3fe8fe84c7cadb7f65fafa4b42c1d6da0385b2db656cbeb7067c6e8fcd",
+          "bytes": 214
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-12/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::mounted_accessibility_actions_are_wired_and_disabled_rows_are_inert",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-13/stdout",
+          "sha256": "ae73726aaa639467c587326299525077080ad3a732310406fdefea57624727f6",
+          "bytes": 227
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-13/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::native_fixture_hierarchy_retains_twenty_five_projects_and_four_thousand_children",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-14/stdout",
+          "sha256": "899f5851149b8444cd97f3140afd9724697a129e4a9e261387f2272bd57f73a9",
+          "bytes": 240
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-14/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::offscreen_actions_focus_survives_scroll_and_queued_actions_resolve_current_ids",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-15/stdout",
+          "sha256": "5748990862e854b3bcd4aa7e45040e5993e70b8f4e91f135638cc4de57269f45",
+          "bytes": 238
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-15/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::outgoing_models_retire_when_rows_scroll_out_of_view",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-16/stdout",
+          "sha256": "f566c80a2002646c92741574ff6cfc75f911188b5d3ef8461b816e66485c921d",
+          "bytes": 211
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-16/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::semantic_identity_survives_disclosure_and_filter_but_retires_deleted_catalog_ids",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-17/stdout",
+          "sha256": "0a1a86037e886c0fed29567d961a51e5ff3399f24ccf0a44a4aad46cbcde84bd",
+          "bytes": 240
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-17/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::shared_tree_preparation_preserves_legacy_owned_fallback_and_retires_old_generations",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-18/stdout",
+          "sha256": "4609f7cef865d1bc2415ee696f779138efb67b089bc498eea2aa217059430f72",
+          "bytes": 243
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-18/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::tests::shared_tree_records_rebuild_changed_labels_topology_policy_and_defaults",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-19/stdout",
+          "sha256": "2f0f93959b3b8ef67c84d4b19ac468d94a1270fd17c6d220772d0c04c2f7f1ac",
+          "bytes": 231
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-19/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "name": "navigation::virtual_tree::catalog_reserve_regressions::arbitrary_catalog_loose_upper_bound_keeps_validation_and_previous_metadata",
+        "actual_exit_code": 0,
+        "stdout": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-20/stdout",
+          "sha256": "0e16d792e08ba2f0f55b2e94b72f12c4944cfa0fe90011ba03774c37575bfdf3",
+          "bytes": 256
+        },
+        "stderr": {
+          "path": ".artifacts/2026-10-18-tree-catalog-reserve-regressions/candidate-case-20/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      }
+    ]
+  },
+  "binaries": [
+    {
+      "variant": "baseline",
+      "kind": "cpu",
+      "copied_binary_rehashed": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-build/frozen-baseline-cpu",
+        "sha256": "681365434ef4068a02c90229ce0519e925db97b766d594b5f06f2c9ff07b6c93",
+        "bytes": 2573248
+      },
+      "actual_fresh": false,
+      "features": [],
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 1,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": false
+      },
+      "core_features": [
+        "backtrace",
+        "font-kit",
+        "icons",
+        "leak-detection",
+        "rand",
+        "test-support"
+      ],
+      "core_actual_fresh": true,
+      "ui_features": [],
+      "ui_actual_fresh": true,
+      "compiler_stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-build/build-baseline-cpu/stdout",
+        "sha256": "492b0c453a2f93f92d8de9c833821f8490e85e3ed5df983cb9b293331f36965e",
+        "bytes": 541547
+      },
+      "historical_copy_origin_not_current_rehashed": {
+        "path": ".artifacts/2026-10-17-control-identity-baseline/target/release/kael-tree-catalog-reserve-cost",
+        "sha256": "681365434ef4068a02c90229ce0519e925db97b766d594b5f06f2c9ff07b6c93",
+        "bytes": 2573248
+      }
+    },
+    {
+      "variant": "baseline",
+      "kind": "allocation",
+      "copied_binary_rehashed": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-build/frozen-baseline-allocation",
+        "sha256": "b487a12657dcd8c891c8cc72b6973091545f86d51c1e97fc5e97160c2c95ad35",
+        "bytes": 2872112
+      },
+      "actual_fresh": false,
+      "features": [
+        "allocation-stats"
+      ],
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 1,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": false
+      },
+      "core_features": [
+        "backtrace",
+        "font-kit",
+        "icons",
+        "leak-detection",
+        "rand",
+        "test-support"
+      ],
+      "core_actual_fresh": true,
+      "ui_features": [],
+      "ui_actual_fresh": true,
+      "compiler_stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-build/build-baseline-allocation/stdout",
+        "sha256": "1352b3e43d1aac5c4a2b6997a3bd6e18c7026c13566bc706067a6ca7a394fd98",
+        "bytes": 544856
+      },
+      "historical_copy_origin_not_current_rehashed": {
+        "path": ".artifacts/2026-10-17-control-identity-baseline/target/release/kael-tree-catalog-reserve-cost",
+        "sha256": "b487a12657dcd8c891c8cc72b6973091545f86d51c1e97fc5e97160c2c95ad35",
+        "bytes": 2872112
+      }
+    },
+    {
+      "variant": "baseline",
+      "kind": "logical",
+      "copied_binary_rehashed": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-build/frozen-baseline-logical",
+        "sha256": "372cf331b3a8881fe999dfea34ee954226f9a6aa3e5c5afc6dd3e927cb913b76",
+        "bytes": 8187656
+      },
+      "actual_fresh": false,
+      "features": [
+        "allocation-stats"
+      ],
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 1,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": false
+      },
+      "core_features": [
+        "backtrace",
+        "font-kit",
+        "icons",
+        "leak-detection",
+        "rand",
+        "test-support"
+      ],
+      "core_actual_fresh": true,
+      "ui_features": [],
+      "ui_actual_fresh": true,
+      "compiler_stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-build/build-baseline-logical/stdout",
+        "sha256": "64ee17a198d33ec0991e8b1efc38819ac81bc574d9c6a7c3f4f35f25b830dd94",
+        "bytes": 537650
+      },
+      "historical_copy_origin_not_current_rehashed": {
+        "path": ".artifacts/2026-10-17-control-identity-baseline/target/release/kael-tree-catalog-reserve-logical-oracle",
+        "sha256": "372cf331b3a8881fe999dfea34ee954226f9a6aa3e5c5afc6dd3e927cb913b76",
+        "bytes": 8187656
+      }
+    },
+    {
+      "variant": "candidate",
+      "kind": "cpu",
+      "copied_binary_rehashed": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-build/frozen-candidate-cpu",
+        "sha256": "28085b421e7b3e3e35bd3550dffddf1237f612e465ec308f65fbb2bc880e2735",
+        "bytes": 2573280
+      },
+      "actual_fresh": false,
+      "features": [],
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 1,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": false
+      },
+      "core_features": [
+        "backtrace",
+        "font-kit",
+        "icons",
+        "leak-detection",
+        "rand",
+        "test-support"
+      ],
+      "core_actual_fresh": true,
+      "ui_features": [],
+      "ui_actual_fresh": false,
+      "compiler_stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-build/build-candidate-cpu/stdout",
+        "sha256": "ab8c81458a2b6365ad3adb361cef79f04a15ef71c8d411b1ff897b1ee6be1ddf",
+        "bytes": 543544
+      },
+      "historical_copy_origin_not_current_rehashed": {
+        "path": ".artifacts/2026-10-17-control-identity-baseline/target/release/kael-tree-catalog-reserve-cost",
+        "sha256": "28085b421e7b3e3e35bd3550dffddf1237f612e465ec308f65fbb2bc880e2735",
+        "bytes": 2573280
+      }
+    },
+    {
+      "variant": "candidate",
+      "kind": "allocation",
+      "copied_binary_rehashed": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-build/frozen-candidate-allocation",
+        "sha256": "71ab8cc42c10e8298574468e4cd7e7c543265e2fb0bfe876f370ed3b2f308d13",
+        "bytes": 2872112
+      },
+      "actual_fresh": false,
+      "features": [
+        "allocation-stats"
+      ],
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 1,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": false
+      },
+      "core_features": [
+        "backtrace",
+        "font-kit",
+        "icons",
+        "leak-detection",
+        "rand",
+        "test-support"
+      ],
+      "core_actual_fresh": true,
+      "ui_features": [],
+      "ui_actual_fresh": true,
+      "compiler_stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-build/build-candidate-allocation/stdout",
+        "sha256": "022005bedb285de853ca8556c69ba0dc7b9436a40b2107a9d1809759393d0a24",
+        "bytes": 546855
+      },
+      "historical_copy_origin_not_current_rehashed": {
+        "path": ".artifacts/2026-10-17-control-identity-baseline/target/release/kael-tree-catalog-reserve-cost",
+        "sha256": "71ab8cc42c10e8298574468e4cd7e7c543265e2fb0bfe876f370ed3b2f308d13",
+        "bytes": 2872112
+      }
+    },
+    {
+      "variant": "candidate",
+      "kind": "logical",
+      "copied_binary_rehashed": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-build/frozen-candidate-logical",
+        "sha256": "bc505f9a1ca5cddf7487160fb0c878b1aabae3f48a1ae1f5d87113b430b777f3",
+        "bytes": 8186904
+      },
+      "actual_fresh": false,
+      "features": [
+        "allocation-stats"
+      ],
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 1,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": false
+      },
+      "core_features": [
+        "backtrace",
+        "font-kit",
+        "icons",
+        "leak-detection",
+        "rand",
+        "test-support"
+      ],
+      "core_actual_fresh": true,
+      "ui_features": [],
+      "ui_actual_fresh": true,
+      "compiler_stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-build/build-candidate-logical/stdout",
+        "sha256": "ee215638fec06326e538ebb987846628c7a64fd20f3ddf1badd5aa0010f5d1f1",
+        "bytes": 539637
+      },
+      "historical_copy_origin_not_current_rehashed": {
+        "path": ".artifacts/2026-10-17-control-identity-baseline/target/release/kael-tree-catalog-reserve-logical-oracle",
+        "sha256": "bc505f9a1ca5cddf7487160fb0c878b1aabae3f48a1ae1f5d87113b430b777f3",
+        "bytes": 8186904
+      }
+    }
+  ],
+  "actual14_commands": [
+    {
+      "variant": "baseline",
+      "kind": "logical",
+      "sample": 0,
+      "exit_code": 0,
+      "source_restoration_safe": true,
+      "stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/00-baseline-logical-0/stdout",
+        "sha256": "c92e56eb7080255d8236ee42a3359eb59abeae04b19e615c733058a88589f9b2",
+        "bytes": 256381
+      },
+      "stderr": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/00-baseline-logical-0/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    },
+    {
+      "variant": "candidate",
+      "kind": "logical",
+      "sample": 0,
+      "exit_code": 0,
+      "source_restoration_safe": true,
+      "stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/01-candidate-logical-0/stdout",
+        "sha256": "a3944220498df2e5e641046cab2c6849f6b65ba3880afe997df4e68d8225a7fb",
+        "bytes": 256383
+      },
+      "stderr": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/01-candidate-logical-0/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    },
+    {
+      "variant": "baseline",
+      "kind": "cpu",
+      "sample": 0,
+      "exit_code": 0,
+      "source_restoration_safe": true,
+      "stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/02-baseline-cpu-0/stdout",
+        "sha256": "c2ce27e021d0a8b5af50c393816807989908ac50b134dd138d26360378457675",
+        "bytes": 3193
+      },
+      "stderr": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/02-baseline-cpu-0/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    },
+    {
+      "variant": "candidate",
+      "kind": "cpu",
+      "sample": 0,
+      "exit_code": 0,
+      "source_restoration_safe": true,
+      "stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/03-candidate-cpu-0/stdout",
+        "sha256": "7b4b2a9747608ac7d408e9f8a344fdf9ec3bc4c9bdbb67e18a6c835660d0e868",
+        "bytes": 3194
+      },
+      "stderr": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/03-candidate-cpu-0/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    },
+    {
+      "variant": "candidate",
+      "kind": "cpu",
+      "sample": 1,
+      "exit_code": 0,
+      "source_restoration_safe": true,
+      "stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/04-candidate-cpu-1/stdout",
+        "sha256": "ed75e4a2df93af1a5dbb17db9984e92717079d301fb7467e3e5704a9e1e5a880",
+        "bytes": 3194
+      },
+      "stderr": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/04-candidate-cpu-1/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    },
+    {
+      "variant": "baseline",
+      "kind": "cpu",
+      "sample": 1,
+      "exit_code": 0,
+      "source_restoration_safe": true,
+      "stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/05-baseline-cpu-1/stdout",
+        "sha256": "7097d391a134d81088d6ce95be4b6c9d8f2c52a1ba39f0004642239d8d89d52d",
+        "bytes": 3193
+      },
+      "stderr": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/05-baseline-cpu-1/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    },
+    {
+      "variant": "baseline",
+      "kind": "cpu",
+      "sample": 2,
+      "exit_code": 0,
+      "source_restoration_safe": true,
+      "stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/06-baseline-cpu-2/stdout",
+        "sha256": "fa1b1bc8ad967a658230e2176e1ce92db61741ff9a35acf5b56a8d2492a1f0c2",
+        "bytes": 3196
+      },
+      "stderr": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/06-baseline-cpu-2/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    },
+    {
+      "variant": "candidate",
+      "kind": "cpu",
+      "sample": 2,
+      "exit_code": 0,
+      "source_restoration_safe": true,
+      "stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/07-candidate-cpu-2/stdout",
+        "sha256": "f63eccbf1a61f8b00bc7f01fea73a143cd3721f221db0bfc5df58dea9c02167e",
+        "bytes": 3194
+      },
+      "stderr": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/07-candidate-cpu-2/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    },
+    {
+      "variant": "candidate",
+      "kind": "cpu",
+      "sample": 3,
+      "exit_code": 0,
+      "source_restoration_safe": true,
+      "stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/08-candidate-cpu-3/stdout",
+        "sha256": "332385c7d9cd076f43c05a74a4b733ed819d3f033a2707142f35ab261715212c",
+        "bytes": 3197
+      },
+      "stderr": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/08-candidate-cpu-3/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    },
+    {
+      "variant": "baseline",
+      "kind": "cpu",
+      "sample": 3,
+      "exit_code": 0,
+      "source_restoration_safe": true,
+      "stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/09-baseline-cpu-3/stdout",
+        "sha256": "0deb5cf2d743005b10c699d2d8b174707b6e633a6356add951d7742986c9d263",
+        "bytes": 3193
+      },
+      "stderr": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/09-baseline-cpu-3/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    },
+    {
+      "variant": "baseline",
+      "kind": "cpu",
+      "sample": 4,
+      "exit_code": 0,
+      "source_restoration_safe": true,
+      "stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/10-baseline-cpu-4/stdout",
+        "sha256": "4f8be3b7bb69e9c529332f8c330a02b784537ef7acbf5444e8cb8caef17e67a2",
+        "bytes": 3193
+      },
+      "stderr": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/10-baseline-cpu-4/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    },
+    {
+      "variant": "candidate",
+      "kind": "cpu",
+      "sample": 4,
+      "exit_code": 0,
+      "source_restoration_safe": true,
+      "stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/11-candidate-cpu-4/stdout",
+        "sha256": "578daa42341ccc52f132df52fb97f9c8487ee32306b37f0be20a428c93ec5148",
+        "bytes": 3194
+      },
+      "stderr": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/11-candidate-cpu-4/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    },
+    {
+      "variant": "baseline",
+      "kind": "allocation",
+      "sample": 0,
+      "exit_code": 0,
+      "source_restoration_safe": true,
+      "stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/12-baseline-allocation-0/stdout",
+        "sha256": "3468aa7b788d605a750011c037cf1e0a1a5e42656e6963b891ac66fa823957b7",
+        "bytes": 8784
+      },
+      "stderr": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/12-baseline-allocation-0/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    },
+    {
+      "variant": "candidate",
+      "kind": "allocation",
+      "sample": 0,
+      "exit_code": 0,
+      "source_restoration_safe": true,
+      "stdout": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/13-candidate-allocation-0/stdout",
+        "sha256": "f2d75a045025099c7e84e92fe276c09602467a95c7a437798c80face80b55cef",
+        "bytes": 8785
+      },
+      "stderr": {
+        "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-measure/runtime/13-candidate-allocation-0/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    }
+  ],
+  "preserved_first_inconclusive_cohort": {
+    "result": {
+      "path": ".artifacts/2026-10-18-tree-catalog-reserve-cost-evaluation/result.json",
+      "sha256": "f1da4f52443614422f27c03302f56f92c696b789cbf2d7102d4124abb4ba916b",
+      "bytes": 1529
+    },
+    "evaluation": {
+      "path": ".artifacts/2026-10-18-tree-catalog-reserve-cost-evaluation/evaluation.json",
+      "sha256": "3609846cac2103a9dbdf5f17375e2f334598f56fdb279baf2f3d3619649b2c1b",
+      "bytes": 48532
+    },
+    "status": "FAIL_INCONCLUSIVE_NO_ADOPTION",
+    "passed_gates": 56,
+    "total_gates": 58,
+    "only_failures": [
+      {
+        "gate": "minimum_CPU_bundle",
+        "pass": false,
+        "kind": "inconclusive",
+        "fixture": "external-empty-loose-upper",
+        "clock": "thread_ns",
+        "baseline": [
+          8638500,
+          8817000,
+          8599541,
+          8699542,
+          8591875
+        ],
+        "candidate": [
+          8572250,
+          8676417,
+          8601375,
+          8579666,
+          8608959
+        ],
+        "minimum": 20000000
+      },
+      {
+        "gate": "minimum_CPU_bundle",
+        "pass": false,
+        "kind": "inconclusive",
+        "fixture": "external-empty-loose-upper",
+        "clock": "process_ns",
+        "baseline": [
+          8639000,
+          8818000,
+          8599000,
+          8700000,
+          8592000
+        ],
+        "candidate": [
+          8572000,
+          8677000,
+          8603000,
+          8579000,
+          8609000
+        ],
+        "minimum": 20000000
+      }
+    ],
+    "old_empty_setter_fixed_operations": 2000000,
+    "successor_empty_setter_fixed_operations": 8000000,
+    "scope": "Only one Rust iteration literal and that fixture iterations/checksum changed prospectively. Other fixtures/logical consumer/counters and every ratio/noise/minimum/allocation gate remain exact. Old cohort is not reclassified."
+  },
+  "pending": {
+    "fresh_current_source_native_platform_and_application_performance": "OPEN; e205 application comparison excludes this later optimization."
+  },
+  "preserved_authoring_failure": {
+    "path": ".artifacts/2026-10-18-tree-catalog-reserve-public-draft/authoring-first-attempt-failure.json",
+    "sha256": "0734d081547d3bd5f6087a75e44e553e5fec63b19bf13f9b993989a9524a22e5",
+    "bytes": 632
+  },
+  "copy_origin_scope": "Each copied binary is independently rehashed. Mutable Cargo target origin hash/path is a historical at-copy observation bound by actual build receipt, never a new origin-object attestation.",
+  "limits": [
+    "Headless public factory construction CPU/requested System layout evidence; no native RSS, total heap/allocator residency, GPU/frame/display, app-wide throughput, power or overall framework result.",
+    "Requested layouts exclude allocator metadata and realloc transients. Complete caller/model temporary owners retire to exact requested-live checkpoints.",
+    "Full100025 logicalAX/action proof remains separate and complete; its timings are not substituted for narrow factory cost.",
+    "No GPUI Kit gap closure/current-HEAD/overall superiority claim.",
+    "This authoring only parses/hashes frozen artifacts; no new compiler/native/benchmark/CI/current-source/Git action."
+  ],
+  "subsequent_acceptance": {
+    "recorded_at_utc": "2026-10-18T08:07:25.303134+00:00",
+    "independent_actual_cost_peer": {
+      "path": ".artifacts/2026-10-18-tree-reserve-duration-v3-independent-renderer-audit/review.json",
+      "sha256": "05fb14a2b2c46922f30a97247df1a9c6246d2b67e5324f7022d19800e4acb8fc",
+      "bytes": 25587
+    },
+    "full_UI_quality_result": {
+      "path": ".artifacts/2026-10-18-tree-reserve-broad-validation/result.json",
+      "sha256": "ba6d037a2665ead8cbe84b7cd47bd78ab77c8c34b13e01f83173bc93b2e13038",
+      "bytes": 3199297
+    },
+    "independent_full_UI_quality_peer": {
+      "path": ".artifacts/2026-10-18-tree-reserve-broad-independent-memory-audit/review.json",
+      "sha256": "82830150f9762b5da53b30dc2ecac072b12c0340deb204d692d0c6a75f2927ec",
+      "bytes": 9049
+    },
+    "formatted_maintained_payload": {
+      "path": ".artifacts/2026-10-18-tree-reserve-formatted-maintained-payload/preparation.json",
+      "sha256": "efb12c2b12c0a9c9213f03133ef5ce065154366a95d4633e64b88f64041a14ca",
+      "bytes": 2357
+    },
+    "format_scope": "Production and all prior tests byte-exact; only appended common regression formatting differs from original42-case payload. All566 UI tests pass on formatted source.",
+    "source_write_receipt": {
+      "path": ".artifacts/2026-10-18-tree-and-metrics-source-adoption/result.json",
+      "sha256": "ff8800db39c05fd2b16f652f9aff58b689984b3dcfa0197b9b284f39ae5f0dc8",
+      "bytes": 3153919
+    },
+    "maintained_source": {
+      "path": "crates/kael_ui/src/navigation/virtual_tree.rs",
+      "sha256": "0e88d50cf065b2f602370e7a2519ee8dc6e272c1b2ecc44db1b8f5e617f7cce2",
+      "bytes": 112941
+    },
+    "quality": {
+      "full_UI_pass": 566,
+      "ignored": 0,
+      "filtered": 0,
+      "strict_UI_lint": true,
+      "production_Wasm": true,
+      "Core_and_UI_test_Wasm": true,
+      "workspace_format": true,
+      "new_full_Core_or_native_runtime": false
+    }
+  }
+}

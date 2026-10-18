@@ -1,0 +1,425 @@
+{
+  "schema_version": 1,
+  "status": "audited_terminal_platform_failure",
+  "run": {
+    "id": 39102275308,
+    "url": "https://github.com/Augani/kael/actions/runs/39102275308",
+    "workflow_head": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008",
+    "event": "pull_request",
+    "status": "completed",
+    "conclusion": "failure",
+    "attempt": 1
+  },
+  "scope": "Public projection of independent Renderer terminal audit12e1b07f and official saved metadata; this preparation does not repeat native/CI tests or relabel failures.",
+  "jobs": [
+    {
+      "id": 117600811810,
+      "name": "Classify change",
+      "url": "https://github.com/Augani/kael/actions/runs/39102275308/job/117600811810",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 117600835648,
+      "name": "Quality / Native (macOS)",
+      "url": "https://github.com/Augani/kael/actions/runs/39102275308/job/117600835648",
+      "status": "completed",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Execute Metal retained-scene runtime proof",
+        "Diagnose same-job Apple drawable presentation"
+      ]
+    },
+    {
+      "id": 117600835661,
+      "name": "Quality / Native (Linux)",
+      "url": "https://github.com/Augani/kael/actions/runs/39102275308/job/117600835661",
+      "status": "completed",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Audit locked dependencies"
+      ]
+    },
+    {
+      "id": 117600835667,
+      "name": "Linux Renderer / WebView Runtime",
+      "url": "https://github.com/Augani/kael/actions/runs/39102275308/job/117600835667",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 117600835669,
+      "name": "Windows Native / WebView / MSI (windows-2025-vs2026)",
+      "url": "https://github.com/Augani/kael/actions/runs/39102275308/job/117600835669",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 117600835710,
+      "name": "WebAssembly / WebGL2 Browser",
+      "url": "https://github.com/Augani/kael/actions/runs/39102275308/job/117600835710",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 117600835715,
+      "name": "Windows Native / WebView / MSI (windows-2022)",
+      "url": "https://github.com/Augani/kael/actions/runs/39102275308/job/117600835715",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 117600836816,
+      "name": "Focused Linux / GTK4 native accessibility",
+      "url": "https://github.com/Augani/kael/actions/runs/39102275308/job/117600836816",
+      "status": "completed",
+      "conclusion": "skipped",
+      "failed_steps": []
+    },
+    {
+      "id": 117611641730,
+      "name": "Platform readiness",
+      "url": "https://github.com/Augani/kael/actions/runs/39102275308/job/117611641730",
+      "status": "completed",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Enforce required build results"
+      ]
+    }
+  ],
+  "failures": [
+    {
+      "job_id": 117600835648,
+      "name": "Quality / Native (macOS)",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Execute Metal retained-scene runtime proof",
+        "Diagnose same-job Apple drawable presentation"
+      ]
+    },
+    {
+      "job_id": 117600835661,
+      "name": "Quality / Native (Linux)",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Audit locked dependencies"
+      ]
+    },
+    {
+      "job_id": 117611641730,
+      "name": "Platform readiness",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Enforce required build results"
+      ]
+    }
+  ],
+  "Linux_locked_dependency_audit": {
+    "ids": [
+      "RUSTSEC-2026-0370",
+      "RUSTSEC-2026-0371",
+      "RUSTSEC-2026-0372"
+    ],
+    "log": {
+      "path": ".artifacts/2026-10-18-e205-linux-advisory-observation/job.log",
+      "sha256": "fa8365fba6c9d4947c28e3bc8373aa33ed8263d8b9311ad2a3eb9e96dc8151f2",
+      "bytes": 994564
+    },
+    "strict_audit_failure_preserved": true
+  },
+  "Mac_source_attribution": {
+    "recorded_checkout": "14adb524f67e88013d25d3887f471970fa9d614b",
+    "workflow_head": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008",
+    "identical_immutable_Git_tree": "1a9cc45049509e7624b13304b52441a72cd5dbcb",
+    "evidence": {
+      "path": ".artifacts/2026-10-18-e205-independent-renderer-ci-audit/macos-step-validation/validation.json",
+      "sha256": "ebc8cb6a0309db04a214d18447be429557cbe7fbafa2410ef82ebdad686356b1",
+      "bytes": 23922
+    }
+  },
+  "Mac_failed_native_presentation": {
+    "GPU_test_invocations": 59,
+    "GPU_distinct_names": 58,
+    "Kael_complete_and_callbacks": 20,
+    "Kael_positive_presentedTime": 0,
+    "independent_Apple_variants": 3,
+    "Apple_complete_and_callbacks": 180,
+    "Apple_positive_presentedTime": 0,
+    "lock_state": "UNKNOWN",
+    "job_log": {
+      "path": ".artifacts/2026-10-18-e205-independent-renderer-ci-audit/macos-job-final.log",
+      "sha256": "b93114357b9ab52d10fb0191b056e51ebff5a6ba0781203c25991107d7636388",
+      "bytes": 986102
+    },
+    "job_log_download_stderr": {
+      "path": ".artifacts/2026-10-18-e205-independent-renderer-ci-audit/macos-job-final-download.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "note": "Post-cache log includes ENOENT target/tests/target, but final step metadata identifies only the two mandatory presentation steps as failed."
+  },
+  "completed_runtime_scope": {
+    "Windows2022_and_2025": "Each23GPUinvocations/23distinct plus nativeUIAUnicode/WebView/generatedapp smoke; softwareWARP, no physicalGPU/signing/install claim.",
+    "LinuxRuntime": "28GPU+GTK7 and nativeAT-SPI/WebView/Unicode routes underllvmpipe/Xvfb.",
+    "Browser": "Three engines retained-readback/oracles; WebKit captureframe_delivery automation-unavailable; trusted picker not automated; softwarefallback budgets not enforced.",
+    "Mac_browser": "Separate Chromium ANGLE AppleParavirtual hardware-performance budget pass does not satisfy native actualpositivepresentation."
+  },
+  "download_provenance": {
+    "artifacts": 10,
+    "extracted_files": 249,
+    "all_download_head_digests_match_final_API_listing": true,
+    "actual_rehash_receipts": [
+      {
+        "path": ".artifacts/2026-10-18-e205-independent-renderer-ci-audit/platform-partial-validation.json",
+        "sha256": "aa699e018da290fdcd0aa1854af12c19b1dfa9040efdf61af4f3507ebec8480c",
+        "bytes": 101612
+      },
+      {
+        "path": ".artifacts/2026-10-18-e205-independent-renderer-ci-audit/macos-step-validation/validation.json",
+        "sha256": "ebc8cb6a0309db04a214d18447be429557cbe7fbafa2410ef82ebdad686356b1",
+        "bytes": 23922
+      }
+    ]
+  },
+  "official_artifacts": [
+    {
+      "id": 12128457129,
+      "name": "macos-runtime-evidence",
+      "size_in_bytes": 433831,
+      "digest": "sha256:d6dcc1b2cbcb88db33909bb890411620a628453607ea859544fd161634f775c9",
+      "url": "https://api.github.com/repos/Augani/kael/actions/artifacts/12128457129",
+      "workflow_run": {
+        "id": 39102275308,
+        "repository_id": 1239697079,
+        "head_repository_id": 1239697079,
+        "head_branch": "codex/desktop-framework-quality",
+        "head_sha": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008"
+      }
+    },
+    {
+      "id": 12127790122,
+      "name": "windows-release-evidence-windows-2022",
+      "size_in_bytes": 421779,
+      "digest": "sha256:396a5efd18ecdc6a5202276ae1eea3ebbe2248731b995997a832f3a5cd9c100c",
+      "url": "https://api.github.com/repos/Augani/kael/actions/artifacts/12127790122",
+      "workflow_run": {
+        "id": 39102275308,
+        "repository_id": 1239697079,
+        "head_repository_id": 1239697079,
+        "head_branch": "codex/desktop-framework-quality",
+        "head_sha": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008"
+      }
+    },
+    {
+      "id": 12127771736,
+      "name": "macos-wkwebview-smoke",
+      "size_in_bytes": 884,
+      "digest": "sha256:10f343e9c0b53d62975d810a2148f548a8a50adbe7c51949db6d812de9058f06",
+      "url": "https://api.github.com/repos/Augani/kael/actions/artifacts/12127771736",
+      "workflow_run": {
+        "id": 39102275308,
+        "repository_id": 1239697079,
+        "head_repository_id": 1239697079,
+        "head_branch": "codex/desktop-framework-quality",
+        "head_sha": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008"
+      }
+    },
+    {
+      "id": 12127741880,
+      "name": "browser-smoke",
+      "size_in_bytes": 17585713,
+      "digest": "sha256:4bc0515e2c462b75d9ab4653748ec153b91ef4c0217286dbca4d1efced9a9903",
+      "url": "https://api.github.com/repos/Augani/kael/actions/artifacts/12127741880",
+      "workflow_run": {
+        "id": 39102275308,
+        "repository_id": 1239697079,
+        "head_repository_id": 1239697079,
+        "head_branch": "codex/desktop-framework-quality",
+        "head_sha": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008"
+      }
+    },
+    {
+      "id": 12127425582,
+      "name": "lottie-admission-chrome",
+      "size_in_bytes": 8944,
+      "digest": "sha256:d7e1db5b06b34dd94a1ab47342ac8eb232d64d2900268f025af0206ffce9345d",
+      "url": "https://api.github.com/repos/Augani/kael/actions/artifacts/12127425582",
+      "workflow_run": {
+        "id": 39102275308,
+        "repository_id": 1239697079,
+        "head_repository_id": 1239697079,
+        "head_branch": "codex/desktop-framework-quality",
+        "head_sha": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008"
+      }
+    },
+    {
+      "id": 12127358237,
+      "name": "windows-release-evidence-windows-2025-vs2026",
+      "size_in_bytes": 419911,
+      "digest": "sha256:120af3389efc9b59cb9f22a61084fbfcd60cd14285440c84f9c61773f7846f69",
+      "url": "https://api.github.com/repos/Augani/kael/actions/artifacts/12127358237",
+      "workflow_run": {
+        "id": 39102275308,
+        "repository_id": 1239697079,
+        "head_repository_id": 1239697079,
+        "head_branch": "codex/desktop-framework-quality",
+        "head_sha": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008"
+      }
+    },
+    {
+      "id": 12127346658,
+      "name": "linux-runtime-evidence",
+      "size_in_bytes": 91685,
+      "digest": "sha256:46836fa5cd778000c8bf001b19bb2956999567320d433cb9ccc97958695827de",
+      "url": "https://api.github.com/repos/Augani/kael/actions/artifacts/12127346658",
+      "workflow_run": {
+        "id": 39102275308,
+        "repository_id": 1239697079,
+        "head_repository_id": 1239697079,
+        "head_branch": "codex/desktop-framework-quality",
+        "head_sha": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008"
+      }
+    },
+    {
+      "id": 12127266991,
+      "name": "webgl2-programmable-runtime-evidence",
+      "size_in_bytes": 32428,
+      "digest": "sha256:e0d1ebf77e3a8eb9c8b79c7a8827febcfd1c7c2e208579b94685e23e43edc98d",
+      "url": "https://api.github.com/repos/Augani/kael/actions/artifacts/12127266991",
+      "workflow_run": {
+        "id": 39102275308,
+        "repository_id": 1239697079,
+        "head_repository_id": 1239697079,
+        "head_branch": "codex/desktop-framework-quality",
+        "head_sha": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008"
+      }
+    },
+    {
+      "id": 12127087679,
+      "name": "lottie-admission-native-macOS",
+      "size_in_bytes": 10888,
+      "digest": "sha256:5c7f2dc7baf6dcf1fc0ae2919bea39c27e69b52bec84cf5fdee32700d4621f26",
+      "url": "https://api.github.com/repos/Augani/kael/actions/artifacts/12127087679",
+      "workflow_run": {
+        "id": 39102275308,
+        "repository_id": 1239697079,
+        "head_repository_id": 1239697079,
+        "head_branch": "codex/desktop-framework-quality",
+        "head_sha": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008"
+      }
+    },
+    {
+      "id": 12126443581,
+      "name": "lottie-admission-native-Linux",
+      "size_in_bytes": 4407,
+      "digest": "sha256:2c1bf6710b5d15cf3fff5934c5b408d9b3b5df28be1680ac81f651369c042a89",
+      "url": "https://api.github.com/repos/Augani/kael/actions/artifacts/12126443581",
+      "workflow_run": {
+        "id": 39102275308,
+        "repository_id": 1239697079,
+        "head_repository_id": 1239697079,
+        "head_branch": "codex/desktop-framework-quality",
+        "head_sha": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008"
+      }
+    }
+  ],
+  "evidence": {
+    "independent_terminal_platform_audit": {
+      "path": ".artifacts/2026-10-18-e205-independent-renderer-ci-audit/platform-final-validation.json",
+      "sha256": "12e1b07fc550bf7c2daefb4760057e3f681d4b6f7fc1617bd535a2391d725d5b",
+      "bytes": 6861
+    },
+    "official_run": {
+      "path": ".artifacts/2026-10-18-e205-independent-renderer-ci-audit/platform-run-fifth.json",
+      "sha256": "68f5fbefbcd92f855207583ec51b73475fdb33e833e376f636c7312f80afd619",
+      "bytes": 11902
+    },
+    "official_jobs": {
+      "path": ".artifacts/2026-10-18-e205-independent-renderer-ci-audit/platform-jobs-final.json",
+      "sha256": "80215cf09255e363bc7fde31f57446ad692dc193fc1cf368a1ffd2a2489b4ab9",
+      "bytes": 36481
+    },
+    "official_artifacts": {
+      "path": ".artifacts/2026-10-18-e205-independent-renderer-ci-audit/platform-artifacts-final.json",
+      "sha256": "8cc8ef13821a91a2ee54527dfb8de7133d8c50bfaffeba3fede0d50b1ccab849",
+      "bytes": 7080
+    }
+  },
+  "separate_completed_comparison": {
+    "run_id": 39102329053,
+    "url": "https://github.com/Augani/kael/actions/runs/39102329053",
+    "conclusion": "success",
+    "same_frozen_source_commit": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008",
+    "validation": "100 accepted captures,800 geometry boundaries,50 pairs,20 uploaded executable identities; qualified cached GPUI dependency evidence.",
+    "independent_audit": {
+      "path": ".artifacts/2026-10-18-benchmark-e205-independent-general-audit/review.json",
+      "sha256": "af61147aede0d74627b01999e72e6a9e7f41bb9d9d1bd04fb256783e0a4a8453",
+      "bytes": 24538
+    },
+    "independent_second_peer": {
+      "path": ".artifacts/2026-10-18-benchmark-e205-independent-renderer-peer/final-review.json",
+      "sha256": "4eb21a71d44d825ca0e2b0a5686d05645bab99797bfa6d511507462c1e8a419c",
+      "bytes": 17374
+    },
+    "public_companion": "2026-10-18-e205-gpui073-hosted-comparison.json",
+    "qualification": "The earlier terminal platform audit recorded the comparison still in progress at its own observation time. This separately bound completed comparison evidence updates only that pending comparison scope, never the failed Platform readiness verdict."
+  },
+  "limits": [
+    "Whole Platform Validation remains failed; one completed comparison cannot establish whole-platform readiness.",
+    "The three named locked-dependency advisories remain preserved failures. Artifact-only ASHPD/ksni source proposals or isolated jobs do not establish maintained graph/advisory closure.",
+    "Hosted native macOS proof has zero positive presentation timestamps in Kael20 and independent Apple180 completion callbacks. Lock state is UNKNOWN; no proven intermittency root cause or environment closure follows.",
+    "GPU test invocations59/distinct names58 are separate from20 native Kael callback frames; neither substitutes for required positive native presentation.",
+    "Windows runs use software WARP; Linux runtime uses llvmpipe/Xvfb. No physical-GPU, signing or installed-app claim.",
+    "Browser retained-readback/oracles, Chromium hardware-budget results and native presentation are separate contracts; no native presentation waiver.",
+    "The Mac PR merge checkout14adb524 and workflow head e205 share exact immutable Git tree1a9cc450. Commit identities remain distinct.",
+    "No current-HEAD, overall winner, app power advantage, physical input/AT/IME, complete feature or pixel parity claim."
+  ],
+  "operations_not_performed": [
+    "Cargo/compiler/native process or CI payload execution",
+    "CI dispatch/rerun/cancel",
+    "Current root inventory or maintained/Managed source modification",
+    "Git/index mutation"
+  ],
+  "older_platform_public_records_preserved": [
+    {
+      "path": "docs/reviews/2026-10-02-cross-platform-bookkeeping-results.json",
+      "sha256": "cc4028026f8fb344d5d9246f193a050394ca84f97fc4e084c9d38b7ecebeffa5",
+      "bytes": 4298,
+      "immutable_source_commit": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008"
+    },
+    {
+      "path": "docs/reviews/2026-10-17-platform-e219-checkpoint.json",
+      "sha256": "72ebf54c98eaeb18e0d60f5eca335f51d46d0ca13e546fe673fcd34d68a7e30e",
+      "bytes": 5213,
+      "immutable_source_commit": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008"
+    },
+    {
+      "path": "docs/reviews/2026-10-17-platform-e219-final.json",
+      "sha256": "21380136b11143526d3cb121a5c51c75ff936d6db774cc8b2b5c59981be1a4d5",
+      "bytes": 5975,
+      "immutable_source_commit": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008"
+    },
+    {
+      "path": "docs/reviews/2026-10-18-platform-0d15-final.json",
+      "sha256": "fb41558318cdbff420eff95151a6a597fb412eddd7fd505e5055bde075001b64",
+      "bytes": 19554,
+      "immutable_source_commit": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008"
+    },
+    {
+      "path": "docs/reviews/2026-10-18-platform-b411-validation.json",
+      "sha256": "8904f980d11d7b42665038646425125d609211da2094e14de232240546b53011",
+      "bytes": 7027,
+      "immutable_source_commit": "e2054aa17c8661fffd89c49e3d8433a5a7ba6008"
+    }
+  ],
+  "public_projection_independent_peer": {
+    "path": ".artifacts/2026-10-18-platform-e205-public-independent-renderer-review/review.json",
+    "sha256": "a64acfcf4bcaf1a5d623f9b175540afa77d32ae3b88dc3877b10301402e41c85",
+    "bytes": 4890
+  }
+}

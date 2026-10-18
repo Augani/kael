@@ -10,6 +10,7 @@ import statistics
 import subprocess
 import time
 from pathlib import Path
+from rusage_energy import summarize_rusage_energy
 from workload_validation import TREE_HASHES, WORKSPACE_HASHES, validate_tree, validate_workspace
 
 PHASE_NAMES = ('idle-before', 'active', 'idle-after', 'churn')
@@ -327,6 +328,7 @@ def run(engine, executable, helper, destination, index, frame_timing=True,
             'billed_energy_raw_delta': last['billed_energy_raw'] - first['billed_energy_raw'],
             'serviced_energy_raw_delta': last['serviced_energy_raw'] - first['serviced_energy_raw'],
         }
+        phase_metrics[name]['rusage_energy'] = summarize_rusage_energy(selected)
     report = {'engine': engine, 'index': index, 'binary_sha256': digest(executable),
               'process_samples': samples, 'phases': phases, 'application': result,
               'phase_window_activation': window_activations,
@@ -377,7 +379,12 @@ def main():
                 'checkout_source_fingerprint': source_fingerprint(),
                 'comparison_revision': '67265a36e260ffe03c5aaebdcd8d654dbf892eab',
                 'command': vars(args) | {'kael': str(args.kael), 'gpui_kit': str(args.gpui_kit), 'output': str(args.output)},
-                'counter_scope': 'libproc RUSAGE_INFO_V4 per-process; energy fields are raw OS counters, not watts',
+                'counter_scope': 'libproc per-process V6 with explicit V4 fallback; energy_nj/penergy_nj are OS nJ counters; billed/serviced raw units retained; no watts',
+                'process_counter_extension': {'version': 1,
+                    'adapter_observation': {key: adapter_sample.get(key) for key in
+                        ('rusage_flavor', 'rusage_v6_sdk_available', 'rusage_v6_errno',
+                         'rusage_fallback_reason', 'energy_nj', 'penergy_nj')},
+                    'scope': 'nullable per-phase nJ deltas only; zero-filled V6 means hardware capability unknown; no calibrated power or watts'},
                 'cpu_timebase': {'numer': adapter_sample['timebase_numer'], 'denom': adapter_sample['timebase_denom'],
                                  'raw_units': 'Mach absolute ticks', 'converted_units': 'nanoseconds'},
                 'adapter_source_sha256': digest(Path(__file__).with_name('process_metrics_macos.c')),

@@ -501,3 +501,46 @@ files to immutable source, with no upload. Local image/Grid Metal proof remains
 a separate checkpoint. The [native wheel attempt](2026-10-18-native-wheel-validation.json)
 stops on a child-process-group ownership guard before any event; later cleanup
 recovery is recorded separately and native wheel acceptance remains open.
+
+The [completed e205 comparison](2026-10-18-e205-gpui073-hosted-comparison.md)
+validates all 100 original captures, 800 equal actual client-size boundaries,
+50 pairs and 20 executable identities at frozen `e2054aa1`. Four general desktop
+workloads lead; editor coverage remains supplemental. Navigation active CPU is
+11.88% / 16.58% (Kael/GPUI Kit 0.7.3); table and tree CPU/RSS remain higher.
+Tree active CPU is 45.30% / 13.90% and stable sampled peak RSS is
+932.86 / 654.52 MiB. Unequal operation counts and accessibility/preparation work
+prevent an equal-work or single-cause interpretation. The restored competitor
+build cache is explicit; no fresh dependency compilation, current-HEAD ranking,
+power or presentation advantage follows.
+
+The separate [e205 platform record](2026-10-18-platform-e205-validation.json)
+remains failed overall. Windows 2022/2025, Linux renderer and browser jobs pass
+their scoped software-device/runtime contracts. Hosted Mac runs 59 GPU tests
+covering 58 names, but its 20 native completion callbacks have zero positive
+presentation timestamps; three independent Apple controls also have zero in
+180 callbacks. The Mac PR merge checkout shares the exact e205 Git tree, while
+its commit identity remains distinct. Three denied dependency advisories remain
+failed. Local Metal and browser proof do not waive those hosted gates.
+
+Both [idle text-wrapper experiments](2026-10-18-idle-text-wrapper-experiment.json)
+are rejected at the unchanged over-capacity churn threshold. Lower warm CPU or
+retained requested bytes do not establish acceptance. The pool is not adopted;
+whole-cache byte policy, active ownership and overlapping/scratch allocations
+remain separate memory work. The later [tree catalog reserve](2026-10-18-tree-catalog-reserve-validation.json)
+passes all 58 fixed factory cost gates and all 566 UI tests, strict UI lint,
+production/test Wasm and formatting, then is adopted. A large partially collapsed
+factory uses 44→29 allocation events and about 15% less CPU; the fully expanded
+case is 4.67% slower, and early duplicate rejection temporarily requests about
+2.13 MiB more. These tradeoffs are explicit. The first short empty-input cohort
+remains inconclusive; a separately specified longer cohort satisfies the same
+20 ms floor. Full logical accessibility and arbitrary public setter behavior stay
+intact. This does not establish application RSS or current cross-framework gains.
+
+The additive [macOS energy collector](2026-10-18-macos-energy-collector-validation.json)
+is adopted after isolated synthetic/own-process validation and maintained 32 Python,
+three strict C builds and two synthetic fallback checks. CI now gates comparisons
+on those tests. V4 unsupported-flavor fallback, nullable capability and monotonic
+deltas remain explicit; the completed e205 cohort still uses V4 and its original
+schema-3 gates. No watts, core-class interpretation or application power advantage
+is established. Table/tree preparation cost, unified memory accounting, denied
+advisories, hosted native presentation and native wheel/IME delivery remain open.

@@ -13,7 +13,7 @@ Its published claims are comparison inputs; superiority requires matched runs.
 | R1 | Public typed targets, portable fragment registration, reflected layouts/bindings, bounded pipeline/source/target storage, device ownership, budget-aware lifecycle | Public application example executes GPU pass and displays target without readback; malformed/layout/admission/lifetime tests; exact output pixels | Implemented with native examples and Metal/Blade GPU proof; platform completion remains |
 | R2 | Native fragment parity on Metal, DirectX 11 and Blade, browser fragment path | Same effect/bindings on each real renderer; transparency, HDR, clipping, sampling and resize goldens | Metal/Blade/browser-on-Metal runtime proof; eight DX11/WARP custom tests passed in CI; fifteen mandatory browser GPU contracts and the complete Chromium/Firefox/WebKit job pass at `dacdea1` |
 | R3 | Native compute and GPU render-graph execution with declared imports, barriers/lifetimes, cache-key skipping and budget-pressure eviction | Real compute output and multi-pass DAG pixels; aliasing, stale input, cache, invalid imports and device-loss tests | Six shared graph fixtures pass on Metal, Blade and native DX11/WARP CI |
-| R4 | Matched product-shaped performance workloads, startup/interaction/idle/RSS/GPU/frame/churn measurements and environment metadata | Runnable same-contract Kael/GPUI Kit applications; raw repeated measurements; explicit power/wakeup capture and fair comparison gates | The [b411 comparison against GPUI Kit 0.7.3](2026-10-18-b411-gpui073-hosted-comparison.md) passes 100 original captures, 800 equal actual 1100×645 at scale 1 boundaries, 50 pairs and 20 independently rehashed executables. Four general desktop CPU/RSS and separate timing tables lead; table/tree gaps, unequal operation totals and component semantics remain explicit. Later-source measurements, power, comparative presentation and an overall ranking remain open |
+| R4 | Matched product-shaped performance workloads, startup/interaction/idle/RSS/GPU/frame/churn measurements and environment metadata | Runnable same-contract Kael/GPUI Kit applications; raw repeated measurements; explicit power/wakeup capture and fair comparison gates | The [e205 comparison against GPUI Kit 0.7.3](2026-10-18-e205-gpui073-hosted-comparison.md) passes 100 original captures, 800 equal actual 1100×645 at scale 1 boundaries, 50 pairs and 20 independently rehashed executables. Four general desktop CPU/RSS and separate timing tables lead; table/tree gaps, unequal operation totals, full logical accessibility work and cached dependency provenance limits remain explicit. Later-source measurements, matched startup/GPU/power, comparative presentation and an overall ranking remain open |
 | R5 | Built-in rendering parity for translucent effects, clips, gradients, text, resize and device loss | Pixel/runtime matrix on native Metal, DX11, Blade and browser engines; no silent skip treated as pass | Local Metal/Blade/SwiftShader proof plus DX11/WARP and Linux llvmpipe CI; fresh text positioning, GTK and native populated-frame checks remain |
 | R6 | Full logical accessibility for virtualized controls while viewport-only rendering remains | Offscreen-node or active-descendant semantics plus native assistive-technology exploration/actions; stable IDs/focus and large-model mounting tests | Actual macOS Editor Unicode/selection/geometry/reveal/edit/clipboard/composition/guard protocol passed with pasteboard restoration; browser mounted-priority projection passes wide/compact scale runtime. Native Windows 2022/2025, Linux X11 and GTK full Unicode protocol clients pass at their recorded checkpoints; screen-reader exploration and physical IME remain |
 | R7 | Idle accessibility actions wake every native window correctly | Platform-thread/lifecycle/action-queue tests plus idle action execution on macOS, Windows and Linux AT adapters | macOS idle/protocol proof; Windows 2022/2025 and the full Linux native matrix pass at `21b9fa7`. Focused Linux jobs at `feb3f8b` and `92d0cd7` pass both X11/GTK4 outline and full Unicode protocols, strict graphs and clipboard bounds. The earlier `b80bbb2` native outline-focus failure remains intermittent and unresolved; diagnostic visibility is not a production lifecycle fix. Later shared cache/control changes require fresh platform execution |
@@ -21,7 +21,7 @@ Its published claims are comparison inputs; superiority requires matched runs.
 | R9 | Reusable virtual filesystem explorer with cached sort keys, lazy async loading, context actions and drag/drop | Visible explorer example and UI-driven tests; bounded model/cache/pending state, generations/cancellation and stale-response tests | Actual native keyboard move/reload and fresh pointer readme-to-Archive move pass; disk oracle verifies source removal and destination bytes. Fresh complete glyph pixels and hidden-file toggle pass |
 | R10 | Persistent movable docking/tab groups, nested splits, floating panes and structured property inspectors | Runnable workspace; pointer/keyboard rearrangement, float/redock, persistence restore and editing/undo tests | Fresh integrated native pointer tab/edge split movement, float/move/resize/redock, keyboard edge docking, floating/nested save/reset/restore, Unicode inspector Undo/Redo and live preview pixels pass |
 | R11 | Rich document and remote-data workflows build on current editors/grids | Real documents exercise selection, IME, undo/redo; remote-data editing/clipboard/frozen-pane/accessibility tests and sustained workloads | Actual native formatting/Undo, Unicode remote edit/sort identity, atomic 2×2 TSV paste/Undo/Redo, frozen-row vertical scrolling and populated pixels pass. Native horizontal keyboard reveal/frozen-column pixels also pass; physical input-source IME, nonzero horizontal wheel delivery and sustained performance remain |
-| R12 | Consumer docs, examples, capability truth and platform CI cover the finished APIs | Native/browser consumer builds, working examples, strict lints/docs, CI evidence and no outdated roadmap claims for implemented features | The [fresh 39-package checkpoint](2026-10-18-image-grid-package-validation.json) binds committed ce39eed source and all 931 included Rust files; all 39 extracted builds and independent archive audit pass. The image/Grid source has separate local Metal proof. The [b411 platform cohort](2026-10-18-platform-b411-validation.json) passes Windows 2022/2025, Linux runtime and browser jobs; hosted native presentation, three strict advisories, later-source platform execution and physical workflows remain open |
+| R12 | Consumer docs, examples, capability truth and platform CI cover the finished APIs | Native/browser consumer builds, working examples, strict lints/docs, CI evidence and no outdated roadmap claims for implemented features | The [fresh 39-package checkpoint](2026-10-18-image-grid-package-validation.json) binds committed ce39eed source and all 931 included Rust files; all 39 extracted builds and independent archive audit pass. The image/Grid source has separate local Metal proof. The [e205 platform cohort](2026-10-18-platform-e205-validation.json) remains failed overall: scoped Windows 2022/2025, Linux runtime and browser jobs pass, but hosted native Mac presentation and three denied dependency advisories fail. The Mac PR merge checkout shares the e205 Git tree; later-source platform execution, native delivery/IME, hardware coverage and physical workflows remain open |
 
 The shader design's later built-in-blur migration is a separate architecture
 effort; it must not remove the existing visual correctness tests. Any scope
@@ -426,3 +426,32 @@ The [native wheel attempt](2026-10-18-native-wheel-validation.json) posts no
 scroll events: the ownership guard refuses a child in a separate process group.
 Its failed cleanup remains preserved; a later exact-PID/group absence check and
 complete source rehash permit safe resumption. R11 wheel delivery stays open.
+
+The [completed e205 comparison](2026-10-18-e205-gpui073-hosted-comparison.md)
+and [separate failed platform cohort](2026-10-18-platform-e205-validation.json)
+update only their frozen-source evidence tracks. All 100 captures pass the
+original gates, with raw operation differences and cached-dependency limitations;
+table/tree CPU and memory remain optimization targets. Hosted native Mac records
+20 completion callbacks with zero positive timestamps, alongside three independent
+Apple controls with zero in 180 callbacks. Its 59 GPU executions/58 names are a
+separate proof. Three strict dependency advisories remain failed; no whole-platform
+acceptance follows from the successful comparison.
+
+The [two idle-wrapper cohorts](2026-10-18-idle-text-wrapper-experiment.json)
+remain rejected at the unchanged churn gate; no pool adoption or unified R8
+closure follows from lower warm CPU/requested retention. Validated additive
+`RUSAGE_INFO_V6` collection remains prospective, with V4 fallback and nullable
+capability; the completed cohort still uses V4 counters. The narrow tree reserve
+successor is still under validation, with no cost-pass or adoption claim. Every
+R1–R12 required final state and authoritative proof above remains unchanged.
+
+The subsequent [tree catalog reserve](2026-10-18-tree-catalog-reserve-validation.json)
+is adopted after 58 fixed factory cost checks, all 566 UI tests, strict UI lint,
+production/test Wasm and formatting, with independent raw-result and restoration
+review. Allocation events fall 44→29 for the large partially collapsed factory;
+fully expanded CPU is 4.67% higher and early duplicate rejection temporarily
+requests 2,228,156 extra bytes. The original short empty-input cohort remains
+inconclusive. Full logical accessibility is retained; application RSS and later
+cross-framework performance remain separate. The [macOS energy collector](2026-10-18-macos-energy-collector-validation.json)
+is also adopted with 32 Python/three strict C/two synthetic checks in CI. It adds no
+application power result or waiver of the failed hosted platform gates.

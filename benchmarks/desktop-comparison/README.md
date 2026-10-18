@@ -197,12 +197,13 @@ the first measured phase. The original geometry and persistence tolerances
 remain unchanged. CI executes the compact regression for both engines and both
 instrumentation modes before collecting full runs.
 
-On macOS, the shared adapter uses the SDK's `proc_pid_rusage(RUSAGE_INFO_V4)` for
-CPU, resident bytes, physical footprint, idle/interrupt wakeups, I/O, and raw
-billed/serviced energy counters. Energy fields are retained as OS counters; no
-conversion to watts is assumed. Metal's actual device allocation counter is
-sampled at phase boundaries for both engines. Linux and Windows need native
-process/power adapters before their measurement contracts can be completed.
+On macOS, the shared adapter requests the SDK's `RUSAGE_INFO_V6` when available,
+with explicit `RUSAGE_INFO_V4` fallback for an SDK without V6 or an unsupported
+kernel flavor. CPU, resident bytes, footprint, wakeups, I/O, instructions/cycles,
+and raw billed/serviced accounting retain their existing fields. New nullable
+`energy_nj`/`penergy_nj` counters remain separate OS observations; no conversion
+to watts is assumed. Metal device allocation is still sampled at phase boundaries.
+Linux and Windows need separate native process/counter adapters.
 
 The collector retains at most 4,096 application frame samples per run and 300
 Kael frame/submission records in the window. Process sampling runs externally
@@ -218,3 +219,20 @@ calling AppKit and records accepted requests; native frame activity remains
 mandatory. This gives both engines the same foreground workload. It does not
 establish continuously unobstructed display, physical power or compositor
 completion, and interrupted/paused captures still fail validation.
+
+The adapter records the rusage flavor, SDK support and exact V4 fallback reason.
+Only an unsupported V6 flavor returning `EINVAL` triggers one V4 attempt; other
+sampling errors remain failures. The existing counters and schema-3 workload,
+geometry, frame and phase gates remain unchanged.
+
+Each phase's `rusage_energy` object uses the same trimmed stable samples. V4
+fallback reports unavailable nJ fields; legacy or mixed collectors report unknown
+capability. All-zero V6 fields also remain unknown. A nonzero cumulative field
+can have a legitimate zero idle delta. Every available observation must be an
+unsigned 64-bit integer and monotonic; decreases reject the capture.
+
+`energy_nj` and `penergy_nj` retain the OS field names. They remain separate from
+raw billed/serviced accounting and are not calibrated wall-plug, GPU or display
+measurements. The collector does not interpret the `p` prefix as a core class,
+calculate watts or establish a framework power advantage. Historical captures
+retain their original fields and limitations.

@@ -40,11 +40,29 @@ jobs:
           cache-on-failure: true
           workspaces: benchmarks/desktop-comparison
 
+      - name: Validate resource collectors
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s benchmarks/desktop-comparison -p 'test_*.py'
+          collector_test_dir="$(mktemp -d)"
+          trap 'rm -rf "$collector_test_dir"' EXIT
+          cc -std=c11 -Wall -Wextra -Werror -O2 \
+            benchmarks/desktop-comparison/process_metrics_macos.c \
+            -o "$collector_test_dir/process-metrics"
+          cc -std=c11 -Wall -Wextra -Werror -O2 \
+            benchmarks/desktop-comparison/test_process_metrics_macos.c \
+            -o "$collector_test_dir/test-v6"
+          "$collector_test_dir/test-v6"
+          cc -std=c11 -Wall -Wextra -Werror -O2 -DTEST_SDK_WITHOUT_V6=1 \
+            benchmarks/desktop-comparison/test_process_metrics_macos.c \
+            -o "$collector_test_dir/test-v4"
+          "$collector_test_dir/test-v4"
+
       - name: Build pinned competitor and local framework
         shell: bash
         run: |
           set -o pipefail
-          python benchmarks/desktop-comparison/test_measure.py
           mkdir -p .artifacts/competition/binaries
           cargo build --manifest-path benchmarks/desktop-comparison/Cargo.toml --locked \
             --release --no-default-features --features gpui-kit-engine,frame-timing \
