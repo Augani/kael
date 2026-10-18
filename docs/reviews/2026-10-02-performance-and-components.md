@@ -544,3 +544,22 @@ deltas remain explicit; the completed e205 cohort still uses V4 and its original
 schema-3 gates. No watts, core-class interpretation or application power advantage
 is established. Table/tree preparation cost, unified memory accounting, denied
 advisories, hosted native presentation and native wheel/IME delivery remain open.
+
+The [tree accessibility label fix](2026-10-18-tree-accessibility-label-validation.json)
+is adopted: relabeling an unchanged model or displaying a stale worker preparation
+updates the accessible root name while preserving row identities. Two behavioral
+regressions, all 568 headless UI tests, strict UI lint, production and test Wasm
+type checks, and formatting pass. Native screen-reader exploration remains open.
+
+The [compact text-wrapper experiments](2026-10-18-compact-text-wrapper-experiments.json)
+preserve another rejection. The bitmap candidate passes all 100 original cost
+checks and reduces requested retained bytes from 676,872 to 308,232, but a separate
+1,024-key cohort costs 4.20 times baseline CPU. Its 512-entry eviction policy is
+not adopted; the original thresholds and failed measurements are retained.
+
+The later [b091 platform cohort](2026-10-18-platform-b091-validation.json) also
+fails overall. Windows, Linux renderer and browser jobs pass their scoped checks;
+Linux still denies three advisories. Mac presentation timestamps remain zero,
+and its distinct hardware-browser timing test exceeds both p95 and p99 budgets.
+The merge checkout has the b091 Git tree with a different commit identity. This
+cohort precedes the label fix and does not establish current platform acceptance.

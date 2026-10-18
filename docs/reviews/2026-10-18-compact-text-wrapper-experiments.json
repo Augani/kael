@@ -1,0 +1,348 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-18",
+  "status": "BOUNDED_BITMAP_IDLE_WRAPPER_EXPERIMENT_REJECTED_NOT_ADOPTED",
+  "summary": "The compact bitmap candidate passes all100 original512-key cost checks and reduces retained requested bytes54.46%, but a separate unchanged-threshold1024-key cohort costs4.20x baseline CPU. The512-entry eviction policy is not adopted.",
+  "scope": {
+    "route": "Actual public line-wrapper acquisition, wrapping, full output comparison and return through TestAppContext/App-owned deterministic NoopTextSystem; ordinary cfg(test=false) release binaries.",
+    "production_source_basis": "b0916c21212eca223cace9bccafbc321baa22615 source;3172 equal eligible inputs before four-path Managed-only overlay, bytes/modes rather than Git-head equivalence.",
+    "not_measured": [
+      "Native font/raster performance",
+      "Application throughput/frame latency",
+      "RSS or global memory use",
+      "Power/energy",
+      "A completed unified memory policy"
+    ]
+  },
+  "candidate": {
+    "max_idle_wrappers_and_keys": 512,
+    "inline_boxes_per_key": 4,
+    "max_retained_unicode_capacity": 512,
+    "ASCII": "Two u64 validity bitmaps, dense sorted SmallVec<[Pixels;32]> with popcount rank; preserves float bits and all128 ASCII scalar positions.",
+    "lifecycle": "O(1) LRU, boxed full-miss transfers, Arc owner identity, checked generation; held/active owners are outside idle budget."
+  },
+  "correctness": {
+    "fresh_baseline_policy_regressions_failed_as_expected": 2,
+    "fresh_candidate_exact_regressions_passed": 22,
+    "full_candidate_core_passed": 2273,
+    "unchanged_opt_in_ignored_cases": 2,
+    "independent_audit": {
+      "path": ".artifacts/2026-10-18-bitmap512-actual-independent-renderer-audit/review.json",
+      "sha256": "5bd095adbc39da0cf4a01cb191cbbdb9e3f56a2d00345b640b251d20e15a945c",
+      "bytes": 25586
+    }
+  },
+  "original_fixed14": {
+    "status": "PASS_FROZEN_HEADLESS_CPU_AND_REQUESTED_ALLOCATION_GATES_ONLY",
+    "passed": 100,
+    "total": 100,
+    "measured_main_and_all_numeric_thresholds_unchanged": true,
+    "allocation_requested_live_bytes": {
+      "A": 676872,
+      "B": 308232
+    },
+    "requested_live_reduction_percent": 54.46229124561217,
+    "CPU_groups": [
+      {
+        "name": "warm-sequential",
+        "acquisitions": 2000000,
+        "clocks": {
+          "thread_cpu_ns": {
+            "A_median_ns": 1188159125,
+            "B_median_ns": 1205753250,
+            "ratio": 1.014807886107006,
+            "percent_change": 1.4807886107006007
+          },
+          "process_cpu_ns": {
+            "A_median_ns": 1188160000,
+            "B_median_ns": 1205755000,
+            "ratio": 1.0148086116347967,
+            "percent_change": 1.4808611634796742
+          }
+        }
+      },
+      {
+        "name": "warm-eight-keys",
+        "acquisitions": 2000000,
+        "clocks": {
+          "thread_cpu_ns": {
+            "A_median_ns": 1195510667,
+            "B_median_ns": 1220154458,
+            "ratio": 1.0206136103008105,
+            "percent_change": 2.0613610300810548
+          },
+          "process_cpu_ns": {
+            "A_median_ns": 1195511000,
+            "B_median_ns": 1220157000,
+            "ratio": 1.0206154523044957,
+            "percent_change": 2.0615452304495685
+          }
+        }
+      },
+      {
+        "name": "warm-two-held-same-key",
+        "acquisitions": 2000000,
+        "clocks": {
+          "thread_cpu_ns": {
+            "A_median_ns": 1340688958,
+            "B_median_ns": 1200509042,
+            "ratio": 0.8954418807110068,
+            "percent_change": -10.455811928899317
+          },
+          "process_cpu_ns": {
+            "A_median_ns": 1340690000,
+            "B_median_ns": 1200510000,
+            "ratio": 0.8954418993204991,
+            "percent_change": -10.45581006795009
+          }
+        }
+      },
+      {
+        "name": "warm-four-held-same-key",
+        "acquisitions": 2000000,
+        "clocks": {
+          "thread_cpu_ns": {
+            "A_median_ns": 1305588750,
+            "B_median_ns": 1170610083,
+            "ratio": 0.8966147134769659,
+            "percent_change": -10.338528652303413
+          },
+          "process_cpu_ns": {
+            "A_median_ns": 1305589000,
+            "B_median_ns": 1170610000,
+            "ratio": 0.8966144782163452,
+            "percent_change": -10.338552178365479
+          }
+        }
+      },
+      {
+        "name": "cold-boxing-and-first-return",
+        "acquisitions": 16384,
+        "clocks": {
+          "thread_cpu_ns": {
+            "A_median_ns": 46305958,
+            "B_median_ns": 47453875,
+            "ratio": 1.0247898337401853,
+            "percent_change": 2.4789833740185285
+          },
+          "process_cpu_ns": {
+            "A_median_ns": 46307000,
+            "B_median_ns": 47454000,
+            "ratio": 1.0247694732977735,
+            "percent_change": 2.476947329777346
+          }
+        }
+      },
+      {
+        "name": "over-capacity-size-churn",
+        "acquisitions": 131072,
+        "clocks": {
+          "thread_cpu_ns": {
+            "A_median_ns": 81763625,
+            "B_median_ns": 82022541,
+            "ratio": 1.003166640422315,
+            "percent_change": 0.3166640422314959
+          },
+          "process_cpu_ns": {
+            "A_median_ns": 81765000,
+            "B_median_ns": 82023000,
+            "ratio": 1.00315538433315,
+            "percent_change": 0.3155384333149991
+          }
+        }
+      }
+    ],
+    "historical_512_churn_fits_this_candidate_capacity": true,
+    "limits": [
+      "No native font rendering/OS font refresh, RSS, allocator usable-size, power, global memory ceiling or cross-framework claim.",
+      "Active widths stay unchanged; regression browser reset is native controlled shared-body acceptance, not a real browser font event.",
+      "No allocation recorder is present in the CPU executables. Whole-operation requested counts include pool metadata with identical common owners, not selectively attributed allocator stacks.",
+      "Cold boxing and the unchanged historical512-key churn are explicit separate cost groups. Under the new512 idle policy this working set fits the cap; it is not greater-than-capacity or universal churn proof."
+    ],
+    "result": {
+      "path": ".artifacts/2026-10-18-bitmap512-cost-measure/result.json",
+      "sha256": "06d1a6561630816bee4dcf0da2ba57236ab639968337cb505b6f1e68a4360b3c",
+      "bytes": 1579270
+    },
+    "independent_audit": {
+      "path": ".artifacts/2026-10-18-bitmap512-cost-independent-renderer-audit/review.json",
+      "sha256": "781f2a2d9e3c39b370db4db792c625fac4b3b160be9b0b459622ee9dc7434dfe",
+      "bytes": 68880
+    }
+  },
+  "separate1024": {
+    "status": "REJECTED_SEPARATE1024_DIAGNOSTIC_GUARD_OR_NOISE",
+    "fixed_processes": 12,
+    "oracles": 2,
+    "CPU_samples": 10,
+    "fixed_AB_BA_pairs": 5,
+    "keys": 1024,
+    "rounds": 256,
+    "acquisitions_per_CPU_process": 262144,
+    "passed": 8,
+    "total": 10,
+    "failed": [
+      {
+        "gate": "separate1024 candidate median <= declared2x+whole-bundle slack",
+        "pass": false,
+        "clock": "thread_cpu_ns",
+        "ratio": 4.199965965399894,
+        "limit_ns": 329341418.0
+      },
+      {
+        "gate": "separate1024 candidate median <= declared2x+whole-bundle slack",
+        "pass": false,
+        "clock": "process_cpu_ns",
+        "ratio": 4.199980561410755,
+        "limit_ns": 329342000.0
+      }
+    ],
+    "clocks": {
+      "thread_cpu_ns": {
+        "variants": {
+          "A": {
+            "values_ns": [
+              174473208,
+              164620709,
+              163753417,
+              165865958,
+              163939167
+            ],
+            "median_ns": 164620709,
+            "mad_ns": 867292,
+            "mad_fraction": 0.005268425857648323
+          },
+          "B": {
+            "values_ns": [
+              683524500,
+              691401375,
+              693223000,
+              692701459,
+              683967083
+            ],
+            "median_ns": 691401375,
+            "mad_ns": 1821625,
+            "mad_fraction": 0.0026346852434304168
+          }
+        },
+        "raw_ratio": 4.199965965399894,
+        "percent_change": 319.9965965399894,
+        "limit_ns": 329341418.0
+      },
+      "process_cpu_ns": {
+        "variants": {
+          "A": {
+            "values_ns": [
+              174474000,
+              164621000,
+              163754000,
+              165866000,
+              163940000
+            ],
+            "median_ns": 164621000,
+            "mad_ns": 867000,
+            "mad_fraction": 0.00526664277340072
+          },
+          "B": {
+            "values_ns": [
+              683526000,
+              691405000,
+              693223000,
+              692702000,
+              683967000
+            ],
+            "median_ns": 691405000,
+            "mad_ns": 1818000,
+            "mad_fraction": 0.0026294284825825673
+          }
+        },
+        "raw_ratio": 4.199980561410755,
+        "percent_change": 319.99805614107555,
+        "limit_ns": 329342000.0
+      }
+    },
+    "limits": [
+      "Separate1024-key new beyond512 policy working set; never substitutes for or rewrites H6 original14/fixed512 cohort.",
+      "Headless deterministic NoopTextSystem public-wrapper CPU only. No native font/raster/runtime browser, allocation requested-byte/RSS/power or universal throughput claim.",
+      "Setup and teardown reported separately; bundle includes first1024 pass and all256 rounds with every output check. No subtractive timing or retries/outlier removal.",
+      "A pass/failure is this diagnostic guard result, not source adoption/unified R8 closure."
+    ],
+    "all_floor_noise_output_and_lifecycle_checks_pass": true,
+    "raw_result": {
+      "path": ".artifacts/2026-10-18-bitmap-beyond1024-measure-v2/result.json",
+      "sha256": "9eaddbad4e3cd7f134630efafad7ceb0da20b73fea94cd70eb80ed99bc4aa1fc",
+      "bytes": 1579235
+    },
+    "independent_audit": {
+      "path": ".artifacts/2026-10-18-bitmap-beyond1024-actual-independent-renderer-audit/review.json",
+      "sha256": "a40e5cce2acaf3a2b02e74865d027d7f6d8ae10ff0570c28d2a4e12b1550b2bd",
+      "bytes": 38349
+    }
+  },
+  "quiet_and_restoration": {
+    "all14_plus12_processes_terminal": true,
+    "owned_workloads_idle_during_each_measured_window": true,
+    "other_OS_user_activity_controlled": false,
+    "both_full3172_source_maps_restored_with_current_mtimes_after_each_cohort": true,
+    "fixed14_quiet_completion": {
+      "path": ".artifacts/2026-10-18-bitmap512-cost-root-ready/quiet-completion.json",
+      "sha256": "b1e7928ed06965eb30121e4b0dae9c6f36995d53f5f741836ddf2a889c78e3d4",
+      "bytes": 1135
+    },
+    "fixed12_quiet_completion": {
+      "path": ".artifacts/2026-10-18-bitmap-beyond1024-root-ready-v2/quiet-completion.json",
+      "sha256": "df29a21c57c6b0f294c5d4a201d39e3d8f42e286b636902935c0026edb183fc5",
+      "bytes": 846
+    }
+  },
+  "preserved_preflight_failure": {
+    "reason": "Root quiet receipt omitted two diagnostic GO booleans; runtime stopped before spawning any measurement process. Fresh explicit build/receipt followed; zero performance samples were retried.",
+    "receipt": {
+      "path": ".artifacts/2026-10-18-bitmap-beyond1024-measure/result.json",
+      "sha256": "1c6dd35d21c03493e12562afaca370c040444db99fc6e59b086cee30059bf849",
+      "bytes": 1579299
+    },
+    "independent_audit": {
+      "path": ".artifacts/2026-10-18-beyond1024-preflight-independent-renderer-audit/review.json",
+      "sha256": "7c12095eca4f3fa62de30d7c994be9390a372923ff3affcf4b266d4903075669",
+      "bytes": 23372
+    }
+  },
+  "preserved_index_map_experiment": {
+    "passed": 99,
+    "total": 100,
+    "requested_retained_bytes": {
+      "A": 676872,
+      "B": 365576
+    },
+    "only_failure": [
+      {
+        "gate": "candidate retained requested delta <=50% baseline",
+        "pass": false,
+        "requested_live_deltas": {
+          "A": 676872,
+          "B": 365576
+        }
+      }
+    ],
+    "adopted": false,
+    "result": {
+      "path": ".artifacts/2026-10-18-compact512-cost-measure/result.json",
+      "sha256": "87860ba9b9b283136f6d84fd647193edff94119cb2e4ec2620ffc9651f0b8a2f",
+      "bytes": 1579245
+    },
+    "peer": {
+      "path": ".artifacts/2026-10-18-compact512-cost-independent-renderer-audit/review.json",
+      "sha256": "c0a24177c35735c7cf5552924198411a4201c9ce8c4e55d511798ed7555af685",
+      "bytes": 68635
+    }
+  },
+  "earlier_experiments": "2026-10-18-idle-text-wrapper-experiment.json",
+  "decision": {
+    "production_adoption": false,
+    "no_cost_retry_or_outlier_removal": true,
+    "numeric_thresholds_relaxed": false,
+    "memory_gain_does_not_override_CPU_rejection": true,
+    "remaining_work": "A distinct compact-width successor may be evaluated with honest retention policy and fresh correctness binding; global idle budget and R8 remain open."
+  }
+}

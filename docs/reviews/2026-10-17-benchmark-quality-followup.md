@@ -1019,3 +1019,13 @@ files to immutable source, with no upload. Local image/Grid Metal proof remains
 a separate checkpoint. The [native wheel attempt](2026-10-18-native-wheel-validation.json)
 stops on a child-process-group ownership guard before any event; later cleanup
 recovery is recorded separately and native wheel acceptance remains open.
+
+The later [tree label fix](2026-10-18-tree-accessibility-label-validation.json)
+passes all 568 headless UI tests, strict lint, production/test Wasm type checks
+and formatting, then is adopted with stable accessible row IDs. The
+[compact-wrapper investigation](2026-10-18-compact-text-wrapper-experiments.json)
+remains rejected: 54.46% fewer requested retained bytes does not offset 4.20 times
+baseline CPU in the separate 1,024-key churn check. The
+[b091 platform run](2026-10-18-platform-b091-validation.json) still fails Linux
+dependency audit, native Mac presentation and distinct Mac browser timing gates.
+No overall framework ranking or later-source platform acceptance follows.

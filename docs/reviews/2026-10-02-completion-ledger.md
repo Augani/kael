@@ -21,7 +21,7 @@ Its published claims are comparison inputs; superiority requires matched runs.
 | R9 | Reusable virtual filesystem explorer with cached sort keys, lazy async loading, context actions and drag/drop | Visible explorer example and UI-driven tests; bounded model/cache/pending state, generations/cancellation and stale-response tests | Actual native keyboard move/reload and fresh pointer readme-to-Archive move pass; disk oracle verifies source removal and destination bytes. Fresh complete glyph pixels and hidden-file toggle pass |
 | R10 | Persistent movable docking/tab groups, nested splits, floating panes and structured property inspectors | Runnable workspace; pointer/keyboard rearrangement, float/redock, persistence restore and editing/undo tests | Fresh integrated native pointer tab/edge split movement, float/move/resize/redock, keyboard edge docking, floating/nested save/reset/restore, Unicode inspector Undo/Redo and live preview pixels pass |
 | R11 | Rich document and remote-data workflows build on current editors/grids | Real documents exercise selection, IME, undo/redo; remote-data editing/clipboard/frozen-pane/accessibility tests and sustained workloads | Actual native formatting/Undo, Unicode remote edit/sort identity, atomic 2×2 TSV paste/Undo/Redo, frozen-row vertical scrolling and populated pixels pass. Native horizontal keyboard reveal/frozen-column pixels also pass; physical input-source IME, nonzero horizontal wheel delivery and sustained performance remain |
-| R12 | Consumer docs, examples, capability truth and platform CI cover the finished APIs | Native/browser consumer builds, working examples, strict lints/docs, CI evidence and no outdated roadmap claims for implemented features | The [fresh 39-package checkpoint](2026-10-18-image-grid-package-validation.json) binds committed ce39eed source and all 931 included Rust files; all 39 extracted builds and independent archive audit pass. The image/Grid source has separate local Metal proof. The [e205 platform cohort](2026-10-18-platform-e205-validation.json) remains failed overall: scoped Windows 2022/2025, Linux runtime and browser jobs pass, but hosted native Mac presentation and three denied dependency advisories fail. The Mac PR merge checkout shares the e205 Git tree; later-source platform execution, native delivery/IME, hardware coverage and physical workflows remain open |
+| R12 | Consumer docs, examples, capability truth and platform CI cover the finished APIs | Native/browser consumer builds, working examples, strict lints/docs, CI evidence and no outdated roadmap claims for implemented features | The [fresh 39-package checkpoint](2026-10-18-image-grid-package-validation.json) binds committed ce39eed source and all 931 included Rust files; all 39 extracted builds and independent archive audit pass. The image/Grid source has separate local Metal proof. The [b091 platform cohort](2026-10-18-platform-b091-validation.json) remains failed overall: scoped Windows 2022/2025, Linux runtime and browser jobs pass, but hosted native Mac presentation, separate hardware-browser timing budgets and three denied dependency advisories fail. The Mac PR merge checkout shares the b091 Git tree; later-source platform execution, native delivery/IME, hardware coverage and physical workflows remain open |
 
 The shader design's later built-in-blur migration is a separate architecture
 effort; it must not remove the existing visual correctness tests. Any scope
@@ -455,3 +455,21 @@ inconclusive. Full logical accessibility is retained; application RSS and later
 cross-framework performance remain separate. The [macOS energy collector](2026-10-18-macos-energy-collector-validation.json)
 is also adopted with 32 Python/three strict C/two synthetic checks in CI. It adds no
 application power result or waiver of the failed hosted platform gates.
+
+The [tree accessibility label fix](2026-10-18-tree-accessibility-label-validation.json)
+is adopted with two runtime RED/GREEN regressions, all 568 headless UI tests,
+strict UI lint, production/joint-test Wasm type checks and formatting. Accessible
+root names refresh without changing row IDs. Native screen-reader acceptance
+and the source-only immutable catalog prototype remain separate work.
+
+The [compact bitmap wrapper](2026-10-18-compact-text-wrapper-experiments.json)
+passes the original 100 checks and retains 54.46% fewer requested bytes, then
+fails both CPU guards in the separate 1,024-key cohort at 4.20 times baseline.
+All noise and output checks pass; no samples are discarded or thresholds relaxed.
+The bounded pool is not adopted, and unified R8 acceptance remains open.
+
+The [b091 platform record](2026-10-18-platform-b091-validation.json) supersedes
+the older platform cohort only for its frozen tree. Its merge commit is distinct
+but has the same b091 tree. Three Linux advisories, native Mac presentation and
+separate Mac hardware-browser p95/p99 budgets remain failed. Later label-source
+platform execution and every R1–R12 final acceptance requirement remain required.

@@ -1,0 +1,590 @@
+{
+  "recorded_at_utc": "2026-10-18T09:20:00.875311+00:00",
+  "run_id": 39110554436,
+  "workflow_head": "b0916c21212eca223cace9bccafbc321baa22615",
+  "event": "pull_request",
+  "conclusion": "failure",
+  "actual_checkout": {
+    "sha": "8f36cd0671c1032f1d99285d2079e0b2af8eb887",
+    "tree": "4afd1348b30c1d180423c54ea248ab0e4f9f9e7d",
+    "head_tree_equal": true,
+    "source": "saved full Mac checkout log plus official commit API; other completed checkout job logs show same8f36cd0 prefix"
+  },
+  "jobs": [
+    {
+      "id": 117625596218,
+      "name": "Classify change",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 117625621884,
+      "name": "Windows Native / WebView / MSI (windows-2022)",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 117625621896,
+      "name": "Quality / Native (Linux)",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Audit locked dependencies"
+      ]
+    },
+    {
+      "id": 117625621917,
+      "name": "WebAssembly / WebGL2 Browser",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 117625621933,
+      "name": "Linux Renderer / WebView Runtime",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 117625621938,
+      "name": "Quality / Native (macOS)",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Execute Metal retained-scene runtime proof",
+        "Diagnose same-job Apple drawable presentation",
+        "Enforce real Metal-backed browser performance"
+      ]
+    },
+    {
+      "id": 117625621981,
+      "name": "Windows Native / WebView / MSI (windows-2025-vs2026)",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 117625623229,
+      "name": "Focused Linux / GTK4 native accessibility",
+      "conclusion": "skipped",
+      "failed_steps": []
+    },
+    {
+      "id": 117635384108,
+      "name": "Platform readiness",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Enforce required build results"
+      ]
+    }
+  ],
+  "Mac_native": {
+    "GPU_complete_records": 29,
+    "drawable_callbacks": 28,
+    "positive_presentedTime": 0,
+    "idle_CPU_submission_1250ms": true,
+    "resize_geometry": "720x460 to723x460, scale1",
+    "required_positive_presentation": "FAILED",
+    "independent_controls": "three variants each60submitted/completed/callbacks;0positive;geometry1;exit1",
+    "lock": "UNKNOWN: locked_known=0, not unlocked",
+    "observed_session": "on-console/login-done1; displayonline/active1,asleep0; no causal environment assumption"
+  },
+  "Mac_hardware_browser": {
+    "status": "FAILED_ACTUAL_HARDWARE_TIMING_BUDGET",
+    "p95_ms": 166.8,
+    "p95_limit_ms": 80,
+    "p99_ms": 267.4,
+    "p99_limit_ms": 160,
+    "other_reported_metrics": {
+      "materialize_p99_us": 200,
+      "long_tasks": 3,
+      "peak_mounted": 19
+    },
+    "GPU": "ANGLE (Apple, ANGLE Metal Renderer: Apple Paravirtual device, Unspecified Version)",
+    "distinct_from_native_presentation_failure": true,
+    "no_screenshot_timeout_or_no_frame_claim": true
+  },
+  "browser_three_engine": [
+    {
+      "engine": "chromium",
+      "version": "151.0.7922.34",
+      "smoke_screens": 2,
+      "suite_screens": 2,
+      "capture_frame_delivery": "passed",
+      "trusted_picker": "not-automated-requires-user-activation",
+      "performance": "software-fallback-liveness; timing budgets not enforced"
+    },
+    {
+      "engine": "firefox",
+      "version": "153.0",
+      "smoke_screens": 2,
+      "suite_screens": 2,
+      "capture_frame_delivery": "passed",
+      "trusted_picker": "not-automated-requires-user-activation",
+      "performance": "software-fallback-liveness; timing budgets not enforced"
+    },
+    {
+      "engine": "webkit",
+      "version": "26.5",
+      "smoke_screens": 2,
+      "suite_screens": 2,
+      "capture_frame_delivery": "automation-unavailable",
+      "trusted_picker": "not-automated-requires-user-activation",
+      "performance": "software-fallback-liveness; timing budgets not enforced"
+    }
+  ],
+  "Lottie": [
+    {
+      "artifact": "lottie-admission-native-Linux",
+      "suite_executions": 140,
+      "separate_public_default_policy": 1
+    },
+    {
+      "artifact": "lottie-admission-native-macOS",
+      "suite_executions": 140,
+      "separate_public_default_policy": 1
+    },
+    {
+      "artifact": "lottie-admission-chrome",
+      "suite_executions": 17,
+      "separate_public_default_policy": null
+    }
+  ],
+  "Linux_audit": {
+    "status": "STRICT_FAILURE_PRESERVED",
+    "advisories": [
+      "RUSTSEC-2026-0370",
+      "RUSTSEC-2026-0371",
+      "RUSTSEC-2026-0372"
+    ],
+    "unmaintained_warnings_not_new_allowlist": true,
+    "auxiliary_cache_ENOENT_preserved": true
+  },
+  "Windows_scope": "Each23GPUinvocations/23distinct, nativeUIAUnicode/tree/WebView and generatedapp/MSI payload checks. SoftwareWARP; Windows2025 additionally fullworkspacecompile/lint, Windows2022 that step skipped by design. MSI build/admin extraction is not signing/install/physicalGPU acceptance. No39cratepackage-preflight claim from these jobs.",
+  "Mac_workspace_scope": "Official workspace stepPASS; raw all-feature Core2460pass+2ignored/UI576pass are distinct from local limited-feature correctness counts. Existing all-feature lint command includes its recorded-Adead-code policy; no stronger lint claim.",
+  "comparison_to_e205": {
+    "earlier_run": 39102275308,
+    "earlier_conclusion": "failure",
+    "same_three_Linux_advisories": true,
+    "same_native_presentation_unmet_pattern": "zeroKael/Applepositive; actual counts/environment are separately recorded",
+    "new_Mac_browser_failure": "e205 hardware browser steppassed; b091 fails p95/p99 budgets. Do not assign all Mac failures one cause."
+  },
+  "boundaries": [
+    "Official job conclusions preserved; no current physical presentation proof inferred from hosted evidence.",
+    "WebKit frame delivery automation-unavailable; trusted capture picker not automated; browser software-fallback budgets not enforced.",
+    "No benchmarkcomparison captures/medians/ranking audited here; run39110574440 left untouched.",
+    "No rerun/dispatch/cancel/push/Cargo/nativeprocess/event/current-maintained-or-Managed-source capture.",
+    "Only readonly GitHub evidence downloads, pure parsing/hashing and ignored artifact writes occurred."
+  ],
+  "schema_version": 1,
+  "status": "B091_PLATFORM_COHORT_FAILED_NO_WAIVERS",
+  "run_url": "https://github.com/Augani/kael/actions/runs/39110554436",
+  "independent_audit": {
+    "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/validation.json",
+    "sha256": "6dda50cd325b32a357e5c77a86a045d58dfabc79f28f4198e820deac57ca24ef",
+    "bytes": 139352
+  },
+  "downloads": {
+    "artifact_count": 10,
+    "extracted_files": 246,
+    "archive_bytes": 18754689,
+    "exact_API_head_size_digest_and_member_hash_verification": true,
+    "records": [
+      {
+        "name": "macos-wkwebview-smoke",
+        "id": 12131115524,
+        "digest": "sha256:8c8b4e421eea9241a2680ef81034d8555f25b959a3ccd574657444e962eca0fc",
+        "archive_bytes": 653,
+        "files": 1,
+        "receipt": {
+          "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/macos-wkwebview-smoke/download.json",
+          "sha256": "cd81bbbb5391d9ead0625e2b5238178c3b029e274f2c5bce8c70351bc49d3cd0",
+          "bytes": 1967
+        }
+      },
+      {
+        "name": "windows-release-evidence-windows-2025-vs2026",
+        "id": 12131072677,
+        "digest": "sha256:67b933dc0d25eaa970e1931114e874423ce64fe6240c417bf384cc2061459e58",
+        "archive_bytes": 418933,
+        "files": 36,
+        "receipt": {
+          "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/windows-release-evidence-windows-2025-vs2026/download.json",
+          "sha256": "bb6128f0e1be8caf514f60733b1e097799a18ae98c8bfd5a6a63dcfd16ec22e5",
+          "bytes": 14273
+        }
+      },
+      {
+        "name": "macos-runtime-evidence",
+        "id": 12131001713,
+        "digest": "sha256:df03638dedc13a0c6c6ec713ce840967f3cf80eb9273b08e5fdbf3d295f71ff1",
+        "archive_bytes": 167225,
+        "files": 29,
+        "receipt": {
+          "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/macos-runtime-evidence/download.json",
+          "sha256": "3f3b8fe9f6f8932036d98c8a45fa25eb9a0945566c704bf02650c3e7e69f9e73",
+          "bytes": 11370
+        }
+      },
+      {
+        "name": "windows-release-evidence-windows-2022",
+        "id": 12130871353,
+        "digest": "sha256:5f0466924a7373cd009536861616932be44c9efde82c789f16e60cf0080818da",
+        "archive_bytes": 419385,
+        "files": 36,
+        "receipt": {
+          "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/windows-release-evidence-windows-2022/download.json",
+          "sha256": "a9e75150af36db904dc888f5647b78bae906dcaba2a64006bbe2072874172b22",
+          "bytes": 14000
+        }
+      },
+      {
+        "name": "lottie-admission-native-Linux",
+        "id": 12130805358,
+        "digest": "sha256:d2331399098f753d8f546475144f4c57a82606936a221eb17821fdcdc7542216",
+        "archive_bytes": 11830,
+        "files": 4,
+        "receipt": {
+          "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/lottie-admission-native-Linux/download.json",
+          "sha256": "0ca9de0ee5eb6fa53144625b154d67f032611a58e0793a5cef50479e433842d1",
+          "bytes": 2907
+        }
+      },
+      {
+        "name": "lottie-admission-chrome",
+        "id": 12130626278,
+        "digest": "sha256:cf55fa43bca302a2a7855d64fe521149d3007e82751cd95be59dc0e4dbd3cc84",
+        "archive_bytes": 10036,
+        "files": 5,
+        "receipt": {
+          "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/lottie-admission-chrome/download.json",
+          "sha256": "c75855997e3ce4a5a858fd20f5e93ab6ed24b9e61bb6f3871af6fe7f6d041833",
+          "bytes": 3143
+        }
+      },
+      {
+        "name": "lottie-admission-native-macOS",
+        "id": 12130496931,
+        "digest": "sha256:f9d26c345feb98b4aadb54a6b8c0b72500941d3f5ae4e58491b60a7382b65787",
+        "archive_bytes": 4531,
+        "files": 4,
+        "receipt": {
+          "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/lottie-admission-native-macOS/download.json",
+          "sha256": "876b2deb30cbe1bd8c94fb5e0907f92bca140def6976a8dde079060b6dde2193",
+          "bytes": 2904
+        }
+      },
+      {
+        "name": "webgl2-programmable-runtime-evidence",
+        "id": 12130457339,
+        "digest": "sha256:7416864dc20236fc76f164a0e017eabd1c618e44df5d715fb7e192522adc58e7",
+        "archive_bytes": 37252,
+        "files": 5,
+        "receipt": {
+          "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/webgl2-programmable-runtime-evidence/download.json",
+          "sha256": "6515943b557769fa19fd493daf96fc94a8f283202e4238a8bc4ecce71b282156",
+          "bytes": 3273
+        }
+      },
+      {
+        "name": "browser-smoke",
+        "id": 12130334487,
+        "digest": "sha256:e037d0ab242d2ff36969d1ce40f72bf322515c23a5990236cb24f4b7bf5f0c79",
+        "archive_bytes": 17593179,
+        "files": 69,
+        "receipt": {
+          "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/browser-smoke/download.json",
+          "sha256": "ab7971d437601df29cd4228f41855c1e8f95d8b1b62f1931420ddf1d0346f12c",
+          "bytes": 23078
+        }
+      },
+      {
+        "name": "linux-runtime-evidence",
+        "id": 12129977971,
+        "digest": "sha256:4502616a106bac0b772c6b9e28cc06555ddf3123b967d22053d56e6220ed66e2",
+        "archive_bytes": 91665,
+        "files": 57,
+        "receipt": {
+          "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/linux-runtime-evidence/download.json",
+          "sha256": "793e64c6cc1cdc16c3450e30837336f66de9bbec4ed41949567cbff316c9427e",
+          "bytes": 21231
+        }
+      }
+    ]
+  },
+  "GPU": {
+    "windows2022": {
+      "invocations": 23,
+      "distinct_names": 23,
+      "duplicates": {},
+      "groups": [
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/windows-release-evidence-windows-2022/extracted/native-renderer-smoke/windows/programmable/atlas-identity-lifetimes.log",
+            "sha256": "ae5b0890ce946da5cd58af1999336ead0fb2ad0258f51be139de5568e59d5356",
+            "bytes": 647
+          },
+          "passed_invocations": 3,
+          "unique_names": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/windows-release-evidence-windows-2022/extracted/native-renderer-smoke/windows/programmable/atlas-tile-residency.log",
+            "sha256": "452eaba59e0203db4f4558e8d7c677c22813f22f7daa0e8647775545c9e19a01",
+            "bytes": 645
+          },
+          "passed_invocations": 3,
+          "unique_names": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/windows-release-evidence-windows-2022/extracted/native-renderer-smoke/windows/programmable/custom-shaders-and-compute.log",
+            "sha256": "e206fcf653196152a65cb581bc328c288840e1c327d01277f76d9d63311bbf7c",
+            "bytes": 3168
+          },
+          "passed_invocations": 11,
+          "unique_names": 11,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/windows-release-evidence-windows-2022/extracted/native-renderer-smoke/windows/programmable/mixed-gpu-graph.log",
+            "sha256": "ec2aad73afa403881b63ff4805d721541198bc12cf61b17dfc7257cf681c717c",
+            "bytes": 1078
+          },
+          "passed_invocations": 6,
+          "unique_names": 6,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    "windows2025": {
+      "invocations": 23,
+      "distinct_names": 23,
+      "duplicates": {},
+      "groups": [
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/windows-release-evidence-windows-2025-vs2026/extracted/native-renderer-smoke/windows/programmable/atlas-identity-lifetimes.log",
+            "sha256": "6e006846363bcc7e891b108318bf0884153e2b69d40af84096de03544ca5b0b2",
+            "bytes": 647
+          },
+          "passed_invocations": 3,
+          "unique_names": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/windows-release-evidence-windows-2025-vs2026/extracted/native-renderer-smoke/windows/programmable/atlas-tile-residency.log",
+            "sha256": "99e78f0c6468bf1e9e2bb89ed388bcd13faab9c7c7e657b66eeea79bde17672f",
+            "bytes": 645
+          },
+          "passed_invocations": 3,
+          "unique_names": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/windows-release-evidence-windows-2025-vs2026/extracted/native-renderer-smoke/windows/programmable/custom-shaders-and-compute.log",
+            "sha256": "e097ca8058341bb759bb9136b010e212cca49ca2b85fd0aad9b0a0f4c0089c95",
+            "bytes": 3074
+          },
+          "passed_invocations": 11,
+          "unique_names": 11,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/windows-release-evidence-windows-2025-vs2026/extracted/native-renderer-smoke/windows/programmable/mixed-gpu-graph.log",
+            "sha256": "c57bdb5776d2d6146842b6f6b10d0632c63954d60a79aee9a2eae322e953d774",
+            "bytes": 1078
+          },
+          "passed_invocations": 6,
+          "unique_names": 6,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    "macos": {
+      "invocations": 59,
+      "distinct_names": 58,
+      "duplicates": {
+        "platform::mac::metal_atlas::tests::native_atlas_identity_rejects_foreign_atlas_and_late_release": 2
+      },
+      "groups": [
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/macos-runtime-evidence/extracted/native-renderer-smoke/macos/programmable/atlas-identity-lifetimes.log",
+            "sha256": "0b109c67305d7cbf7cba951656707f10ce64e1c506b952b48498a6c7b3132b4e",
+            "bytes": 1020
+          },
+          "passed_invocations": 4,
+          "unique_names": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/macos-runtime-evidence/extracted/native-renderer-smoke/macos/programmable/atlas-tile-residency.log",
+            "sha256": "78274fa19d90caad1af4370a885858041c7db3ec553e66e56e34255cd53920b6",
+            "bytes": 910
+          },
+          "passed_invocations": 3,
+          "unique_names": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/macos-runtime-evidence/extracted/native-renderer-smoke/macos/programmable/custom-shaders-and-compute.log",
+            "sha256": "a102f2f8352d88da25ca965f88403fc48e64dad4e7931731cdc92993470a01b8",
+            "bytes": 1658
+          },
+          "passed_invocations": 7,
+          "unique_names": 7,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/macos-runtime-evidence/extracted/native-renderer-smoke/macos/programmable/mixed-gpu-graph.log",
+            "sha256": "0c75b30fde8375ad4aefa931ec1832e51a0e8821ab959a168932e5ae0d02f48c",
+            "bytes": 1307
+          },
+          "passed_invocations": 6,
+          "unique_names": 6,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/macos-runtime-evidence/extracted/native-renderer-smoke/macos/programmable/offscreen-scenes.log",
+            "sha256": "7dbb86b1a95d398f2dd804253cf82178163f925a9276eb95e016aec8291ce067",
+            "bytes": 11783
+          },
+          "passed_invocations": 26,
+          "unique_names": 26,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/macos-runtime-evidence/extracted/native-renderer-smoke/macos/programmable/ordered-atlas-uploads.log",
+            "sha256": "d9fd96ad7aa3e3669a0a02836f4982146aa8bfe0bf10242384d723d40d90e87d",
+            "bytes": 7986
+          },
+          "passed_invocations": 13,
+          "unique_names": 13,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    "linux": {
+      "invocations": 28,
+      "distinct_names": 28,
+      "duplicates": {},
+      "GTK4_tests": {
+        "file": {
+          "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/linux-runtime-evidence/extracted/kael/kael/target/native-renderer-smoke/linux/gtk4-atlas/native-tests.log",
+          "sha256": "5d4a6aad0256f9511e7f0d2a464ca05eb05a8a73a8d0654fb7f9cceff8a08e2d",
+          "bytes": 1525
+        },
+        "passed_invocations": 7,
+        "unique_names": 7,
+        "names": [
+          "platform::linux::gtk4_scene::tests::gtk4_atlas_budget_evicts_lru_without_touching_current_scene",
+          "platform::linux::gtk4_scene::tests::gtk4_checked_admission_bounds_mirrors_variants_and_deferred_entries",
+          "platform::linux::gtk4_scene::tests::gtk4_pressure_preserves_presented_texture_and_releases_unused_residency",
+          "platform::linux::gtk4_scene::tests::gtk4_atlas_deduplicates_validates_and_removes_tiles",
+          "platform::linux::gtk4_scene::tests::gtk4_retired_entry_does_not_unlink_same_key_replacement",
+          "platform::linux::gtk4_scene::tests::proof_scene_uses_ordered_kael_primitives",
+          "platform::linux::gtk4_scene::tests::texture_conversion_preserves_masks_and_subpixel_channels"
+        ],
+        "interleaved_named_verdicts": [],
+        "failed": 0,
+        "ignored": 0
+      },
+      "groups": [
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/linux-runtime-evidence/extracted/kael/kael/target/native-renderer-smoke/linux/programmable/atlas-admission.log",
+            "sha256": "5e21e26863e4ec43913645c70975bd39376222272a4c9eff49f4c1c1a81a7c1b",
+            "bytes": 415
+          },
+          "passed_invocations": 1,
+          "unique_names": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/linux-runtime-evidence/extracted/kael/kael/target/native-renderer-smoke/linux/programmable/atlas-identity-lifetimes.log",
+            "sha256": "3f9ea4c90cf7ab741152852aeb498dff86b3a78411f67c8812a6827027158700",
+            "bytes": 643
+          },
+          "passed_invocations": 3,
+          "unique_names": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/linux-runtime-evidence/extracted/kael/kael/target/native-renderer-smoke/linux/programmable/atlas-tile-residency.log",
+            "sha256": "6bbbbcd763d35d1bdbe2390b0f0585103ab2760ad6eda12cd09923b75043adda",
+            "bytes": 641
+          },
+          "passed_invocations": 3,
+          "unique_names": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/linux-runtime-evidence/extracted/kael/kael/target/native-renderer-smoke/linux/programmable/custom-shaders-and-compute.log",
+            "sha256": "d129d6da96f54c6a0d2c1882d9b247bfa289d25eec330c017e0a7f716aa1d81a",
+            "bytes": 1215
+          },
+          "passed_invocations": 5,
+          "unique_names": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/linux-runtime-evidence/extracted/kael/kael/target/native-renderer-smoke/linux/programmable/mixed-gpu-graph.log",
+            "sha256": "ce1504e6d6f3423f4948b1e404c267db1eace7cd8aeab58ffef8d5432828dce0",
+            "bytes": 1050
+          },
+          "passed_invocations": 6,
+          "unique_names": 6,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "file": {
+            "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/downloads/linux-runtime-evidence/extracted/kael/kael/target/native-renderer-smoke/linux/programmable/offscreen-scenes.log",
+            "sha256": "fcb024caf72dea586b33bddaf7727dae0d96d9a5e5bd931d775a2eb602c29c59",
+            "bytes": 2433
+          },
+          "passed_invocations": 10,
+          "unique_names": 10,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    }
+  },
+  "limits": [
+    "This cohort precedes the subsequently adopted tree label fix.",
+    "Matched comparison39110574440 was still running at publication preparation; no benchmark medians or energy result inferred.",
+    "Mac native zero presentation and Mac browser budget failure are separate unmet gates, without an assumed common cause.",
+    "No advisory ignores were introduced; staged D-Bus migrations are unadopted and do not close the Linux audit."
+  ]
+}

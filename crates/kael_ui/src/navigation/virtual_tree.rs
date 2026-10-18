@@ -306,6 +306,7 @@ pub struct VirtualTreeAccessibilityContext<T: Clone + Eq + Hash + 'static> {
 
 struct PreparedTreeAccessibility<T: Clone> {
     root: AccessibilityId,
+    label: SharedString,
     ids: Arc<Vec<AccessibilityId>>,
     model_indices: Arc<HashMap<T, usize>>,
     catalog_ids: Arc<Vec<AccessibilityId>>,
@@ -584,6 +585,7 @@ fn build_accessibility<T: Clone + Eq + Hash + 'static>(
     .expect("validated virtual tree produces a consistent accessibility subtree");
     Arc::new(PreparedTreeAccessibility {
         root: context.root,
+        label: context.label.clone(),
         ids,
         model_indices: model.data.indices.clone(),
         catalog_ids,
@@ -752,6 +754,10 @@ impl<T: Clone + Eq + Hash + 'static> VirtualTreeState<T> {
     ) -> Arc<AccessibilitySnapshot> {
         if self.accessibility_model.as_ptr() == Arc::as_ptr(&model.data)
             && self.accessibility_toggle == has_toggle
+            && self
+                .accessibility_data
+                .as_ref()
+                .is_some_and(|data| data.label == *label)
         {
             return self.accessibility_snapshot.as_ref().unwrap().clone();
         }
@@ -762,14 +768,25 @@ impl<T: Clone + Eq + Hash + 'static> VirtualTreeState<T> {
             .data
             .accessibility
             .as_ref()
-            .filter(|data| data.root == self.accessibility_root && data.has_toggle == has_toggle)
+            .filter(|data| {
+                data.root == self.accessibility_root
+                    && data.has_toggle == has_toggle
+                    && data.label == *label
+            })
             .cloned()
             .unwrap_or_else(|| {
-                build_accessibility(
-                    model,
-                    &self.accessibility_preparation_context(label.clone(), has_toggle),
-                    Some(_executor),
-                )
+                let mut context = self.accessibility_preparation_context(label.clone(), has_toggle);
+                // A relabeled worker snapshot still owns the initial row identities.
+                // Once published state exists, its current identities stay authoritative.
+                if context.previous.is_none() {
+                    context.previous = model
+                        .data
+                        .accessibility
+                        .as_ref()
+                        .filter(|data| data.root == self.accessibility_root)
+                        .cloned();
+                }
+                build_accessibility(model, &context, Some(_executor))
             });
         let snapshot = prepared.snapshot.as_ref().unwrap().clone();
         self.accessibility_data = Some(prepared);
@@ -2737,6 +2754,68 @@ mod tests {
             assert!(old_prepared.upgrade().is_none());
             assert!(old_snapshot.upgrade().is_none());
         }
+    }
+
+    #[::core::prelude::v1::test]
+    fn accessibility_root_label_updates_on_the_same_tree_model() {
+        let cx = TestAppContext::single();
+        let worker = cx.background_executor.clone();
+        let mut state = cx.update(VirtualTreeState::new);
+        let model = VirtualTreeModel::new(&[TreeNode::new(7, "Entry")], &HashSet::new()).unwrap();
+        let first = state.logical_accessibility(&model, &"Files".into(), false, &worker);
+        let row = state.accessibility_id(&7).unwrap();
+        let renamed =
+            state.logical_accessibility(&model, &"Contacts 日本語".into(), false, &worker);
+        assert_eq!(
+            first.get(first.root).unwrap().label.as_deref(),
+            Some("Files")
+        );
+        assert_eq!(
+            renamed.get(renamed.root).unwrap().label.as_deref(),
+            Some("Contacts 日本語")
+        );
+        assert_eq!(renamed.root, first.root);
+        assert_eq!(state.accessibility_id(&7), Some(row));
+        assert_eq!(renamed.get(row).unwrap().label.as_deref(), Some("Entry"));
+        assert!(!Arc::ptr_eq(&first, &renamed));
+        let reused = state.logical_accessibility(&model, &"Contacts 日本語".into(), false, &worker);
+        assert!(Arc::ptr_eq(&renamed, &reused));
+    }
+
+    #[::core::prelude::v1::test]
+    fn accessibility_rejects_worker_preparation_for_a_different_root_label() {
+        let cx = TestAppContext::single();
+        let worker = cx.background_executor.clone();
+        let mut state = cx.update(VirtualTreeState::new);
+        let mut model =
+            VirtualTreeModel::new(&[TreeNode::new(7, "Entry")], &HashSet::new()).unwrap();
+        model
+            .prepare_accessibility(
+                state.accessibility_preparation_context("Queued", false),
+                &worker,
+            )
+            .unwrap();
+        let prepared = record_snapshot(&model).clone();
+        let displayed = state.logical_accessibility(&model, &"Visible".into(), false, &worker);
+        assert_eq!(
+            prepared.get(prepared.root).unwrap().label.as_deref(),
+            Some("Queued")
+        );
+        assert_eq!(
+            displayed.get(displayed.root).unwrap().label.as_deref(),
+            Some("Visible")
+        );
+        assert_eq!(displayed.root, prepared.root);
+        let row = state.accessibility_id(&7).unwrap();
+        assert_eq!(displayed.get(row).unwrap().label.as_deref(), Some("Entry"));
+        assert!(!Arc::ptr_eq(&prepared, &displayed));
+        let matching = state.logical_accessibility(&model, &"Queued".into(), false, &worker);
+        assert!(Arc::ptr_eq(&prepared, &matching));
+        assert_eq!(state.accessibility_id(&7), Some(row));
+        assert_eq!(
+            displayed.get(displayed.root).unwrap().label.as_deref(),
+            Some("Visible")
+        );
     }
 }
 
