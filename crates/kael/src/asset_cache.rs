@@ -1687,3 +1687,508 @@ mod active_consumer_regressions {
         drop(subscription);
     }
 }
+
+// Checked admission must cover synchronous initialization and reentry.
+#[cfg(test)]
+mod checked_asset_reentrancy_regressions {
+    use crate::{App, Asset, TestAppContext};
+    use futures::Future;
+    use std::{
+        hash::{Hash, Hasher},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    #[derive(Clone, Debug)]
+    struct NestedObservation {
+        accepted: bool,
+        created: Option<bool>,
+        pending_before: usize,
+        pending_after: usize,
+    }
+
+    #[derive(Default)]
+    struct Probe {
+        outer_loads: AtomicUsize,
+        leaf_loads: AtomicUsize,
+        same_key_loads: AtomicUsize,
+        source_clones: AtomicUsize,
+        nested: Mutex<Option<NestedObservation>>,
+    }
+
+    struct Source {
+        key: u8,
+        reenter_same_key: bool,
+        panic_on_clone: bool,
+        panic_on_load: bool,
+        probe: Arc<Probe>,
+    }
+
+    impl Source {
+        fn new(key: u8, probe: &Arc<Probe>) -> Self {
+            Self {
+                key,
+                reenter_same_key: false,
+                panic_on_clone: false,
+                panic_on_load: false,
+                probe: probe.clone(),
+            }
+        }
+    }
+
+    impl Clone for Source {
+        fn clone(&self) -> Self {
+            self.probe.source_clones.fetch_add(1, Ordering::SeqCst);
+            assert!(!self.panic_on_clone, "controlled source Clone panic");
+            Self {
+                key: self.key,
+                reenter_same_key: self.reenter_same_key,
+                panic_on_clone: self.panic_on_clone,
+                panic_on_load: self.panic_on_load,
+                probe: self.probe.clone(),
+            }
+        }
+    }
+
+    impl Hash for Source {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.key.hash(state);
+        }
+    }
+
+    // One bounded synchronous reentry. The result is observed before acquiring
+    // the Probe mutex, so no callback occurs under a fixture lock.
+    fn nested_checked<A: Asset<Source = Source, Output = u8>>(
+        cx: &mut App,
+        source: &Source,
+    ) -> NestedObservation {
+        let pending_before = cx.pending_asset_count();
+        let result = cx.fetch_asset_checked::<A>(source);
+        let observation = NestedObservation {
+            accepted: result.is_ok(),
+            created: result.as_ref().ok().map(|(_, created)| *created),
+            pending_before,
+            pending_after: cx.pending_asset_count(),
+        };
+        drop(result);
+        observation
+    }
+
+    struct LeafAsset;
+    impl Asset for LeafAsset {
+        type Source = Source;
+        type Output = u8;
+
+        fn load(source: Source, _: &mut App) -> impl Future<Output = u8> + Send + 'static {
+            source.probe.leaf_loads.fetch_add(1, Ordering::SeqCst);
+            assert!(!source.panic_on_load, "controlled synchronous loader panic");
+            futures::future::pending()
+        }
+    }
+
+    struct OuterAsset;
+    impl Asset for OuterAsset {
+        type Source = Source;
+        type Output = u8;
+
+        fn load(source: Source, cx: &mut App) -> impl Future<Output = u8> + Send + 'static {
+            source.probe.outer_loads.fetch_add(1, Ordering::SeqCst);
+            let inner = Source::new(1, &source.probe);
+            // Distinct keys/types and a non-reentrant leaf: no loader cycle.
+            let observation = nested_checked::<LeafAsset>(cx, &inner);
+            *source.probe.nested.lock().unwrap() = Some(observation);
+            futures::future::pending()
+        }
+    }
+
+    struct SameKeyAsset;
+    impl Asset for SameKeyAsset {
+        type Source = Source;
+        type Output = u8;
+
+        fn load(source: Source, cx: &mut App) -> impl Future<Output = u8> + Send + 'static {
+            source.probe.same_key_loads.fetch_add(1, Ordering::SeqCst);
+            if source.reenter_same_key {
+                // Explicitly disarm the nested attempt. At most two old-loader
+                // invocations can occur; there is no unbounded recursion.
+                let inner = Source::new(source.key, &source.probe);
+                let observation = nested_checked::<SameKeyAsset>(cx, &inner);
+                *source.probe.nested.lock().unwrap() = Some(observation);
+            }
+            futures::future::pending()
+        }
+    }
+
+    #[test]
+    fn checked_reentrant_different_key_cannot_exceed_one_pending_admission() {
+        let cx = TestAppContext::single();
+        let probe = Arc::new(Probe::default());
+        let outer = Source::new(0, &probe);
+        let inner = Source::new(1, &probe);
+        assert_ne!(
+            crate::asset_cache::hash(&outer),
+            crate::asset_cache::hash(&inner)
+        );
+        cx.update(|cx| {
+            cx.set_pending_asset_limit(1);
+            let (task, created) = cx.fetch_asset_checked::<OuterAsset>(&outer).unwrap();
+            let observation = probe.nested.lock().unwrap().clone().unwrap();
+            let pending = cx.pending_asset_count();
+            let outer_loads = probe.outer_loads.load(Ordering::SeqCst);
+            let leaf_loads = probe.leaf_loads.load(Ordering::SeqCst);
+            eprintln!(
+                "checked-reentrant different-key: limit=1 pending={pending} outer-loads={outer_loads} leaf-loads={leaf_loads} nested-accepted={} nested-created={:?} nested-before={} nested-after={}",
+                observation.accepted, observation.created,
+                observation.pending_before, observation.pending_after,
+            );
+            assert!(created);
+            assert_eq!(pending, 1, "checked reentrant work must obey the pending cap");
+            assert!(!observation.accepted, "outer admission must reserve the only slot before loader callbacks");
+            assert_eq!(outer_loads, 1);
+            assert_eq!(leaf_loads, 0, "a rejected child must not invoke its loader");
+            drop(task);
+        });
+    }
+
+    #[test]
+    fn checked_reentrant_same_key_does_not_start_duplicate_loader_and_later_fetch_shares() {
+        let cx = TestAppContext::single();
+        let probe = Arc::new(Probe::default());
+        let mut source = Source::new(0, &probe);
+        source.reenter_same_key = true;
+        cx.update(|cx| {
+            cx.set_pending_asset_limit(1);
+            let (task, created) = cx.fetch_asset_checked::<SameKeyAsset>(&source).unwrap();
+            let (shared, created_again) = cx.fetch_asset_checked::<SameKeyAsset>(&source).unwrap();
+            let observation = probe.nested.lock().unwrap().clone().unwrap();
+            let calls = probe.same_key_loads.load(Ordering::SeqCst);
+            eprintln!(
+                "checked-reentrant same-key: limit=1 pending={} loads={calls} outer-created={created} later-created={created_again} nested-accepted={} nested-created={:?} nested-before={} nested-after={}",
+                cx.pending_asset_count(), observation.accepted, observation.created,
+                observation.pending_before, observation.pending_after,
+            );
+            assert_eq!(calls, 1, "initializing the same key must not start a second loader");
+            assert_eq!(cx.pending_asset_count(), 1);
+            assert!(created);
+            assert!(!created_again, "ordinary same-key fetch still shares after publication");
+            // Rejecting the initializing-key request is valid; a real shared
+            // placeholder is also valid if no duplicate loader was constructed.
+            if observation.accepted {
+                assert_eq!(observation.created, Some(false));
+            }
+            drop((task, shared));
+        });
+    }
+
+    #[test]
+    fn checked_reentrant_distinct_key_progresses_when_two_slots_are_available() {
+        let cx = TestAppContext::single();
+        let probe = Arc::new(Probe::default());
+        let outer = Source::new(0, &probe);
+        cx.update(|cx| {
+            cx.set_pending_asset_limit(2);
+            let (task, created) = cx.fetch_asset_checked::<OuterAsset>(&outer).unwrap();
+            let (shared, created_again) = cx.fetch_asset_checked::<OuterAsset>(&outer).unwrap();
+            let observation = probe.nested.lock().unwrap().clone().unwrap();
+            assert!(created && !created_again);
+            assert!(observation.accepted);
+            assert_eq!(observation.created, Some(true));
+            assert_eq!(probe.outer_loads.load(Ordering::SeqCst), 1);
+            assert_eq!(probe.leaf_loads.load(Ordering::SeqCst), 1);
+            assert_eq!(cx.pending_asset_count(), 2);
+            let third = Source::new(2, &probe);
+            assert!(cx.fetch_asset_checked::<LeafAsset>(&third).is_err());
+            assert_eq!(probe.leaf_loads.load(Ordering::SeqCst), 1);
+            drop((task, shared));
+        });
+    }
+
+    fn assert_panicking_initialization_releases_admission(panic_on_clone: bool) {
+        let cx = TestAppContext::single();
+        let probe = Arc::new(Probe::default());
+        let mut source = Source::new(0, &probe);
+        source.panic_on_clone = panic_on_clone;
+        source.panic_on_load = !panic_on_clone;
+        cx.update(|cx| {
+            cx.set_pending_asset_limit(1);
+            let panic = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                cx.fetch_asset_checked::<LeafAsset>(&source)
+            })) {
+                Err(panic) => panic,
+                Ok(_) => panic!("controlled source/loader panic did not occur"),
+            };
+            let message = panic
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| panic.downcast_ref::<&'static str>().copied())
+                .unwrap();
+            assert_eq!(
+                message,
+                if panic_on_clone {
+                    "controlled source Clone panic"
+                } else {
+                    "controlled synchronous loader panic"
+                }
+            );
+            let expected_calls = usize::from(!panic_on_clone);
+            eprintln!(
+                "checked-init panic: source-clone={panic_on_clone} pending={} clones={} loads={}",
+                cx.pending_asset_count(),
+                probe.source_clones.load(Ordering::SeqCst),
+                probe.leaf_loads.load(Ordering::SeqCst),
+            );
+            assert_eq!(cx.pending_asset_count(), 0);
+            assert_eq!(probe.source_clones.load(Ordering::SeqCst), 1);
+            assert_eq!(probe.leaf_loads.load(Ordering::SeqCst), expected_calls);
+
+            let retry = Source::new(0, &probe);
+            let (task, created) = cx.fetch_asset_checked::<LeafAsset>(&retry).unwrap();
+            let (shared, created_again) = cx.fetch_asset_checked::<LeafAsset>(&retry).unwrap();
+            assert!(created && !created_again);
+            assert_eq!(cx.pending_asset_count(), 1);
+            assert_eq!(probe.leaf_loads.load(Ordering::SeqCst), expected_calls + 1);
+            cx.remove_asset::<LeafAsset>(&retry);
+            assert_eq!(cx.pending_asset_count(), 0);
+            drop((task, shared));
+            let different = Source::new(1, &probe);
+            let (next, created) = cx.fetch_asset_checked::<LeafAsset>(&different).unwrap();
+            assert!(created);
+            assert_eq!(cx.pending_asset_count(), 1);
+            assert_eq!(probe.leaf_loads.load(Ordering::SeqCst), expected_calls + 2);
+            drop(next);
+        });
+    }
+
+    #[test]
+    fn synchronous_loader_panic_leaves_no_admission_or_initializing_key_reservation() {
+        assert_panicking_initialization_releases_admission(false);
+    }
+
+    #[test]
+    fn source_clone_panic_leaves_no_admission_or_initializing_key_reservation() {
+        assert_panicking_initialization_releases_admission(true);
+    }
+
+    #[test]
+    fn explicit_legacy_fetch_keeps_its_documented_uncapped_pending_contract() {
+        let cx = TestAppContext::single();
+        let probe = Arc::new(Probe::default());
+        let first = Source::new(0, &probe);
+        let second = Source::new(1, &probe);
+        cx.update(|cx| {
+            cx.set_pending_asset_limit(1);
+            let (one, new_one) = cx.fetch_asset::<LeafAsset>(&first);
+            let (two, new_two) = cx.fetch_asset::<LeafAsset>(&second);
+            assert!(new_one && new_two);
+            assert_eq!(probe.leaf_loads.load(Ordering::SeqCst), 2);
+            assert_eq!(cx.pending_asset_count(), 2);
+            // Checked callers still see the legacy-owned pending entries.
+            assert!(
+                cx.fetch_asset_checked::<LeafAsset>(&Source::new(2, &probe))
+                    .is_err()
+            );
+            assert_eq!(probe.leaf_loads.load(Ordering::SeqCst), 2);
+            drop((one, two));
+        });
+    }
+}
+
+// A failed initializer must release admission before waking a deferred view.
+#[cfg(test)]
+mod checked_asset_initialization_wake_tests {
+    use crate::{
+        AnyWindowHandle, App, Asset, Context, IntoElement, ParentElement, Render, TestAppContext,
+        VisualContext as _, Window, div,
+    };
+    use futures::Future;
+    use std::{
+        cell::Cell,
+        hash::{Hash, Hasher},
+        rc::Rc,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    #[derive(Clone)]
+    struct RetrySource(Arc<AtomicUsize>);
+    impl Hash for RetrySource {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            1_u8.hash(state);
+        }
+    }
+
+    struct RetryAsset;
+    impl Asset for RetryAsset {
+        type Source = RetrySource;
+        type Output = u8;
+
+        fn load(source: RetrySource, _: &mut App) -> impl Future<Output = u8> + Send + 'static {
+            source.0.fetch_add(1, Ordering::SeqCst);
+            futures::future::ready(17)
+        }
+    }
+
+    struct RetryConsumer {
+        source: RetrySource,
+        enabled: bool,
+        last: Option<u8>,
+        renders: usize,
+    }
+    impl Render for RetryConsumer {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            self.renders += 1;
+            if self.enabled {
+                self.last = window.use_asset::<RetryAsset>(&self.source, cx);
+            }
+            div().child(if self.last.is_some() {
+                "ready"
+            } else {
+                "waiting"
+            })
+        }
+    }
+
+    #[derive(Clone)]
+    struct PanickingSource {
+        window: AnyWindowHandle,
+        generation_before: u64,
+        renders_before: usize,
+        blocked_attempts: Arc<AtomicUsize>,
+        panic_after_render: bool,
+    }
+    impl Hash for PanickingSource {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.window.hash(state);
+        }
+    }
+
+    struct PanickingAsset;
+    impl Asset for PanickingAsset {
+        type Source = PanickingSource;
+        type Output = u8;
+
+        fn load(
+            source: PanickingSource,
+            cx: &mut App,
+        ) -> impl Future<Output = u8> + Send + 'static {
+            // This real drawing consumer requests a distinct asset while the
+            // outer checked call owns the sole initialization reservation.
+            let (renders, last, calls, generation) = source
+                .window
+                .update(cx, |view, window, cx| {
+                    let view = view.downcast::<RetryConsumer>().unwrap();
+                    // Deliberately no notify: the cleanup wake must be the only
+                    // generation change before the outer App update finishes.
+                    view.update(cx, |view, _| view.enabled = true);
+                    window.draw(cx).clear();
+                    let consumer = view.read(cx);
+                    (
+                        consumer.renders,
+                        consumer.last,
+                        consumer.source.0.load(Ordering::SeqCst),
+                        cx.entity_generation(view.entity_id()),
+                    )
+                })
+                .unwrap();
+            // Restore the Window before assertions or the controlled panic.
+            assert!(renders > source.renders_before);
+            assert_eq!(last, None);
+            assert_eq!(calls, 0);
+            assert_eq!(
+                generation,
+                Some(source.generation_before),
+                "the explicit blocked draw must not already notify the owner"
+            );
+            source.blocked_attempts.fetch_add(1, Ordering::SeqCst);
+            assert!(
+                !source.panic_after_render,
+                "controlled loader panic after a drawing consumer deferred"
+            );
+            futures::future::pending()
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn panicking_initialization_wakes_a_real_deferred_consumer_after_releasing_its_slot() {
+        let mut cx = TestAppContext::single();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let blocked_attempts = Arc::new(AtomicUsize::new(0));
+        let (consumer, window) = cx.add_window_view(|_, _| RetryConsumer {
+            source: RetrySource(calls.clone()),
+            enabled: false,
+            last: None,
+            renders: 0,
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        window.run_until_parked();
+        window.simulate_platform_frame();
+        window.run_until_parked();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        let notifications = Rc::new(Cell::new(0));
+        let _observer = window.cx.update(|cx| {
+            let notifications = notifications.clone();
+            cx.observe(&consumer, move |_, _| {
+                notifications.set(notifications.get() + 1)
+            })
+        });
+        let (generation_before, renders_before) = window.cx.update(|cx| {
+            (
+                cx.entity_generation(consumer.entity_id()).unwrap(),
+                consumer.read(cx).renders,
+            )
+        });
+        let source = PanickingSource {
+            window: window.window_handle(),
+            generation_before,
+            renders_before,
+            blocked_attempts: blocked_attempts.clone(),
+            panic_after_render: true,
+        };
+        // Use the App-only entry point so the loader can draw the owned window;
+        // the window is not already borrowed out by VisualTestContext::update.
+        window.cx.update(|cx| {
+            cx.set_pending_asset_limit(1);
+            let panic = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                cx.fetch_asset_checked::<PanickingAsset>(&source)
+            })) {
+                Err(panic) => panic,
+                Ok(_) => panic!("controlled loader panic did not occur"),
+            };
+            let message = panic
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| panic.downcast_ref::<&'static str>().copied())
+                .unwrap();
+            assert_eq!(
+                message,
+                "controlled loader panic after a drawing consumer deferred"
+            );
+            assert_eq!(blocked_attempts.load(Ordering::SeqCst), 1);
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+            assert_eq!(cx.pending_asset_count(), 0);
+            assert_eq!(
+                cx.entity_generation(consumer.entity_id()),
+                Some(generation_before.wrapping_add(1)),
+                "cleanup must notify the actual deferred owner before effects flush"
+            );
+        });
+        // Do not force a draw after the panic. Normal platform callbacks plus
+        // ordinary test effect flushing must admit and deliver the tiny asset.
+        window.run_until_parked();
+        for _ in 0..2 {
+            window.simulate_platform_frame();
+            window.run_until_parked();
+        }
+        window.cx.update(|cx| {
+            assert_eq!(consumer.read(cx).last, Some(17));
+            assert_eq!(cx.pending_asset_count(), 0);
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(notifications.get() >= 1);
+    }
+}

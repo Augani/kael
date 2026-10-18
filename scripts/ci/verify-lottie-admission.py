@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Require the maintained Lottie fork's native and real-Chrome admission tests."""
+"""Require Lottie fork admission tests and the isolated native loader default policy."""
 
 import argparse
 import hashlib
@@ -47,6 +47,10 @@ NATIVE_TESTS = PORTABLE_TESTS + (
 CHROME_TESTS = PORTABLE_TESTS + (
     "admission_raised_limits_still_reject_unrepresentable_target_buffers",
 )
+DEFAULT_LOADER_POLICY_TEST = (
+    "public_loader_admission_regression::"
+    "public_loader_starts_two_of_three_across_apps_and_direct_constructors_still_work"
+)
 SUMMARY = re.compile(
     r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored;[^\n]*$",
     re.MULTILINE,
@@ -81,6 +85,21 @@ def validate_runtime(text, backend):
     if backend == "chrome" and "Running headless tests in Chrome on " not in text:
         raise RuntimeError("chrome: runner did not confirm actual headless Chrome execution")
     return [report[0] for report in suites]
+
+
+def validate_default_loader_policy(text):
+    """Require the sole native public-policy test, never an empty/filtered harness."""
+    if SUMMARY.findall(text) != [("1", "0", "0")]:
+        raise RuntimeError("native default loader policy: expected exactly 1 passed, 0 failed/ignored")
+    if re.findall(r"^running (\d+) tests?$", text, re.MULTILINE) != ["1"]:
+        raise RuntimeError("native default loader policy: expected one executed test harness")
+    if any(int(count) for count in re.findall(r"(\d+) filtered out", text)):
+        raise RuntimeError("native default loader policy: filtered tests are not complete")
+    verdict = (r"^test " + re.escape(DEFAULT_LOADER_POLICY_TEST)
+               + r" \.\.\.(?:(?!\ntest ).)*?\bok(?:\r?\n|$)")
+    if len(re.findall(verdict, text, re.MULTILINE | re.DOTALL)) != 1:
+        raise RuntimeError("native default loader policy: missing/repeated public-policy verdict")
+    return 1
 
 
 def run(command, log, env):
@@ -171,6 +190,27 @@ def main():
     result.update({"suite_passes": validate_runtime(text, args.backend),
                    "runtime_log_sha256": sha256(log)})
     result["total_passed"] = sum(result["suite_passes"])
+    if args.backend == "native":
+        # A separate Cargo integration-test process exercises the real default
+        # singleton without parallel library tests occupying its two slots.
+        policy_command = ["cargo", "test", "--locked", "-p", "kael", "--test",
+                          "lottie_loader_policy", "--features", "lottie,test-support",
+                          "--", "--test-threads=1", "--nocapture"]
+        commands.append(policy_command)
+        (evidence / "commands.json").write_text(json.dumps(commands, indent=2) + "\n")
+        policy_env = env.copy()
+        policy_env["KAEL_HEADLESS"] = "1"
+        policy_log = evidence / "native-default-loader-policy.log"
+        policy_text = run(policy_command, policy_log, policy_env)
+        result["default_loader_policy"] = {
+            "passed": validate_default_loader_policy(policy_text),
+            "test_name": DEFAULT_LOADER_POLICY_TEST,
+            "runtime_log_sha256": sha256(policy_log),
+            "integration_source_sha256": sha256(
+                ROOT / "crates/kael/tests/lottie_loader_policy.rs"),
+            "core_loader_source_sha256": sha256(ROOT / "crates/kael/src/lottie.rs"),
+            "KAEL_HEADLESS": "1",
+        }
     (evidence / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     print(f"LOTTIE_ADMISSION_RUNTIME_OK: backend={args.backend} passed={result['total_passed']}")
 

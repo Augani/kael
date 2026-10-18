@@ -1,0 +1,331 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-10-18T01:30:04.912959+00:00",
+  "status": "ISOLATED_CANDIDATE_AND_ACTUAL_ALLOCATION_PROOF_PASS_PRIMARY7_COPIED_COMBINED_CHECKS_PENDING",
+  "change": "Whole-image-radius Simple Choker alpha reduction avoids the RGBA source scratch copy. Smaller-radius kernel, finite admission thresholds, RGB and existing public API are preserved.",
+  "eligibility": "After current finite-value admission and rounding, the existing clamped radius equals max(width,height)-1. Every clipped window then spans the image; reduce alpha min/max once and write alpha in place before source.to_vec. No general smaller-radius optimization is included.",
+  "source_scope": {
+    "baseline_layer_effects_sha256": "031d37e4469a4554b90650c875c49b0be1aba643823490ca811993009c89cf11",
+    "unaugmented_candidate_layer_effects_sha256": "f9a597db79014b1eaa70f86065c0e2f067d77cfe8aeaac991c11cdaac81ca48b",
+    "isolated_fork_changes": [
+      "vendor/rasterlottie/src/render/layer_effects.rs",
+      "vendor/rasterlottie/PATCHES.md",
+      "vendor/rasterlottie/zip9-compatibility.patch"
+    ],
+    "immutable_boundary_inputs": 3010,
+    "current_managed_tree_not_read_by_independent_audit": true,
+    "exact_sources_not_commit_inference": true
+  },
+  "actual_allocator_and_pixels": {
+    "scope": "Separate augmented native unit binaries invoke the real private function with the identical probe and unchanged geometric oracle. This is not an admission-suite or performance count.",
+    "paired_cases": 120,
+    "snapshots": 240,
+    "maximum_pixels_per_case": 6,
+    "classes": {
+      "eligible_whole_image": 52,
+      "local_window_controls": 20,
+      "noop_controls": 48
+    },
+    "actual_baseline": {
+      "executed": 1,
+      "passed": 0,
+      "failed": 1,
+      "ignored": 0,
+      "filtered_unrelated_not_executed": 119,
+      "exit_code": 101,
+      "candidate_budget_case_failures": 52
+    },
+    "actual_candidate": {
+      "executed": 1,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "filtered_unrelated_not_executed": 119,
+      "exit_code": 0,
+      "candidate_budget_case_failures": 0
+    },
+    "all_RGBA_matches_independent_geometric_oracle": true,
+    "eligible_case_delta": {
+      "successful_requested_bytes_saved": "exact4N, N=image pixels",
+      "alloc_calls_saved": 1,
+      "dealloc_calls_saved": 1
+    },
+    "all68_controls_unchanged": true,
+    "common_static_scalar_request_bytes_remaining": 4,
+    "all240_return_live_payload_balances_zero": true,
+    "counter_scope": "Disjoint System allocator entrypoints and requested Layout payloads on the watched thread; all snapshots precede final assertions. No hooks allocate. Peak does not capture allocator metadata or internal transient realloc storage."
+  },
+  "unaugmented_acceptance": {
+    "outer_checks": [
+      {
+        "name": "provenance",
+        "exit_code": 0,
+        "log": {
+          "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/provenance.log",
+          "sha256": "bc8b4a396142878ed087442c40e1c5e691d24990f9b2d7e417eeb6c5bf31e231",
+          "bytes": 248
+        }
+      },
+      {
+        "name": "native",
+        "exit_code": 0,
+        "log": {
+          "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/native.log",
+          "sha256": "d5d6c42cbdd4b720741b79d0d630b401e7579c77d085bc2d51877c3d6ec2f816",
+          "bytes": 14769
+        }
+      },
+      {
+        "name": "strict-fork-clippy",
+        "exit_code": 0,
+        "log": {
+          "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/strict-fork-clippy.log",
+          "sha256": "7075067fc9565f9ecfae97186a20c8c5c6ad166901e423f5e49c3a995f94b888",
+          "bytes": 1147
+        }
+      },
+      {
+        "name": "chrome",
+        "exit_code": 0,
+        "log": {
+          "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/chrome.log",
+          "sha256": "a88da4fd750eeec4ec0e070900c44b69e22caa2302159434dd098f3ac0947dba",
+          "bytes": 3557
+        }
+      },
+      {
+        "name": "format",
+        "exit_code": 0,
+        "log": {
+          "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/format.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      }
+    ],
+    "native_fork": {
+      "suite_passes": [
+        119,
+        1,
+        1,
+        1,
+        16,
+        2
+      ],
+      "total_passed": 140,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0,
+      "two_doctests_included_in140": true,
+      "required_regression_names_verified": 28
+    },
+    "separate_native_default_loader_policy": {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0,
+      "source_sha256": "ecff5e14d132332a035ac9df25980555ceb0ac6c54808314db9b7703a9e04058",
+      "core_lottie_sha256": "00339465e5423fc013b1c981ad62a9e25368b78344d2fc5eb543bfde3379ed27"
+    },
+    "actual_headless_Chrome": {
+      "passed": 17,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0,
+      "Wasm_sha256": "bd56d3270ef8e91d536e248d97c5fa62ea2ef55c55390439b239c07d81609c79",
+      "required_regression_names_verified": 16
+    },
+    "strict_Clippy": "--locked --all-features --all-targets -- -D warnings: exit0",
+    "format_check": "cargo fmt -p kael_rasterlottie -- --check: exit0",
+    "provenance": {
+      "pinned_original_archive_sha256": "384686130a2b365f82258f5e444c512e57989addcf2b45e9913c4ef6f0e95a24",
+      "original_files": 74,
+      "reconstructed_files": 81,
+      "reviewed_original_Rust_changes": 10,
+      "canonical_patch_bytes": 130241,
+      "unchanged_cap_bytes": 131072,
+      "headroom_bytes": 831
+    }
+  },
+  "seven_path_primary_copy": {
+    "scope": "Seven-path primary adoption of exact separately validated loader/default-policy and whole-image Choker candidates; combined primary integration/package/CI remain pending.",
+    "all7_primary_bytes_independently_match_validated_source_copies": true,
+    "combined_primary_integration": "PENDING",
+    "fresh_package_preflight": "PENDING",
+    "new_hosted_CI": "PENDING",
+    "paths": [
+      {
+        "path": "crates/kael/Cargo.toml",
+        "sha256": "ed579ea58880dea0bbd7d38ffeb77bd7002ab76dabcb8db18eb0f95c517bf614",
+        "bytes": 27330,
+        "validated_copy": ".artifacts/2026-10-18-lottie-loader-default-policy-v2-validation/promotion-sources/crates/kael/Cargo.toml"
+      },
+      {
+        "path": "crates/kael/src/lottie.rs",
+        "sha256": "00339465e5423fc013b1c981ad62a9e25368b78344d2fc5eb543bfde3379ed27",
+        "bytes": 98636,
+        "validated_copy": ".artifacts/2026-10-18-lottie-loader-default-policy-v2-validation/promotion-sources/crates/kael/src/lottie.rs"
+      },
+      {
+        "path": "crates/kael/tests/lottie_loader_policy.rs",
+        "sha256": "ecff5e14d132332a035ac9df25980555ceb0ac6c54808314db9b7703a9e04058",
+        "bytes": 4552,
+        "validated_copy": ".artifacts/2026-10-18-lottie-loader-default-policy-v2-validation/promotion-sources/crates/kael/tests/lottie_loader_policy.rs"
+      },
+      {
+        "path": "scripts/ci/verify-lottie-admission.py",
+        "sha256": "fa15b1c61b9d271cc6c9934def349fff0bab9ac62fcee23039d06da11e1aafe3",
+        "bytes": 11389,
+        "validated_copy": ".artifacts/2026-10-18-lottie-loader-default-policy-v2-validation/promotion-sources/scripts/ci/verify-lottie-admission.py"
+      },
+      {
+        "path": "vendor/rasterlottie/src/render/layer_effects.rs",
+        "sha256": "f9a597db79014b1eaa70f86065c0e2f067d77cfe8aeaac991c11cdaac81ca48b",
+        "bytes": 9755,
+        "validated_copy": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/candidate-sources/vendor/rasterlottie/src/render/layer_effects.rs"
+      },
+      {
+        "path": "vendor/rasterlottie/zip9-compatibility.patch",
+        "sha256": "3f9158e83ded247bdc6662a5d5b40b7d4d4af8d3909576635603a94d9ee2f2ed",
+        "bytes": 130241,
+        "validated_copy": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/candidate-sources/vendor/rasterlottie/zip9-compatibility.patch"
+      },
+      {
+        "path": "vendor/rasterlottie/PATCHES.md",
+        "sha256": "0aaaee92ea2b905b769ce6b285dc722ea5c550084804bceb4c033fdefae5ed20",
+        "bytes": 14516,
+        "validated_copy": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/candidate-sources/vendor/rasterlottie/PATCHES.md"
+      }
+    ]
+  },
+  "preserved_executables": [
+    {
+      "scope": "fork",
+      "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/preserved-binaries/rasterlottie-034b6ca0355b21c1",
+      "sha256": "1644a817201785790c776e522d8acc0035747f0e11380313aa3df9ed01015ff2",
+      "bytes": 14154240
+    },
+    {
+      "scope": "fork",
+      "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/preserved-binaries/corpus-fd6b5f0a0d1b9f6b",
+      "sha256": "1c273b512a1acc4d08357a1ce15104138426112c0a612d3815f009ecec30df9c",
+      "bytes": 10091464
+    },
+    {
+      "scope": "fork",
+      "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/preserved-binaries/image_diff-999a8003340ca661",
+      "sha256": "cfe2334438f4e9ee68f1413a3351edcfb403cc121546b04f1e4b517fde76e26f",
+      "bytes": 10661144
+    },
+    {
+      "scope": "fork",
+      "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/preserved-binaries/output_allocation-6fbf6aa34b56fa29",
+      "sha256": "8ef48cba1933be49abfcb181177eb4f7dbd505c3efd189e530102a7628780e4f",
+      "bytes": 10062720
+    },
+    {
+      "scope": "fork",
+      "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/preserved-binaries/zip9_compatibility-930cdb9cf3a0b864",
+      "sha256": "b2b56383d984bd7cbdf1c30b09ce1ddd185bc964142074bd900be6b443a3a7f8",
+      "bytes": 13029200
+    },
+    {
+      "scope": "policy",
+      "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/preserved-binaries/lottie_loader_policy-3981d293378fba8d",
+      "sha256": "b790ea5ca6d58280b246867a9e785eb25e7f5b51dca45d96158ba747799b471b",
+      "bytes": 57066968
+    },
+    {
+      "scope": "actual_Chrome_Wasm",
+      "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/preserved-binaries/zip9_compatibility-413d55123756edd4.wasm",
+      "sha256": "bd56d3270ef8e91d536e248d97c5fa62ea2ef55c55390439b239c07d81609c79",
+      "bytes": 53271659
+    }
+  ],
+  "executable_scope": "Five fork native executables, one separate loader-policy executable and actual Chrome Wasm preserved from Cargo paths. Two passing temporary doctest executables were not retained. Identity hashes are not deterministic rebuild proof.",
+  "evidence": {
+    "unaugmented_candidate_validation": {
+      "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/result.json",
+      "sha256": "3330d801adc85e725384bc53a9618f8ce85726fa570dc3ca4017a00ed375431c",
+      "bytes": 6053
+    },
+    "unaugmented_binaries": {
+      "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/preserved-binaries.json",
+      "sha256": "d8f475bc25e8dd8f88815d788484f2d6272cabba29cf8ad7491844e08798f1fa",
+      "bytes": 3680
+    },
+    "candidate_independent_audit": {
+      "path": ".artifacts/2026-10-18-choker-whole-image-candidate-independent-audit/review-v2.json",
+      "sha256": "e7e9f371cbd056b5b59b597d920967be2ea7c53ae3b9a167d33c01b2b1e5bc45",
+      "bytes": 18056
+    },
+    "native_fork_verdicts": {
+      "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/native/native-runtime.log",
+      "sha256": "06ceb43daa26ee7ec3120c28c9e935478676777c27c1ea205174408bd1603ad4",
+      "bytes": 13537
+    },
+    "native_policy_verdict": {
+      "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/native/native-default-loader-policy.log",
+      "sha256": "e71f02e7ce0e9d6b54bc7ceee0f2d2a61b7ced3a9c92ff55d12a8eed51d1a261",
+      "bytes": 969
+    },
+    "actual_Chrome_verdicts": {
+      "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/chrome/chrome-runtime.log",
+      "sha256": "6062da5c9510930f92ab763c5c94bdb39e6094b75d4842c85971c8366aab6351",
+      "bytes": 3099
+    },
+    "candidate_input_boundaries": {
+      "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/candidate-inputs.json",
+      "sha256": "da007f46f170daf41aed467e3afde502fbf14e41c062739a2cfafa9e3eea1d5c",
+      "bytes": 346714
+    },
+    "managed_end_boundaries": {
+      "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/managed-after.json",
+      "sha256": "da007f46f170daf41aed467e3afde502fbf14e41c062739a2cfafa9e3eea1d5c",
+      "bytes": 346714
+    },
+    "primary_prevalidation_boundary": {
+      "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/primary-before.json",
+      "sha256": "5102c0b93028cfa5eaf7447752f87967b2389a02c1bcdc7fa89ad1ace6f95097",
+      "bytes": 349507
+    },
+    "provenance_reconstruction": {
+      "path": ".artifacts/2026-10-18-choker-whole-image-candidate-validation/provenance.log",
+      "sha256": "bc8b4a396142878ed087442c40e1c5e691d24990f9b2d7e417eeb6c5bf31e231",
+      "bytes": 248
+    },
+    "actual_allocator_execution": {
+      "path": ".artifacts/2026-10-18-choker-whole-image-actual-proof/result.json",
+      "sha256": "befef6e1a215d6337410216c70db291b5bdc3bd570685f54293cf9dc1b82176e",
+      "bytes": 10007
+    },
+    "actual_allocator_counter_comparison": {
+      "path": ".artifacts/2026-10-18-choker-whole-image-actual-proof/allocation-comparison.json",
+      "sha256": "29cfff5a59d9575c726566924958e57a5c7117acb18727a9018389c2d8ea73e2",
+      "bytes": 102650
+    },
+    "actual_allocator_independent_audit": {
+      "path": ".artifacts/2026-10-18-choker-whole-image-independent-components-audit/review.json",
+      "sha256": "3dfb8d1f550d48e3eec994bc3c0ef70287c8b5529768dab0c9fe940071ea0248",
+      "bytes": 9350
+    },
+    "initial_source_feasibility": {
+      "path": ".artifacts/2026-10-18-choker-whole-image-proposal/receipt.json",
+      "sha256": "e4859c2293f717e4350550085a62e384210d6e91f8747374ce23d20a50aed3bd",
+      "bytes": 2476
+    },
+    "seven_path_primary_copy": {
+      "path": ".artifacts/2026-10-18-loader-choker-primary/promotion.json",
+      "sha256": "388b1febce5ed7f050cbb4fb61bd3be3fcb1e16dd3864e3dbc4cabe107d48519",
+      "bytes": 4135
+    }
+  },
+  "limitations": [
+    "No runtime/performance timing or RSS result; elapsed command seconds are diagnostic only. No power, GPU, presentation or framework-ranking inference.",
+    "The full effect is not allocation-free: common4B scalar sampling remains. This is a conditional scratch-copy reduction, not a global memory policy or general local-window complexity improvement.",
+    "Existing alpha-only behavior is preserved; no broader premultiplication/composition guarantee is made.",
+    "Allocator probe augmented binaries and unaugmented admission binaries are distinct. Neither140fork tests nor17Chrome tests includes the separate120-case allocation probe as additional tests.",
+    "This record covers isolated private-target candidate execution and exact seven-file primary copy. Combined primary validation, publishing archives and CI were pending when recorded.",
+    "The prior45-case arithmetic harness and19negative provenance probes are historical separate evidence, not rerun counts in this phase. Deferred full separable implementation remains excluded."
+  ]
+}

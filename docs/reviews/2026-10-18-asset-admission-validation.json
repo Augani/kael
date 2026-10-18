@@ -1,0 +1,349 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-10-18T01:49:19.426311+00:00",
+  "status": "EXACT_NINE_PATH_PRIMARY_COMBINED_VALIDATION_PASS_FRESH_PACKAGE_AND_PLATFORM_PENDING",
+  "source_scope": {
+    "HEAD_at_validation_start": "b9fb5356feb0331053c060e3f0a35a578256e8f7",
+    "working_source_explicit": true,
+    "note": "The nine source changes were validated in the primary working tree after the recorded HEAD; this is not a claim that that earlier commit contains them. Exact path hashes and the frozen3014-input snapshots bind this record.",
+    "input_count": 3014,
+    "all_inputs_unchanged": true,
+    "paths": [
+      {
+        "path": "crates/kael/Cargo.toml",
+        "sha256": "ed579ea58880dea0bbd7d38ffeb77bd7002ab76dabcb8db18eb0f95c517bf614",
+        "bytes": 27330
+      },
+      {
+        "path": "crates/kael/src/lottie.rs",
+        "sha256": "00339465e5423fc013b1c981ad62a9e25368b78344d2fc5eb543bfde3379ed27",
+        "bytes": 98636
+      },
+      {
+        "path": "crates/kael/tests/lottie_loader_policy.rs",
+        "sha256": "ecff5e14d132332a035ac9df25980555ceb0ac6c54808314db9b7703a9e04058",
+        "bytes": 4552
+      },
+      {
+        "path": "scripts/ci/verify-lottie-admission.py",
+        "sha256": "fa15b1c61b9d271cc6c9934def349fff0bab9ac62fcee23039d06da11e1aafe3",
+        "bytes": 11389
+      },
+      {
+        "path": "vendor/rasterlottie/src/render/layer_effects.rs",
+        "sha256": "f9a597db79014b1eaa70f86065c0e2f067d77cfe8aeaac991c11cdaac81ca48b",
+        "bytes": 9755
+      },
+      {
+        "path": "vendor/rasterlottie/zip9-compatibility.patch",
+        "sha256": "3f9158e83ded247bdc6662a5d5b40b7d4d4af8d3909576635603a94d9ee2f2ed",
+        "bytes": 130241
+      },
+      {
+        "path": "vendor/rasterlottie/PATCHES.md",
+        "sha256": "0aaaee92ea2b905b769ce6b285dc722ea5c550084804bceb4c033fdefae5ed20",
+        "bytes": 14516
+      },
+      {
+        "path": "crates/kael/src/app.rs",
+        "sha256": "0edb524a786bb85bfc56316a48f17b9d5ef641be0bb91291b397afd476883dee",
+        "bytes": 2004372
+      },
+      {
+        "path": "crates/kael/src/asset_cache.rs",
+        "sha256": "e1186c0c02bd4c6f7a46cedd4788daa6c9a16a10698d1d3a18404187a4e001e6",
+        "bytes": 81890
+      }
+    ]
+  },
+  "checked_asset_initialization": {
+    "problem": "A checked loader could synchronously reenter through source cloning or Asset::load before publishing its task, exceeding the pending limit or invoking the same loader twice.",
+    "fix": "Private per-App RAII key reservations precede application callbacks. Published requests still share at capacity. Initializing same-key requests return Result::Err. Reservations are released on return or unwind; panic cleanup wakes deferred views before rethrowing the original payload.",
+    "actual_baseline": {
+      "executed": 6,
+      "passed_controls": 4,
+      "failed_regressions": 2,
+      "ignored": 0,
+      "first_failed_oracles": "Published pending2 versus1; same-key loader calls2 versus1. Later assertions after those first failures were not executed."
+    },
+    "actual_new_tests": {
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "subset_of_asset31_and_full_core": true
+    },
+    "actual_negative_control": {
+      "source_delta": "Remove only panic cleanup wake, keep reservations and the identical wake test body.",
+      "executed": 1,
+      "passed": 0,
+      "failed": 1,
+      "ignored": 0,
+      "owner_generation_actual": 0,
+      "owner_generation_expected": 1,
+      "oracle_before_effect_flush": true
+    },
+    "limits": [
+      "Only checked calls reserve; the explicit legacy raw fetch remains uncapped.",
+      "Public pending_asset_count remains the cache-owned published unfinished-task count.",
+      "The default pending cap64 normalizes to1..4096; live initializer count is bounded but HashSet buckets/capacity can round above that count and retain their high-water allocation.",
+      "No general App/Window unwind recovery, asynchronous-future panic recovery, performance or global byte-budget claim."
+    ]
+  },
+  "built_in_lottie_loading": {
+    "slots": 2,
+    "native_scope": "Across Apps within one process.",
+    "Wasm_scope": "Within one Rust/Wasm runtime instance, not independent tabs/workers/modules.",
+    "permit_lifetime": "Inside future, before source IO, through validation/parse/natural-size poster construction.",
+    "playing_worker_slots_separate": 2,
+    "actual_default_policy_baseline": {
+      "passed": 0,
+      "failed": 1,
+      "actual_source_IO_starts": 3,
+      "expected": 2,
+      "later_oracles_not_reached": true
+    },
+    "new_private_tests": 9,
+    "private_loader_phase_full_core": {
+      "passed": 2226,
+      "failed": 0,
+      "ignored": 2,
+      "filtered": 0,
+      "features_include_icons": true,
+      "scope": "Before the seven checked-initialization tests; one unchanged SVG icon test explains the private icons/no-icons count difference."
+    },
+    "maintained_public_policy": {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0,
+      "separate_process": true,
+      "normal_non_test_library": true,
+      "actual_primary_combined_helper_ran": true
+    },
+    "limits": [
+      "Waiting sources/futures can retain caller-owned bytes. Slow IO can occupy both slots.",
+      "Cancellation of waiting/async IO work releases admission; synchronous work already running completes before releasing its permit.",
+      "Direct synchronous constructors remain outside the loader limit.",
+      "No off-thread browser parsing, browser responsiveness, throughput, RSS or unified-memory bound is established."
+    ]
+  },
+  "combined_primary_checks": {
+    "check_count": 15,
+    "checks": [
+      {
+        "name": "apple-control-parser",
+        "exit_code": 0,
+        "log_sha256": "80a1d2e85ab5a428be1b617af3b707cce40dd31c9d962f6c7a55f22a12467a2d"
+      },
+      {
+        "name": "fork-provenance",
+        "exit_code": 0,
+        "log_sha256": "bc8b4a396142878ed087442c40e1c5e691d24990f9b2d7e417eeb6c5bf31e231"
+      },
+      {
+        "name": "clippy",
+        "exit_code": 0,
+        "log_sha256": "04f632eed3d4fe52cf855f2d3760dfc816010873b1ad21cbc18f849ea39d93b0"
+      },
+      {
+        "name": "core",
+        "exit_code": 0,
+        "log_sha256": "c674b634615b6d420cf2153336e6f4c9481f7e611b439b77e927fe01515af75c"
+      },
+      {
+        "name": "ui",
+        "exit_code": 0,
+        "log_sha256": "f142b6e3fe970464cbfad41e60ad79469e245c2654e307613346e192624a9e86"
+      },
+      {
+        "name": "wasm",
+        "exit_code": 0,
+        "log_sha256": "abc81c0d5adcce24f5b0b0e848c1d6e9d48af90e597261cf18f71e302b02b540"
+      },
+      {
+        "name": "example-tests",
+        "exit_code": 0,
+        "log_sha256": "8c3f04cbdfdaf47851f487ce73174b41404a27c3bc015f32e645078d9d4b422a"
+      },
+      {
+        "name": "example-build",
+        "exit_code": 0,
+        "log_sha256": "7e515b297f25617e693c657cb662ea497a917ab000de1c8f0e13952aad38564f"
+      },
+      {
+        "name": "benchmark-kael-timing",
+        "exit_code": 0,
+        "log_sha256": "00d97c6fc2b4b9e15a1b8bd8b37525ad1f9c92d1e01fdb04ee4d8db973f40bc3"
+      },
+      {
+        "name": "benchmark-gpui-timing",
+        "exit_code": 0,
+        "log_sha256": "f829cc4399ecc3ce6836e95f04ab372e08d61b53432f3e96d158773a8dfb055a"
+      },
+      {
+        "name": "benchmark-kael-no-timing",
+        "exit_code": 0,
+        "log_sha256": "ebbb780893ec73b2786e8d1636dcd40d3fd0abce6075fb275855ab836f20f580"
+      },
+      {
+        "name": "benchmark-gpui-no-timing",
+        "exit_code": 0,
+        "log_sha256": "bbc2c0dfcb3b0f32164848427ef1351bf1fb35131d10aeabdd34d578cc7e3b7b"
+      },
+      {
+        "name": "native-animation-policy",
+        "exit_code": 0,
+        "log_sha256": "388aecabf3f018d76619ca14ac8a7400e36767f9d0aaaa2ccd50c72ae4ce60f5"
+      },
+      {
+        "name": "fmt",
+        "exit_code": 0,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "docs",
+        "exit_code": 0,
+        "log_sha256": "0fb87ecae09e05f755df5b77bb290e1636d51926a57bb5e2361c5a19dddcce3f"
+      }
+    ],
+    "core": {
+      "passed": 2232,
+      "failed": 0,
+      "ignored": 2,
+      "measured": 0,
+      "filtered": 0
+    },
+    "ui": {
+      "passed": 538,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered": 0
+    },
+    "default_parallel_core_and_UI": true,
+    "existing_ignored_names": [
+      "platform::mac::display_link::tests::native_retained_display_link_probe",
+      "platform::mac::text_system::tests::native_sized_font_shaping_diagnostic"
+    ],
+    "strict_all_target_lint": "Core and UI, with lottie and test-support so the required-feature integration target is included.",
+    "Wasm_consumer": "Browser UI/lottie check, not browser runtime execution.",
+    "native_animation_policy_result": {
+      "schema_version": 1,
+      "backend": "native",
+      "suite_passes": [
+        119,
+        1,
+        1,
+        1,
+        16,
+        2
+      ],
+      "runtime_log_sha256": "6482334dcbccd5903c862a51f58dd9e5bd802c78ed10465148629a2955992798",
+      "total_passed": 140,
+      "default_loader_policy": {
+        "passed": 1,
+        "test_name": "public_loader_admission_regression::public_loader_starts_two_of_three_across_apps_and_direct_constructors_still_work",
+        "runtime_log_sha256": "a6ff51355b46f0a31de7c8a7c246792db85ee69e8a1044d9b776ce9678a04258",
+        "integration_source_sha256": "ecff5e14d132332a035ac9df25980555ceb0ac6c54808314db9b7703a9e04058",
+        "core_loader_source_sha256": "00339465e5423fc013b1c981ad62a9e25368b78344d2fc5eb543bfde3379ed27",
+        "KAEL_HEADLESS": "1"
+      }
+    },
+    "benchmark_compile_targets": 20,
+    "test_count_limits": "Focused groups and repeated isolated runs are subsets, not additional unique full-suite passes. Fork/native policy are separate crate/process scopes."
+  },
+  "cpu_animation_effect": "The same batch includes the whole-image Simple Choker fast path. Its actual paired allocator/pixel proof and actual Chrome17 are separately recorded in2026-10-18-choker-optimization-validation.json; this is not a GPU shader or general radius complexity improvement.",
+  "private_final_combination": {
+    "assets": 31,
+    "Lottie_and_elements": 39,
+    "unique_focused": 70,
+    "full_core_default_parallel": {
+      "passed": 2233,
+      "failed": 0,
+      "ignored": 2,
+      "filtered": 0
+    },
+    "icons_scope": "Explicit icons adds one existing SVG test compared with primary2232; no repeated focus run is counted as new coverage."
+  },
+  "pending_at_record": [
+    "Fresh39 extracted package builds from a committed exact source checkpoint.",
+    "Current hosted platform CI and comparative performance; physical GPU/presentation proof atb279795 is a separate earlier source scope."
+  ],
+  "references": [
+    {
+      "path": ".artifacts/2026-10-18-loader-choker-primary/promotion.json",
+      "sha256": "388b1febce5ed7f050cbb4fb61bd3be3fcb1e16dd3864e3dbc4cabe107d48519",
+      "bytes": 4135
+    },
+    {
+      "path": ".artifacts/2026-10-18-checked-admission-primary/promotion.json",
+      "sha256": "fa7f09e51edbde1e9f0ec6c45d67e69907184cb93b91ea8dfe105f55b6469292",
+      "bytes": 1455
+    },
+    {
+      "path": ".artifacts/2026-10-18-lottie-loader-baseline/manifest.json",
+      "sha256": "02341a6a753e2fa646c453bfe94310140405e2ce02ab449797d0a39ec07f94aa",
+      "bytes": 4160
+    },
+    {
+      "path": ".artifacts/2026-10-18-lottie-loader-candidate-v3-validation/final-receipt.json",
+      "sha256": "28073dee0a95554d844a9d0e79007c1aa0ad24dac1eebe98163c856b51c8905f",
+      "bytes": 6774
+    },
+    {
+      "path": ".artifacts/2026-10-18-lottie-loader-default-policy-v2-validation/final-receipt.json",
+      "sha256": "67aa024c913e1289a6216b3145eb84cf8fe1a68e50b9c635e4056800c4b7a57f",
+      "bytes": 3527
+    },
+    {
+      "path": ".artifacts/2026-10-18-lottie-loader-promotion-independent-review/review.json",
+      "sha256": "bff34cd647bb0c2372d178ad2383b93d52f80f0acba78d4a6bb4279501b926c3",
+      "bytes": 5213
+    },
+    {
+      "path": ".artifacts/2026-10-18-asset-admission-reentrancy-baseline/final-receipt.json",
+      "sha256": "6723ae109994134cc8960a460fa19c48ae67af100e894d53774f67e89a8b5f59",
+      "bytes": 9112
+    },
+    {
+      "path": ".artifacts/2026-10-18-asset-admission-reentrancy-v4-validation/manifest.json",
+      "sha256": "bd4540cc2dc269fea2c15bb1dfb6a35d7d98efb0d863435f06f5507c68ec2737",
+      "bytes": 10885
+    },
+    {
+      "path": ".artifacts/2026-10-18-asset-admission-reentrancy-v4-validation/final-receipt.json",
+      "sha256": "29951a5466353d923335a09450a3afa87d0d499965da970d53d778b5c1042bc1",
+      "bytes": 7746
+    },
+    {
+      "path": ".artifacts/2026-10-18-asset-admission-reentrancy-independent-components-review/review.json",
+      "sha256": "3bad74823ba297a0382593fa6c2cfc4be13ad75066545af5a3c214fb32e6f878",
+      "bytes": 9608
+    },
+    {
+      "path": ".artifacts/2026-10-18-asset-admission-v4-independent-components-audit/review.json",
+      "sha256": "2ca60b1eed6d8674e0d30cd1addf83c05b3f9a089a78c57f2d4236dfa013451a",
+      "bytes": 28788
+    },
+    {
+      "path": ".artifacts/2026-10-18-desktop-admission-combined/integration.json",
+      "sha256": "b1238aa09c76251e7fc0538d1257d46d4f82a727b39f02fc7539b893844a3e90",
+      "bytes": 9353
+    },
+    {
+      "path": ".artifacts/2026-10-18-desktop-admission-combined/source-before.json",
+      "sha256": "81aab5160f3f65383dd45e11635fdfd23713f9a8fef81c2f24c6a8735dd67bad",
+      "bytes": 347185
+    },
+    {
+      "path": ".artifacts/2026-10-18-desktop-admission-combined/source-after.json",
+      "sha256": "81aab5160f3f65383dd45e11635fdfd23713f9a8fef81c2f24c6a8735dd67bad",
+      "bytes": 347185
+    },
+    {
+      "path": "docs/reviews/2026-10-18-choker-optimization-validation.json",
+      "sha256": "3c98b5c125da802c1f0aa10bdff89e542fc3b28d13e7405f62bfd5d7132b39d5",
+      "bytes": 15478
+    }
+  ]
+}

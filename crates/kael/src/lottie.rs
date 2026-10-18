@@ -30,6 +30,11 @@ const MAX_LOTTIE_RENDER_BATCH_BYTES: usize = 256 * 1024 * 1024;
 const MAX_LOTTIE_FRAMES: usize = 100_000;
 const MAX_LOTTIE_FPS: f32 = 1_000.0;
 const MAX_LOTTIE_RENDER_BATCH: usize = 256;
+
+// This bounds concurrent framework loader pipelines, not ready outputs, retained
+// source references, renderer scratch, direct constructors or total process RSS.
+static LOTTIE_ASSET_LOAD_SLOTS: std::sync::LazyLock<Arc<async_lock::Semaphore>> =
+    std::sync::LazyLock::new(|| Arc::new(async_lock::Semaphore::new(2)));
 const MAX_PREPARED_ANIMATIONS_PER_THREAD: usize = 4;
 const MAX_PREPARED_IMAGE_BYTES_PER_THREAD: u64 = 64 * 1024 * 1024;
 const MAX_PREPARED_ANIMATIONS_GLOBAL: usize = 16;
@@ -871,10 +876,28 @@ impl Asset for LottieAssetLoader {
         source: Self::Source,
         cx: &mut App,
     ) -> impl futures::Future<Output = Self::Output> + Send + 'static {
+        Self::load_with_admission(source, cx, LOTTIE_ASSET_LOAD_SLOTS.clone(), |bytes| {
+            Ok(Arc::new(LottieAnimation::from_bytes(bytes)?))
+        })
+    }
+}
+
+impl LottieAssetLoader {
+    // Inject admission and the synchronous builder privately so ownership tests
+    // can use isolated permits without modifying the shared default.
+    fn load_with_admission(
+        source: LottieAssetSource,
+        cx: &mut App,
+        slots: Arc<async_lock::Semaphore>,
+        build: impl FnOnce(Arc<[u8]>) -> Result<Arc<LottieAnimation>, LottieError> + Send + 'static,
+    ) -> impl futures::Future<Output = Result<Arc<LottieAnimation>, LottieError>> + Send + 'static
+    {
         let client = cx.http_client();
         let asset_source = cx.asset_source().clone();
 
         async move {
+            // Own admission inside the future through IO and synchronous poster build.
+            let _permit = slots.acquire_arc().await;
             let bytes = match source {
                 LottieAssetSource::Resource(resource) => match resource {
                     Resource::Path(path) => read_lottie_file(path.as_ref())?,
@@ -917,7 +940,7 @@ impl Asset for LottieAssetLoader {
                 LottieAssetSource::Bytes(bytes) => bytes,
             };
 
-            Ok(Arc::new(LottieAnimation::from_bytes(bytes)?))
+            build(bytes)
         }
     }
 }
@@ -2086,5 +2109,607 @@ mod asset_payload_tests {
                 .decoded_bytes(),
             4
         );
+    }
+}
+
+#[cfg(test)]
+mod loader_admission_tests {
+    use super::*;
+    use crate::{Task, TestAppContext};
+    use futures::{FutureExt as _, channel::oneshot, future::Shared};
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    const TINY: &[u8] = br#"{"fr":30,"ip":0,"op":2,"w":1,"h":1,"layers":[]}"#;
+    type Loaded = Result<Arc<LottieAnimation>, LottieError>;
+    type LoadTask = Shared<Task<Loaded>>;
+
+    struct RequestLifetime {
+        active: Arc<AtomicUsize>,
+        retired: Arc<AtomicUsize>,
+    }
+
+    impl Drop for RequestLifetime {
+        fn drop(&mut self) {
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            self.retired.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[derive(Default)]
+    struct HeldHttp {
+        started: Arc<AtomicUsize>,
+        active: Arc<AtomicUsize>,
+        retired: Arc<AtomicUsize>,
+        responses: Arc<Mutex<VecDeque<oneshot::Sender<()>>>>,
+    }
+
+    impl HeldHttp {
+        fn install(&self, cx: &TestAppContext) {
+            let started = self.started.clone();
+            let active = self.active.clone();
+            let retired = self.retired.clone();
+            let responses = self.responses.clone();
+            let client = http_client::FakeHttpClient::create(move |_| {
+                started.fetch_add(1, Ordering::SeqCst);
+                active.fetch_add(1, Ordering::SeqCst);
+                let lifetime = RequestLifetime {
+                    active: active.clone(),
+                    retired: retired.clone(),
+                };
+                let (sender, receiver) = oneshot::channel();
+                responses.lock().unwrap().push_back(sender);
+                async move {
+                    let _lifetime = lifetime;
+                    receiver
+                        .await
+                        .map_err(|_| anyhow::anyhow!("controlled response canceled"))?;
+                    Ok(http_client::Response::builder()
+                        .status(200)
+                        .body(http_client::AsyncBody::from(TINY.to_vec()))
+                        .unwrap())
+                }
+            });
+            cx.update(|cx| cx.set_http_client(client));
+        }
+
+        fn release_next(&self) -> bool {
+            let sender = self.responses.lock().unwrap().pop_front().unwrap();
+            sender.send(()).is_ok()
+        }
+    }
+
+    fn uri(name: &str) -> LottieAssetSource {
+        LottieAssetSource::Resource(Resource::Uri(
+            format!("https://example.invalid/{name}.json").into(),
+        ))
+    }
+
+    fn spawn_with_builder(
+        cx: &TestAppContext,
+        source: LottieAssetSource,
+        slots: Arc<async_lock::Semaphore>,
+        build: impl FnOnce(Arc<[u8]>) -> Loaded + Send + 'static,
+    ) -> LoadTask {
+        cx.update(|cx| {
+            let future = LottieAssetLoader::load_with_admission(source, cx, slots, build);
+            cx.background_executor().spawn(future).shared()
+        })
+    }
+
+    fn spawn(
+        cx: &TestAppContext,
+        source: LottieAssetSource,
+        slots: Arc<async_lock::Semaphore>,
+        builds: &Arc<AtomicUsize>,
+    ) -> LoadTask {
+        let builds = builds.clone();
+        spawn_with_builder(cx, source, slots, move |bytes| {
+            builds.fetch_add(1, Ordering::SeqCst);
+            Ok(Arc::new(LottieAnimation::from_bytes(bytes)?))
+        })
+    }
+
+    fn assert_poster(animation: &LottieAnimation) {
+        let poster = animation.poster_frame();
+        assert_eq!(poster.size(0), size(DevicePixels(1), DevicePixels(1)));
+        assert_eq!(poster.decoded_bytes(), 4);
+        assert_eq!(poster.as_bytes(0), Some(&[0, 0, 0, 0][..]));
+    }
+
+    fn take_ready(task: LoadTask) -> Arc<LottieAnimation> {
+        let result = task.now_or_never().expect("load must have completed");
+        let animation = result.expect("tiny animation must decode");
+        assert_poster(&animation);
+        animation
+    }
+
+    #[test]
+    fn held_loader_admission_performs_no_http_or_build_and_does_not_block_foreground() {
+        let cx = TestAppContext::single();
+        let slots = Arc::new(async_lock::Semaphore::new(2));
+        let first = slots.try_acquire_arc().unwrap();
+        let second = slots.try_acquire_arc().unwrap();
+        let http = HeldHttp::default();
+        http.install(&cx);
+        let builds = Arc::new(AtomicUsize::new(0));
+        let tasks = (0..3)
+            .map(|index| spawn(&cx, uri(&index.to_string()), slots.clone(), &builds))
+            .collect::<Vec<_>>();
+        let foreground = Arc::new(AtomicBool::new(false));
+        let progress = foreground.clone();
+        let ui_task = cx.foreground_executor().spawn(async move {
+            progress.store(true, Ordering::SeqCst);
+        });
+        cx.executor().run_until_parked();
+        assert!(foreground.load(Ordering::SeqCst));
+        assert_eq!(http.started.load(Ordering::SeqCst), 0);
+        assert_eq!(builds.load(Ordering::SeqCst), 0);
+        assert!(
+            tasks
+                .iter()
+                .all(|task| task.clone().now_or_never().is_none())
+        );
+
+        drop(first);
+        cx.executor().run_until_parked();
+        assert_eq!(http.started.load(Ordering::SeqCst), 1);
+        assert_eq!(http.active.load(Ordering::SeqCst), 1);
+        assert_eq!(builds.load(Ordering::SeqCst), 0);
+        // One available slot services every waiter while the second remains held.
+        for completed in 1..=3 {
+            assert!(http.release_next());
+            cx.executor().run_until_parked();
+            assert_eq!(builds.load(Ordering::SeqCst), completed);
+            assert_eq!(http.started.load(Ordering::SeqCst), (completed + 1).min(3));
+        }
+        for task in tasks {
+            take_ready(task);
+        }
+        assert_eq!(http.active.load(Ordering::SeqCst), 0);
+        assert_eq!(http.retired.load(Ordering::SeqCst), 3);
+        drop((second, ui_task));
+        let first = slots.try_acquire_arc().unwrap();
+        let second = slots.try_acquire_arc().unwrap();
+        assert!(slots.try_acquire_arc().is_none());
+        drop((first, second));
+    }
+
+    #[test]
+    fn two_loaders_admit_two_of_three_and_ready_outputs_do_not_hoard_slots() {
+        let cx = TestAppContext::single();
+        let slots = Arc::new(async_lock::Semaphore::new(2));
+        let http = HeldHttp::default();
+        http.install(&cx);
+        let builds = Arc::new(AtomicUsize::new(0));
+        let tasks = (0..3)
+            .map(|index| spawn(&cx, uri(&index.to_string()), slots.clone(), &builds))
+            .collect::<Vec<_>>();
+        cx.executor().run_until_parked();
+        assert_eq!(http.started.load(Ordering::SeqCst), 2);
+        assert_eq!(http.active.load(Ordering::SeqCst), 2);
+        assert_eq!(builds.load(Ordering::SeqCst), 0);
+        assert!(slots.try_acquire_arc().is_none());
+        assert!(http.release_next());
+        cx.executor().run_until_parked();
+        assert_eq!(http.started.load(Ordering::SeqCst), 3);
+        assert_eq!(http.active.load(Ordering::SeqCst), 2);
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+        for _ in 0..2 {
+            assert!(http.release_next());
+        }
+        cx.executor().run_until_parked();
+        assert_eq!(http.active.load(Ordering::SeqCst), 0);
+        assert_eq!(builds.load(Ordering::SeqCst), 3);
+        // Completed Shared outputs remain live; neither permit belongs to them.
+        let first = slots.try_acquire_arc().unwrap();
+        let second = slots.try_acquire_arc().unwrap();
+        for task in tasks {
+            take_ready(task);
+        }
+        drop((first, second));
+    }
+
+    #[test]
+    fn canceled_waiting_loader_releases_source_without_io_and_next_waiter_progresses() {
+        let cx = TestAppContext::single();
+        let slots = Arc::new(async_lock::Semaphore::new(1));
+        let blocker = slots.try_acquire_arc().unwrap();
+        let http = HeldHttp::default();
+        http.install(&cx);
+        let canceled_builds = Arc::new(AtomicUsize::new(0));
+        let next_builds = Arc::new(AtomicUsize::new(0));
+        let bytes = Arc::<[u8]>::from(TINY);
+        let source = Arc::downgrade(&bytes);
+        let canceled = spawn(
+            &cx,
+            LottieAssetSource::Bytes(bytes),
+            slots.clone(),
+            &canceled_builds,
+        );
+        let next = spawn(&cx, uri("next"), slots.clone(), &next_builds);
+        cx.executor().run_until_parked();
+        assert!(source.upgrade().is_some());
+        assert_eq!(http.started.load(Ordering::SeqCst), 0);
+        drop(canceled); // The final Shared/Task owner, not a detached observer.
+        cx.executor().run_until_parked();
+        assert!(source.upgrade().is_none());
+        drop(blocker);
+        cx.executor().run_until_parked();
+        assert_eq!(http.started.load(Ordering::SeqCst), 1);
+        assert_eq!(canceled_builds.load(Ordering::SeqCst), 0);
+        assert!(http.release_next());
+        cx.executor().run_until_parked();
+        take_ready(next);
+        assert_eq!(next_builds.load(Ordering::SeqCst), 1);
+        assert!(slots.try_acquire_arc().is_some());
+    }
+
+    #[test]
+    fn canceling_pending_http_retires_request_and_returns_admission_to_next_load() {
+        let cx = TestAppContext::single();
+        let slots = Arc::new(async_lock::Semaphore::new(1));
+        let http = HeldHttp::default();
+        http.install(&cx);
+        let builds = Arc::new(AtomicUsize::new(0));
+        let canceled = spawn(&cx, uri("canceled"), slots.clone(), &builds);
+        cx.executor().run_until_parked();
+        assert_eq!(http.started.load(Ordering::SeqCst), 1);
+        assert_eq!(http.active.load(Ordering::SeqCst), 1);
+        assert!(slots.try_acquire_arc().is_none());
+        drop(canceled);
+        cx.executor().run_until_parked();
+        assert_eq!(http.active.load(Ordering::SeqCst), 0);
+        assert_eq!(http.retired.load(Ordering::SeqCst), 1);
+        assert_eq!(builds.load(Ordering::SeqCst), 0);
+        assert!(!http.release_next()); // Canceled receiver has no hidden owner.
+        let next = spawn(&cx, uri("next"), slots.clone(), &builds);
+        cx.executor().run_until_parked();
+        assert_eq!(http.started.load(Ordering::SeqCst), 2);
+        assert_eq!(http.active.load(Ordering::SeqCst), 1);
+        assert!(http.release_next());
+        cx.executor().run_until_parked();
+        take_ready(next);
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+        assert_eq!(http.active.load(Ordering::SeqCst), 0);
+        assert_eq!(http.retired.load(Ordering::SeqCst), 2);
+        assert!(slots.try_acquire_arc().is_some());
+    }
+
+    #[test]
+    fn every_source_branch_waits_before_validation_while_direct_constructors_stay_callable() {
+        let cx = TestAppContext::single();
+        for (source, valid) in [
+            (LottieAssetSource::Bytes(Arc::from(TINY)), true),
+            (
+                LottieAssetSource::Resource(Resource::Embedded("missing.json".into())),
+                false,
+            ),
+            (
+                LottieAssetSource::Resource(Resource::Path(PathBuf::from("\0").into())),
+                false,
+            ),
+        ] {
+            let slots = Arc::new(async_lock::Semaphore::new(1));
+            let blocker = slots.try_acquire_arc().unwrap();
+            let builds = Arc::new(AtomicUsize::new(0));
+            let task = spawn(&cx, source, slots.clone(), &builds);
+            cx.executor().run_until_parked();
+            assert!(task.clone().now_or_never().is_none());
+            assert_eq!(builds.load(Ordering::SeqCst), 0);
+            assert_poster(&LottieAnimation::from_bytes(Arc::<[u8]>::from(TINY)).unwrap());
+            assert_poster(
+                &LottieAnimation::from_json_str(std::str::from_utf8(TINY).unwrap()).unwrap(),
+            );
+            drop(blocker);
+            cx.executor().run_until_parked();
+            let result = task.now_or_never().unwrap();
+            assert_eq!(result.is_ok(), valid);
+            assert_eq!(builds.load(Ordering::SeqCst), usize::from(valid));
+            if let Ok(animation) = result {
+                assert_poster(&animation);
+            }
+            assert!(slots.try_acquire_arc().is_some());
+        }
+    }
+
+    #[test]
+    fn transport_status_and_decode_errors_release_slot_for_following_real_poster() {
+        let cx = TestAppContext::single();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let started = requests.clone();
+        let client = http_client::FakeHttpClient::create(move |request| {
+            started.fetch_add(1, Ordering::SeqCst);
+            async move {
+                match request.uri().path() {
+                    "/transport.json" => Err(anyhow::anyhow!("controlled transport failure")),
+                    "/status.json" => Ok(http_client::Response::builder()
+                        .status(503)
+                        .body(Default::default())
+                        .unwrap()),
+                    "/decode.json" => Ok(http_client::Response::builder()
+                        .status(200)
+                        .body(http_client::AsyncBody::from(b"{".to_vec()))
+                        .unwrap()),
+                    _ => panic!("unexpected in-memory request"),
+                }
+            }
+        });
+        cx.update(|cx| cx.set_http_client(client));
+        let slots = Arc::new(async_lock::Semaphore::new(1));
+        let builds = Arc::new(AtomicUsize::new(0));
+        for (index, name) in ["transport", "status", "decode"].into_iter().enumerate() {
+            let before = builds.load(Ordering::SeqCst);
+            let task = spawn(&cx, uri(name), slots.clone(), &builds);
+            cx.executor().run_until_parked();
+            let error = task.now_or_never().unwrap().unwrap_err();
+            if name == "status" {
+                assert!(
+                    matches!(error, LottieError::BadStatus { status, .. } if status == http_client::StatusCode::SERVICE_UNAVAILABLE)
+                );
+            }
+            assert_eq!(
+                builds.load(Ordering::SeqCst),
+                before + usize::from(name == "decode")
+            );
+            assert_eq!(requests.load(Ordering::SeqCst), index + 1);
+            let next = spawn(
+                &cx,
+                LottieAssetSource::Bytes(Arc::from(TINY)),
+                slots.clone(),
+                &builds,
+            );
+            cx.executor().run_until_parked();
+            take_ready(next);
+            assert!(slots.try_acquire_arc().is_some());
+        }
+    }
+
+    #[test]
+    fn completed_output_owns_source_and_poster_but_no_loader_permit() {
+        let cx = TestAppContext::single();
+        let slots = Arc::new(async_lock::Semaphore::new(1));
+        let builds = Arc::new(AtomicUsize::new(0));
+        let bytes = Arc::<[u8]>::from(TINY);
+        let source = Arc::downgrade(&bytes);
+        let task = spawn(&cx, LottieAssetSource::Bytes(bytes), slots.clone(), &builds);
+        cx.executor().run_until_parked();
+        let animation = take_ready(task);
+        let output = Arc::downgrade(&animation);
+        let poster = Arc::downgrade(&animation.poster_frame());
+        assert!(source.upgrade().is_some());
+        assert!(output.upgrade().is_some());
+        assert!(poster.upgrade().is_some());
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+        let permit = slots.try_acquire_arc().unwrap();
+        drop(animation);
+        assert!(source.upgrade().is_none());
+        assert!(output.upgrade().is_none());
+        assert!(poster.upgrade().is_none());
+        drop(permit);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn canceled_running_loader_holds_permit_until_actual_tiny_poster_builder_returns() {
+        use std::{sync::mpsc, thread, time::Duration};
+
+        // On every unwind, release the owned worker and join. Its only wait is
+        // bounded, and it renders just one transparent pixel before that wait.
+        struct WorkerRelease {
+            release: Option<mpsc::Sender<()>>,
+            worker: Option<thread::JoinHandle<()>>,
+        }
+        impl WorkerRelease {
+            fn finish(&mut self) {
+                self.release.take().unwrap().send(()).unwrap();
+                self.worker.take().unwrap().join().unwrap();
+            }
+        }
+        impl Drop for WorkerRelease {
+            fn drop(&mut self) {
+                if let Some(release) = self.release.take() {
+                    let _ = release.send(());
+                }
+                if let Some(worker) = self.worker.take() {
+                    let _ = worker.join();
+                }
+            }
+        }
+
+        let cx = TestAppContext::single();
+        let executor = cx.executor();
+        // Drain startup before selecting one background runnable. No App or
+        // dispatcher call may run concurrently with the blocked worker below.
+        executor.run_until_parked();
+        let slots = Arc::new(async_lock::Semaphore::new(1));
+        let http = HeldHttp::default();
+        http.install(&cx);
+        let bytes = Arc::<[u8]>::from(TINY);
+        let source = Arc::downgrade(&bytes);
+        let observed_output = Arc::new(Mutex::new(None));
+        let observed = observed_output.clone();
+        let returned = Arc::new(AtomicUsize::new(0));
+        let completed = returned.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let next_builds = Arc::new(AtomicUsize::new(0));
+        let next_builder = next_builds.clone();
+        // Capture all App-owned handles on the foreground before the worker
+        // changes TestDispatcher's shared is_main_thread state.
+        let mut next_future = cx.update(|cx| -> futures::future::BoxFuture<'static, Loaded> {
+            LottieAssetLoader::load_with_admission(uri("next"), cx, slots.clone(), move |bytes| {
+                next_builder.fetch_add(1, Ordering::SeqCst);
+                Ok(Arc::new(LottieAnimation::from_bytes(bytes)?))
+            })
+            .boxed()
+        });
+        let first = spawn_with_builder(
+            &cx,
+            LottieAssetSource::Bytes(bytes),
+            slots.clone(),
+            move |bytes| {
+                let animation = Arc::new(LottieAnimation::from_bytes(bytes)?);
+                assert_poster(&animation);
+                *observed.lock().unwrap() = Some(Arc::downgrade(&animation));
+                started_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                completed.fetch_add(1, Ordering::SeqCst);
+                Ok(animation)
+            },
+        );
+        let worker_executor = executor.clone();
+        let worker = thread::spawn(move || {
+            assert!(worker_executor.dispatcher.as_test().unwrap().tick(true));
+        });
+        let mut cleanup = WorkerRelease {
+            release: Some(release_tx),
+            worker: Some(worker),
+        };
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(slots.try_acquire_arc().is_none());
+        assert!(source.upgrade().is_some());
+        // This future owns only previously captured Send handles. Poll it
+        // directly to register a semaphore waiter without App/dispatcher calls
+        // while the real first Task remains inside its running poll.
+        let mut poll_context = std::task::Context::from_waker(futures::task::noop_waker_ref());
+        assert!(futures::Future::poll(next_future.as_mut(), &mut poll_context).is_pending());
+        assert_eq!(http.started.load(Ordering::SeqCst), 0);
+        drop(first);
+        assert!(futures::Future::poll(next_future.as_mut(), &mut poll_context).is_pending());
+        assert!(slots.try_acquire_arc().is_none());
+        assert_eq!(http.started.load(Ordering::SeqCst), 0);
+        assert_eq!(returned.load(Ordering::SeqCst), 0);
+        assert!(source.upgrade().is_some());
+        assert!(
+            observed_output
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .upgrade()
+                .is_some()
+        );
+        cleanup.finish();
+        // Join restores the dispatcher thread flag before normal scheduling.
+        let next = executor.spawn(next_future).shared();
+        executor.run_until_parked();
+        // Cancellation cannot preempt that poll; its discarded result retires
+        // only after the real builder has returned. It cannot hoard admission.
+        assert_eq!(returned.load(Ordering::SeqCst), 1);
+        assert!(source.upgrade().is_none());
+        assert!(
+            observed_output
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .upgrade()
+                .is_none()
+        );
+        assert_eq!(http.started.load(Ordering::SeqCst), 1);
+        assert_eq!(next_builds.load(Ordering::SeqCst), 0);
+        assert!(http.release_next());
+        executor.run_until_parked();
+        take_ready(next);
+        assert_eq!(next_builds.load(Ordering::SeqCst), 1);
+        assert!(slots.try_acquire_arc().is_some());
+    }
+
+    #[test]
+    fn loader_holds_admission_during_body_read_and_canceling_it_unblocks_waiter() {
+        use std::{
+            pin::Pin,
+            task::{Context, Poll},
+        };
+
+        struct PausedBody {
+            gate: oneshot::Receiver<()>,
+            cursor: futures::io::Cursor<&'static [u8]>,
+            released: bool,
+            polls: Arc<AtomicUsize>,
+            dropped: Arc<AtomicUsize>,
+        }
+        impl futures::AsyncRead for PausedBody {
+            fn poll_read(
+                mut self: Pin<&mut Self>,
+                cx: &mut Context<'_>,
+                bytes: &mut [u8],
+            ) -> Poll<io::Result<usize>> {
+                if !self.released {
+                    self.polls.fetch_add(1, Ordering::SeqCst);
+                    match futures::Future::poll(Pin::new(&mut self.gate), cx) {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(Ok(())) => self.released = true,
+                        Poll::Ready(Err(_)) => {
+                            return Poll::Ready(Err(io::Error::new(
+                                io::ErrorKind::Interrupted,
+                                "controlled body canceled",
+                            )));
+                        }
+                    }
+                }
+                futures::AsyncRead::poll_read(Pin::new(&mut self.cursor), cx, bytes)
+            }
+        }
+        impl Drop for PausedBody {
+            fn drop(&mut self) {
+                self.dropped.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let cx = TestAppContext::single();
+        let slots = Arc::new(async_lock::Semaphore::new(1));
+        let builds = Arc::new(AtomicUsize::new(0));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let polls = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let (sender, receiver) = oneshot::channel();
+        let receiver = Arc::new(Mutex::new(Some(receiver)));
+        let client = http_client::FakeHttpClient::create({
+            let requests = requests.clone();
+            let polls = polls.clone();
+            let dropped = dropped.clone();
+            move |request| {
+                requests.fetch_add(1, Ordering::SeqCst);
+                let body = if request.uri().path() == "/body.json" {
+                    http_client::AsyncBody::from_reader(PausedBody {
+                        gate: receiver.lock().unwrap().take().unwrap(),
+                        cursor: futures::io::Cursor::new(TINY),
+                        released: false,
+                        polls: polls.clone(),
+                        dropped: dropped.clone(),
+                    })
+                } else {
+                    http_client::AsyncBody::from(TINY)
+                };
+                async move {
+                    Ok(http_client::Response::builder()
+                        .status(200)
+                        .body(body)
+                        .unwrap())
+                }
+            }
+        });
+        cx.update(|cx| cx.set_http_client(client));
+        let first = spawn(&cx, uri("body"), slots.clone(), &builds);
+        cx.executor().run_until_parked();
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        assert!(polls.load(Ordering::SeqCst) > 0);
+        assert_eq!(builds.load(Ordering::SeqCst), 0);
+        assert!(slots.try_acquire_arc().is_none());
+        let next = spawn(&cx, uri("next"), slots.clone(), &builds);
+        cx.executor().run_until_parked();
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        drop(first);
+        cx.executor().run_until_parked();
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        assert!(sender.send(()).is_err());
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        take_ready(next);
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+        assert!(slots.try_acquire_arc().is_some());
     }
 }

@@ -34349,6 +34349,19 @@ impl LayoutStylingHandoffBuilder {
     }
 }
 
+// Own the initializing-key lifetime without borrowing App through caller code.
+// Only checked cache misses reserve these keys; legacy fetch remains uncapped.
+struct AssetInitializationReservation {
+    keys: Rc<RefCell<FxHashSet<(TypeId, u64)>>>,
+    key: (TypeId, u64),
+}
+
+impl Drop for AssetInitializationReservation {
+    fn drop(&mut self) {
+        self.keys.borrow_mut().remove(&self.key);
+    }
+}
+
 pub(crate) struct CachedAssetTask {
     task: Box<dyn Any>,
     ready_consumers: AssetReadySubscribers,
@@ -34379,6 +34392,7 @@ pub struct App {
     asset_cache_max_entries: usize,
     asset_cache_max_bytes: u64,
     asset_cache_max_pending: usize,
+    asset_initializations: Rc<RefCell<FxHashSet<(TypeId, u64)>>>,
     asset_cache_waiters: FxHashSet<EntityId>,
     asset_consumer_invalidations: AssetInvalidationSubscribers,
     pub(crate) image_load_slots: Arc<async_lock::Semaphore>,
@@ -34486,6 +34500,7 @@ impl App {
                 asset_cache_max_entries: 256,
                 asset_cache_max_bytes: 64 * 1024 * 1024,
                 asset_cache_max_pending: 64,
+                asset_initializations: Rc::default(),
                 asset_cache_waiters: FxHashSet::default(),
                 asset_consumer_invalidations: SubscriberSet::new(),
                 image_load_slots: Arc::new(async_lock::Semaphore::new(4)),
@@ -39191,7 +39206,9 @@ impl App {
 
     /// Set the pending-work cap used by [`Self::fetch_asset_checked`] and window
     /// asset helpers (default 64, normalized to 1..=4096). Existing shared loads
-    /// remain valid. Legacy [`Self::fetch_asset`] permits explicit unbounded admission.
+    /// remain valid. Synchronous checked loader initializations also occupy
+    /// admission before they publish a task. Legacy [`Self::fetch_asset`] permits
+    /// explicit unbounded admission.
     pub fn set_pending_asset_limit(&mut self, max_pending: usize) {
         self.asset_cache_max_pending = max_pending.clamp(1, 4096);
     }
@@ -39205,9 +39222,10 @@ impl App {
     }
 
     /// Fetch an asset with pending admission checked before invoking its loader.
-    /// Existing requests always share their task. A full cache returns an error;
-    /// retry after another request completes. Other owners' shared handles remain
-    /// valid if an entry is removed or evicted.
+    /// Published requests always share their task, including at the admission cap.
+    /// A full cache or an initializing same-key request returns an error; retry
+    /// after initialization or another load completes. Other owners' shared
+    /// handles remain valid if an entry is removed or evicted.
     pub fn fetch_asset_checked<A: Asset>(
         &mut self,
         source: &A::Source,
@@ -39221,12 +39239,42 @@ impl App {
         source: &A::Source,
         key: (TypeId, u64),
     ) -> Result<(Shared<Task<A::Output>>, bool)> {
-        anyhow::ensure!(
-            self.loading_assets.contains_key(&key)
-                || self.pending_asset_count() < self.asset_cache_max_pending,
-            "asset cache pending-load limit reached; retry after a load completes"
-        );
-        Ok(self.fetch_asset_with_key::<A>(source, key))
+        if self.loading_assets.contains_key(&key) {
+            return Ok(self.fetch_asset_with_key::<A>(source, key));
+        }
+
+        let reservation = {
+            let mut keys = self.asset_initializations.borrow_mut();
+            anyhow::ensure!(
+                !keys.contains(&key),
+                "asset request is being initialized; retry after initialization completes"
+            );
+            anyhow::ensure!(
+                self.pending_asset_count().saturating_add(keys.len())
+                    < self.asset_cache_max_pending,
+                "asset cache pending-load limit reached; retry after a load completes"
+            );
+            keys.insert(key);
+            AssetInitializationReservation {
+                keys: self.asset_initializations.clone(),
+                key,
+            }
+        };
+
+        // Source::clone and Asset::load may reenter checked fetch synchronously.
+        // No registry or cache borrow crosses those callbacks, and unwinding
+        // must release admission before waking views that just deferred on it.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.fetch_asset_with_key::<A>(source, key)
+        }));
+        drop(reservation);
+        match result {
+            Ok(request) => Ok(request),
+            Err(panic) => {
+                self.resume_deferred_asset_requests();
+                std::panic::resume_unwind(panic)
+            }
+        }
     }
 
     pub(crate) fn observe_asset_consumer_invalidation(

@@ -121,6 +121,19 @@ RSS remain concrete gaps. Hosted viewports are equally constrained to 1100×645,
 scale 1. Zero-only energy counters provide no power result; later source,
 physical presentation and overall superiority remain separate.
 
+The subsequent [asset-admission checkpoint](2026-10-18-asset-admission-validation.json)
+limits built-in animation loading to two concurrent I/O/parse/poster operations
+and reserves checked asset initialization before application callbacks. Reproduced
+reentrant oversubscription and duplicate-load failures are fixed, with explicit
+panic cleanup waking waiting views. The combined nine-path source passes 15
+checks, including 2,232 core tests, all 538 UI tests, native animation 140 plus
+the separate public loader policy, strict lint, Wasm and consumer builds.
+The same batch's [CPU Choker fast path](2026-10-18-choker-optimization-validation.json)
+avoids one 4N-byte RGBA scratch copy in each of 52 eligible tiny allocator cases,
+with exact pixels and actual Chrome17 acceptance. Global byte accounting,
+fresh packages, platform CI and later-source comparative measurements remain
+separate from this headless checkpoint.
+
 ## Component coverage and gaps
 
 The library already contains most common controls, so component count alone is

@@ -13,7 +13,7 @@ choose the lowest rung that solves the problem:
 | Charts, timelines, waveform views, custom controls | `canvas(...)`, `paint_quad`, `paint_path`, `PathBuilder` | Native immediate-mode drawing |
 | Game worlds, whiteboards, and large retained 2D surfaces | `PortableScene2d` / `portable_scene(...)` | Same bounded retained commands on native and browser renderers |
 | Icons, diagrams, generated vector assets | `svg()` / `PathBuilder` | Keep assets inspectable and themeable |
-| Motion graphics and loaders | `lottie(...)` with feature `lottie` | Decodes off the UI path |
+| Motion graphics and loaders | `lottie(...)` with feature `lottie` | Native background decoding; bounded loading on each runtime |
 | Frosted or filtered subtrees | `backdrop_blur(...)` / `effect_layer(...)` | Effect layers are partial CSS-filter coverage, not arbitrary shaders |
 | Run a Kael canvas in a browser | `kael` / `kael_ui` feature `browser` | Same retained Scene through the WebGL2 renderer |
 | External or hosted browser content | `webview(id, url)` | Native composition island on desktop; sandboxed iframe island in the wasm backend, with documented cross-origin limits |
@@ -442,16 +442,25 @@ clears/pressure events, with eight pending loads.
 The default shared asset cache retains at most 256 completed entries and 64 MiB
 of reported output bytes. Configure it through
 `App::set_completed_asset_cache_limits`; custom heap-backed assets should override
-`Asset::cache_bytes`. Framework asset helpers use `App::fetch_asset_checked`, which
-checks a separate pending limit before calling the loader (64 by default).
-`App::set_pending_asset_limit` configures that limit. The legacy `App::fetch_asset`
-allows explicit unbounded admission. Removing the cache's ownership does not
+`Asset::cache_bytes`. Framework asset helpers use `App::fetch_asset_checked`, with
+a separate pending limit of 64 by default. `App::set_pending_asset_limit`
+configures it within 1..=4096. A checked cold miss reserves admission before
+calling source-clone or loader code, so synchronous reentry cannot bypass the
+limit or start the same initializing key twice. Already-published requests share
+even at capacity. A request for an initializing key returns an error until
+publication; drawing helpers defer and retry. `App::pending_asset_count` counts
+published unfinished tasks, excluding these temporary initialization reservations.
+The legacy `App::fetch_asset` allows explicit unbounded admission.
+
+Removing the cache's ownership does not
 cancel a shared load still owned by another caller; it cancels when the final
 owner releases it. Critical pressure releases both completed outputs and cache
-ownership of unfinished shared assets. Window rendering helpers keep lightweight
-wake tokens rather than independent owners of those tasks. These are retention
-and concurrency budgets, not a hard cap
-on the process's total memory or codec temporary allocations.
+ownership of unfinished shared assets. Pending window rendering consumers keep
+weak task references. Mounted helpers retain completed results independently of
+the completed-cache LRU, and retire those owners when their retained content is
+unmounted. Active results, including errors, therefore remain additional to the
+completed-cache budget. These retention and concurrency limits do not bound the
+process's total memory or codec temporary allocations.
 
 Inspect
 `RetainAllImageCacheProvider::to_text()`, `LruImageCacheProvider::to_text()`,
@@ -475,7 +484,7 @@ Enable Kael's `lottie` feature to add the native decoder and renderer:
 kael = { version = "0.4", features = ["lottie"] }
 ```
 
-`lottie()` plays Lottie/dotLottie animations, decoding frames on a background thread so the UI stays responsive:
+`lottie()` plays Lottie/dotLottie animations. Native playback decodes frames on the background executor:
 
 ```rust
 use kael::{lottie, LoopMode};
@@ -486,6 +495,21 @@ lottie("animations/loader.json")
 ```
 
 Builders: `.autoplay()`, `.loop_forever()`, `.loop_mode(LoopMode)`, `.ping_pong()`, `.object_fit(ObjectFit)`, `.prefetch_frames(n)`, `.with_loading(|| element)`, `.with_fallback(|| element)`.
+
+The built-in `LottieAssetLoader` admits two loads at a time across native Apps in
+one process, or within one Rust/Wasm runtime instance. A slot covers source I/O,
+validation, parsing and the initial poster frame. Waiting loads start as a slot
+becomes available; cancelling an asynchronous load releases its slot. Slow I/O
+can occupy both slots, and a synchronous parse or render already in progress
+runs to completion. Playback frame workers have a separate two-slot limit.
+Direct `LottieAnimation::from_bytes` and `from_json_str` calls retain their
+synchronous contract and do not use loader admission.
+
+Queued byte sources, mounted outputs, prepared models and rendering scratch have
+separate ownership. Loader admission is not a total-memory or frame-time budget.
+On browsers it also does not move synchronous parsing/rendering off the runtime
+thread. See [animation APIs](animations.md#lottie-animated-assets) for element
+configuration.
 
 See the Astryx showcase's media and visual-effects sections for complete,
 runnable compositions.

@@ -279,6 +279,11 @@ harness = false
 name = "action_macros"
 path = "tests/action_macros.rs"
 
+[[test]]
+name = "lottie_loader_policy"
+path = "tests/lottie_loader_policy.rs"
+required-features = ["lottie", "test-support"]
+
 [dependencies.anyhow]
 workspace = true
 

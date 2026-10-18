@@ -146,6 +146,16 @@ also disabled during unwinding. The counter measures requested Rust allocation
 payloads, not allocator overhead or RSS; portable golden tests independently
 cover pixels without this native allocator watch.
 
+### Whole-image Simple Choker radius
+
+An admitted rounded radius covering the complete image reduces alpha once with
+the same minimum or maximum and then writes alpha in place. RGB and the existing
+finite-value thresholds are preserved. The local-window kernel is unchanged.
+This path avoids its full RGBA source copy; scalar sampling still allocates its
+existing small temporary, so the effect is not allocation-free. Tiny geometric
+oracles cover both signs, asymmetric and one-pixel canvases and numeric limits.
+This is not a global memory policy or a speed guarantee for other radii.
+
 ## Provenance and exact reconstruction
 
 The pinned registry archive is

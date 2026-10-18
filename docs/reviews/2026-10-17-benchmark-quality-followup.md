@@ -924,3 +924,13 @@ separate. General desktop CPU/RSS and separate CPU timing summaries retain mixed
 results, substantial table/tree gaps, native component differences and per-run
 values. Energy/instruction/cycle counters are all zero and support no power
 ranking. These binaries predate the nineteen-file `b279795` batch.
+
+The subsequent [asset-admission checkpoint](2026-10-18-asset-admission-validation.json)
+passes 15 combined primary checks, including 2,232 core and all 538 UI tests
+with default parallelism. Checked initializers reserve capacity before user
+callbacks; built-in animation loading holds two process/runtime slots through
+source I/O and poster construction. The [CPU Choker fast path](2026-10-18-choker-optimization-validation.json)
+also removes a whole-image scratch copy with paired actual pixel/allocation
+proof and actual Chrome17 acceptance. These are correctness and scoped ownership
+results. The full GPUI Kit comparison still names its earlier immutable source;
+new package/platform and later-source performance remain separate.

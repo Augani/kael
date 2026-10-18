@@ -81,6 +81,15 @@ fn apply_simple_choker_effect(pixmap: &mut Pixmap, effect: &SimpleChokerEffect, 
     // Pixmaps have positive dimensions. Larger radii select exactly the same
     // clipped square, including the f32 threshold where i32::MAX rounds to 2^31.
     let radius = (rounded.abs() as usize).min(width.max(height) - 1);
+    if radius == width.max(height) - 1 {
+        // Every clipped window covers the whole image; RGB remains unchanged.
+        let alphas = pixmap.data().chunks_exact(4).map(|pixel| pixel[3]);
+        let alpha = if erode { alphas.min() } else { alphas.max() }.unwrap_or(0);
+        for pixel in pixmap.data_mut().chunks_exact_mut(4) {
+            pixel[3] = alpha;
+        }
+        return;
+    }
     let source = pixmap.data().to_vec();
 
     for y in 0..height {
@@ -157,7 +166,7 @@ mod tests {
 
     #[test]
     fn choker_finite_boundaries_match_geometric_alpha_oracle() {
-        for (width, height) in [(1, 1), (2, 3), (3, 2)] {
+        for (width, height) in [(1, 1), (2, 3), (3, 2), (1, 4), (4, 1), (2, 2)] {
             let mut original = Pixmap::new(width, height).unwrap();
             for (index, pixel) in original.data_mut().chunks_exact_mut(4).enumerate() {
                 pixel.copy_from_slice(&[index as u8, 2, 3, (index * 47) as u8]);
@@ -173,6 +182,8 @@ mod tests {
                 -1.0,
                 2.0,
                 -2.0,
+                3.0,
+                -3.0,
                 2_147_483_520.0,
                 -2_147_483_520.0,
                 2_147_483_648.0,
