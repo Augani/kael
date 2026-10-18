@@ -680,16 +680,21 @@ impl Chart {
     }
 
     fn compute_data_range(&self) -> DataRange {
-        let mut range = DataRange::new(f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        let mut range: Option<DataRange> = None;
 
         for series in &self.series {
+            if series.data.is_empty() {
+                continue;
+            }
             let series_range = series.data_range();
-            range.extend(&series_range);
+            if let Some(range) = &mut range {
+                range.extend(&series_range);
+            } else {
+                range = Some(series_range);
+            }
         }
 
-        if range.x_min == f64::MAX {
-            range = DataRange::new(0.0, 1.0, 0.0, 1.0);
-        }
+        let mut range = range.unwrap_or_else(|| DataRange::new(0.0, 1.0, 0.0, 1.0));
 
         if let Some(min) = self.x_axis.min {
             range.x_min = min;
@@ -1109,5 +1114,141 @@ mod tests {
         assert!(summary.contains("and 3 more"));
         assert!(!summary.contains("Latency P12"));
         assert_eq!(chart_summary(&[]), "Chart. No data");
+    }
+
+    #[::core::prelude::v1::test]
+    fn chart_domain_uses_positive_data_extents() {
+        let chart = Chart::new().series(Series::line(
+            "Revenue",
+            vec![DataPoint::new(10.0, 20.0), DataPoint::new(30.0, 80.0)],
+        ));
+        let range = chart.compute_data_range();
+        assert_eq!(
+            (range.x_min, range.x_max, range.y_min, range.y_max),
+            (10.0, 30.0, 20.0, 80.0)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn chart_domain_uses_negative_data_extents() {
+        let chart = Chart::new().series(Series::line(
+            "Loss",
+            vec![DataPoint::new(-30.0, -80.0), DataPoint::new(-10.0, -20.0)],
+        ));
+        let range = chart.compute_data_range();
+        assert_eq!(
+            (range.x_min, range.x_max, range.y_min, range.y_max),
+            (-30.0, -10.0, -80.0, -20.0)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn chart_domain_merges_series_without_empty_unit_domains() {
+        let chart = Chart::new()
+            .series(Series::line("Empty before", Vec::new()))
+            .series(Series::line(
+                "First",
+                vec![DataPoint::new(40.0, 80.0), DataPoint::new(50.0, 90.0)],
+            ))
+            .series(Series::line("Empty between", Vec::new()))
+            .series(Series::line(
+                "Second",
+                vec![DataPoint::new(10.0, 20.0), DataPoint::new(60.0, 100.0)],
+            ))
+            .series(Series::line("Empty after", Vec::new()));
+        let range = chart.compute_data_range();
+        assert_eq!(
+            (range.x_min, range.x_max, range.y_min, range.y_max),
+            (10.0, 60.0, 20.0, 100.0)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn chart_domain_defaults_only_when_all_series_are_empty() {
+        for chart in [
+            Chart::new(),
+            Chart::new()
+                .series(Series::line("Empty one", Vec::new()))
+                .series(Series::line("Empty two", Vec::new())),
+        ] {
+            let range = chart.compute_data_range();
+            assert_eq!(
+                (range.x_min, range.x_max, range.y_min, range.y_max),
+                (0.0, 1.0, 0.0, 1.0)
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn chart_domain_explicit_axes_override_data_extents() {
+        let chart = Chart::new()
+            .series(Series::line(
+                "Revenue",
+                vec![DataPoint::new(10.0, 20.0), DataPoint::new(30.0, 80.0)],
+            ))
+            .x_axis(Axis::new().range(-5.0, 55.0))
+            .y_axis(Axis::new().range(-20.0, 100.0));
+        let range = chart.compute_data_range();
+        assert_eq!(
+            (range.x_min, range.x_max, range.y_min, range.y_max),
+            (-5.0, 55.0, -20.0, 100.0)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn chart_domain_partial_axis_override_keeps_other_data_bounds() {
+        let chart = Chart::new()
+            .series(Series::line(
+                "Revenue",
+                vec![DataPoint::new(10.0, 20.0), DataPoint::new(30.0, 80.0)],
+            ))
+            .x_axis(Axis {
+                min: Some(12.0),
+                ..Axis::new()
+            });
+        let range = chart.compute_data_range();
+        assert_eq!(
+            (range.x_min, range.x_max, range.y_min, range.y_max),
+            (12.0, 30.0, 20.0, 80.0)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn chart_domain_endpoints_project_into_offset_padded_viewport() {
+        for (lower, upper, middle) in [
+            ((10.0, 20.0), (30.0, 80.0), (20.0, 50.0)),
+            ((-30.0, -80.0), (-10.0, -20.0), (-20.0, -50.0)),
+        ] {
+            let chart = Chart::new().series(Series::line(
+                "Data",
+                vec![
+                    DataPoint::new(lower.0, lower.1),
+                    DataPoint::new(upper.0, upper.1),
+                ],
+            ));
+            let area = ChartArea {
+                bounds: Bounds {
+                    origin: point(px(100.0), px(50.0)),
+                    size: Size {
+                        width: px(400.0),
+                        height: px(300.0),
+                    },
+                },
+                range: chart.compute_data_range(),
+                padding: ChartPadding::new(30.0, 10.0, 20.0, 40.0),
+            };
+            assert_eq!(
+                area.data_to_screen(&DataPoint::new(lower.0, lower.1)),
+                point(px(130.0), px(310.0))
+            );
+            assert_eq!(
+                area.data_to_screen(&DataPoint::new(upper.0, upper.1)),
+                point(px(490.0), px(70.0))
+            );
+            assert_eq!(
+                area.data_to_screen(&DataPoint::new(middle.0, middle.1)),
+                point(px(310.0), px(190.0))
+            );
+        }
     }
 }
