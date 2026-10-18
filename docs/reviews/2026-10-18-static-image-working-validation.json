@@ -3,7 +3,7 @@
   "status": "EXACT_IMAGE_SOURCES_ADOPTED_CORRECTNESS_CPU_AND_EXPLICIT_THREAD_ACCEPTANCE_COMPLETE",
   "adoption": {
     "status": "EXACT_FOUR_V6_FILES_PROMOTED_PRIMARY_AND_MANAGED_BEFORE_DOCUMENTATION",
-    "commit": null,
+    "commit": "10db90b69080673c09954011c5989be7e4f49b28",
     "base_cohort_provided_by_Root": "124260c; prior Grid adoption, before Image working admission",
     "unaugmented_candidate_preparation": {
       "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-static-image-working-admission-prototype-v6/preparation.json",
@@ -63,7 +63,7 @@
       "direct public synchronous Image::to_image_data constructors",
       "whole process RSS or application memory"
     ],
-    "default_memory_saving_not_established": "Four default LRU requests each capped at64 MiB RGBA output can already fit the widest native-plus-RGBA representation within1280 MiB. Typed or higher-cap requests have separate output limits. The pool preserves every individually legal up-to256 MiB RGBA output; no reduction in default-workload memory use was measured.",
+    "default_memory_saving_not_established": "Four default LRU requests each capped at 64 MiB RGBA output already fit the widest native-plus-RGBA representation within 1,280 MiB. Typed or higher-cap requests retain separate output limits. Every individually legal output up to 256 MiB RGBA remains admissible; no decrease in default-workload memory use was measured.",
     "public_custom_budget": "No new public byte-budget API; smaller pool values appear only in controlled tests."
   },
   "correctness": {
@@ -1183,7 +1183,46 @@
     "bytes": 38938
   },
   "further_scope": {
-    "current_source_native_GUI_GPU_compositor_acceptance": "Not executed by this image proof; previous b411 local presentation is a separate historical cohort.",
+    "current_source_native_GUI_GPU_compositor_acceptance": {
+      "status": "PASS_ORIGINAL_LOCAL_METAL_GATES",
+      "source_commit": "10db90b69080673c09954011c5989be7e4f49b28",
+      "receipt": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-native-validation/result.json",
+        "sha256": "60efac6dd775cb8b8d5c96915b07a0735deafb693029c4b854c9da196718dfbb",
+        "bytes": 1480587
+      },
+      "independent_audit": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-native-independent-general-review/review.json",
+        "sha256": "32f77bb68c14decd81e783be35bdf7b0ddf96dda6304b5e16bf5e6a4da0cff90",
+        "bytes": 16568
+      },
+      "source_inputs_unchanged": 3159,
+      "GPU_test_executions": 59,
+      "distinct_GPU_tests": 58,
+      "ignored_GPU_tests": 0,
+      "positive_presentation_frames": 59,
+      "initial_logical_client": [
+        720,
+        460
+      ],
+      "scale_factor": 2,
+      "idle_model_wake_ms": 1250,
+      "programmatic_resize_final_logical_client": [
+        723,
+        460
+      ],
+      "PNG": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-native-validation/native-renderer.png",
+        "sha256": "45c69fbf05fa7f1ef8e22eef68a86fad0c619f7abafb8821e45405918f8df979",
+        "bytes": 128438
+      },
+      "visual_review": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-image-working-native-validation/visual-review.json",
+        "sha256": "6e4ded8f421c19949994b4569d750840625dede3b65cd3800516d7bae6f3ea44",
+        "bytes": 775
+      },
+      "qualification": "Native GPU and local presentation proof only; hosted Mac failure, comparative measurements and power remain separate. The two coincidentally59 counts represent distinct metrics."
+    },
     "fresh39_package_preflight": "Pending Root; no new package result claimed.",
     "strict_dependency_advisories": "No dependency change or advisory closure claimed; the separate Platform strict audit still has three denied unmaintained advisories.",
     "R8_unified_memory_closure": false

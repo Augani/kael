@@ -997,3 +997,10 @@ pass, while native presentation and three independent Apple controls produce
 zero positive timestamps. The same-source local Metal check records a positive
 frame. Three denied unmaintained-dependency advisories also remain failed.
 This cohort predates the subsequent Grid and image changes.
+
+The image/Grid source at `10db90b` also passes the original local Metal gates:
+59 GPU test executions covering 58 distinct tests, plus 59 separate positive
+presentation frames. Initial 720×460 sizing at scale 2, the programmatic resize,
+1,250 ms idle model wake and the complete deterministic readback pass. The PNG
+is byte-identical to the earlier scene. Independent audit keeps these GPU and
+presentation counts separate; current packaging and hosted acceptance remain open.
