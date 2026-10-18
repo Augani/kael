@@ -10,9 +10,21 @@ gi.require_version('Atspi', '2.0')
 from gi.repository import Atspi, Gio, GLib
 
 
+def process_native_events():
+    # Bound our nonblocking dispatch attempts. A libatspi callback can itself
+    # drain multiple queued signals; this is not a hard callback-time limit.
+    context = GLib.MainContext.default()
+    deadline = time.monotonic() + .025
+    for _ in range(64):
+        if time.monotonic() >= deadline or not context.pending():
+            break
+        context.iteration(False)
+
+
 def wait(read, seconds=30):
     deadline = time.monotonic() + seconds
     while True:
+        process_native_events()
         try:
             return read()
         except Exception:
@@ -176,26 +188,40 @@ def main():
                     'native D-Bus document identity changed across disclosure')
             return restored
         last = wait(expanded)
+        def current_last():
+            nonlocal last
+            # Cache.RemoveAccessible disposes a client GObject. Reacquire from
+            # the live parent after dispatch, preserving native service/path.
+            project.clear_cache_single()
+            restored = project.get_child_at_index(3_999)
+            require(native_identity(restored) == last_identity,
+                    'native D-Bus document identity changed after re-add')
+            require(restored.get_parent() == project,
+                    'restored native document parent changed')
+            last = restored
+            return restored
         def restored_actions():
-            # Parent children can return before the re-added D-Bus object's
-            # interfaces are registered. The retained proxy may also cache the
-            # absent interfaces it observed while the row was collapsed.
-            last.clear_cache()
-            actions = last.get_action_iface()
+            # Hierarchy restoration can precede interface registration. Query
+            # the current proxy rather than reusing a possibly disposed one.
+            restored = current_last()
+            restored.clear_cache_single()
+            actions = restored.get_action_iface()
             require(actions is not None, 'offscreen row lacks its native action interface')
             names = [actions.get_action_name(index) for index in range(actions.get_n_actions())]
             require('click' in names, f'last row does not advertise Click: {names}')
             return actions, names
+        wait(restored_actions)
+        time.sleep(2)  # Preserve the native idle-action wakeup requirement.
         actions, names = wait(restored_actions)
-        time.sleep(2)
         require(actions.do_action(names.index('click')), 'native click was rejected')
         def selected():
             text = args.app_log.read_text()
             for marker in ('NATIVE_ACCESSIBILITY_MODEL: rows=100025',
                            'NATIVE_ACCESSIBILITY_SELECT: id=100024'):
                 require(marker in text, f'foreground did not execute {marker}')
-            last.clear_cache()
-            states = last.get_state_set()
+            restored = current_last()
+            restored.clear_cache_single()
+            states = restored.get_state_set()
             require(states.contains(Atspi.StateType.FOCUSED),
                     'native active descendant did not receive focus: '
                     f'focusable={states.contains(Atspi.StateType.FOCUSABLE)} '
