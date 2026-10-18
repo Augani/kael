@@ -574,3 +574,23 @@ All 10,922 samples use V6 but return zero energy fields; capability and deltas
 remain unknown/null. No power or overall ranking follows. This direct b091
 checkout precedes the label fix; the separate failed platform job uses a distinct
 merge commit with the same tree.
+
+The [40b24 platform cohort](2026-10-18-platform-40b24-validation.json) remains
+failed overall. Its actual PR merge has the exact workflow-head tree. Windows,
+Linux renderer and browser jobs pass within their recorded scopes; the focused
+GTK4 job and Windows 2022 workspace compile/lint were skipped. Mac records 44 GPU
+completions, 42 drawable callbacks and zero positive timestamps; three independent
+Apple controls each record 60 callbacks and zero positive timestamps. Linux still
+denies the same three dependency advisories. The separate Metal-backed browser
+budget passes at both viewports this run under unchanged limits; no repeatable
+improvement or cause is established. Later font-source platform acceptance remains
+separate.
+
+The [shared font-arrival fix](2026-10-18-font-arrival-validation.json) is adopted.
+A real CoreText fixture reproduces a successfully registered font remaining stuck
+on fallback, then passes with the fix while established IDs, cached layouts and
+held wrappers remain valid. Eight shared regressions, all 2,260 enabled Core tests
+and 568 UI tests, strict Core/UI lints, production/test Wasm typechecks and
+formatting pass. Three fixture files are present in the package listing; extracted
+archive builds remain separate. Platform-specific font caches, browser held-width
+revisions, native presentation and comparative performance remain open.

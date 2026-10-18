@@ -1845,3 +1845,131 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, target_os = "macos"))]
+mod native_font_arrival_regressions {
+    use super::MacTextSystem;
+    use crate::{
+        FontRun, LineFragment, PlatformTextSystem, TextRun, TextSystem, WindowTextSystem, black,
+        font, px,
+    };
+    use std::{borrow::Cow, sync::Arc};
+
+    const FAMILY: &str = "Kael Font Arrival 40d692fc";
+    const POSTSCRIPT: &str = "KaelFontArrival40d692fc-Regular";
+    const FONT_BYTES: &[u8] =
+        include_bytes!("../../../tests/fixtures/font-arrival/KaelFontArrival-Regular.ttf");
+
+    #[test]
+    fn registered_unique_face_replaces_shared_miss_without_invalidating_live_fonts() {
+        let native = Arc::new(MacTextSystem::new());
+        let shared = Arc::new(TextSystem::new(native.clone()));
+        let requested = font(FAMILY);
+
+        // A real native miss is required. A machine already containing this
+        // fixture family must fail here rather than weaken the arrival test.
+        assert!(
+            native.font_id(&requested).is_err(),
+            "unique fixture family was already resolvable before registration"
+        );
+        let fallback_id = shared.resolve_font(&requested);
+        let requested_before_add = shared.resolve_font(&requested);
+        assert_eq!(requested_before_add, fallback_id);
+
+        let stable = font("Helvetica");
+        let stable_id = shared.resolve_font(&stable);
+        assert_eq!(native.font_id(&stable).unwrap(), stable_id);
+        let stable_postscript = {
+            let state = native.0.read();
+            state.fonts[stable_id.0].postscript_name().unwrap()
+        };
+        let window_text = WindowTextSystem::new(shared.clone());
+        let label = "mWav";
+        let stable_runs = [TextRun {
+            len: label.len(),
+            font: stable.clone(),
+            color: black(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }];
+        let held_layout = window_text.layout_line(label, px(16.), &stable_runs, None);
+        let old_width = held_layout.width;
+        let old_len = held_layout.len;
+        assert!(old_width.0.is_finite() && old_width > px(0.));
+        assert_eq!(old_len, label.len());
+        let mut held_wrapper = shared.line_wrapper(stable.clone(), px(16.));
+        assert_eq!(held_wrapper.font_id, stable_id);
+        assert_eq!(
+            held_wrapper
+                .wrap_line(&[LineFragment::text(label)], px(10000.))
+                .count(),
+            0
+        );
+
+        // This is the actual public shared registration route into the native
+        // CGFont/CoreText-backed memory source, not a test setter or OS install.
+        shared.add_fonts(vec![Cow::Borrowed(FONT_BYTES)]).unwrap();
+        let arrived_id = native.font_id(&requested).unwrap();
+        let arrived_postscript = {
+            let state = native.0.read();
+            state.fonts[arrived_id.0].postscript_name().unwrap()
+        };
+        assert_eq!(arrived_postscript, POSTSCRIPT);
+        assert_ne!(arrived_id, fallback_id);
+        let metrics = native.font_metrics(arrived_id);
+        assert!(metrics.units_per_em > 0);
+        let glyph = native.glyph_for_char(arrived_id, 'm').unwrap();
+        let advance = native.advance(arrived_id, glyph).unwrap();
+        assert!(advance.width.is_finite() && advance.width > 0.);
+        let native_layout = native.layout_line(
+            label,
+            px(16.),
+            &[FontRun {
+                font_id: arrived_id,
+                len: label.len(),
+            }],
+        );
+        assert_eq!(native_layout.len, label.len());
+        assert!(native_layout.width.0.is_finite() && native_layout.width > px(0.));
+        assert!(
+            native_layout
+                .runs
+                .iter()
+                .any(|run| { run.font_id == arrived_id && !run.glyphs.is_empty() })
+        );
+
+        // Registration must leave old IDs, their actual native faces, a live
+        // caller-owned line, its cache hit, and an active wrapper valid.
+        assert_eq!(shared.resolve_font(&stable), stable_id);
+        assert_eq!(native.font_id(&stable).unwrap(), stable_id);
+        let stable_postscript_after = {
+            let state = native.0.read();
+            state.fonts[stable_id.0].postscript_name().unwrap()
+        };
+        assert_eq!(stable_postscript_after, stable_postscript);
+        let again = window_text.layout_line(label, px(16.), &stable_runs, None);
+        assert!(Arc::ptr_eq(&held_layout, &again));
+        assert_eq!(held_layout.width, old_width);
+        assert_eq!(held_layout.len, old_len);
+        assert_eq!(held_wrapper.font_id, stable_id);
+        assert_eq!(
+            held_wrapper
+                .wrap_line(&[LineFragment::text(label)], px(10000.))
+                .count(),
+            0
+        );
+
+        let shared_after_add = shared.resolve_font(&requested);
+        eprintln!(
+            "DIRECT_CORETEXT_FONT_ARRIVAL family={FAMILY:?} postscript={arrived_postscript:?} fallback={fallback_id:?} native_arrived={arrived_id:?} shared_after_add={shared_after_add:?} stable={stable_id:?} native_glyph_runs={}",
+            native_layout.runs.len()
+        );
+        assert_eq!(
+            shared_after_add, arrived_id,
+            "shared lookup retained fallback after actual native fixture registration"
+        );
+        assert_eq!(shared.get_font_for_id(arrived_id), Some(requested));
+        drop(held_wrapper);
+    }
+}

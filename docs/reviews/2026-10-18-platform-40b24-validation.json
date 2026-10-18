@@ -1,0 +1,518 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-10-18T11:34:28.899420+00:00",
+  "status": "40B24_PLATFORM_COHORT_FAILED_NO_WAIVERS",
+  "run_id": 39118445980,
+  "run_url": "https://github.com/Augani/kael/actions/runs/39118445980",
+  "workflow_head": "40b24b0e6c24fb514d04e035fd8f2bdec1abbed1",
+  "event": "pull_request",
+  "conclusion": "failure",
+  "actual_checkout": {
+    "sha": "2c73d8931fd1c1bd5f87e121801d55ba55e922d3",
+    "tree": "ad0f3b45679226da01bac9eb186aa69031a10f39",
+    "head_tree_equal": true,
+    "head_is_parent": true
+  },
+  "jobs": [
+    {
+      "id": 117648931301,
+      "name": "Classify change",
+      "conclusion": "success",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39118445980/job/117648931301",
+      "failed_steps": []
+    },
+    {
+      "id": 117648958607,
+      "name": "Windows Native / WebView / MSI (windows-2025-vs2026)",
+      "conclusion": "success",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39118445980/job/117648958607",
+      "failed_steps": []
+    },
+    {
+      "id": 117648958677,
+      "name": "WebAssembly / WebGL2 Browser",
+      "conclusion": "success",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39118445980/job/117648958677",
+      "failed_steps": []
+    },
+    {
+      "id": 117648958681,
+      "name": "Linux Renderer / WebView Runtime",
+      "conclusion": "success",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39118445980/job/117648958681",
+      "failed_steps": []
+    },
+    {
+      "id": 117648958699,
+      "name": "Quality / Native (macOS)",
+      "conclusion": "failure",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39118445980/job/117648958699",
+      "failed_steps": [
+        "Execute Metal retained-scene runtime proof",
+        "Diagnose same-job Apple drawable presentation"
+      ]
+    },
+    {
+      "id": 117648958705,
+      "name": "Quality / Native (Linux)",
+      "conclusion": "failure",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39118445980/job/117648958705",
+      "failed_steps": [
+        "Audit locked dependencies"
+      ]
+    },
+    {
+      "id": 117648958761,
+      "name": "Windows Native / WebView / MSI (windows-2022)",
+      "conclusion": "success",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39118445980/job/117648958761",
+      "failed_steps": []
+    },
+    {
+      "id": 117648959725,
+      "name": "Focused Linux / GTK4 native accessibility",
+      "conclusion": "skipped",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39118445980/job/117648959725",
+      "failed_steps": []
+    },
+    {
+      "id": 117661093275,
+      "name": "Platform readiness",
+      "conclusion": "failure",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39118445980/job/117661093275",
+      "failed_steps": [
+        "Enforce required build results"
+      ]
+    }
+  ],
+  "independent_audit": {
+    "receipt": {
+      "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/review.json",
+      "sha256": "a0898b38670e34f42e2d2a6e05e937cca5987133273c6ed472ce1982eecb762f",
+      "bytes": 3449
+    },
+    "validation": {
+      "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/validation.json",
+      "sha256": "6a3e3bd47f9d90d50fa2a9d42b54cc30017356cb48a2767db7ea7dd02f7d0c5c",
+      "bytes": 148546
+    },
+    "scope": "Projection of the independently audited terminal official cohort; no new job or runtime action."
+  },
+  "downloads": {
+    "artifact_count": 10,
+    "extracted_files": 249,
+    "log_files": 143,
+    "exact_API_head_size_digest_and_member_verification": true,
+    "records": [
+      {
+        "name": "macos-runtime-evidence",
+        "id": 12135040302,
+        "digest": "sha256:1b7477a547c3de73280e1b7921d2f4407e3bc493419a96a211b9d055f6174003",
+        "archive_bytes": 435375,
+        "files": 32,
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/downloads/macos-runtime-evidence/artifact.zip",
+          "sha256": "1b7477a547c3de73280e1b7921d2f4407e3bc493419a96a211b9d055f6174003",
+          "bytes": 435375
+        },
+        "metadata_digest_size_and_head_verified": true
+      },
+      {
+        "name": "windows-release-evidence-windows-2025-vs2026",
+        "id": 12134791153,
+        "digest": "sha256:49b65ae88cb95d0d1512477e9d20789fa0c0a7b9956e01382f23f3a34ce3a3bf",
+        "archive_bytes": 419871,
+        "files": 36,
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/downloads/windows-release-evidence-windows-2025-vs2026/artifact.zip",
+          "sha256": "49b65ae88cb95d0d1512477e9d20789fa0c0a7b9956e01382f23f3a34ce3a3bf",
+          "bytes": 419871
+        },
+        "metadata_digest_size_and_head_verified": true
+      },
+      {
+        "name": "macos-wkwebview-smoke",
+        "id": 12134187427,
+        "digest": "sha256:29c54593b1d98d15c53a5de58bf8dc5c9ef21b58dd0f94f87263cc8362360732",
+        "archive_bytes": 882,
+        "files": 1,
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/downloads/macos-wkwebview-smoke/artifact.zip",
+          "sha256": "29c54593b1d98d15c53a5de58bf8dc5c9ef21b58dd0f94f87263cc8362360732",
+          "bytes": 882
+        },
+        "metadata_digest_size_and_head_verified": true
+      },
+      {
+        "name": "browser-smoke",
+        "id": 12134031731,
+        "digest": "sha256:302c649912aea346ee4400ba68614cd69b8e7c151ad39d2d3ba80e5910a3afa3",
+        "archive_bytes": 17587663,
+        "files": 69,
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/downloads/browser-smoke/artifact.zip",
+          "sha256": "302c649912aea346ee4400ba68614cd69b8e7c151ad39d2d3ba80e5910a3afa3",
+          "bytes": 17587663
+        },
+        "metadata_digest_size_and_head_verified": true
+      },
+      {
+        "name": "lottie-admission-native-Linux",
+        "id": 12133815117,
+        "digest": "sha256:e8548be9f6a8f28662010cbfc9ed6adbe05bf9919af98253b3ee4ea1d183b4dd",
+        "archive_bytes": 4408,
+        "files": 4,
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/downloads/lottie-admission-native-Linux/artifact.zip",
+          "sha256": "e8548be9f6a8f28662010cbfc9ed6adbe05bf9919af98253b3ee4ea1d183b4dd",
+          "bytes": 4408
+        },
+        "metadata_digest_size_and_head_verified": true
+      },
+      {
+        "name": "windows-release-evidence-windows-2022",
+        "id": 12133757539,
+        "digest": "sha256:c59440aca686b7055e6483fcf4f296d21deed5881b0215e732fe5b33de690e9a",
+        "archive_bytes": 421741,
+        "files": 36,
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/downloads/windows-release-evidence-windows-2022/artifact.zip",
+          "sha256": "c59440aca686b7055e6483fcf4f296d21deed5881b0215e732fe5b33de690e9a",
+          "bytes": 421741
+        },
+        "metadata_digest_size_and_head_verified": true
+      },
+      {
+        "name": "webgl2-programmable-runtime-evidence",
+        "id": 12133755754,
+        "digest": "sha256:591f035bf67b79601c093b4513366f15fdca05156b1aa98176ec2ab5f38205dd",
+        "archive_bytes": 32373,
+        "files": 5,
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/downloads/webgl2-programmable-runtime-evidence/artifact.zip",
+          "sha256": "591f035bf67b79601c093b4513366f15fdca05156b1aa98176ec2ab5f38205dd",
+          "bytes": 32373
+        },
+        "metadata_digest_size_and_head_verified": true
+      },
+      {
+        "name": "lottie-admission-chrome",
+        "id": 12133427017,
+        "digest": "sha256:a4d7c3ea4b904f35a5c5fa1a9910707d7bbbf80799de3b799c1eb946f32cdfdc",
+        "archive_bytes": 8944,
+        "files": 5,
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/downloads/lottie-admission-chrome/artifact.zip",
+          "sha256": "a4d7c3ea4b904f35a5c5fa1a9910707d7bbbf80799de3b799c1eb946f32cdfdc",
+          "bytes": 8944
+        },
+        "metadata_digest_size_and_head_verified": true
+      },
+      {
+        "name": "lottie-admission-native-macOS",
+        "id": 12133377356,
+        "digest": "sha256:1a2f76bc3f109111daf553f942b5772c4d5d4654eec5839f059db347df22e994",
+        "archive_bytes": 10837,
+        "files": 4,
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/downloads/lottie-admission-native-macOS/artifact.zip",
+          "sha256": "1a2f76bc3f109111daf553f942b5772c4d5d4654eec5839f059db347df22e994",
+          "bytes": 10837
+        },
+        "metadata_digest_size_and_head_verified": true
+      },
+      {
+        "name": "linux-runtime-evidence",
+        "id": 12132769304,
+        "digest": "sha256:b8e2bab8b8d40284f40d92bad0f45d4490f5d208e90fbb72356dc3e43dbe829a",
+        "archive_bytes": 91818,
+        "files": 57,
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/downloads/linux-runtime-evidence/artifact.zip",
+          "sha256": "b8e2bab8b8d40284f40d92bad0f45d4490f5d208e90fbb72356dc3e43dbe829a",
+          "bytes": 91818
+        },
+        "metadata_digest_size_and_head_verified": true
+      }
+    ]
+  },
+  "source_identity": {
+    "workflow_head_tree": "ad0f3b45679226da01bac9eb186aa69031a10f39",
+    "actual_PR_merge_tree_equal_head": true,
+    "source_API_records": [
+      {
+        "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/run.json",
+        "sha256": "c5d663e53bdcf80e6bd6356fde817be358159bf85214e029841bbd992f358bb3",
+        "bytes": 11900
+      },
+      {
+        "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/jobs.json",
+        "sha256": "ba34200d37f3688f9324847aa5aff5641d7e406ce1f8d2e09a3e2a7f131e1f57",
+        "bytes": 36481
+      },
+      {
+        "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/artifacts.json",
+        "sha256": "e6a01067bc528a4b3f13dfcc1fc10bcabba754e267b644fc99508c3726396508",
+        "bytes": 7080
+      },
+      {
+        "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/head-commit.json",
+        "sha256": "03e0ddce09499b8130532c1b7efb497eea609922ba675e4e9ca397dd7b63f955",
+        "bytes": 1103
+      },
+      {
+        "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/checkout-commit.json",
+        "sha256": "83afb2b6fdc43a063f955f2c2804c4460367307e3f1a5aab6d8c7c9799f22c85",
+        "bytes": 2558
+      }
+    ],
+    "gate_sources_unchanged_vs_b091": [
+      {
+        "path": ".github/workflows/platform-readiness.yml",
+        "decoded_source": {
+          "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/pinned-source/.github/workflows/platform-readiness.yml",
+          "sha256": "1f4872eae81b226ae68f5c28e64373796d3373cf00082c806e257ae35f0d8d04",
+          "bytes": 32318
+        },
+        "exact_b091_gate_source": true
+      },
+      {
+        "path": "scripts/ci/audit-dependencies.sh",
+        "decoded_source": {
+          "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/pinned-source/scripts/ci/audit-dependencies.sh",
+          "sha256": "ca1bf53da798371be8570f8494c478cbf86a2dcba6567c808c9589d8ac87b786",
+          "bytes": 1759
+        },
+        "exact_b091_gate_source": true
+      },
+      {
+        "path": "scripts/ci/verify-macos-native-renderer.sh",
+        "decoded_source": {
+          "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/pinned-source/scripts/ci/verify-macos-native-renderer.sh",
+          "sha256": "8e244e9266559c56c1e3562f8652146401f61adba26e64e06f310eea0143d9a4",
+          "bytes": 1434
+        },
+        "exact_b091_gate_source": true
+      },
+      {
+        "path": "diagnostics/metal-presentation/run-controls.py",
+        "decoded_source": {
+          "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/pinned-source/diagnostics/metal-presentation/run-controls.py",
+          "sha256": "d3cb056ddb7c7fce722d0e9a378dca348590841a9b38bb272cd0b66045de3682",
+          "bytes": 7309
+        },
+        "exact_b091_gate_source": true
+      },
+      {
+        "path": "scripts/verify_browser_matrix.py",
+        "decoded_source": {
+          "path": ".artifacts/2026-10-18-platform-40b24-terminal-audit/pinned-source/scripts/verify_browser_matrix.py",
+          "sha256": "f85b253d987c8720fc85eef6f662c76ef97761668a7fb764b009c3fcdeddbde4",
+          "bytes": 43263
+        },
+        "exact_b091_gate_source": true
+      }
+    ]
+  },
+  "Mac_native": {
+    "command": "bash scripts/ci/verify-macos-native-renderer.sh",
+    "exit_code": 1,
+    "GPU_completions": 44,
+    "drawable_callbacks": 42,
+    "positive_presentedTime": 0,
+    "required_positive_presentation": "FAILED",
+    "CPU_idle_submission_after1250ms": true,
+    "client_geometry": "720x460\u2192723x460; scale1",
+    "independent_controls": "mtk/layer/layer-transaction each exit1, submitted/completed/callbacks60, positive0, failures0, geometry1",
+    "lock": "UNKNOWN; locked_known0",
+    "display": "on_console/login_done1; online/active1 asleep0",
+    "hypervisor": 1,
+    "device": "Apple Paravirtual device",
+    "cause": "Not established; runner/provider/session investigation required. Independent controls do not convert Kael failure into pass.",
+    "independent_control_results": [
+      {
+        "mode": "mtk",
+        "exit_code": 1,
+        "submitted": 60,
+        "completed": 60,
+        "drawable_callbacks": 60,
+        "positive_presentedTime": 0,
+        "GPU_failures": 0,
+        "geometry_matches": true
+      },
+      {
+        "mode": "layer",
+        "exit_code": 1,
+        "submitted": 60,
+        "completed": 60,
+        "drawable_callbacks": 60,
+        "positive_presentedTime": 0,
+        "GPU_failures": 0,
+        "geometry_matches": true
+      },
+      {
+        "mode": "layer-transaction",
+        "exit_code": 1,
+        "submitted": 60,
+        "completed": 60,
+        "drawable_callbacks": 60,
+        "positive_presentedTime": 0,
+        "GPU_failures": 0,
+        "geometry_matches": true
+      }
+    ],
+    "scope": "GPU command completions and drawable callbacks are distinct from positive presentation and from renderer contract test counts. The required native gate remains FAILED."
+  },
+  "Mac_hardware_browser": {
+    "conclusion": "PASS_ACTUAL_TIMING_BUDGET_THIS_RUN",
+    "metrics": [
+      {
+        "viewport": {
+          "height": 800,
+          "width": 1280
+        },
+        "p95_ms": 50.5,
+        "p99_ms": 64.7,
+        "p95_limit_ms": 80,
+        "p99_limit_ms": 160,
+        "long_tasks": 0,
+        "materialize_p99_us": 1000,
+        "peak_mounted": 19,
+        "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple Paravirtual device, Unspecified Version)"
+      },
+      {
+        "viewport": {
+          "height": 720,
+          "width": 430
+        },
+        "p95_ms": 24.0,
+        "p99_ms": 27.6,
+        "p95_limit_ms": 80,
+        "p99_limit_ms": 160,
+        "long_tasks": 0,
+        "materialize_p99_us": 100,
+        "peak_mounted": 7,
+        "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple Paravirtual device, Unspecified Version)"
+      }
+    ],
+    "distinct_from_native_presentation": true,
+    "not_physical_display_or_framework_speedup_proof": true,
+    "comparison_qualification": "Pass in this one hosted cohort under unchanged 80/160 ms budgets; b091 failed. This establishes no repeatable or causal framework improvement, native drawable presentation, or physical display proof."
+  },
+  "browser_three_engine": [
+    {
+      "engine": "chromium",
+      "version": "151.0.7922.34",
+      "smoke_screens": 2,
+      "suite_screens": 2,
+      "frame_delivery": "passed",
+      "trusted_picker": "not-automated-requires-user-activation",
+      "timing_class": "software-fallback-liveness"
+    },
+    {
+      "engine": "firefox",
+      "version": "153.0",
+      "smoke_screens": 2,
+      "suite_screens": 2,
+      "frame_delivery": "passed",
+      "trusted_picker": "not-automated-requires-user-activation",
+      "timing_class": "software-fallback-liveness"
+    },
+    {
+      "engine": "webkit",
+      "version": "26.5",
+      "smoke_screens": 2,
+      "suite_screens": 2,
+      "frame_delivery": "automation-unavailable",
+      "trusted_picker": "not-automated-requires-user-activation",
+      "timing_class": "software-fallback-liveness"
+    }
+  ],
+  "Linux_audit": {
+    "command": "bash scripts/ci/audit-dependencies.sh; cargo audit -D warnings plus existing explicit ignores",
+    "exit_code": 1,
+    "advisories": [
+      {
+        "crate": "zbus_names",
+        "version": "4.3.4",
+        "id": "RUSTSEC-2026-0371",
+        "classification": "unmaintained denied warning"
+      },
+      {
+        "crate": "zvariant",
+        "version": "5.13.1",
+        "id": "RUSTSEC-2026-0370",
+        "classification": "unmaintained denied warning"
+      },
+      {
+        "crate": "zvariant_derive",
+        "version": "5.13.1",
+        "id": "RUSTSEC-2026-0372",
+        "classification": "unmaintained denied warning"
+      }
+    ],
+    "same_three_ids_as_b091": true,
+    "new_waiver": false
+  },
+  "Windows_scope": {
+    "windows2025": "Official job PASS includes full workspace compile/lint and native runtime/UIA/tree/text/WebView/generated app/MSI payload checks.",
+    "windows2022": "Official job PASS; full workspace compile/lint step SKIPPED by design, with native runtime/UIA/tree/text/WebView/generated app/MSI payload checks.",
+    "limits": "Software WARP and MSI build/admin extraction do not establish physical GPU, signing, installed-release acceptance or the separate preflight of 39 crates."
+  },
+  "Mac_workspace_scope": "Separate workspace, Blade, WKWebView, outline and native text steps pass; the required positive native drawable presentation gate and independent controls fail. No stronger all-platform result is inferred.",
+  "focused_GTK4_scope": "Focused Linux/GTK4 native accessibility job SKIPPED; successful Linux renderer/WebView job is separate scoped coverage.",
+  "cache_auxiliary": {
+    "step_conclusion": "success",
+    "error": "ENOENT optional target/tests/target during post-action cleanup; cache save continues",
+    "separate_from_required_gate_failure": true,
+    "pinned_action": "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+    "source_note": {
+      "path": ".artifacts/2026-10-18-rust-cache-pinned-source-note/note.json",
+      "sha256": "eb60476b1b3beaac4b3b28e10746d09bf8d5e8ea11a1cdb92643a09bcbd6af83",
+      "bytes": 2820
+    },
+    "source_refs": {
+      "path": ".artifacts/2026-10-18-rust-cache-pinned-source-note/source-refs.json",
+      "sha256": "7757c8b52bccbf2e049b1471dd78c1be11c929379bee9f754cf430499a74006b",
+      "bytes": 3679
+    },
+    "mechanism": "The special tests branch calls async cleanTargetDir on optional target and trybuild paths without await; synchronous try/catch does not catch Promise rejection from opendir. Detached cleanup is also not awaited before later saving.",
+    "repair_status": "Concrete dependency repair opportunity only. Validate a corrected upstream/fork pin; none is validated or proposed as ready here.",
+    "repository_workaround": "No evidence-backed mkdir/removal/disable-cache workaround is ready; no maintained change is made.",
+    "not_a_native_presentation_cause_claim": true
+  },
+  "comparison_to_b091": {
+    "prior_public_record": "2026-10-18-platform-b091-validation.json",
+    "prior_audit_validation": {
+      "path": ".artifacts/2026-10-18-platform-b091-independent-renderer-audit/validation.json",
+      "sha256": "6dda50cd325b32a357e5c77a86a045d58dfabc79f28f4198e820deac57ca24ef",
+      "bytes": 139352
+    },
+    "same_denied_advisory_ids": true,
+    "native": "Same unmet zero-positive pattern; prior counts were 29 completions, 28 callbacks and 0 positive timestamps, versus 44/42/0 here. The three independent controls also fail.",
+    "hardware_browser": "The previous separate 166.8/267.4 ms result failed its budget; both current viewports pass the unchanged 80/160 ms limits. No framework improvement or repeatability is established.",
+    "historical_reports_preserved": true
+  },
+  "boundaries": [
+    "Windows2025 full workspace compile/lint and runtime/WebView/UIA/MSI jobs pass; Windows2022 compile/lint step skipped by design, runtime/WebView/UIA/MSI pass. WARP/MSI extraction is not physical GPU/sign/install proof.",
+    "Linux renderer/WebView and browser jobs pass; focused GTK4 job skipped, not additional coverage.",
+    "Mac workspace/Blade/WKWebView/outline/native text steps pass; required drawable presentation remains failed.",
+    "Three-engine browser software-fallback timing is liveness only. WebKit captured-frame delivery remains automation-unavailable and trusted picker not automated.",
+    "No local Cargo/native/compiler/current maintained or Managed source capture, Git write, dispatch/rerun/cancel, approval bypass, benchmark comparison or adoption.",
+    "Actual checkout is the named PR merge tree, proven equal to 40b24 workflow head; this is not a current-HEAD or future-source assertion.",
+    "No R1\u2013R12 scope is closed, no denied advisory is waived, and no native positive-presentation requirement is reduced.",
+    "This publication projection did not audit benchmark captures, medians, RSS, app energy/power or framework ranking.",
+    "Browser software-fallback coverage is liveness; WebKit frame-delivery automation-unavailable and trusted picker not automated remain explicit."
+  ],
+  "limits": [
+    "Aggregate Platform readiness remains FAILURE.",
+    "Mac runner lock is UNKNOWN; online/awake/console flags and Apple Paravirtual device do not identify the presentation failure cause.",
+    "This summary adds no local runtime, source fix, platform waiver or causal presentation diagnosis.",
+    "This is historical hosted evidence at40b24; later font-source platform acceptance remains separate."
+  ],
+  "publication_draft": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-platform-40b24-publication-draft-v2/2026-10-18-platform-40b24-validation.json",
+    "sha256": "a601940cbb03149419c100fea721d97cf0e553de75f2d950f7a534a25beb32d5",
+    "bytes": 21974
+  }
+}

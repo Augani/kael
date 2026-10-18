@@ -31,7 +31,10 @@ use std::{
     fmt::{Debug, Display, Formatter},
     hash::{Hash, Hasher},
     ops::{Deref, DerefMut, Range},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 /// An opaque identifier for a specific font.
@@ -57,6 +60,7 @@ pub struct TextSystem {
     platform_text_system: Arc<dyn PlatformTextSystem>,
     global_line_layout_cache: Arc<GlobalLineLayoutCache>,
     font_ids_by_font: RwLock<FxHashMap<Font, Result<FontId>>>,
+    font_registration_generation: AtomicUsize,
     font_metrics: RwLock<FxHashMap<FontId, FontMetrics>>,
     raster_bounds: RwLock<FxHashMap<RenderGlyphParams, Bounds<DevicePixels>>>,
     wrapper_pool: Mutex<FxHashMap<FontIdWithSize, Vec<LineWrapper>>>,
@@ -72,6 +76,7 @@ impl TextSystem {
             font_metrics: RwLock::default(),
             raster_bounds: RwLock::default(),
             font_ids_by_font: RwLock::default(),
+            font_registration_generation: AtomicUsize::new(0),
             wrapper_pool: Mutex::default(),
             font_runs_pool: Mutex::default(),
             fallback_font_stack: smallvec![
@@ -103,8 +108,32 @@ impl TextSystem {
     }
 
     /// Add a font's data to the text system.
+    ///
+    /// Failed descriptor lookups are retried after this attempt, even when a
+    /// backend partially registers data before returning an error. Established
+    /// successful FontIds and caller-owned layouts are not invalidated.
     pub fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
+        struct RegistrationAttempt<'a>(&'a TextSystem);
+        impl Drop for RegistrationAttempt<'_> {
+            fn drop(&mut self) {
+                self.0.invalidate_failed_font_ids();
+            }
+        }
+        // No descriptor-cache lock is held across backend/application code.
+        // The guard also retires old misses if a partial attempt unwinds.
+        let _attempt = RegistrationAttempt(self);
         self.platform_text_system.add_fonts(fonts)
+    }
+
+    fn invalidate_failed_font_ids(&self) {
+        let mut cache = self.font_ids_by_font.write();
+        // All generation access is inside the descriptor cache's read/write
+        // lock. Saturation permanently disables negative admission; no wrap can
+        // make a pre-registration miss current again.
+        let generation = self.font_registration_generation.load(Ordering::Relaxed);
+        self.font_registration_generation
+            .store(generation.saturating_add(1), Ordering::Relaxed);
+        cache.retain(|_, result| result.is_ok());
     }
 
     /// Release the shared shaped-text cache and its bookkeeping storage.
@@ -125,20 +154,30 @@ impl TextSystem {
             }
         }
 
-        let font_id = self
-            .font_ids_by_font
-            .read()
-            .get(font)
-            .map(clone_font_id_result);
-        if let Some(font_id) = font_id {
-            font_id
-        } else {
-            let font_id = self.platform_text_system.font_id(font);
-            self.font_ids_by_font
-                .write()
-                .insert(font.clone(), clone_font_id_result(&font_id));
-            font_id
+        let generation = {
+            let cache = self.font_ids_by_font.read();
+            if let Some(font_id) = cache.get(font) {
+                return clone_font_id_result(font_id);
+            }
+            self.font_registration_generation.load(Ordering::Relaxed)
+        };
+        let font_id = self.platform_text_system.font_id(font);
+        // Formatting an application-supplied error can run user code. Do it
+        // before acquiring the descriptor-cache write lock. Cached errors are
+        // owned messages, not backend-owned error/destructor objects.
+        let cached = clone_font_id_result(&font_id);
+        let mut cache = self.font_ids_by_font.write();
+        if cached.is_ok()
+            || (generation != usize::MAX
+                && generation == self.font_registration_generation.load(Ordering::Relaxed))
+        {
+            // A concurrent successful resolution must never be replaced by an
+            // older error or a different speculative backend result.
+            if !cache.get(font).is_some_and(|result| result.is_ok()) {
+                cache.insert(font.clone(), cached);
+            }
         }
+        font_id
     }
 
     /// Get the Font for the Font Id.
@@ -1199,5 +1238,329 @@ pub(crate) fn font_name_with_fallbacks<'a>(name: &'a str, system: &'a str) -> &'
         ".KaelSans" | ".ZedSans" | "Zed Plex Sans" => "IBM Plex Sans",
         ".KaelMono" | ".ZedMono" | "Zed Plex Mono" => "Lilex",
         _ => name,
+    }
+}
+
+#[cfg(test)]
+mod shared_negative_font_cache_regressions {
+    use super::*;
+    use crate::{GlyphId, LineFragment, NoopTextSystem};
+    use std::{
+        sync::{
+            Weak,
+            atomic::{AtomicUsize, Ordering},
+            mpsc,
+        },
+        time::Duration,
+    };
+
+    const REQUESTED: &str = "KaelArrivalFixture";
+    const FALLBACK: FontId = FontId(1);
+    const ARRIVED: FontId = FontId(2);
+
+    #[derive(Default)]
+    struct ArrivalBackend {
+        available: std::sync::atomic::AtomicBool,
+        requested_calls: AtomicUsize,
+        other_calls: AtomicUsize,
+        registration_mode: AtomicUsize,
+        check_error_format_lock: std::sync::atomic::AtomicBool,
+        blocked_old_miss: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+        owner: Mutex<Weak<TextSystem>>,
+    }
+
+    impl ArrivalBackend {
+        fn assert_cache_unlocked(&self) {
+            if let Some(owner) = self.owner.lock().upgrade() {
+                assert!(
+                    owner.font_ids_by_font.try_write().is_some(),
+                    "backend callback holds descriptor cache lock"
+                );
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct MissingFamily(Weak<TextSystem>, bool);
+    impl std::fmt::Display for MissingFamily {
+        fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+            if let Some(owner) = self.0.upgrade().filter(|_| self.1) {
+                assert!(
+                    owner.font_ids_by_font.try_write().is_some(),
+                    "backend error formatting holds descriptor cache lock"
+                );
+            }
+            formatter.write_str("requested fixture family unavailable")
+        }
+    }
+    impl std::error::Error for MissingFamily {}
+
+    impl PlatformTextSystem for ArrivalBackend {
+        fn add_fonts(&self, _: Vec<Cow<'static, [u8]>>) -> Result<()> {
+            self.assert_cache_unlocked();
+            let mode = self.registration_mode.load(Ordering::SeqCst);
+            if mode == 2 {
+                return Err(anyhow!("registration rejected before mutation"));
+            }
+            self.available.store(true, Ordering::SeqCst);
+            if mode == 1 {
+                return Err(anyhow!("registration failed after partial mutation"));
+            }
+            assert_ne!(mode, 3, "registration unwound after partial mutation");
+            Ok(())
+        }
+        fn all_font_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn font_id(&self, descriptor: &Font) -> Result<FontId> {
+            self.assert_cache_unlocked();
+            if descriptor.family.as_ref() != REQUESTED {
+                self.other_calls.fetch_add(1, Ordering::SeqCst);
+                return Ok(FALLBACK);
+            }
+            self.requested_calls.fetch_add(1, Ordering::SeqCst);
+            if self.available.load(Ordering::SeqCst) {
+                return Ok(ARRIVED);
+            }
+            let blocked = self.blocked_old_miss.lock().take();
+            if let Some((started, release)) = blocked {
+                started.send(()).expect("old-miss observer disappeared");
+                release
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("old miss was not released");
+            }
+            Err(MissingFamily(
+                self.owner.lock().clone(),
+                self.check_error_format_lock.load(Ordering::SeqCst),
+            )
+            .into())
+        }
+        fn font_metrics(&self, id: FontId) -> FontMetrics {
+            NoopTextSystem.font_metrics(id)
+        }
+        fn typographic_bounds(&self, id: FontId, glyph: GlyphId) -> Result<Bounds<f32>> {
+            NoopTextSystem.typographic_bounds(id, glyph)
+        }
+        fn advance(&self, id: FontId, glyph: GlyphId) -> Result<Size<f32>> {
+            NoopTextSystem.advance(id, glyph)
+        }
+        fn glyph_for_char(&self, id: FontId, character: char) -> Option<GlyphId> {
+            NoopTextSystem.glyph_for_char(id, character)
+        }
+        fn glyph_raster_bounds(&self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
+            NoopTextSystem.glyph_raster_bounds(params)
+        }
+        fn rasterize_glyph(
+            &self,
+            params: &RenderGlyphParams,
+            bounds: Bounds<DevicePixels>,
+        ) -> Result<(Size<DevicePixels>, Vec<u8>)> {
+            NoopTextSystem.rasterize_glyph(params, bounds)
+        }
+        fn layout_line(&self, text: &str, size: Pixels, runs: &[FontRun]) -> LineLayout {
+            NoopTextSystem.layout_line(text, size, runs)
+        }
+    }
+
+    fn fixture() -> (Arc<TextSystem>, Arc<ArrivalBackend>) {
+        let backend = Arc::new(ArrivalBackend::default());
+        let text = Arc::new(TextSystem::new(backend.clone()));
+        *backend.owner.lock() = Arc::downgrade(&text);
+        (text, backend)
+    }
+
+    fn registration_input() -> Vec<Cow<'static, [u8]>> {
+        // Control token consumed only by this fake backend, never by a native
+        // decoder. This is not a real-font/OS integration acceptance fixture.
+        vec![Cow::Borrowed(&b"arrival-control-token"[..])]
+    }
+
+    fn run(font: Font) -> TextRun {
+        TextRun {
+            len: 4,
+            font,
+            color: crate::black(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }
+    }
+
+    #[test]
+    fn previously_missing_family_resolves_after_successful_registration() {
+        let (text, backend) = fixture();
+        let requested = font(REQUESTED);
+        assert_eq!(text.resolve_font(&requested), FALLBACK);
+        assert_eq!(text.resolve_font(&requested), FALLBACK);
+        assert_eq!(backend.requested_calls.load(Ordering::SeqCst), 1);
+        text.add_fonts(registration_input()).unwrap();
+        assert_eq!(text.resolve_font(&requested), ARRIVED);
+        assert_eq!(backend.requested_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(text.resolve_font(&requested), ARRIVED);
+        assert_eq!(backend.requested_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn registration_preserves_successful_ids_and_live_cached_layouts() {
+        let (text, backend) = fixture();
+        let stable = font("AlreadyEstablished");
+        assert_eq!(text.resolve_font(&stable), FALLBACK);
+        let window_text = WindowTextSystem::new(text.clone());
+        let runs = [run(stable.clone())];
+        let old = window_text.layout_line("hold", px(16.), &runs, None);
+        let old_width = old.width;
+        let old_len = old.len;
+        let mut held = text.line_wrapper(stable.clone(), px(16.));
+        assert_eq!(
+            held.wrap_line(&[LineFragment::text("hold")], px(10000.))
+                .count(),
+            0
+        );
+        assert_eq!(text.resolve_font(&font(REQUESTED)), FALLBACK);
+        let calls = backend.other_calls.load(Ordering::SeqCst);
+        text.add_fonts(registration_input()).unwrap();
+        assert_eq!(text.resolve_font(&stable), FALLBACK);
+        assert_eq!(backend.other_calls.load(Ordering::SeqCst), calls);
+        assert_eq!(text.resolve_font(&font(REQUESTED)), ARRIVED);
+        let again = window_text.layout_line("hold", px(16.), &runs, None);
+        assert!(
+            Arc::ptr_eq(&old, &again),
+            "established shaped layout was invalidated"
+        );
+        assert_eq!(old.width, old_width);
+        assert_eq!(old.len, old_len);
+        assert!(text.get_font_for_id(FALLBACK).is_some());
+        assert_eq!(text.get_font_for_id(ARRIVED), Some(font(REQUESTED)));
+        assert_eq!(
+            held.wrap_line(&[LineFragment::text("hold")], px(10000.))
+                .count(),
+            0
+        );
+        drop(held);
+    }
+
+    #[test]
+    fn partial_registration_error_still_retries_prior_missing_family() {
+        let (text, backend) = fixture();
+        assert_eq!(text.resolve_font(&font(REQUESTED)), FALLBACK);
+        backend.registration_mode.store(1, Ordering::SeqCst);
+        assert!(
+            text.add_fonts(registration_input())
+                .unwrap_err()
+                .to_string()
+                .contains("partial mutation")
+        );
+        assert_eq!(text.resolve_font(&font(REQUESTED)), ARRIVED);
+        assert_eq!(backend.requested_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn failed_registration_without_mutation_allows_one_retry_then_negative_cache() {
+        let (text, backend) = fixture();
+        assert_eq!(text.resolve_font(&font(REQUESTED)), FALLBACK);
+        backend.registration_mode.store(2, Ordering::SeqCst);
+        assert!(text.add_fonts(registration_input()).is_err());
+        assert_eq!(text.resolve_font(&font(REQUESTED)), FALLBACK);
+        assert_eq!(backend.requested_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(text.resolve_font(&font(REQUESTED)), FALLBACK);
+        assert_eq!(backend.requested_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    struct OldMiss {
+        release: Option<mpsc::Sender<()>>,
+        worker: Option<std::thread::JoinHandle<Result<FontId>>>,
+    }
+    #[cfg(not(target_family = "wasm"))]
+    impl OldMiss {
+        fn finish(mut self) -> Result<FontId> {
+            self.release.take().unwrap().send(()).unwrap();
+            self.worker.take().unwrap().join().unwrap()
+        }
+    }
+    #[cfg(not(target_family = "wasm"))]
+    impl Drop for OldMiss {
+        fn drop(&mut self) {
+            if let Some(release) = self.release.take() {
+                let _ = release.send(());
+            }
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn in_flight_old_error_cannot_poison_successful_registration() {
+        let (text, backend) = fixture();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *backend.blocked_old_miss.lock() = Some((started_tx, release_rx));
+        let worker_text = text.clone();
+        let pending = OldMiss {
+            release: Some(release_tx),
+            worker: Some(std::thread::spawn(move || {
+                worker_text.font_id(&font(REQUESTED))
+            })),
+        };
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        text.add_fonts(registration_input()).unwrap();
+        assert!(
+            pending.finish().is_err(),
+            "the pre-registration lookup should keep its observed error"
+        );
+        assert_eq!(text.resolve_font(&font(REQUESTED)), ARRIVED);
+        assert_eq!(backend.requested_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn generation_exhaustion_disables_negative_admission_not_successes() {
+        let (text, backend) = fixture();
+        {
+            let _cache = text.font_ids_by_font.write();
+            text.font_registration_generation
+                .store(usize::MAX - 1, Ordering::Relaxed);
+        }
+        assert_eq!(text.resolve_font(&font(REQUESTED)), FALLBACK);
+        backend.registration_mode.store(2, Ordering::SeqCst);
+        assert!(text.add_fonts(registration_input()).is_err());
+        assert_eq!(
+            text.font_registration_generation.load(Ordering::Relaxed),
+            usize::MAX
+        );
+        for _ in 0..2 {
+            assert_eq!(text.resolve_font(&font(REQUESTED)), FALLBACK);
+        }
+        assert_eq!(backend.requested_calls.load(Ordering::SeqCst), 3);
+        backend.registration_mode.store(0, Ordering::SeqCst);
+        text.add_fonts(registration_input()).unwrap();
+        assert_eq!(text.resolve_font(&font(REQUESTED)), ARRIVED);
+        assert_eq!(text.resolve_font(&font(REQUESTED)), ARRIVED);
+        assert_eq!(backend.requested_calls.load(Ordering::SeqCst), 4);
+    }
+
+    #[cfg(panic = "unwind")]
+    #[test]
+    fn unwinding_partial_registration_invalidates_negative_cache() {
+        let (text, backend) = fixture();
+        assert_eq!(text.resolve_font(&font(REQUESTED)), FALLBACK);
+        backend.registration_mode.store(3, Ordering::SeqCst);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            text.add_fonts(registration_input())
+        }));
+        assert!(result.is_err());
+        assert_eq!(text.resolve_font(&font(REQUESTED)), ARRIVED);
+    }
+
+    #[test]
+    fn backend_callbacks_and_error_formatting_run_without_descriptor_lock() {
+        let (text, backend) = fixture();
+        backend
+            .check_error_format_lock
+            .store(true, Ordering::SeqCst);
+        assert!(text.font_id(&font(REQUESTED)).is_err());
+        text.add_fonts(registration_input()).unwrap();
+        assert_eq!(text.font_id(&font(REQUESTED)).unwrap(), ARRIVED);
     }
 }

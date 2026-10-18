@@ -21,7 +21,7 @@ Its published claims are comparison inputs; superiority requires matched runs.
 | R9 | Reusable virtual filesystem explorer with cached sort keys, lazy async loading, context actions and drag/drop | Visible explorer example and UI-driven tests; bounded model/cache/pending state, generations/cancellation and stale-response tests | Actual native keyboard move/reload and fresh pointer readme-to-Archive move pass; disk oracle verifies source removal and destination bytes. Fresh complete glyph pixels and hidden-file toggle pass |
 | R10 | Persistent movable docking/tab groups, nested splits, floating panes and structured property inspectors | Runnable workspace; pointer/keyboard rearrangement, float/redock, persistence restore and editing/undo tests | Fresh integrated native pointer tab/edge split movement, float/move/resize/redock, keyboard edge docking, floating/nested save/reset/restore, Unicode inspector Undo/Redo and live preview pixels pass |
 | R11 | Rich document and remote-data workflows build on current editors/grids | Real documents exercise selection, IME, undo/redo; remote-data editing/clipboard/frozen-pane/accessibility tests and sustained workloads | Actual native formatting/Undo, Unicode remote edit/sort identity, atomic 2×2 TSV paste/Undo/Redo, frozen-row vertical scrolling and populated pixels pass. Native horizontal keyboard reveal/frozen-column pixels also pass; physical input-source IME, nonzero horizontal wheel delivery and sustained performance remain |
-| R12 | Consumer docs, examples, capability truth and platform CI cover the finished APIs | Native/browser consumer builds, working examples, strict lints/docs, CI evidence and no outdated roadmap claims for implemented features | The [fresh 39-package checkpoint](2026-10-18-image-grid-package-validation.json) binds committed ce39eed source and all 931 included Rust files; all 39 extracted builds and independent archive audit pass. The image/Grid source has separate local Metal proof. The [b091 platform cohort](2026-10-18-platform-b091-validation.json) remains failed overall: scoped Windows 2022/2025, Linux runtime and browser jobs pass, but hosted native Mac presentation, separate hardware-browser timing budgets and three denied dependency advisories fail. The Mac PR merge checkout shares the b091 Git tree; later-source platform execution, native delivery/IME, hardware coverage and physical workflows remain open |
+| R12 | Consumer docs, examples, capability truth and platform CI cover the finished APIs | Native/browser consumer builds, working examples, strict lints/docs, CI evidence and no outdated roadmap claims for implemented features | The [fresh 39-package checkpoint](2026-10-18-image-grid-package-validation.json) binds committed ce39eed source and all 931 included Rust files; all 39 extracted builds and independent archive audit pass. The image/Grid source has separate local Metal proof. The [40b24 platform cohort](2026-10-18-platform-40b24-validation.json) remains failed overall: scoped Windows 2022/2025, Linux runtime and browser jobs pass; native Mac presentation and three denied dependency advisories fail. The separate hardware-browser budget passes this run, with no attributed improvement. Its actual merge checkout shares the 40b24 tree. The [font-arrival fix](2026-10-18-font-arrival-validation.json) has complete Core/UI and native CoreText correctness proof; later font-source packaging/platform execution, native delivery/IME, hardware coverage and physical workflows remain open |
 
 The shader design's later built-in-blur migration is a separate architecture
 effort; it must not remove the existing visual correctness tests. Any scope
@@ -484,3 +484,23 @@ fields, so all 400 phase capability/delta summaries remain unknown/null. The
 hardware capability. Cached dependency provenance, unequal operation totals and
 the separate failed platform run remain explicit. Later label-source execution,
 controlled power and every R1–R12 acceptance scope remain open as recorded above.
+
+The [40b24 platform cohort](2026-10-18-platform-40b24-validation.json) remains
+failed overall. Its actual PR merge has the exact workflow-head tree. Windows,
+Linux renderer and browser jobs pass within their recorded scopes; the focused
+GTK4 job and Windows 2022 workspace compile/lint were skipped. Mac records 44 GPU
+completions, 42 drawable callbacks and zero positive timestamps; three independent
+Apple controls each record 60 callbacks and zero positive timestamps. Linux still
+denies the same three dependency advisories. The separate Metal-backed browser
+budget passes at both viewports this run under unchanged limits; no repeatable
+improvement or cause is established. Later font-source platform acceptance remains
+separate.
+
+The [shared font-arrival fix](2026-10-18-font-arrival-validation.json) is adopted.
+A real CoreText fixture reproduces a successfully registered font remaining stuck
+on fallback, then passes with the fix while established IDs, cached layouts and
+held wrappers remain valid. Eight shared regressions, all 2,260 enabled Core tests
+and 568 UI tests, strict Core/UI lints, production/test Wasm typechecks and
+formatting pass. Three fixture files are present in the package listing; extracted
+archive builds remain separate. Platform-specific font caches, browser held-width
+revisions, native presentation and comparative performance remain open.

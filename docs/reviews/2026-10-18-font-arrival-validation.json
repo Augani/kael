@@ -1,0 +1,686 @@
+{
+  "recorded_at_utc": "2026-10-18T11:33:35.054384+00:00",
+  "status": "ADOPTED_EXACT_SHARED_FONT_CACHE_FIX_AND_MACOS_ARRIVAL_REGRESSION_VALIDATED",
+  "problem": "Shared failed descriptor lookups outlive later font registration and keep resolving the fallback.",
+  "change": "Retire only failed descriptor-cache entries after every registration attempt; use a saturating generation to prevent stale in-flight errors from re-entering. Keep successful IDs, shaped layouts and live wrappers valid. Backend callbacks and error formatting run outside the descriptor-cache lock.",
+  "source": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-arrival-formatted-v2/preparation.json",
+    "sha256": "b54fa1b5ef241454ebce39e69e27f26b171c838fea93c940992510433796bcf8",
+    "bytes": 3911
+  },
+  "independent_actual_review": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-actual-independent-memory-audit/review.json",
+    "sha256": "34d352699179f19d5974d3735b186aadce7a18089644d317066cfd4393dee2bc",
+    "bytes": 36237
+  },
+  "actual_native_validation": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/result.json",
+    "sha256": "012751d9ff634d5cf3468013200aeffccd25c8fd4dcd8a76ec6f911b210be3dc",
+    "bytes": 7831005
+  },
+  "shared_mechanism_validation": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-shared-font-first-native-validation/result.json",
+    "sha256": "8c4e5e6d31cd55b75f308cbe6f56279e98c0399d46feb80b1c6b805133e7b498",
+    "bytes": 3563524
+  },
+  "shared_mechanism_peer": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-shared-font-first-actual-independent-services-review/review.json",
+    "sha256": "2aa2a225a6081139acc5bb3b84849caaaf4d2edeb7509777a8742191a83996ba",
+    "bytes": 1943
+  },
+  "baseline_native_witness": {
+    "unique_family": "Kael Font Arrival 40d692fc",
+    "postscript": "KaelFontArrival40d692fc-Regular",
+    "fallback_id": 0,
+    "direct_native_arrived_id": 6,
+    "shared_after_registration_id": 0,
+    "native_glyph_runs": 1,
+    "exit_code": 101,
+    "assertion": "shared lookup retained fallback after actual native fixture registration"
+  },
+  "candidate_native_witness": {
+    "fallback_id": 0,
+    "direct_native_arrived_id": 6,
+    "shared_after_registration_id": 6,
+    "native_glyph_runs": 1,
+    "exit_code": 0,
+    "old_ids_cached_layouts_and_held_wrapper_preserved": true
+  },
+  "binaries": {
+    "baseline": {
+      "binary": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/baseline-tests",
+        "sha256": "bf274619f42c8722b901c103d6f21a0c959e52ecba84942e9ba0a15667e03f24",
+        "bytes": 171000024
+      },
+      "artifact": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///Users/augustusotu/.codex/worktrees/animation-working-proof/kael/crates/kael#0.4.1",
+        "manifest_path": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael/crates/kael/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "kael",
+          "src_path": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael/crates/kael/src/kael.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [
+          "backtrace",
+          "font-kit",
+          "icons",
+          "leak-detection",
+          "lottie",
+          "rand",
+          "test-support"
+        ],
+        "filenames": [
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-control-identity-baseline/target/debug/deps/kael-b2a2d9593f2031cb"
+        ],
+        "executable": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-control-identity-baseline/target/debug/deps/kael-b2a2d9593f2031cb",
+        "fresh": false
+      },
+      "inventory_count": 2261
+    },
+    "candidate": {
+      "binary": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/candidate-tests",
+        "sha256": "d0e073902dbacbdcc5df09cab6b3b3a4acc4ed9c98b37cdc10257bedf703f279",
+        "bytes": 171003576
+      },
+      "artifact": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///Users/augustusotu/.codex/worktrees/animation-working-proof/kael/crates/kael#0.4.1",
+        "manifest_path": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael/crates/kael/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "kael",
+          "src_path": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael/crates/kael/src/kael.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [
+          "backtrace",
+          "font-kit",
+          "icons",
+          "leak-detection",
+          "lottie",
+          "rand",
+          "test-support"
+        ],
+        "filenames": [
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-control-identity-baseline/target/debug/deps/kael-b2a2d9593f2031cb"
+        ],
+        "executable": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-control-identity-baseline/target/debug/deps/kael-b2a2d9593f2031cb",
+        "fresh": false
+      },
+      "inventory_count": 2262
+    },
+    "candidate-ui": {
+      "binary": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/candidate-ui-tests",
+        "sha256": "1975d3c1988a098b24d22405085fbb4f56e40ce9336ea8bc7fda7d74488a15e5",
+        "bytes": 137734712
+      },
+      "artifact": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///Users/augustusotu/.codex/worktrees/animation-working-proof/kael/crates/kael_ui#0.4.1",
+        "manifest_path": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael/crates/kael_ui/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "kael_ui",
+          "src_path": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael/crates/kael_ui/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [
+          "default",
+          "editor",
+          "http",
+          "native"
+        ],
+        "filenames": [
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-control-identity-baseline/target/debug/deps/kael_ui-c8d667a3c6e7853c"
+        ],
+        "executable": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-control-identity-baseline/target/debug/deps/kael_ui-c8d667a3c6e7853c",
+        "fresh": false
+      },
+      "inventory_count": 568
+    }
+  },
+  "native_core": {
+    "passed": 2260,
+    "ignored": [
+      "platform::mac::display_link::tests::native_retained_display_link_probe",
+      "platform::mac::text_system::tests::native_sized_font_shaping_diagnostic"
+    ],
+    "failed": 0,
+    "filtered": 0,
+    "default_parallel": true,
+    "RUST_TEST_THREADS": null,
+    "command": {
+      "argv": [
+        "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/candidate-tests",
+        "--show-output"
+      ],
+      "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+      "timed_out": false,
+      "interrupted": null,
+      "source_restoration_safe": true,
+      "owned_pid_and_pgid": 29601,
+      "normal_owned_group_states_before_reap": [
+        {
+          "pid": 29601,
+          "pgid": 29601,
+          "state": "Z"
+        }
+      ],
+      "normal_owned_group_zombie_only_verified_before_reap": true,
+      "exit_code": 0,
+      "seconds_diagnostic_only": 4.918269157409668,
+      "stdout": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/candidate-core-full/stdout",
+        "sha256": "3be1edd1765422154806383621e894cb3433457deca8996810ccde6020547644",
+        "bytes": 371935
+      },
+      "stderr": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/candidate-core-full/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    }
+  },
+  "native_UI": {
+    "passed": 568,
+    "ignored": [],
+    "failed": 0,
+    "filtered": 0,
+    "default_parallel": true,
+    "RUST_TEST_THREADS": null,
+    "command": {
+      "argv": [
+        "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/candidate-ui-tests",
+        "--show-output"
+      ],
+      "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+      "timed_out": false,
+      "interrupted": null,
+      "source_restoration_safe": true,
+      "owned_pid_and_pgid": 30664,
+      "normal_owned_group_states_before_reap": [
+        {
+          "pid": 30664,
+          "pgid": 30664,
+          "state": "Z"
+        }
+      ],
+      "normal_owned_group_zombie_only_verified_before_reap": true,
+      "exit_code": 0,
+      "seconds_diagnostic_only": 16.50848698616028,
+      "stdout": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/candidate-ui-full/stdout",
+        "sha256": "8ec2a68642757634afe9174c811240e03dc56ed31781863bde080b4e72c2d493",
+        "bytes": 108611
+      },
+      "stderr": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/candidate-ui-full/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    }
+  },
+  "exact_shared_candidate_tests": [
+    "text_system::shared_negative_font_cache_regressions::previously_missing_family_resolves_after_successful_registration",
+    "text_system::shared_negative_font_cache_regressions::registration_preserves_successful_ids_and_live_cached_layouts",
+    "text_system::shared_negative_font_cache_regressions::partial_registration_error_still_retries_prior_missing_family",
+    "text_system::shared_negative_font_cache_regressions::failed_registration_without_mutation_allows_one_retry_then_negative_cache",
+    "text_system::shared_negative_font_cache_regressions::in_flight_old_error_cannot_poison_successful_registration",
+    "text_system::shared_negative_font_cache_regressions::generation_exhaustion_disables_negative_admission_not_successes",
+    "text_system::shared_negative_font_cache_regressions::unwinding_partial_registration_invalidates_negative_cache",
+    "text_system::shared_negative_font_cache_regressions::backend_callbacks_and_error_formatting_run_without_descriptor_lock"
+  ],
+  "compiler_checks": [
+    {
+      "label": "strict-core-alltargets",
+      "scope": "STRICT_CLIPPY_ALLTARGETS",
+      "command": {
+        "argv": [
+          "/Users/augustusotu/.cargo/bin/cargo",
+          "clippy",
+          "--locked",
+          "--offline",
+          "-p",
+          "kael",
+          "--all-targets",
+          "--no-default-features",
+          "--features",
+          "font-kit,test-support,lottie,icons",
+          "--message-format=json",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "owned_pid_and_pgid": 30701,
+        "normal_owned_group_states_before_reap": [
+          {
+            "pid": 30701,
+            "pgid": 30701,
+            "state": "Z"
+          }
+        ],
+        "normal_owned_group_zombie_only_verified_before_reap": true,
+        "exit_code": 0,
+        "seconds_diagnostic_only": 24.7575421333313,
+        "stdout": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/strict-core-alltargets/stdout",
+          "sha256": "d8459fd9a9abfde71ac870482ce9385b58f919da39f67120af2e28554c9a390f",
+          "bytes": 526757
+        },
+        "stderr": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/strict-core-alltargets/stderr",
+          "sha256": "9aa9c9f8853526dcdfa84a1ad4f511e75a37ad3f3eda1fa541fa26ce8e992d59",
+          "bytes": 420
+        }
+      }
+    },
+    {
+      "label": "strict-ui-alltargets",
+      "scope": "STRICT_CLIPPY_ALLTARGETS",
+      "command": {
+        "argv": [
+          "/Users/augustusotu/.cargo/bin/cargo",
+          "clippy",
+          "--locked",
+          "--offline",
+          "-p",
+          "kael_ui",
+          "--all-targets",
+          "--features",
+          "kael/lottie,kael/test-support",
+          "--message-format=json",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "owned_pid_and_pgid": 30774,
+        "normal_owned_group_states_before_reap": [
+          {
+            "pid": 30774,
+            "pgid": 30774,
+            "state": "Z"
+          }
+        ],
+        "normal_owned_group_zombie_only_verified_before_reap": true,
+        "exit_code": 0,
+        "seconds_diagnostic_only": 25.314612865447998,
+        "stdout": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/strict-ui-alltargets/stdout",
+          "sha256": "70262fb694b1c7fbef066cb2c55003974f4ac44f283da1373fce6c437ce1eb4f",
+          "bytes": 549409
+        },
+        "stderr": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/strict-ui-alltargets/stderr",
+          "sha256": "72bca8afe73f8bcc1e7c0d7a52acba6e043f277fb8cfa59a90a959080e3fcf0e",
+          "bytes": 530
+        }
+      }
+    },
+    {
+      "label": "wasm-core-production",
+      "scope": "TYPECHECK_ONLY",
+      "command": {
+        "argv": [
+          "/Users/augustusotu/.cargo/bin/cargo",
+          "check",
+          "--locked",
+          "--offline",
+          "-p",
+          "kael",
+          "--lib",
+          "--target",
+          "wasm32-unknown-unknown",
+          "--no-default-features",
+          "--features",
+          "browser,lottie",
+          "--message-format=json"
+        ],
+        "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "owned_pid_and_pgid": 30825,
+        "normal_owned_group_states_before_reap": [
+          {
+            "pid": 30825,
+            "pgid": 30825,
+            "state": "Z"
+          }
+        ],
+        "normal_owned_group_zombie_only_verified_before_reap": true,
+        "exit_code": 0,
+        "seconds_diagnostic_only": 11.02648115158081,
+        "stdout": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/wasm-core-production/stdout",
+          "sha256": "fb3fe6640fe8498c48961b450e618546da6dc345af20fd880ad0fac675eabbce",
+          "bytes": 397107
+        },
+        "stderr": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/wasm-core-production/stderr",
+          "sha256": "1f3df516136ab8c92c0a80f4140c39d392af4873de7638d2f89bf8f72f2263fa",
+          "bytes": 177
+        }
+      }
+    },
+    {
+      "label": "wasm-ui-production",
+      "scope": "TYPECHECK_ONLY",
+      "command": {
+        "argv": [
+          "/Users/augustusotu/.cargo/bin/cargo",
+          "check",
+          "--locked",
+          "--offline",
+          "-p",
+          "kael_ui",
+          "--lib",
+          "--target",
+          "wasm32-unknown-unknown",
+          "--no-default-features",
+          "--features",
+          "browser,kael/lottie",
+          "--message-format=json"
+        ],
+        "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "owned_pid_and_pgid": 30860,
+        "normal_owned_group_states_before_reap": [
+          {
+            "pid": 30860,
+            "pgid": 30860,
+            "state": "Z"
+          }
+        ],
+        "normal_owned_group_zombie_only_verified_before_reap": true,
+        "exit_code": 0,
+        "seconds_diagnostic_only": 9.618387937545776,
+        "stdout": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/wasm-ui-production/stdout",
+          "sha256": "7a8bde625f5b7f402e0da3b6b97712c785f2582c45e39f8d4e0819c954cb7520",
+          "bytes": 403114
+        },
+        "stderr": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/wasm-ui-production/stderr",
+          "sha256": "b9469cad8db00cbd9e6b41c28502ed66be5fe825237d3ed3b2cbf72c1f5501b7",
+          "bytes": 286
+        }
+      }
+    },
+    {
+      "label": "wasm-joint-tests",
+      "scope": "TYPECHECK_ONLY",
+      "command": {
+        "argv": [
+          "/Users/augustusotu/.cargo/bin/cargo",
+          "check",
+          "--locked",
+          "--offline",
+          "-p",
+          "kael",
+          "-p",
+          "kael_ui",
+          "--tests",
+          "--target",
+          "wasm32-unknown-unknown",
+          "--no-default-features",
+          "--features",
+          "kael/browser,kael/test-support,kael/lottie,kael_ui/browser",
+          "--message-format=json"
+        ],
+        "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "owned_pid_and_pgid": 30876,
+        "normal_owned_group_states_before_reap": [
+          {
+            "pid": 30876,
+            "pgid": 30876,
+            "state": "Z"
+          }
+        ],
+        "normal_owned_group_zombie_only_verified_before_reap": true,
+        "exit_code": 0,
+        "seconds_diagnostic_only": 25.893107891082764,
+        "stdout": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/wasm-joint-tests/stdout",
+          "sha256": "3407b820bae9ef2abb8e62ccbc83931a51ff44ae8bb5131849f57a1b142755ef",
+          "bytes": 454981
+        },
+        "stderr": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/wasm-joint-tests/stderr",
+          "sha256": "1b3e3896b08efb661d2146ed38c9606b5d7cdf2b41e56dd6584fee54f7e2c24b",
+          "bytes": 287
+        }
+      }
+    }
+  ],
+  "format_and_package_list": [
+    {
+      "argv": [
+        "/Users/augustusotu/.cargo/bin/cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+      "timed_out": false,
+      "interrupted": null,
+      "source_restoration_safe": true,
+      "owned_pid_and_pgid": 30922,
+      "normal_owned_group_states_before_reap": [
+        {
+          "pid": 30922,
+          "pgid": 30922,
+          "state": "Z"
+        }
+      ],
+      "normal_owned_group_zombie_only_verified_before_reap": true,
+      "exit_code": 0,
+      "seconds_diagnostic_only": 35.78681302070618,
+      "stdout": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/format-all/stdout",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      },
+      "stderr": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/format-all/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    },
+    {
+      "argv": [
+        "/Users/augustusotu/.cargo/bin/cargo",
+        "package",
+        "--locked",
+        "--offline",
+        "-p",
+        "kael",
+        "--list",
+        "--allow-dirty"
+      ],
+      "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+      "timed_out": false,
+      "interrupted": null,
+      "source_restoration_safe": true,
+      "owned_pid_and_pgid": 30955,
+      "normal_owned_group_states_before_reap": [
+        {
+          "pid": 30955,
+          "pgid": 30955,
+          "state": "Z"
+        }
+      ],
+      "normal_owned_group_zombie_only_verified_before_reap": true,
+      "exit_code": 0,
+      "seconds_diagnostic_only": 0.35732197761535645,
+      "stdout": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/package-core-list-only/stdout",
+        "sha256": "2a7fda34d3d2540f1c27fae7e519ff452440e89d266344734c7b36e2ed408760",
+        "bytes": 10136
+      },
+      "stderr": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/package-core-list-only/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    }
+  ],
+  "package_listing_only": {
+    "listed_fixture_paths": [
+      "tests/fixtures/font-arrival/KaelFontArrival-Regular.ttf",
+      "tests/fixtures/font-arrival/OFL.txt",
+      "tests/fixtures/font-arrival/README.md"
+    ],
+    "archive_created_or_verified": false,
+    "command": {
+      "argv": [
+        "/Users/augustusotu/.cargo/bin/cargo",
+        "package",
+        "--locked",
+        "--offline",
+        "-p",
+        "kael",
+        "--list",
+        "--allow-dirty"
+      ],
+      "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+      "timed_out": false,
+      "interrupted": null,
+      "source_restoration_safe": true,
+      "owned_pid_and_pgid": 30955,
+      "normal_owned_group_states_before_reap": [
+        {
+          "pid": 30955,
+          "pgid": 30955,
+          "state": "Z"
+        }
+      ],
+      "normal_owned_group_zombie_only_verified_before_reap": true,
+      "exit_code": 0,
+      "seconds_diagnostic_only": 0.35732197761535645,
+      "stdout": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/package-core-list-only/stdout",
+        "sha256": "2a7fda34d3d2540f1c27fae7e519ff452440e89d266344734c7b36e2ed408760",
+        "bytes": 10136
+      },
+      "stderr": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-direct-coretext-font-native-validation/package-core-list-only/stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      }
+    }
+  },
+  "all_25_owned_groups_quiescent": true,
+  "source_restoration": {
+    "both_byte_mode_maps_restored_at_current_mtimes": true,
+    "eligible_count": 3177,
+    "fingerprints": {
+      "primary": "e4989ffebc54f1c05a15c7ce8048d1fdaf7bea4ccf98000e353dad007be1ce63",
+      "managed": "e4989ffebc54f1c05a15c7ce8048d1fdaf7bea4ccf98000e353dad007be1ce63"
+    },
+    "heads": "Primary40b24b0 and Managed d766b5d differ; equal source bytes/modes are not equal Git provenance."
+  },
+  "scope": [
+    "Real-font runtime evidence is macOS CoreText. Controllable shared backend tests also cover partial errors, unwinding, stale in-flight errors and generation saturation.",
+    "The shared fix does not repair platform-specific negative-family caches or successful fallback mappings on other backends, browser held-width revisions, or system font discovery notifications.",
+    "Production Core/UI and joint tests typecheck on wasm32; no browser runtime is claimed for this candidate.",
+    "Fixture is a uniquely renamed bundled Inter Regular derivative with original OFL license and source/checksum recipe; no OS font installation.",
+    "Package --list verifies all three fixture files are included. It does not compile extracted package archives.",
+    "No comparative CPU/RSS, native window/presentation, power, global memory-policy or overall framework-ranking claim."
+  ],
+  "publication_review": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-font-arrival-publication-independent-memory-review/review.json",
+    "sha256": "917ff9f0a2a2a78b7e8f5b9e458d7bbb5edcc7379a65cf56e4ed0a6b9fd93929",
+    "bytes": 3314
+  },
+  "adoption": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-font-arrival-root-adoption-v1/result.json",
+    "sha256": "5d1eb9e2d4fd549fff39fb38ce5af26df9a4c46e6c8e6b9b5ab81d33c0e16589",
+    "bytes": 3158140
+  },
+  "adopted_five_payloads": {
+    "crates/kael/src/platform/mac/text_system.rs": {
+      "sha256": "c583c7499cb5684fe66fcc4e5edcca4c93acc9d4dd8fa977fc31a9594efe9737",
+      "bytes": 78212
+    },
+    "crates/kael/src/text_system.rs": {
+      "sha256": "83578dfd42106a57b84851b816f5a30946f99feee648a12cd92e58db96c40a8a",
+      "bytes": 55577
+    },
+    "crates/kael/tests/fixtures/font-arrival/KaelFontArrival-Regular.ttf": {
+      "sha256": "a6b70d35f97f82b36afbc4ec383cee6819e7d4cccf9b83a50d64839c97d87746",
+      "bytes": 411788
+    },
+    "crates/kael/tests/fixtures/font-arrival/OFL.txt": {
+      "sha256": "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a",
+      "bytes": 4380
+    },
+    "crates/kael/tests/fixtures/font-arrival/README.md": {
+      "sha256": "b6760634463621ac0f71e22e38c66dd8cb2d2c0f45cd4a179684c5281abf1958",
+      "bytes": 519
+    }
+  }
+}
