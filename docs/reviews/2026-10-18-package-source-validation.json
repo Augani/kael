@@ -1,0 +1,368 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-10-18T00:56:31.076565+00:00",
+  "status": "THIRTY_NINE_EXTRACTED_PACKAGE_BUILDS_AND_EXACT_SOURCE_ARCHIVE_AUDIT_PASS",
+  "source_commit": "b279795d2a240886b22b2f0d8f4bba1b10f3682e",
+  "version": "0.4.1",
+  "command": [
+    "bash",
+    "scripts/publish-all.sh",
+    "--preflight"
+  ],
+  "registry_upload": false,
+  "source_and_HEAD_unchanged": true,
+  "archive_count": 39,
+  "compressed_archive_bytes": 6067354,
+  "included_Rust_files": 929,
+  "included_Rust_bytes": 23464432,
+  "all_included_Rust_bytes_match_immutable_Git_commit": true,
+  "max_archive_bytes": 10485760,
+  "VCS": {
+    "all39_archived_commit_ids": "b279795d2a240886b22b2f0d8f4bba1b10f3682e",
+    "dirty_field": {
+      "absent": 39,
+      "interpretation": "Unknown metadata; absence is not a clean or dirty checkout claim."
+    }
+  },
+  "source_scope": "Exact nineteen-file source batch validated by the separate14-check integration and physical Metal receipt; saved in b279795 before packaging. Later isolated candidates are excluded.",
+  "archive_policy": {
+    "licenses_and_notices": "Required Apache/MIT/Chromium/font/Lucide declarations and bytes match Git as appropriate for each package.",
+    "published_manifests": "Original manifests match Git, normalized dependencies contain no local paths, fork package alias/registry rewriting and ZIP9 policy verified.",
+    "fork": "All65 included source/test payloads and required provenance match immutable Git; development tools and historical ZIP8 upstream lock are excluded.",
+    "package_include_rules": "Examples/benches excluded except the two approved portable network examples; omitted source needs its separate consumer compilation evidence."
+  },
+  "packages": [
+    {
+      "name": "kael_sum_tree",
+      "archive_sha256": "2761b60ce4597637abfa29b35c996ef3dc79cc7765870a7df3ecdf54e598cd10",
+      "compressed_bytes": 24416,
+      "Rust_files": 3,
+      "Rust_bytes": 98712
+    },
+    {
+      "name": "kael_storage",
+      "archive_sha256": "6822a351a2b60688acacb0424698deaaad92dadf570165d2db0ed36909c6f590",
+      "compressed_bytes": 38213,
+      "Rust_files": 14,
+      "Rust_bytes": 117915
+    },
+    {
+      "name": "kael_share",
+      "archive_sha256": "76ab8ad7d26018dacae2d365f01d1e8269d7633701dca33bb640cd0eb168b6e5",
+      "compressed_bytes": 33969,
+      "Rust_files": 7,
+      "Rust_bytes": 83466
+    },
+    {
+      "name": "kael_semantic_version",
+      "archive_sha256": "193798d95f8ef796ac7e7c185435523911f12f68732c394ba82f968072aa40a4",
+      "compressed_bytes": 8002,
+      "Rust_files": 1,
+      "Rust_bytes": 7185
+    },
+    {
+      "name": "kael_secrets",
+      "archive_sha256": "d6ebdac14daac4cfc8b05573f465aed5cc1ca59f9406a45ffe9631c248364c2e",
+      "compressed_bytes": 21134,
+      "Rust_files": 1,
+      "Rust_bytes": 25753
+    },
+    {
+      "name": "kael_render_graph",
+      "archive_sha256": "67990ea664e38dd58c0cb41ba93e9e11c21ef2cafb5bf3239ef2fd71e15669a1",
+      "compressed_bytes": 43808,
+      "Rust_files": 1,
+      "Rust_bytes": 205886
+    },
+    {
+      "name": "kael_release",
+      "archive_sha256": "75f6b0b22a70dc0d258030ddc4479d2f005e0643eeeed289bd739ae247a95ab8",
+      "compressed_bytes": 31060,
+      "Rust_files": 7,
+      "Rust_bytes": 79279
+    },
+    {
+      "name": "kael_pdf",
+      "archive_sha256": "c272e12f4819e456d9e2794cad063254d6bb46540592b007514d2a5c9a55d606",
+      "compressed_bytes": 45791,
+      "Rust_files": 12,
+      "Rust_bytes": 129616
+    },
+    {
+      "name": "kael_office",
+      "archive_sha256": "4c7d9b5384b345a8f33df75f6d5efee8ffc9663f7757a850d78161d3ac1fc528",
+      "compressed_bytes": 24707,
+      "Rust_files": 3,
+      "Rust_bytes": 70046
+    },
+    {
+      "name": "kael_notifications",
+      "archive_sha256": "eb88f2bddce260a1ebcd7ef501d6601d4a0c28c9f91bcf099b190d41a9593e72",
+      "compressed_bytes": 36320,
+      "Rust_files": 10,
+      "Rust_bytes": 96861
+    },
+    {
+      "name": "kael_media_sys",
+      "archive_sha256": "e3df91ea6d841dd3cff4899842f434c8f2cdf5cb33c8a466fb128f7eb61f1479",
+      "compressed_bytes": 13255,
+      "Rust_files": 2,
+      "Rust_bytes": 24950
+    },
+    {
+      "name": "kael_markdown",
+      "archive_sha256": "9a8bfc3d2212efb5e8593729d84ec93803af81127a03e854bb19ac462fcf3079",
+      "compressed_bytes": 11072,
+      "Rust_files": 1,
+      "Rust_bytes": 26410
+    },
+    {
+      "name": "kael_icons",
+      "archive_sha256": "84c5dde710e2373a6ee20bb2e483c3c371ac9e06d54be491d8cc3f4622f04970",
+      "compressed_bytes": 17002,
+      "Rust_files": 4,
+      "Rust_bytes": 15139
+    },
+    {
+      "name": "kael_i18n",
+      "archive_sha256": "ff311ef91977a10e1cc2edff055a923f6c16807384e5998c5e30646eb74d07df",
+      "compressed_bytes": 14564,
+      "Rust_files": 5,
+      "Rust_bytes": 39372
+    },
+    {
+      "name": "kael_gpu_budget",
+      "archive_sha256": "cc77983216349fc68889a5c18265539a5df3ee14fa7d2726ee0ecc3649d1cfc7",
+      "compressed_bytes": 10000,
+      "Rust_files": 1,
+      "Rust_bytes": 7468
+    },
+    {
+      "name": "kael_engines",
+      "archive_sha256": "8bca9ffd5399c08388008d1e8f1eba5f1fafe45528ba218b73795f7db8333f96",
+      "compressed_bytes": 39751,
+      "Rust_files": 9,
+      "Rust_bytes": 132580
+    },
+    {
+      "name": "kael_document",
+      "archive_sha256": "4482acb4ae2160417b978e6abb735b7daef5d08a04887e512befb532dbd6cecb",
+      "compressed_bytes": 51852,
+      "Rust_files": 18,
+      "Rust_bytes": 175101
+    },
+    {
+      "name": "kael_derive_refineable",
+      "archive_sha256": "02eaf98b94c5a5b54a4c3d17d84f7b810d675814a4cec2548fa98b53497f2e4a",
+      "compressed_bytes": 11103,
+      "Rust_files": 1,
+      "Rust_bytes": 25479
+    },
+    {
+      "name": "kael_collections",
+      "archive_sha256": "bf3213d9ac2bb9f32137b92fcb2dc1240a4a62eaf59fbceefec52c0b11abba02",
+      "compressed_bytes": 6822,
+      "Rust_files": 1,
+      "Rust_bytes": 1256
+    },
+    {
+      "name": "kael_cache",
+      "archive_sha256": "3cc72badac30601f538ac1f45ddda9dd4c21d1f3c655f93a0e9df321548b7a03",
+      "compressed_bytes": 23362,
+      "Rust_files": 4,
+      "Rust_bytes": 68055
+    },
+    {
+      "name": "kael-media",
+      "archive_sha256": "5f932c15c2ae5c93dcb14123f3c76f7f216dfecdddb679d0c0189c2a7204152d",
+      "compressed_bytes": 37552,
+      "Rust_files": 3,
+      "Rust_bytes": 85459
+    },
+    {
+      "name": "kael-macros",
+      "archive_sha256": "f2022095f1580effc0bc0330d53e270ea86f814465f81a16b1f87f1c23913aad",
+      "compressed_bytes": 28868,
+      "Rust_files": 21,
+      "Rust_bytes": 120315
+    },
+    {
+      "name": "kael-cli",
+      "archive_sha256": "4b1712cda5620bb2982dd39c537a212efe254d4da36d665c836e86636386e5d2",
+      "compressed_bytes": 18921,
+      "Rust_files": 2,
+      "Rust_bytes": 43870
+    },
+    {
+      "name": "kael_net",
+      "archive_sha256": "c008207f4954c690f12bf663fa6fe98aa8cddb68f81c545ba82149206e631aff",
+      "compressed_bytes": 55061,
+      "Rust_files": 11,
+      "Rust_bytes": 174763
+    },
+    {
+      "name": "kael_media_engines",
+      "archive_sha256": "5a212b2a8b85ad091548def977de0247a28e080b7f5e7d6c60ba8e464420ac63",
+      "compressed_bytes": 85231,
+      "Rust_files": 16,
+      "Rust_bytes": 351580
+    },
+    {
+      "name": "kael_refineable",
+      "archive_sha256": "cad3b81f969d68029a78e69bfd66f396a75362687987b016c58118761ea400a9",
+      "compressed_bytes": 11024,
+      "Rust_files": 1,
+      "Rust_bytes": 14269
+    },
+    {
+      "name": "kael_perf",
+      "archive_sha256": "f335c32176a8341c9d36048c36d1bc84a1919afb504c9eca87d800287c08c83f",
+      "compressed_bytes": 22645,
+      "Rust_files": 3,
+      "Rust_bytes": 57894
+    },
+    {
+      "name": "kael_audio",
+      "archive_sha256": "2f43e9754212182044c4654e0f45b9847c1f3d763aa8cba1baddcf73fc8c5d70",
+      "compressed_bytes": 79183,
+      "Rust_files": 21,
+      "Rust_bytes": 271876
+    },
+    {
+      "name": "kael_util_macros",
+      "archive_sha256": "9ecd3dfeb48ece95588d2e1cab1e07d7061f158a24396acf1d55805d4e16b3e7",
+      "compressed_bytes": 11463,
+      "Rust_files": 1,
+      "Rust_bytes": 15257
+    },
+    {
+      "name": "kael_util",
+      "archive_sha256": "73437932c8f7b5bbb3d8d34c7c5f1a7a9c038df69eea8aa50b62f05dcf8a06af",
+      "compressed_bytes": 68738,
+      "Rust_files": 18,
+      "Rust_bytes": 216380
+    },
+    {
+      "name": "kael_http_client",
+      "archive_sha256": "e631ce0d762d916fd2d9858138d44902e965bf6efd8d98e33e7555cf639af608",
+      "compressed_bytes": 30640,
+      "Rust_files": 3,
+      "Rust_bytes": 50462
+    },
+    {
+      "name": "kael_diagnostics",
+      "archive_sha256": "ee92edef69b39a84fc85ed8c7780bf5849927c679bc91e4400edbc6721574859",
+      "compressed_bytes": 50003,
+      "Rust_files": 13,
+      "Rust_bytes": 145383
+    },
+    {
+      "name": "kael_accesskit_macos",
+      "archive_sha256": "d599b97c91c693babe42d88a38ff2982c79349a28fcef74ca27b940d9d9c7f1b",
+      "compressed_bytes": 62689,
+      "Rust_files": 13,
+      "Rust_bytes": 156718
+    },
+    {
+      "name": "kael_accesskit_atspi_common",
+      "archive_sha256": "46b327de94cffdda2a8b942ae45bbcb72d9da388e4ad29710983ebbcc456b255",
+      "compressed_bytes": 56366,
+      "Rust_files": 14,
+      "Rust_bytes": 172522
+    },
+    {
+      "name": "kael_accesskit_unix",
+      "archive_sha256": "45a1ec5c7b4d364bceda83b77d252e98266908f982381e84b321e97534caeee6",
+      "compressed_bytes": 42385,
+      "Rust_files": 20,
+      "Rust_bytes": 85947
+    },
+    {
+      "name": "kael_accesskit_windows",
+      "archive_sha256": "a66671558c29c641a762ce1cdb17350d08417728ac2b691ad5675280afd80255",
+      "compressed_bytes": 85058,
+      "Rust_files": 14,
+      "Rust_bytes": 184709
+    },
+    {
+      "name": "kael_rasterlottie",
+      "archive_sha256": "a221179d1174a012d234dd74c2e9e77e28659551200f3ad58038fa0f9badc06b",
+      "compressed_bytes": 152419,
+      "Rust_files": 44,
+      "Rust_bytes": 507670
+    },
+    {
+      "name": "kael",
+      "archive_sha256": "93f31cae68c994661051f0647590b2c7fcc71c356209956b92641f2f5c07c205",
+      "compressed_bytes": 2701978,
+      "Rust_files": 342,
+      "Rust_bytes": 14404884
+    },
+    {
+      "name": "kael_ui",
+      "archive_sha256": "5f3fb1ac515d5fc70d3250fbfa3e9386fc2e0998859067c93b181ae28749969d",
+      "compressed_bytes": 1960927,
+      "Rust_files": 264,
+      "Rust_bytes": 4973945
+    }
+  ],
+  "evidence": [
+    {
+      "path": ".artifacts/2026-10-18-package-preflight-desktop-quality/preflight.json",
+      "sha256": "5c6b084e23a80cc7eb414205ace388e8a19bffa56efe44e2a2d7d9b09a3367f3",
+      "bytes": 646
+    },
+    {
+      "path": ".artifacts/2026-10-18-package-preflight-desktop-quality/preflight.log",
+      "sha256": "0c5171411fa70aba34e62bcc05e078a799e89b503d69095158440acc9cc2da6f",
+      "bytes": 60610
+    },
+    {
+      "path": ".artifacts/2026-10-18-package-preflight-desktop-quality/run.py",
+      "sha256": "75e05c04993bbe6800ec81c45b163f59a166ef223a1bf1301e7cbb3911241d42",
+      "bytes": 3469
+    },
+    {
+      "path": ".artifacts/2026-10-18-package-preflight-desktop-quality/metadata.json",
+      "sha256": "2232e379b6a1e410a3fa3d6e325d6864379136d19a13a3ed2673340efe904cfc",
+      "bytes": 199999
+    },
+    {
+      "path": ".artifacts/2026-10-18-package-preflight-desktop-quality/preserved.json",
+      "sha256": "96f4412a2c1f0be869f3c978b840ebdcfeb7ebb4b2bb505dd83e4b2f010db31f",
+      "bytes": 5865
+    },
+    {
+      "path": ".artifacts/2026-10-18-package-preflight-desktop-quality/release-archives.json",
+      "sha256": "2441a79491d824c9247c2b710c4cf7a29ea343bd62f992c76870ee3807a9399b",
+      "bytes": 353614
+    },
+    {
+      "path": ".artifacts/2026-10-18-package-preflight-desktop-quality/source-before.json",
+      "sha256": "36a34d78a013dd6d7f791032ea99438f6e7205eadacecd5f016047f18b8851a6",
+      "bytes": 346056
+    },
+    {
+      "path": ".artifacts/2026-10-17-verify-release-archives-v2.py",
+      "sha256": "e9055d29c2d848f948e7090df3ba08ebc6d0a6a625cad8ba2c80237dacc3dcfb",
+      "bytes": 16669
+    },
+    {
+      "path": "docs/reviews/2026-10-18-native-desktop-quality-validation.json",
+      "sha256": "73e8d0fb16f3d11fd28787e0bdf8f29d3f6161ab599b02be48faa4d01bccbf38",
+      "bytes": 9409
+    },
+    {
+      "path": ".artifacts/2026-10-18-desktop-quality-final/integration.json",
+      "sha256": "8d13e03422794d278f4b2f82fec23d7c7a883c7e20b4f5eb984ab41757aba5a5",
+      "bytes": 7956
+    }
+  ],
+  "limitations": [
+    "Cargo verifies extracted packages for the local host/default package features; this does not replace optional-feature, browser or other-platform acceptance.",
+    "The independent archive auditor performs no compilation itself; the preceding maintained preflight supplies the extracted-package builds.",
+    "No crates were uploaded. This is release preflight, not a registry publication or installed-application distribution test.",
+    "Known hosted positive-presentation and strict dependency-audit failures remain open; package success does not waive them.",
+    "No comparative performance, RSS, power or overall framework ranking follows."
+  ]
+}

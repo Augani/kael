@@ -907,3 +907,20 @@ instead of six; its failed receipt remains preserved, and the continuation reuse
 the successful GPU logs before building and running the window once. The older
 hosted Mac cohort has the same 59/58 distinction and still fails presentation.
 Fresh packaging and hosted acceptance remain separate.
+
+The [current nineteen-file package preflight](2026-10-18-package-source-validation.json)
+then builds all 39 extracted archives at `b279795`. Independent audit matches all
+929 included Rust files (23,464,432 bytes) to that immutable Git source; compressed
+archives total 6,067,354 bytes. License/notice bytes, normalized dependency
+aliases, ZIP 9 and fork provenance pass. All archived VCS IDs name `b279795`;
+the missing dirty flag remains unknown metadata. No crates are uploaded, and
+hosted presentation, dependency policy and platform acceptance stay separate.
+
+The [completed released-0.7.3 hosted comparison](2026-10-18-gpui073-hosted-comparison.md)
+subsequently passes independent audit of all 100 captures at `0d15aff`, all
+twenty executable identities, 800 geometry boundaries and 50 framework pairs.
+The actual equal client area is 1100×645 at scale 1; local scale-2 geometry is
+separate. General desktop CPU/RSS and separate CPU timing summaries retain mixed
+results, substantial table/tree gaps, native component differences and per-run
+values. Energy/instruction/cycle counters are all zero and support no power
+ranking. These binaries predate the nineteen-file `b279795` batch.

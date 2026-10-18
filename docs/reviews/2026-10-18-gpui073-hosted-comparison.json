@@ -1,0 +1,269 @@
+{
+  "schema_version": 1,
+  "status": "audited_descriptive_projection",
+  "run": {
+    "id": 39079038200,
+    "url": "https://github.com/Augani/kael/actions/runs/39079038200",
+    "source_commit": "0d15aff4288e8e98a54032e6ed149e080ea13104",
+    "gpui_kit_version": "0.7.3",
+    "gpui_kit_revision": "67265a36e260ffe03c5aaebdcd8d654dbf892eab",
+    "all_captures_full_not_quick": true
+  },
+  "evidence": {
+    "summary": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/summary.json",
+      "sha256": "bcb63ce69d660093cea4e7ec084c27c0486f7fbe986349ca040092a59abd7711",
+      "bytes": 505840
+    },
+    "root_audit_invocation": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/audit-invocation.json",
+      "sha256": "26a6c5263cd375e4750739462146c0afc39b6e54ff76ae833baba20f6ab6170d",
+      "bytes": 662
+    },
+    "root_audit_log": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/audit.log",
+      "sha256": "bb70128cb2d53f62b65293a7b189ad4b220dd8cdadf06ed9ef3259c901baeeb8",
+      "bytes": 10080
+    },
+    "counter_observer": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/counter-quality.json",
+      "sha256": "2c5c6c47a7d7876196658603f035d7bd691ac6ac4e802723c78ac56201946c1a",
+      "bytes": 21885
+    },
+    "independent_audit": {
+      "path": ".artifacts/2026-10-18-hosted-0d15-independent-components-audit/review.json",
+      "sha256": "bbd60382c6da703a1d3041053c098fe41eceb7dd886a09b8b413a3d4d3c73f21",
+      "bytes": 286421
+    },
+    "independent_counter_audit": {
+      "path": ".artifacts/2026-10-18-hosted-0d15-counter-independent-memory-review/review.json",
+      "sha256": "9b402b06608cb58a2d0064d0854386ca872260758317dbfaecc645903a9d5302",
+      "bytes": 28447
+    },
+    "download_manifest": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/download.json",
+      "sha256": "dd6c0803929a554b4ed88196fc1d5328cb4b5ea207574d2f05793538a462e09d",
+      "bytes": 1155
+    },
+    "source_archive_verification": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/source-archive-verification.json",
+      "sha256": "61d05dd7e74b415d677336dd91f04eb45b4821e96a2c9bfd71f336b642d0c396",
+      "bytes": 865
+    }
+  },
+  "validated_scope": {
+    "captures": 100,
+    "contracts": 5,
+    "modes_per_contract": 2,
+    "runs_per_engine_per_group": 5,
+    "binary_files": 20,
+    "geometry_boundaries": 800,
+    "engine_pairs": 50,
+    "paired_boundaries": 400,
+    "process_samples": 10885,
+    "stable_samples": 9333,
+    "eligible_kael_source_files": 2946
+  },
+  "actual_hosted_geometry": {
+    "logical_width": 1100,
+    "logical_height": 645,
+    "scale": 1,
+    "scope": "all 800 measured phase boundaries, equal across paired engines",
+    "nominal_fixture_only": [1100, 760],
+    "documentation": "benchmarks/desktop-comparison/README.md"
+  },
+  "environment": {
+    "platform": "macOS 26.6.2 arm64",
+    "cpu": "Apple M1 (Virtual)",
+    "cpu_count": 3,
+    "memory_bytes": 7516192768,
+    "rustc": "1.97.1",
+    "power_source": "AC Power",
+    "display_inventory": [],
+    "thermal_report": "No thermal or performance warning level recorded; no CPU power status recorded"
+  },
+  "definitions": {
+    "order": "five runs in original repetition order index 0..4, never selected or retried",
+    "cpu_percent": "Per-phase process user+system CPU delta/stable elapsed; 100% is one core. Median and range of five per-run percentages. Values rounded to 6 decimal places here; full precision in audit/summary.",
+    "stable_sampled_peak_rss_bytes": "Per-run maximum process RSS among retained stable samples of the four phases, then five-run median/range. Startup/oracle validation/boundaries excluded; not exact lifetime peak, retained heap or GPU memory.",
+    "cpu_span_p99_us": "Timing-enabled only: each run sorted spans[floor((n-1)*0.99)], then five-run median/range. CPU-side wall spans, not CPU utilization, GPU time, compositor completion or end-to-end latency. Not pooled or interpolated.",
+    "modes": "Use timing-disabled CPU/RSS for primary resource descriptions; keep timing-enabled p99 separate. Both modes retain all process metrics here. Not an instrumentation-overhead experiment.",
+    "precision": "RSS and p99 integers are exact. Human tables round CPU to 2 decimals, RSS to 1 MiB decimal, spans to 3 ms decimals."
+  },
+  "counter_quality": {
+    "captures_checked": 100,
+    "decreases": 0,
+    "all_zero_fields": ["billed_energy_raw", "serviced_energy_raw", "instructions", "cycles"],
+    "interpretation": "Zero-only fields are unavailable or zero-only on this runner; no watts, power efficiency, instruction-work or hardware-cycle inference."
+  },
+  "binary_refs": {
+    "gpui-kit": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/gpui-kit",
+      "sha256": "049bad2fbb201b3930889ee36ee56f11809d6c32bb35309ab8ffe524d091f003",
+      "bytes": 13747776
+    },
+    "gpui-kit-data": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/gpui-kit-data",
+      "sha256": "a101cf6eb698b264c729f10c8c6a262d1b1151d6cc9ae1dff25385c34b8a5867",
+      "bytes": 14168608
+    },
+    "gpui-kit-data-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/gpui-kit-data-without-frame-timing",
+      "sha256": "8e5455e4443664e9a392763dc1b5f115803e1086602b4e85fa22451b1e696a63",
+      "bytes": 14053360
+    },
+    "gpui-kit-editor": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/gpui-kit-editor",
+      "sha256": "de37898b7c283556a43e6d9a7d90a8aca21a578bd4b9b665cc87338ff16e2507",
+      "bytes": 16921184
+    },
+    "gpui-kit-editor-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/gpui-kit-editor-without-frame-timing",
+      "sha256": "d17e9907c71b7ee1d6ccc747bbe9f8db677fdfdfb0ee7873ff288feff9c18854",
+      "bytes": 16806320
+    },
+    "gpui-kit-tree": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/gpui-kit-tree",
+      "sha256": "5d3f65d0b3f85435a5ddbec2ca72c39bbf4380cd67e8f619a8cd0ee426ecb8c3",
+      "bytes": 14013328
+    },
+    "gpui-kit-tree-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/gpui-kit-tree-without-frame-timing",
+      "sha256": "9982fbafdcafb4c51dc2d6cfa6b48ffc2d390612f3a1b143f17c2895a82bc73d",
+      "bytes": 13897856
+    },
+    "gpui-kit-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/gpui-kit-without-frame-timing",
+      "sha256": "37605ccf8ec9406a559ff29436a79ba0adb719354942524ae8302782bf8b6937",
+      "bytes": 13632208
+    },
+    "gpui-kit-workspace": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/gpui-kit-workspace",
+      "sha256": "c233f18ff2cd0ba8731ae53174b175e0d1188a3a74b70ba8ea168eb60b9d9ee6",
+      "bytes": 14732080
+    },
+    "gpui-kit-workspace-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/gpui-kit-workspace-without-frame-timing",
+      "sha256": "9ef12ef46f0fde95677854516c878cbbdac86db94170e7adfdfcb30b48bb252e",
+      "bytes": 14600256
+    },
+    "kael": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/kael",
+      "sha256": "a6694f4e450f14b4dd62390a552fe851485aaa043da766d25006ab3fd481e6d7",
+      "bytes": 11844608
+    },
+    "kael-data": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/kael-data",
+      "sha256": "b818e82a80f24141e68a5aa1390064341eb3a006ac98ae97c829e23a3879da54",
+      "bytes": 14097744
+    },
+    "kael-data-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/kael-data-without-frame-timing",
+      "sha256": "3bd4004dc4da482a32350fccc16cb87dd99b61666ba068ccd6d30579cfddc366",
+      "bytes": 14043424
+    },
+    "kael-editor": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/kael-editor",
+      "sha256": "d853b8479b5baa92e8fb031b6f4186f7f85d9d1dc3c4e16ccc8deba12925cc9a",
+      "bytes": 13004640
+    },
+    "kael-editor-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/kael-editor-without-frame-timing",
+      "sha256": "648403db0a5da2e137fc34f530be453828d5752e305c190a990bb5aedf2b2c5b",
+      "bytes": 12949264
+    },
+    "kael-tree": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/kael-tree",
+      "sha256": "9a78275af910025f16b5861ba96d1d2a6c5c227e3bd00324ed1eaee710c4641b",
+      "bytes": 12603392
+    },
+    "kael-tree-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/kael-tree-without-frame-timing",
+      "sha256": "6ff598eed3d106843d405c43c6754dcb0beee2473aca055cd3f133a47ba83d94",
+      "bytes": 12565008
+    },
+    "kael-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/kael-without-frame-timing",
+      "sha256": "6e14e1b6101c6015d36667cfc630af77ee51789929ef7e0e11631407249db208",
+      "bytes": 11806288
+    },
+    "kael-workspace": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/kael-workspace",
+      "sha256": "2f0094653f06fa66ca8c5c4bb9dc94d30576d74226f93b6be263273ffe614e67",
+      "bytes": 12842624
+    },
+    "kael-workspace-without-frame-timing": {
+      "path": ".artifacts/2026-10-17-hosted-0d15-comparison/raw/binaries/kael-workspace-without-frame-timing",
+      "sha256": "0309c2465c20a5731e1a3a58cd66986fe2b72bee17bb796392420b84a512ecb9",
+      "bytes": 12789552
+    }
+  },
+  "contract_disclosures": {
+    "native-data-table-v1": ["Kael bounded local tile cache16x512cells; GPUI Kit delegate reads immutable dataset directly", "Both header wrappers32px and body rows28px; GPUI Kit native leaf header cells28px", "Kael grid provides native editing; GPUI Kit table delegates editing to apps, so editing excluded", "Navigation targets both horizontal extremes; controls retain their native reveal/clamp semantics"],
+    "native-dock-workspace-v1": ["Kael uses retained application pane closures; GPUI Kit persistence reconstructs registered Panel entities", "Kael binary splits and GPUI Kit normalized n-ary splits are compared by ordered semantic layout with same-axis normalization", "Kael tab strip minimum34px; pinned DockSkin native tab bar30px; retain native chrome and disclose content-height difference", "Native split handle/minimum-size rules differ; common requested root ratio checked within0.005, persistence float tolerance0.01px", "GPUI Kit does not serialize zoom state, so persistence is performed after unzoom; floating panes and edge docks excluded"],
+    "native-virtual-tree-v1": ["Kael expansion is a controlled flattened immutable model rebuild; GPUI Kit expansion is its public routed SelectLeft/SelectRight action", "Kael prepares complete logical accessibility metadata; pinned GPUI Kit Tree exposes mounted rows only", "Kael has a disclosure button per row; GPUI Kit ListItem renders an application disclosure glyph inside its native Tree row", "Native selection, scrolling, layout, and repaint remain each shipped control's implementation"]
+  },
+  "limits": ["One shared hosted virtual runner and five descriptive repetitions per engine/mode. No overall framework ranking or controlled bare-metal/power claim.", "Frozen 0d15 source excludes all subsequent Kael changes, including later tree stage optimizations and control/animation fixes.", "Paced programmatic public APIs and semantic/content/layout oracles; no physical pointer/keyboard/IME/AT interaction claim.", "Equal phase-boundary geometry and passed oracles do not prove pixel/feature parity, equal work or identical operation counts. Full per-run operation counts remain in source summary/raw reports.", "Kael tree prepares complete logical accessibility metadata; pinned GPUI Kit exposes mounted rows. Tree RSS variation is observed process RSS, not proven retained heap or a leak.", "Empty display inventory. Accepted foreground requests/repaint activity do not prove physical focus, positive presentation, GPU completion, compositor latency or smoothness.", "Startup lacks matched initial geometry and is excluded from comparative tables.", "Binary/source identity was checked; no deterministic rebuild or visible-presentation inference."],
+  "groups": [
+    {
+      "contract": "native-navigation-detail-v1",
+      "frame_timing_enabled": false,
+      "raw_aggregate": {"path":".artifacts/2026-10-17-hosted-0d15-comparison/raw/navigation-detail-without-frame-timing/runs.json","sha256":"3f1f36dedb2cbf477681a00bfafe1779a2a1a3cae5390184ecd00feb00dd80b7"},
+      "engines": {"kael":{"binary":"kael-without-frame-timing","cpu_percent":{"idle-before":{"runs":[0.849712,0.760298,0.773096,0.839193,0.980515],"median":0.839193,"range":[0.760298,0.980515]},"active":{"runs":[8.584019,9.27384,8.058191,8.599919,9.547719],"median":8.599919,"range":[8.058191,9.547719]},"idle-after":{"runs":[0.007121,0.003616,0.01405,0.006572,0.004683],"median":0.006572,"range":[0.003616,0.01405]},"churn":{"runs":[5.59007,3.908554,5.544496,4.297302,5.828505],"median":5.544496,"range":[3.908554,5.828505]}},"stable_sampled_peak_rss_bytes":{"runs":[95862784,95911936,96288768,95961088,95879168],"median":95911936,"range":[95862784,96288768]},"cpu_span_p99_us":null},"gpui-kit":{"binary":"gpui-kit-without-frame-timing","cpu_percent":{"idle-before":{"runs":[1.206978,1.111315,1.255624,1.233889,1.275777],"median":1.233889,"range":[1.111315,1.275777]},"active":{"runs":[12.833713,13.217028,13.065992,13.224709,12.68924],"median":13.065992,"range":[12.68924,13.224709]},"idle-after":{"runs":[0.635379,0.648842,0.618434,0.680386,0.648326],"median":0.648326,"range":[0.618434,0.680386]},"churn":{"runs":[6.544879,8.19601,5.932417,8.175781,5.968155],"median":6.544879,"range":[5.932417,8.19601]}},"stable_sampled_peak_rss_bytes":{"runs":[82558976,82558976,82444288,82706432,82657280],"median":82558976,"range":[82444288,82706432]},"cpu_span_p99_us":null}}
+    },
+    {
+      "contract": "native-navigation-detail-v1",
+      "frame_timing_enabled": true,
+      "raw_aggregate": {"path":".artifacts/2026-10-17-hosted-0d15-comparison/raw/native-navigation-detail/runs.json","sha256":"d9227fd80aed133bd473da446add2756cf77bf549ec2ef5807df109a082fd72b"},
+      "engines": {"kael":{"binary":"kael","cpu_percent":{"idle-before":{"runs":[0.804864,0.797618,0.594074,0.772948,0.632153],"median":0.772948,"range":[0.594074,0.804864]},"active":{"runs":[5.182428,8.988141,7.829305,8.61745,7.485644],"median":7.829305,"range":[5.182428,8.988141]},"idle-after":{"runs":[0.004389,0.007599,0.008779,0.008349,0.004931],"median":0.007599,"range":[0.004389,0.008779]},"churn":{"runs":[5.725152,5.666212,5.790003,5.602451,5.605588],"median":5.666212,"range":[5.602451,5.790003]}},"stable_sampled_peak_rss_bytes":{"runs":[96468992,96092160,96403456,96108544,96387072],"median":96387072,"range":[96092160,96468992]},"cpu_span_p99_us":{"draw":{"runs":[7155,7605,7174,7111,7030],"median":7155,"range":[7030,7605]},"platform_submission":{"runs":[460,543,799,537,449],"median":537,"range":[449,799]}}},"gpui-kit":{"binary":"gpui-kit","cpu_percent":{"idle-before":{"runs":[1.230865,1.117096,1.4101,0.928068,1.214314],"median":1.214314,"range":[0.928068,1.4101]},"active":{"runs":[13.07574,9.854328,12.627957,11.788702,12.582497],"median":12.582497,"range":[9.854328,13.07574]},"idle-after":{"runs":[0.677075,0.633162,0.694712,0.656991,0.769107],"median":0.677075,"range":[0.633162,0.769107]},"churn":{"runs":[8.251368,8.54235,8.858227,8.396466,7.779972],"median":8.396466,"range":[7.779972,8.858227]}},"stable_sampled_peak_rss_bytes":{"runs":[87605248,87769088,88113152,88244224,88178688],"median":88113152,"range":[87605248,88244224]},"cpu_span_p99_us":{"draw":{"runs":[11530,11397,11359,11535,11487],"median":11487,"range":[11359,11535]},"platform_submission":{"runs":[390,382,418,564,380],"median":390,"range":[380,564]}}}}
+    },
+    {
+      "contract": "native-data-table-v1",
+      "frame_timing_enabled": false,
+      "raw_aggregate": {"path":".artifacts/2026-10-17-hosted-0d15-comparison/raw/data-table-without-frame-timing/runs.json","sha256":"9f79dfc892a70ac409a6e286a6b25fe05e7bcc850c3cc53617a0817cd363379b"},
+      "engines": {"kael":{"binary":"kael-data-without-frame-timing","cpu_percent":{"idle-before":{"runs":[1.215432,1.413643,0.821558,0.86996,0.902596],"median":0.902596,"range":[0.821558,1.413643]},"active":{"runs":[26.058857,32.622978,25.302818,26.111522,24.891879],"median":26.058857,"range":[24.891879,32.622978]},"idle-after":{"runs":[0.028965,0.09326,0.005974,0.003014,0.020716],"median":0.020716,"range":[0.003014,0.09326]},"churn":{"runs":[18.539807,18.224806,19.511186,15.035978,18.723721],"median":18.539807,"range":[15.035978,19.511186]}},"stable_sampled_peak_rss_bytes":{"runs":[212451328,212598784,213303296,214499328,214253568],"median":213303296,"range":[212451328,214499328]},"cpu_span_p99_us":null},"gpui-kit":{"binary":"gpui-kit-data-without-frame-timing","cpu_percent":{"idle-before":{"runs":[1.633795,1.417048,1.333975,1.432226,1.534283],"median":1.432226,"range":[1.333975,1.633795]},"active":{"runs":[17.68808,17.252857,18.317816,20.160269,18.603836],"median":18.317816,"range":[17.252857,20.160269]},"idle-after":{"runs":[1.235957,1.076522,1.242732,1.357372,1.35201],"median":1.242732,"range":[1.076522,1.357372]},"churn":{"runs":[13.435574,13.748795,9.289235,13.063496,8.927941],"median":13.063496,"range":[8.927941,13.748795]}},"stable_sampled_peak_rss_bytes":{"runs":[141950976,142327808,142442496,142327808,142344192],"median":142327808,"range":[141950976,142442496]},"cpu_span_p99_us":null}}
+    },
+    {
+      "contract": "native-data-table-v1",
+      "frame_timing_enabled": true,
+      "raw_aggregate": {"path":".artifacts/2026-10-17-hosted-0d15-comparison/raw/native-data-table/runs.json","sha256":"aa9c86e4a980a278f76d4024e7f038b5e60eeb33435edd3f07de8574797c4fb7"},
+      "engines": {"kael":{"binary":"kael-data","cpu_percent":{"idle-before":{"runs":[0.890239,1.26507,1.036427,1.369747,0.954164],"median":1.036427,"range":[0.890239,1.369747]},"active":{"runs":[25.874632,23.936452,24.566891,24.134021,25.089789],"median":24.566891,"range":[23.936452,25.874632]},"idle-after":{"runs":[0.015836,0.006221,0.00644,0.010288,0.003746],"median":0.00644,"range":[0.003746,0.015836]},"churn":{"runs":[14.680673,19.800867,19.224704,18.819614,20.430909],"median":19.224704,"range":[14.680673,20.430909]}},"stable_sampled_peak_rss_bytes":{"runs":[213958656,214646784,214515712,214548480,214499328],"median":214515712,"range":[213958656,214646784]},"cpu_span_p99_us":{"draw":{"runs":[15257,17602,15372,17813,15527],"median":15527,"range":[15257,17813]},"platform_submission":{"runs":[795,704,471,714,642],"median":704,"range":[471,795]}}},"gpui-kit":{"binary":"gpui-kit-data","cpu_percent":{"idle-before":{"runs":[1.396236,1.757818,1.276364,1.312509,1.661192],"median":1.396236,"range":[1.276364,1.757818]},"active":{"runs":[20.129575,20.500963,18.143021,17.374916,19.896467],"median":19.896467,"range":[17.374916,20.500963]},"idle-after":{"runs":[1.385122,1.596695,0.930481,0.95482,0.828341],"median":0.95482,"range":[0.828341,1.596695]},"churn":{"runs":[13.472384,9.94229,12.152435,13.15628,13.467877],"median":13.15628,"range":[9.94229,13.472384]}},"stable_sampled_peak_rss_bytes":{"runs":[147718144,147521536,147734528,148013056,148226048],"median":147734528,"range":[147521536,148226048]},"cpu_span_p99_us":{"draw":{"runs":[17148,16578,19628,18351,18417],"median":18351,"range":[16578,19628]},"platform_submission":{"runs":[494,576,509,465,626],"median":509,"range":[465,626]}}}}
+    },
+    {
+      "contract": "native-virtual-tree-v1",
+      "frame_timing_enabled": false,
+      "raw_aggregate": {"path":".artifacts/2026-10-17-hosted-0d15-comparison/raw/native-virtual-tree-without-frame-timing/runs.json","sha256":"1024e3030ff801760cf8fcc5727f79e907dfd35c897b7fe1ec2903bea2dbee41"},
+      "engines": {"kael":{"binary":"kael-tree-without-frame-timing","cpu_percent":{"idle-before":{"runs":[0.978501,0.895889,0.879687,0.938925,1.018495],"median":0.938925,"range":[0.879687,1.018495]},"active":{"runs":[48.506469,57.667446,57.492999,57.312538,52.9799],"median":57.312538,"range":[48.506469,57.667446]},"idle-after":{"runs":[0.0027,0.011712,0.003706,0.004215,0.00332],"median":0.003706,"range":[0.0027,0.011712]},"churn":{"runs":[35.799053,26.925882,30.321641,32.553002,38.542412],"median":32.553002,"range":[26.925882,38.542412]}},"stable_sampled_peak_rss_bytes":{"runs":[1121763328,1089191936,949338112,868745216,1119387648],"median":1089191936,"range":[868745216,1121763328]},"cpu_span_p99_us":null},"gpui-kit":{"binary":"gpui-kit-tree-without-frame-timing","cpu_percent":{"idle-before":{"runs":[2.290012,1.532684,1.30038,1.251393,2.152306],"median":1.532684,"range":[1.251393,2.290012]},"active":{"runs":[14.232004,12.348218,12.267079,13.124158,12.495408],"median":12.495408,"range":[12.267079,14.232004]},"idle-after":{"runs":[1.119678,0.9989,0.887044,0.615485,1.186218],"median":0.9989,"range":[0.615485,1.186218]},"churn":{"runs":[8.850013,6.939657,8.085633,9.154209,8.691544],"median":8.691544,"range":[6.939657,9.154209]}},"stable_sampled_peak_rss_bytes":{"runs":[685850624,685686784,685637632,678641664,685768704],"median":685686784,"range":[678641664,685850624]},"cpu_span_p99_us":null}}
+    },
+    {
+      "contract": "native-virtual-tree-v1",
+      "frame_timing_enabled": true,
+      "raw_aggregate": {"path":".artifacts/2026-10-17-hosted-0d15-comparison/raw/native-virtual-tree/runs.json","sha256":"3555bb58d59ae5405cff1472d91c9c325556c10811c12962f072c87b85f94145"},
+      "engines": {"kael":{"binary":"kael-tree","cpu_percent":{"idle-before":{"runs":[0.820131,1.259186,0.747149,0.94618,0.897332],"median":0.897332,"range":[0.747149,1.259186]},"active":{"runs":[47.265056,40.069558,49.801049,61.09735,61.989879],"median":49.801049,"range":[40.069558,61.989879]},"idle-after":{"runs":[0.007889,0.019945,0.004186,0.004556,0.002513],"median":0.004556,"range":[0.002513,0.019945]},"churn":{"runs":[29.771687,25.860429,23.683373,31.188285,30.218571],"median":29.771687,"range":[23.683373,31.188285]}},"stable_sampled_peak_rss_bytes":{"runs":[519749632,896122880,637648896,798425088,1131839488],"median":798425088,"range":[519749632,1131839488]},"cpu_span_p99_us":{"draw":{"runs":[4664,4057,3968,4873,4623],"median":4623,"range":[3968,4873]},"platform_submission":{"runs":[464,453,450,479,488],"median":464,"range":[450,488]}}},"gpui-kit":{"binary":"gpui-kit-tree","cpu_percent":{"idle-before":{"runs":[2.156713,1.447745,1.223795,1.78314,1.286972],"median":1.447745,"range":[1.223795,2.156713]},"active":{"runs":[12.317442,12.761301,9.114545,13.130497,11.791239],"median":12.317442,"range":[9.114545,13.130497]},"idle-after":{"runs":[0.881771,1.285155,1.296701,1.159811,1.188861],"median":1.188861,"range":[0.881771,1.296701]},"churn":{"runs":[8.289744,8.726723,8.889706,10.055544,8.021789],"median":8.726723,"range":[8.021789,10.055544]}},"stable_sampled_peak_rss_bytes":{"runs":[694419456,683376640,683491328,692092928,691585024],"median":691585024,"range":[683376640,694419456]},"cpu_span_p99_us":{"draw":{"runs":[7522,9100,7290,7894,6875],"median":7522,"range":[6875,9100]},"platform_submission":{"runs":[450,410,482,637,534],"median":482,"range":[410,637]}}}}
+    },
+    {
+      "contract": "native-dock-workspace-v1",
+      "frame_timing_enabled": false,
+      "raw_aggregate": {"path":".artifacts/2026-10-17-hosted-0d15-comparison/raw/native-dock-workspace-without-frame-timing/runs.json","sha256":"4e87f99f953c43545f60f56293b0f5c08e1523f56dcdbe420fabeeb4a74d4177"},
+      "engines": {"kael":{"binary":"kael-workspace-without-frame-timing","cpu_percent":{"idle-before":{"runs":[0.785254,0.838413,1.179235,0.871308,0.939265],"median":0.871308,"range":[0.785254,1.179235]},"active":{"runs":[15.527973,16.500304,15.344735,14.715655,15.10027],"median":15.344735,"range":[14.715655,16.500304]},"idle-after":{"runs":[0.004431,0.004608,0.004228,0.003515,0.006748],"median":0.004431,"range":[0.003515,0.006748]},"churn":{"runs":[8.97827,9.158794,8.939485,9.275268,9.626249],"median":9.158794,"range":[8.939485,9.626249]}},"stable_sampled_peak_rss_bytes":{"runs":[84033536,84557824,83951616,84164608,84590592],"median":84164608,"range":[83951616,84590592]},"cpu_span_p99_us":null},"gpui-kit":{"binary":"gpui-kit-workspace-without-frame-timing","cpu_percent":{"idle-before":{"runs":[1.627617,1.58627,1.555749,1.663092,1.707162],"median":1.627617,"range":[1.555749,1.707162]},"active":{"runs":[16.925831,17.306621,15.238692,17.357594,13.03679],"median":16.925831,"range":[13.03679,17.357594]},"idle-after":{"runs":[0.943057,0.872249,0.811539,0.961221,0.897529],"median":0.897529,"range":[0.811539,0.961221]},"churn":{"runs":[8.417015,9.505107,10.145602,10.08616,10.268597],"median":10.08616,"range":[8.417015,10.268597]}},"stable_sampled_peak_rss_bytes":{"runs":[84115456,83738624,84066304,84033536,83902464],"median":84033536,"range":[83738624,84115456]},"cpu_span_p99_us":null}}
+    },
+    {
+      "contract": "native-dock-workspace-v1",
+      "frame_timing_enabled": true,
+      "raw_aggregate": {"path":".artifacts/2026-10-17-hosted-0d15-comparison/raw/native-dock-workspace/runs.json","sha256":"61b3c1ea5e7b52fe673ad7c86a0c90a5c191af9d3f33a211c92893987b4eacc5"},
+      "engines": {"kael":{"binary":"kael-workspace","cpu_percent":{"idle-before":{"runs":[0.719244,0.849581,0.632047,0.729977,0.794553],"median":0.729977,"range":[0.632047,0.849581]},"active":{"runs":[14.057945,16.014686,15.541134,16.182179,13.883677],"median":15.541134,"range":[13.883677,16.182179]},"idle-after":{"runs":[0.002651,0.007102,0.00788,0.004517,0.003339],"median":0.004517,"range":[0.002651,0.00788]},"churn":{"runs":[9.631299,9.81937,9.44005,7.307194,9.517159],"median":9.517159,"range":[7.307194,9.81937]}},"stable_sampled_peak_rss_bytes":{"runs":[85065728,84672512,84934656,84721664,85393408],"median":84934656,"range":[84672512,85393408]},"cpu_span_p99_us":{"draw":{"runs":[16290,15956,16120,16197,15823],"median":16120,"range":[15823,16290]},"platform_submission":{"runs":[487,556,552,482,501],"median":501,"range":[482,556]}}},"gpui-kit":{"binary":"gpui-kit-workspace","cpu_percent":{"idle-before":{"runs":[1.555399,1.150949,1.284446,1.244307,1.281228],"median":1.281228,"range":[1.150949,1.555399]},"active":{"runs":[15.754676,14.770635,16.505211,17.467498,16.088672],"median":16.088672,"range":[14.770635,17.467498]},"idle-after":{"runs":[0.872875,0.987013,0.71579,0.837099,0.648756],"median":0.837099,"range":[0.648756,0.987013]},"churn":{"runs":[9.892393,10.010103,8.967597,10.780298,8.004592],"median":9.892393,"range":[8.004592,10.780298]}},"stable_sampled_peak_rss_bytes":{"runs":[89866240,89817088,89980928,89604096,89686016],"median":89817088,"range":[89604096,89980928]},"cpu_span_p99_us":{"draw":{"runs":[13866,15659,14477,16197,13515],"median":14477,"range":[13515,16197]},"platform_submission":{"runs":[456,552,467,447,459],"median":459,"range":[447,552]}}}}
+    },
+    {
+      "contract": "native-editor-document-v1",
+      "frame_timing_enabled": false,
+      "raw_aggregate": {"path":".artifacts/2026-10-17-hosted-0d15-comparison/raw/editor-document-without-frame-timing/runs.json","sha256":"af3d4956e48f38645a85359ccc2aeefadf883f440c0298240a56c534e82f36bb"},
+      "engines": {"kael":{"binary":"kael-editor-without-frame-timing","cpu_percent":{"idle-before":{"runs":[0.822941,0.751866,1.194383,0.676465,0.78305],"median":0.78305,"range":[0.676465,1.194383]},"active":{"runs":[26.57367,30.256461,28.298757,31.658372,29.729935],"median":29.729935,"range":[26.57367,31.658372]},"idle-after":{"runs":[0.004235,0.023598,0.026931,0.030302,0.002258],"median":0.023598,"range":[0.002258,0.030302]},"churn":{"runs":[19.647874,19.97992,20.525283,19.811814,19.170825],"median":19.811814,"range":[19.170825,20.525283]}},"stable_sampled_peak_rss_bytes":{"runs":[86310912,90439680,90767360,86720512,90570752],"median":90439680,"range":[86310912,90767360]},"cpu_span_p99_us":null},"gpui-kit":{"binary":"gpui-kit-editor-without-frame-timing","cpu_percent":{"idle-before":{"runs":[1.546285,1.625109,1.062211,1.35101,1.493036],"median":1.493036,"range":[1.062211,1.625109]},"active":{"runs":[6.03725,8.466172,6.556915,7.823283,8.134423],"median":7.823283,"range":[6.03725,8.466172]},"idle-after":{"runs":[0.950058,0.915269,0.783482,0.780637,1.274193],"median":0.915269,"range":[0.780637,1.274193]},"churn":{"runs":[10.397458,11.154518,11.040906,10.943761,15.503656],"median":11.040906,"range":[10.397458,15.503656]}},"stable_sampled_peak_rss_bytes":{"runs":[99598336,99926016,99778560,99631104,99696640],"median":99696640,"range":[99598336,99926016]},"cpu_span_p99_us":null}}
+    },
+    {
+      "contract": "native-editor-document-v1",
+      "frame_timing_enabled": true,
+      "raw_aggregate": {"path":".artifacts/2026-10-17-hosted-0d15-comparison/raw/native-editor-document/runs.json","sha256":"d12541256f3055a733413791e56bbddadf6aae8d2b1f6b899428c8cecda6795b"},
+      "engines": {"kael":{"binary":"kael-editor","cpu_percent":{"idle-before":{"runs":[0.431349,0.766788,0.769239,1.174807,0.999999],"median":0.769239,"range":[0.431349,1.174807]},"active":{"runs":[18.499251,29.815957,30.039484,30.432618,34.136776],"median":30.039484,"range":[18.499251,34.136776]},"idle-after":{"runs":[0.003047,0.006529,0.014706,0.040717,0.008949],"median":0.008949,"range":[0.003047,0.040717]},"churn":{"runs":[19.246183,19.762281,19.344344,21.748963,18.488853],"median":19.344344,"range":[18.488853,21.748963]}},"stable_sampled_peak_rss_bytes":{"runs":[89997312,90816512,90718208,90406912,86835200],"median":90406912,"range":[86835200,90816512]},"cpu_span_p99_us":{"draw":{"runs":[9442,9190,9005,7303,8183],"median":9005,"range":[7303,9442]},"platform_submission":{"runs":[476,432,439,548,444],"median":444,"range":[432,548]}}},"gpui-kit":{"binary":"gpui-kit-editor","cpu_percent":{"idle-before":{"runs":[1.268275,1.215814,1.14575,1.679569,1.273186],"median":1.268275,"range":[1.14575,1.679569]},"active":{"runs":[8.2897,8.240407,7.631033,8.724882,6.546778],"median":8.240407,"range":[6.546778,8.724882]},"idle-after":{"runs":[0.653347,0.759316,0.568746,1.074497,0.73272],"median":0.73272,"range":[0.568746,1.074497]},"churn":{"runs":[9.947145,10.341536,11.680398,12.57961,11.530798],"median":11.530798,"range":[9.947145,12.57961]}},"stable_sampled_peak_rss_bytes":{"runs":[105889792,105709568,105611264,105955328,105562112],"median":105709568,"range":[105562112,105955328]},"cpu_span_p99_us":{"draw":{"runs":[5873,5471,5515,5967,6051],"median":5873,"range":[5471,6051]},"platform_submission":{"runs":[619,493,466,2126,643],"median":619,"range":[466,2126]}}}}
+    }
+  ]
+}

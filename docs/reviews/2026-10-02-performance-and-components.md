@@ -81,9 +81,9 @@ The [exact-tag local runtime checkpoint](2026-10-18-gpui073-local-runtime-valida
 then freezes all twenty Kael/GPUI Kit 0.7.3 release executables and verifies their
 source and compiler inventories. All twenty native attempts pass with equal
 1100×760 logical client sizes at scale 2. Four navigation runs use the original
-duration; sixteen component cases are quick correctness smokes. The full hosted
-comparison remains separate and unaudited here; these checks establish no
-comparative performance, presentation or power result.
+duration; sixteen component cases are quick correctness smokes. At that
+checkpoint the full hosted comparison remained separate and unaudited; these
+local checks establish no comparative performance, presentation or power result.
 
 The [October 18 sizing/animation checkpoint](2026-10-18-track-and-animation-validation.json)
 extends table scrollbars across their actual parent width and prevents Choker
@@ -107,6 +107,19 @@ passes the same nineteen-file source: 58 distinct GPU tests, correct client
 sizing and resize, idle model wake, and 58 frames with positive presentation
 timestamps. The complete readback passes visual inspection. This local proof
 leaves the hosted presentation failure and fresh packaging separate.
+
+The [package preflight at `b279795`](2026-10-18-package-source-validation.json)
+builds all 39 extracted archives and independently matches all 929 included Rust
+files to Git. Required licenses, dependency aliases and fork provenance pass;
+no crates are uploaded.
+
+The [completed GPUI Kit 0.7.3 comparison](2026-10-18-gpui073-hosted-comparison.md)
+then independently validates all 100 hosted captures at the earlier `0d15aff`
+source, all twenty executable identities and 800 equal client-size boundaries.
+Navigation and workspace use less active CPU in that cohort; table/tree CPU and
+RSS remain concrete gaps. Hosted viewports are equally constrained to 1100×645,
+scale 1. Zero-only energy counters provide no power result; later source,
+physical presentation and overall superiority remain separate.
 
 ## Component coverage and gaps
 
