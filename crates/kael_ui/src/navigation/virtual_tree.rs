@@ -356,6 +356,88 @@ impl<T: Clone + Eq + Hash + 'static> VirtualTreeModel<T> {
     }
 }
 
+// Borrow every generated field until reuse has been decided. This deliberately
+// lists the default fields too: an old record with extra metadata cannot silently
+// survive a generator change merely because label/topology happen to match.
+struct LogicalTreeRecord<'a> {
+    id: AccessibilityId,
+    role: AccessibilityRole,
+    states: AccessibilityState,
+    label: &'a str,
+    level: Option<usize>,
+    parent: Option<AccessibilityId>,
+    children: &'a [AccessibilityId],
+    actions: &'a [AccessibilityAction],
+}
+impl LogicalTreeRecord<'_> {
+    fn matches(&self, node: &AccessibilityNode) -> bool {
+        // No `..`: adding a node field must trigger an explicit reuse decision.
+        let AccessibilityNode {
+            id,
+            role,
+            states,
+            label,
+            description,
+            value,
+            placeholder,
+            level,
+            row_count,
+            column_count,
+            row_index,
+            column_index,
+            row_span,
+            column_span,
+            sort_direction,
+            bounds,
+            actions,
+            children,
+            parent,
+            active_descendant,
+            text_document,
+            text_selection,
+            text_geometry,
+        } = node;
+        *id == self.id
+            && *role == self.role
+            && *states == self.states
+            && label.as_deref() == Some(self.label)
+            && *level == self.level
+            && *parent == self.parent
+            && children.as_slice() == self.children
+            && actions.as_slice() == self.actions
+            && description.is_none()
+            && value.is_none()
+            && placeholder.is_none()
+            && row_count.is_none()
+            && column_count.is_none()
+            && row_index.is_none()
+            && column_index.is_none()
+            && row_span.is_none()
+            && column_span.is_none()
+            && sort_direction.is_none()
+            && bounds.is_none()
+            && active_descendant.is_none()
+            && text_document.is_none()
+            && text_selection.is_none()
+            && text_geometry.is_none()
+    }
+
+    fn into_node(self) -> AccessibilityNode {
+        let mut node = AccessibilityNode::new(self.role).with_label(self.label.to_owned());
+        node.id = self.id;
+        node.states = self.states;
+        node.level = self.level;
+        node.parent = self.parent;
+        node.actions = self.actions.to_vec();
+        // Preserve the shared empty child list for leaves. Only actual parents
+        // need a new child allocation when a fresh record is required.
+        if !self.children.is_empty() {
+            node.children = self.children.to_vec().into();
+        }
+        node
+    }
+}
+
 fn build_accessibility<T: Clone + Eq + Hash + 'static>(
     model: &VirtualTreeModel<T>,
     context: &VirtualTreeAccessibilityContext<T>,
@@ -386,51 +468,104 @@ fn build_accessibility<T: Clone + Eq + Hash + 'static>(
                 .collect(),
         )
     };
+    // Complete topology before choosing records. Parent keys are positions only
+    // inside this transient builder; retained records use stable semantic IDs.
+    // There is one Vec per displayed parent with children, not one per leaf.
+    let mut children: HashMap<usize, Vec<AccessibilityId>> = HashMap::new();
+    for (index, id) in ids.iter().enumerate() {
+        let parent = model.parent_index(index).map_or(0, |parent| parent + 1);
+        children.entry(parent).or_default().push(*id);
+    }
+    let previous = context
+        .previous
+        .as_ref()
+        .and_then(|data| data.snapshot.as_ref());
+    let mut shared = executor.map(|executor| {
+        AccessibilitySnapshot::sharing_builder(context.root, model.len() + 1, executor)
+    });
+    // The no-executor fallback preserves the legacy owned-constructor contract.
+    let mut nodes = if shared.is_some() {
+        Vec::new()
+    } else {
+        Vec::with_capacity(model.len() + 1)
+    };
     let mut indices = HashMap::with_capacity(model.len());
-    let mut nodes = Vec::with_capacity(model.len() + 1);
-    let mut root =
-        AccessibilityNode::new(AccessibilityRole::Tree).with_label(context.label.to_string());
-    root.id = context.root;
-    root.actions = vec![AccessibilityAction::Focus];
-    nodes.push(root);
-    for (index, row) in model.data.rows.iter().enumerate() {
-        let id = ids[index];
-        indices.insert(id, index);
-        let mut node = AccessibilityNode::new(AccessibilityRole::TreeItem)
-            .with_label(row.label.to_string())
-            .with_level(row.level + 1);
-        node.id = id;
-        if row.disabled {
-            node.states |= AccessibilityState::DISABLED;
-        }
-        if row.has_children {
-            node.states |= if model.data.expanded[index] {
-                AccessibilityState::EXPANDED
+    {
+        let mut emit = |record: LogicalTreeRecord<'_>| {
+            if let Some(builder) = shared.as_mut() {
+                if let Some(previous) = previous.filter(|snapshot| {
+                    snapshot
+                        .get(record.id)
+                        .is_some_and(|node| record.matches(node))
+                }) {
+                    builder.reuse_from(previous, record.id)
+                } else {
+                    builder.insert(record.into_node())
+                }
+                .expect("validated virtual tree has unique accessibility identities");
             } else {
-                AccessibilityState::COLLAPSED
-            };
-        }
-        if !row.disabled {
-            node.actions = vec![
+                nodes.push(record.into_node());
+            }
+        };
+        emit(LogicalTreeRecord {
+            id: context.root,
+            role: AccessibilityRole::Tree,
+            states: AccessibilityState::NONE,
+            label: context.label.as_ref(),
+            level: None,
+            parent: None,
+            children: children.get(&0).map(Vec::as_slice).unwrap_or(&[]),
+            actions: &[AccessibilityAction::Focus],
+        });
+        for (index, row) in model.data.rows.iter().enumerate() {
+            let id = ids[index];
+            indices.insert(id, index);
+            let mut states = AccessibilityState::NONE;
+            if row.disabled {
+                states |= AccessibilityState::DISABLED;
+            }
+            if row.has_children {
+                states |= if model.data.expanded[index] {
+                    AccessibilityState::EXPANDED
+                } else {
+                    AccessibilityState::COLLAPSED
+                };
+            }
+            let actions = [
                 AccessibilityAction::Focus,
                 AccessibilityAction::Click,
                 AccessibilityAction::ScrollToVisible,
-            ];
-            if row.has_children && context.has_toggle {
-                node.actions.push(if model.data.expanded[index] {
+                if model.data.expanded[index] {
                     AccessibilityAction::Collapse
                 } else {
                     AccessibilityAction::Expand
-                });
-            }
+                },
+            ];
+            let action_count = if row.disabled {
+                0
+            } else if row.has_children && context.has_toggle {
+                4
+            } else {
+                3
+            };
+            emit(LogicalTreeRecord {
+                id,
+                role: AccessibilityRole::TreeItem,
+                states,
+                label: row.label.as_ref(),
+                level: Some(row.level + 1),
+                parent: Some(
+                    model
+                        .parent_index(index)
+                        .map_or(context.root, |parent| ids[parent]),
+                ),
+                children: children.get(&(index + 1)).map(Vec::as_slice).unwrap_or(&[]),
+                actions: &actions[..action_count],
+            });
         }
-        let parent = model.parent_index(index).map_or(0, |parent| parent + 1);
-        node.parent = Some(nodes[parent].id);
-        nodes[parent].children.push(id);
-        nodes.push(node);
     }
-    let snapshot = if let Some(executor) = executor {
-        AccessibilitySnapshot::with_reclaim_executor(context.root, nodes, executor)
+    let snapshot = if let Some(builder) = shared {
+        builder.finish()
     } else {
         AccessibilitySnapshot::new(context.root, nodes)
     }
@@ -2148,5 +2283,447 @@ mod tests {
         });
         window.run_until_parked();
         window.update(|_, cx| assert_eq!(view.read(cx).selected.get(), None));
+    }
+
+    fn adopt_record_model(
+        mut model: VirtualTreeModel<usize>,
+        state: &mut VirtualTreeState<usize>,
+        worker: &BackgroundExecutor,
+        label: &str,
+        has_toggle: bool,
+    ) -> VirtualTreeModel<usize> {
+        let label: SharedString = label.to_owned().into();
+        model
+            .prepare_accessibility(
+                state.accessibility_preparation_context(label.clone(), has_toggle),
+                worker,
+            )
+            .unwrap();
+        state.logical_accessibility(&model, &label, has_toggle, worker);
+        model
+    }
+
+    fn record_snapshot(model: &VirtualTreeModel<usize>) -> &Arc<AccessibilitySnapshot> {
+        model
+            .data
+            .accessibility
+            .as_ref()
+            .unwrap()
+            .snapshot
+            .as_ref()
+            .unwrap()
+    }
+
+    fn record_id(model: &VirtualTreeModel<usize>, id: usize) -> AccessibilityId {
+        let data = model.data.accessibility.as_ref().unwrap();
+        data.ids[model.index_of(&id).unwrap()]
+    }
+
+    #[::core::prelude::v1::test]
+    fn disclosure_shares_records_by_semantics_not_shifted_positions_or_hidden_history() {
+        let mut cx = TestAppContext::single();
+        let worker = cx.background_executor.clone();
+        let mut state = cx.update(VirtualTreeState::new);
+        let nodes = vec![
+            TreeNode::new(0, "Project 日本語").with_children(vec![TreeNode::new(1, "👩🏽‍💻 café")]),
+            TreeNode::new(2, "Project 2").with_children(vec![TreeNode::new(3, "tail")]),
+        ];
+        let all = HashSet::from([0, 2]);
+        let initial = adopt_record_model(
+            VirtualTreeModel::new(&nodes, &all).unwrap(),
+            &mut state,
+            &worker,
+            "files",
+            true,
+        );
+        let first = record_snapshot(&initial).clone();
+        let old_leaf = record_id(&initial, 1);
+        let tail = record_id(&initial, 3);
+        let root = first.root;
+        let collapsed = adopt_record_model(
+            VirtualTreeModel::new(&nodes, &HashSet::from([2])).unwrap(),
+            &mut state,
+            &worker,
+            "files",
+            true,
+        );
+        let second = record_snapshot(&collapsed);
+        assert_eq!(collapsed.index_of(&3), Some(2));
+        assert_eq!(initial.index_of(&3), Some(3));
+        assert_eq!(second.len(), 4);
+        assert!(second.get(old_leaf).is_none());
+        assert!(std::ptr::eq(
+            first.get(root).unwrap(),
+            second.get(root).unwrap()
+        ));
+        assert!(std::ptr::eq(
+            first.get(tail).unwrap(),
+            second.get(tail).unwrap()
+        ));
+        assert!(!std::ptr::eq(
+            first.get(record_id(&initial, 0)).unwrap(),
+            second.get(record_id(&collapsed, 0)).unwrap()
+        ));
+        assert_eq!(
+            second.get(record_id(&collapsed, 0)).unwrap().children.len(),
+            0
+        );
+        assert_eq!(first.get(record_id(&initial, 0)).unwrap().children.len(), 1);
+        let restored = adopt_record_model(
+            VirtualTreeModel::new(&nodes, &all).unwrap(),
+            &mut state,
+            &worker,
+            "files",
+            true,
+        );
+        assert_eq!(record_id(&restored, 1), old_leaf);
+        assert!(
+            !std::ptr::eq(
+                first.get(old_leaf).unwrap(),
+                record_snapshot(&restored).get(old_leaf).unwrap()
+            ),
+            "an external old snapshot is not a hidden payload cache"
+        );
+        assert!(std::ptr::eq(
+            second.get(tail).unwrap(),
+            record_snapshot(&restored).get(tail).unwrap()
+        ));
+        assert_eq!(
+            first.get(old_leaf).unwrap().label.as_deref(),
+            Some("👩🏽‍💻 café")
+        );
+        drop(initial);
+        drop(collapsed);
+        drop(first);
+        cx.run_until_parked();
+        assert_eq!(record_snapshot(&restored).len(), 5);
+    }
+
+    #[::core::prelude::v1::test]
+    fn hundred_thousand_disclosure_records_share_full_offscreen_hierarchy() {
+        let mut cx = TestAppContext::single();
+        let worker = cx.background_executor.clone();
+        let mut state = cx.update(VirtualTreeState::new);
+        let nodes = (0..25)
+            .map(|project| {
+                let root = project * 4001;
+                TreeNode::new(root, format!("Project {project:02} 日本語")).with_children(
+                    (1..=4000)
+                        .map(|file| {
+                            TreeNode::new(root + file, format!("document_{file:04} 👩🏽‍💻 café"))
+                        })
+                        .collect(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let all = (0..25)
+            .map(|project| project * 4001)
+            .collect::<HashSet<_>>();
+        let mut current = adopt_record_model(
+            VirtualTreeModel::new(&nodes, &all).unwrap(),
+            &mut state,
+            &worker,
+            "files",
+            true,
+        );
+        assert_eq!(record_snapshot(&current).len(), 100026);
+        for project in [0, 12, 24] {
+            let parent_id = project * 4001;
+            let before = record_snapshot(&current).clone();
+            let parent = record_id(&current, parent_id);
+            let old_leaf = record_id(&current, parent_id + 4000);
+            let mut expanded = all.clone();
+            expanded.remove(&parent_id);
+            let collapsed = adopt_record_model(
+                VirtualTreeModel::new(&nodes, &expanded).unwrap(),
+                &mut state,
+                &worker,
+                "files",
+                true,
+            );
+            let after = record_snapshot(&collapsed);
+            assert_eq!(after.len(), 96026);
+            assert!(after.get(old_leaf).is_none());
+            let mut reused = usize::from(std::ptr::eq(
+                before.get(before.root).unwrap(),
+                after.get(after.root).unwrap(),
+            ));
+            for index in 0..collapsed.len() {
+                let id = collapsed.data.accessibility.as_ref().unwrap().ids[index];
+                let node = after.get(id).unwrap();
+                assert_eq!(
+                    node.label.as_deref(),
+                    Some(collapsed.label_at(index).unwrap().as_ref())
+                );
+                assert_eq!(node.level, Some(collapsed.level_at(index).unwrap() + 1));
+                let expected_parent = collapsed
+                    .parent_index(index)
+                    .map(|parent| collapsed.data.accessibility.as_ref().unwrap().ids[parent])
+                    .unwrap_or(after.root);
+                assert_eq!(node.parent, Some(expected_parent));
+                if std::ptr::eq(before.get(id).unwrap(), node) {
+                    reused += 1;
+                }
+                assert_eq!(
+                    node.children.len(),
+                    if node.level == Some(1) && id != parent {
+                        4000
+                    } else {
+                        0
+                    }
+                );
+            }
+            assert_eq!(reused, 96025);
+            assert_eq!(after.get(parent).unwrap().children.len(), 0);
+            assert_eq!(before.get(parent).unwrap().children.len(), 4000);
+            assert_eq!(after.get(after.root).unwrap().children.len(), 25);
+            current = adopt_record_model(
+                VirtualTreeModel::new(&nodes, &all).unwrap(),
+                &mut state,
+                &worker,
+                "files",
+                true,
+            );
+            let restored = record_snapshot(&current);
+            assert_eq!(record_id(&current, parent_id + 4000), old_leaf);
+            assert!(!std::ptr::eq(
+                before.get(old_leaf).unwrap(),
+                restored.get(old_leaf).unwrap()
+            ));
+            assert_eq!(restored.get(parent).unwrap().children.len(), 4000);
+            drop(before);
+            drop(collapsed);
+            cx.run_until_parked();
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn shared_tree_records_rebuild_changed_labels_topology_policy_and_defaults() {
+        let cx = TestAppContext::single();
+        let worker = cx.background_executor.clone();
+        let mut state = cx.update(VirtualTreeState::new);
+        let mut nodes = vec![
+            TreeNode::new(0, "Project")
+                .with_children(vec![TreeNode::new(1, "日本語"), TreeNode::new(2, "café")]),
+            TreeNode::new(10, "Other").with_children(vec![TreeNode::new(11, "tail")]),
+        ];
+        let all = HashSet::from([0, 10]);
+        let mut current = adopt_record_model(
+            VirtualTreeModel::new(&nodes, &all).unwrap(),
+            &mut state,
+            &worker,
+            "files",
+            true,
+        );
+        let mut before = record_snapshot(&current).clone();
+        let leaf = record_id(&current, 1);
+        let sibling = record_id(&current, 2);
+        nodes[0].children[0].label = "日本語 changed".into();
+        current = adopt_record_model(
+            VirtualTreeModel::new(&nodes, &all).unwrap(),
+            &mut state,
+            &worker,
+            "files",
+            true,
+        );
+        assert!(!std::ptr::eq(
+            before.get(leaf).unwrap(),
+            record_snapshot(&current).get(leaf).unwrap()
+        ));
+        assert!(std::ptr::eq(
+            before.get(sibling).unwrap(),
+            record_snapshot(&current).get(sibling).unwrap()
+        ));
+        assert_eq!(before.get(leaf).unwrap().label.as_deref(), Some("日本語"));
+        before = record_snapshot(&current).clone();
+        nodes[0].children.swap(0, 1);
+        current = adopt_record_model(
+            VirtualTreeModel::new(&nodes, &all).unwrap(),
+            &mut state,
+            &worker,
+            "files",
+            true,
+        );
+        assert!(!std::ptr::eq(
+            before.get(record_id(&current, 0)).unwrap(),
+            record_snapshot(&current)
+                .get(record_id(&current, 0))
+                .unwrap()
+        ));
+        assert!(std::ptr::eq(
+            before.get(leaf).unwrap(),
+            record_snapshot(&current).get(leaf).unwrap()
+        ));
+        before = record_snapshot(&current).clone();
+        let moved = nodes[0].children.remove(1);
+        nodes[1].children.push(moved);
+        current = adopt_record_model(
+            VirtualTreeModel::new(&nodes, &all).unwrap(),
+            &mut state,
+            &worker,
+            "files",
+            true,
+        );
+        assert!(!std::ptr::eq(
+            before.get(leaf).unwrap(),
+            record_snapshot(&current).get(leaf).unwrap()
+        ));
+        assert_eq!(
+            record_snapshot(&current).get(leaf).unwrap().parent,
+            Some(record_id(&current, 10))
+        );
+        before = record_snapshot(&current).clone();
+        nodes[1].children[1].disabled = true;
+        current = adopt_record_model(
+            VirtualTreeModel::new(&nodes, &all).unwrap(),
+            &mut state,
+            &worker,
+            "files",
+            true,
+        );
+        assert!(!std::ptr::eq(
+            before.get(leaf).unwrap(),
+            record_snapshot(&current).get(leaf).unwrap()
+        ));
+        assert!(
+            record_snapshot(&current)
+                .get(leaf)
+                .unwrap()
+                .actions
+                .is_empty()
+        );
+        before = record_snapshot(&current).clone();
+        current = adopt_record_model(
+            VirtualTreeModel::new(&nodes, &all).unwrap(),
+            &mut state,
+            &worker,
+            "renamed files",
+            false,
+        );
+        assert!(!std::ptr::eq(
+            before.get(before.root).unwrap(),
+            record_snapshot(&current).get(before.root).unwrap()
+        ));
+        assert!(!std::ptr::eq(
+            before.get(record_id(&current, 10)).unwrap(),
+            record_snapshot(&current)
+                .get(record_id(&current, 10))
+                .unwrap()
+        ));
+        assert!(std::ptr::eq(
+            before.get(sibling).unwrap(),
+            record_snapshot(&current).get(sibling).unwrap()
+        ));
+    }
+
+    #[::core::prelude::v1::test]
+    fn logical_tree_record_matching_checks_every_generated_and_default_field() {
+        let make_record = || LogicalTreeRecord {
+            id: AccessibilityId(20),
+            role: AccessibilityRole::TreeItem,
+            states: AccessibilityState::NONE,
+            label: "日本語",
+            level: Some(1),
+            parent: Some(AccessibilityId(10)),
+            children: &[],
+            actions: &[AccessibilityAction::Focus],
+        };
+        let pristine = make_record().into_node();
+        assert!(make_record().matches(&pristine));
+        let mutations: &[fn(&mut AccessibilityNode)] = &[
+            |n| n.id = AccessibilityId(21),
+            |n| n.role = AccessibilityRole::Button,
+            |n| n.states = AccessibilityState::SELECTED,
+            |n| n.label = Some("changed".into()),
+            |n| n.level = Some(2),
+            |n| n.parent = Some(AccessibilityId(99)),
+            |n| n.children.push(AccessibilityId(99)),
+            |n| n.actions.push(AccessibilityAction::Click),
+            |n| n.description = Some("extra".into()),
+            |n| n.value = Some(AccessibilityValue::Text("extra".into())),
+            |n| n.placeholder = Some("extra".into()),
+            |n| n.row_count = Some(1),
+            |n| n.column_count = Some(1),
+            |n| n.row_index = Some(1),
+            |n| n.column_index = Some(1),
+            |n| n.row_span = Some(1),
+            |n| n.column_span = Some(1),
+            |n| n.sort_direction = Some(AccessibilitySortDirection::Ascending),
+            |n| n.bounds = Some(AccessibilityRect::new(0.0, 0.0, 1.0, 1.0)),
+            |n| n.active_descendant = Some(AccessibilityId(99)),
+            |n| n.text_document = Some(AccessibilityTextDocument::new("text")),
+            |n| {
+                n.text_selection = Some(AccessibilityTextSelection {
+                    anchor: 0,
+                    focus: 0,
+                })
+            },
+            |n| {
+                n.text_geometry = Some(
+                    AccessibilityTextGeometry::new(
+                        &AccessibilityTextDocument::new("text"),
+                        Vec::new(),
+                    )
+                    .unwrap(),
+                )
+            },
+        ];
+        for (index, mutate) in mutations.iter().enumerate() {
+            let mut altered = pristine.clone();
+            mutate(&mut altered);
+            assert!(
+                !make_record().matches(&altered),
+                "field mutation {index} must force a new record"
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn shared_tree_preparation_preserves_legacy_owned_fallback_and_retires_old_generations() {
+        let mut cx = TestAppContext::single();
+        let worker = cx.background_executor.clone();
+        let mut state = cx.update(VirtualTreeState::new);
+        let nodes = vec![TreeNode::new(0, "root").with_children(vec![TreeNode::new(1, "leaf")])];
+        let all = HashSet::from([0]);
+        let model = VirtualTreeModel::new(&nodes, &all).unwrap();
+        let owned = build_accessibility(
+            &model,
+            &state.accessibility_preparation_context("files", true),
+            None,
+        );
+        let owned_snapshot = owned.snapshot.as_ref().unwrap();
+        let legacy_context = VirtualTreeAccessibilityContext {
+            root: owned.root,
+            previous: Some(owned.clone()),
+            label: "files".into(),
+            has_toggle: true,
+        };
+        let shared = build_accessibility(&model, &legacy_context, Some(&worker));
+        assert_eq!(shared.snapshot.as_ref().unwrap(), owned_snapshot);
+        drop(legacy_context);
+        let mut current = adopt_record_model(model, &mut state, &worker, "files", true);
+        for _ in 0..32 {
+            let old_model = Arc::downgrade(&current.data);
+            let old_prepared = Arc::downgrade(current.data.accessibility.as_ref().unwrap());
+            let old_snapshot = Arc::downgrade(record_snapshot(&current));
+            let next = adopt_record_model(
+                VirtualTreeModel::new(&nodes, &all).unwrap(),
+                &mut state,
+                &worker,
+                "files",
+                true,
+            );
+            assert!(std::ptr::eq(
+                record_snapshot(&current)
+                    .get(record_id(&current, 1))
+                    .unwrap(),
+                record_snapshot(&next).get(record_id(&next, 1)).unwrap()
+            ));
+            current = next;
+            cx.run_until_parked();
+            assert!(old_model.upgrade().is_none());
+            assert!(old_prepared.upgrade().is_none());
+            assert!(old_snapshot.upgrade().is_none());
+        }
     }
 }

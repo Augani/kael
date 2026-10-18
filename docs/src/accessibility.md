@@ -178,6 +178,27 @@ let task = executor.spawn(async move {
 
 Adopting prepared metadata on the foreground thread shares its snapshot and ID
 maps. Outgoing prepared model and semantic storage are reclaimed on the worker.
+Preparation reuses unchanged immutable logical node records from the current
+preparation context after checking their complete label, state, actions, parent
+and ordered children. Collapsed descendants remain absent from the snapshot;
+only their IDs remain in the current catalog. Re-expansion may build their node
+records again. This shares record payloads across adjacent generations without
+retaining a history of old models or disclosure variants.
+
+Model indexing, topology validation and changed-snapshot delta scans remain
+linear. Initial shared preparation adds an allocation per record, while matching
+records avoid rebuilding owned labels and actions. This is not a process memory
+budget or a guarantee of lower initialization or frame latency. Existing
+`AccessibilitySnapshot::new` and `with_reclaim_executor` keep owned storage.
+Custom logical controls may opt into `AccessibilitySnapshot::sharing_builder`,
+which preserves borrowed getters and validates the complete graph on `finish`.
+Use `reuse_from` only after verifying all desired semantics. An unfinished or
+invalid builder retains accepted records, rejected owned input values and
+reserved map storage until `finish` or drop, then reclaims them in a batch on the
+supplied executor. Continuing to submit owned inputs after an error retains
+those values until that retirement. Successful `finish` transfers valid records
+to the new snapshot; record owners do not escape it.
+
 Keep the returned task and apply its result through the application's normal
 entity update. Small or non-`Send` models can use ordinary construction; their
 first render prepares semantics on the foreground thread, so this route is

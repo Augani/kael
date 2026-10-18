@@ -52,6 +52,252 @@ impl<'a> IntoIterator for &'a AccessibilityChildren {
     }
 }
 
+// Keep legacy snapshots contiguous. Shared storage is opt-in so unrelated
+// callers do not gain an allocation per node merely by rebuilding the crate.
+#[derive(Debug)]
+pub(crate) enum AccessibilitySnapshotNodes {
+    Owned(HashMap<AccessibilityId, AccessibilityNode>),
+    Shared(HashMap<AccessibilityId, Arc<AccessibilityNode>>),
+}
+impl Default for AccessibilitySnapshotNodes {
+    fn default() -> Self {
+        Self::Owned(HashMap::new())
+    }
+}
+impl PartialEq for AccessibilitySnapshotNodes {
+    fn eq(&self, other: &Self) -> bool {
+        self.len() == other.len() && self.iter().all(|(id, node)| other.get(id) == Some(node))
+    }
+}
+impl AccessibilitySnapshotNodes {
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Owned(nodes) => nodes.len(),
+            Self::Shared(nodes) => nodes.len(),
+        }
+    }
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    fn capacity(&self) -> usize {
+        match self {
+            Self::Owned(nodes) => nodes.capacity(),
+            Self::Shared(nodes) => nodes.capacity(),
+        }
+    }
+    pub(crate) fn get(&self, id: &AccessibilityId) -> Option<&AccessibilityNode> {
+        match self {
+            Self::Owned(nodes) => nodes.get(id),
+            Self::Shared(nodes) => nodes.get(id).map(Arc::as_ref),
+        }
+    }
+    pub(crate) fn contains_key(&self, id: &AccessibilityId) -> bool {
+        match self {
+            Self::Owned(nodes) => nodes.contains_key(id),
+            Self::Shared(nodes) => nodes.contains_key(id),
+        }
+    }
+    pub(crate) fn iter(&self) -> AccessibilitySnapshotIter<'_> {
+        match self {
+            Self::Owned(nodes) => AccessibilitySnapshotIter::Owned(nodes.iter()),
+            Self::Shared(nodes) => AccessibilitySnapshotIter::Shared(nodes.iter()),
+        }
+    }
+    pub(crate) fn keys(&self) -> impl Iterator<Item = &AccessibilityId> {
+        self.iter().map(|(id, _)| id)
+    }
+    pub(crate) fn values(&self) -> impl Iterator<Item = &AccessibilityNode> {
+        self.iter().map(|(_, node)| node)
+    }
+    fn shared_record(&self, id: &AccessibilityId) -> Option<Arc<AccessibilityNode>> {
+        match self {
+            Self::Owned(nodes) => nodes.get(id).cloned().map(Arc::new),
+            Self::Shared(nodes) => nodes.get(id).cloned(),
+        }
+    }
+}
+impl Index<&AccessibilityId> for AccessibilitySnapshotNodes {
+    type Output = AccessibilityNode;
+    fn index(&self, id: &AccessibilityId) -> &Self::Output {
+        self.get(id).expect("logical accessibility node missing")
+    }
+}
+// No box or collection allocation on lookup/iteration. References always point
+// at immutable node values, regardless of the private representation.
+pub(crate) enum AccessibilitySnapshotIter<'a> {
+    Owned(std::collections::hash_map::Iter<'a, AccessibilityId, AccessibilityNode>),
+    Shared(std::collections::hash_map::Iter<'a, AccessibilityId, Arc<AccessibilityNode>>),
+}
+impl<'a> Iterator for AccessibilitySnapshotIter<'a> {
+    type Item = (&'a AccessibilityId, &'a AccessibilityNode);
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Owned(iter) => iter.next(),
+            Self::Shared(iter) => iter.next().map(|(id, node)| (id, node.as_ref())),
+        }
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::Owned(iter) => iter.size_hint(),
+            Self::Shared(iter) => iter.size_hint(),
+        }
+    }
+}
+impl ExactSizeIterator for AccessibilitySnapshotIter<'_> {}
+impl<'a> IntoIterator for &'a AccessibilitySnapshotNodes {
+    type Item = (&'a AccessibilityId, &'a AccessibilityNode);
+    type IntoIter = AccessibilitySnapshotIter<'a>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+fn validate_snapshot(
+    root: AccessibilityId,
+    nodes: &AccessibilitySnapshotNodes,
+) -> anyhow::Result<(Option<AccessibilityId>, Vec<AccessibilityId>)> {
+    anyhow::ensure!(
+        nodes.contains_key(&root),
+        "logical accessibility root missing"
+    );
+    let mut seen = HashSet::with_capacity(nodes.len());
+    let mut pending = vec![root];
+    while let Some(id) = pending.pop() {
+        anyhow::ensure!(
+            seen.insert(id),
+            "logical accessibility subtree contains a cycle or duplicate child"
+        );
+        let node = nodes
+            .get(&id)
+            .ok_or_else(|| anyhow::anyhow!("logical accessibility child missing"))?;
+        for child in &node.children {
+            anyhow::ensure!(
+                nodes.get(child).is_some_and(|node| node.parent == Some(id)),
+                "logical accessibility parent mismatch"
+            );
+            pending.push(*child);
+        }
+    }
+    anyhow::ensure!(
+        seen.len() == nodes.len(),
+        "logical accessibility subtree contains unreachable nodes"
+    );
+    let focused = nodes
+        .values()
+        .find(|node| node.states.contains(super::AccessibilityState::FOCUSED))
+        .map(|node| node.id);
+    let text_owners = nodes
+        .values()
+        .filter(|node| node.text_document.is_some())
+        .map(|node| node.id)
+        .collect();
+    Ok((focused, text_owners))
+}
+
+/// Build a complete snapshot while sharing unchanged immutable node records.
+///
+/// `reuse_from` copies a record's Arc, without retaining its old snapshot or any
+/// predecessor chain. Legacy owned snapshots require one value clone instead.
+/// Getters still return immutable `AccessibilityNode` references; record owners
+/// never escape. Every accepted record, including an unfinished/error builder's
+/// records, is reclaimed in one batch on the supplied background executor.
+/// Initial construction adds an Arc allocation per record. Building and graph
+/// validation remain linear; this is not incremental topology or a heap budget.
+pub struct AccessibilitySnapshotBuilder {
+    root: AccessibilityId,
+    nodes: AccessibilitySnapshotNodes,
+    rejected: Vec<AccessibilityNode>,
+    error: Option<&'static str>,
+    reclaimer: Option<crate::BackgroundExecutor>,
+}
+impl AccessibilitySnapshotBuilder {
+    /// Add a fresh logical record. A duplicate identity poisons this builder,
+    /// even if its caller ignores the returned error.
+    pub fn insert(&mut self, node: AccessibilityNode) -> anyhow::Result<()> {
+        if let Some(error) = self.error {
+            self.rejected.push(node);
+            anyhow::bail!(error);
+        }
+        let AccessibilitySnapshotNodes::Shared(nodes) = &mut self.nodes else {
+            unreachable!("shared builder owns shared storage");
+        };
+        match nodes.entry(node.id) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(Arc::new(node));
+                Ok(())
+            }
+            std::collections::hash_map::Entry::Occupied(_) => {
+                self.rejected.push(node);
+                self.error = Some("duplicate logical accessibility node");
+                anyhow::bail!("duplicate logical accessibility node")
+            }
+        }
+    }
+    /// Add the exact immutable record currently held under `id` in `previous`.
+    /// The caller must first decide whether all desired semantics still match.
+    /// Missing/duplicate identities poison the builder; finish never repairs or
+    /// silently omits invalid input. Reuse does not skip whole-graph validation.
+    pub fn reuse_from(
+        &mut self,
+        previous: &AccessibilitySnapshot,
+        id: AccessibilityId,
+    ) -> anyhow::Result<()> {
+        if let Some(error) = self.error {
+            anyhow::bail!(error);
+        }
+        let AccessibilitySnapshotNodes::Shared(nodes) = &mut self.nodes else {
+            unreachable!("shared builder owns shared storage");
+        };
+        match nodes.entry(id) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let Some(node) = previous.nodes.shared_record(&id) else {
+                    self.error = Some("logical accessibility reuse node missing");
+                    anyhow::bail!("logical accessibility reuse node missing");
+                };
+                entry.insert(node);
+                Ok(())
+            }
+            std::collections::hash_map::Entry::Occupied(_) => {
+                self.error = Some("duplicate logical accessibility node");
+                anyhow::bail!("duplicate logical accessibility node")
+            }
+        }
+    }
+    /// Validate the complete current graph and retain only this generation's
+    /// map/records. Failure still retires accepted resources on the executor.
+    pub fn finish(mut self) -> anyhow::Result<Arc<AccessibilitySnapshot>> {
+        if let Some(error) = self.error {
+            anyhow::bail!(error);
+        }
+        let (focused, text_owners) = validate_snapshot(self.root, &self.nodes)?;
+        Ok(Arc::new(AccessibilitySnapshot {
+            root: self.root,
+            nodes: std::mem::take(&mut self.nodes),
+            focused,
+            text_owners,
+            reclaimer: self.reclaimer.take(),
+        }))
+    }
+}
+impl Drop for AccessibilitySnapshotBuilder {
+    fn drop(&mut self) {
+        // An empty, reserved map still owns potentially large table storage.
+        // The successful-finish replacement has zero capacity and needs no job.
+        if self.nodes.capacity() == 0 && self.rejected.capacity() == 0 {
+            return;
+        }
+        if let Some(executor) = self.reclaimer.take() {
+            let nodes = std::mem::take(&mut self.nodes);
+            let rejected = std::mem::take(&mut self.rejected);
+            executor
+                .spawn(async move {
+                    drop((nodes, rejected));
+                })
+                .detach();
+        }
+    }
+}
+
 /// An immutable logical subtree, independent of physically mounted elements.
 ///
 /// Build when the logical model changes and reuse the same `Arc` on every
@@ -60,7 +306,7 @@ impl<'a> IntoIterator for &'a AccessibilityChildren {
 pub struct AccessibilitySnapshot {
     /// The subtree's semantic root identity.
     pub root: AccessibilityId,
-    pub(crate) nodes: HashMap<AccessibilityId, AccessibilityNode>,
+    pub(crate) nodes: AccessibilitySnapshotNodes,
     pub(crate) focused: Option<AccessibilityId>,
     // Prepared once with the logical model; actions never scan all logical rows.
     text_owners: Vec<AccessibilityId>,
@@ -107,41 +353,8 @@ impl AccessibilitySnapshot {
                 "duplicate logical accessibility node"
             );
         }
-        anyhow::ensure!(
-            map.contains_key(&root),
-            "logical accessibility root missing"
-        );
-        let mut seen = HashSet::with_capacity(map.len());
-        let mut pending = vec![root];
-        while let Some(id) = pending.pop() {
-            anyhow::ensure!(
-                seen.insert(id),
-                "logical accessibility subtree contains a cycle or duplicate child"
-            );
-            let node = map
-                .get(&id)
-                .ok_or_else(|| anyhow::anyhow!("logical accessibility child missing"))?;
-            for child in &node.children {
-                anyhow::ensure!(
-                    map.get(child).is_some_and(|node| node.parent == Some(id)),
-                    "logical accessibility parent mismatch"
-                );
-                pending.push(*child);
-            }
-        }
-        anyhow::ensure!(
-            seen.len() == map.len(),
-            "logical accessibility subtree contains unreachable nodes"
-        );
-        let focused = map
-            .values()
-            .find(|node| node.states.contains(super::AccessibilityState::FOCUSED))
-            .map(|node| node.id);
-        let text_owners = map
-            .values()
-            .filter(|node| node.text_document.is_some())
-            .map(|node| node.id)
-            .collect();
+        let map = AccessibilitySnapshotNodes::Owned(map);
+        let (focused, text_owners) = validate_snapshot(root, &map)?;
         Ok(Arc::new(Self {
             root,
             nodes: map,
@@ -161,6 +374,25 @@ impl AccessibilitySnapshot {
         let mut snapshot = Self::new(root, nodes)?;
         Arc::get_mut(&mut snapshot).unwrap().reclaimer = Some(executor.clone());
         Ok(snapshot)
+    }
+    /// Start an opt-in shared-record snapshot. `node_capacity` is a reserve hint,
+    /// not an admission limit. Unlike the legacy owned constructors this adds an
+    /// Arc per fresh node, and keeps record-map destruction on `executor`, even
+    /// if the builder is abandoned or validation fails. No previous snapshot is
+    /// retained by reuse; borrowed getters and frame-overlay mutation keep the
+    /// same public value semantics.
+    pub fn sharing_builder(
+        root: AccessibilityId,
+        node_capacity: usize,
+        executor: &crate::BackgroundExecutor,
+    ) -> AccessibilitySnapshotBuilder {
+        AccessibilitySnapshotBuilder {
+            root,
+            nodes: AccessibilitySnapshotNodes::Shared(HashMap::with_capacity(node_capacity)),
+            rejected: Vec::new(),
+            error: None,
+            reclaimer: Some(executor.clone()),
+        }
     }
     /// Look up a logical node without copying its label or children.
     pub fn get(&self, id: AccessibilityId) -> Option<&AccessibilityNode> {
@@ -918,5 +1150,323 @@ mod tests {
                 .is_some()
         );
         assert_eq!(changes.added, 1);
+    }
+
+    fn copy_shared_snapshot(
+        previous: &AccessibilitySnapshot,
+        worker: &crate::BackgroundExecutor,
+    ) -> Arc<AccessibilitySnapshot> {
+        let mut builder =
+            AccessibilitySnapshot::sharing_builder(previous.root, previous.len(), worker);
+        for id in previous.nodes.keys() {
+            builder.reuse_from(previous, *id).unwrap();
+        }
+        builder.finish().unwrap()
+    }
+
+    #[test]
+    fn shared_record_snapshots_preserve_owned_values_without_predecessor_ownership() {
+        let mut cx = crate::TestAppContext::single();
+        let worker = cx.background_executor.clone();
+        let owned = logical_group(100, &[101, 102], "日本語 👩🏽‍💻 café");
+        let shared = copy_shared_snapshot(&owned, &worker);
+        assert_eq!(shared, owned);
+        assert!(!std::ptr::eq(
+            shared.get(AccessibilityId(101)).unwrap(),
+            owned.get(AccessibilityId(101)).unwrap()
+        ));
+        let successor = copy_shared_snapshot(&shared, &worker);
+        assert_eq!(successor, shared);
+        for id in shared.nodes.keys() {
+            assert!(std::ptr::eq(
+                shared.get(*id).unwrap(),
+                successor.get(*id).unwrap()
+            ));
+        }
+        let old = Arc::downgrade(&shared);
+        drop(shared);
+        assert!(
+            old.upgrade().is_none(),
+            "record reuse must not retain its old snapshot"
+        );
+        cx.run_until_parked();
+        assert_eq!(
+            successor
+                .get(AccessibilityId(101))
+                .unwrap()
+                .label
+                .as_deref(),
+            Some("日本語 👩🏽‍💻 café row 101")
+        );
+        assert_eq!(successor, owned);
+    }
+
+    #[test]
+    fn shared_record_deltas_keep_overlay_masks_reparent_and_consumer_semantics() {
+        let cx = crate::TestAppContext::single();
+        let worker = cx.background_executor.clone();
+        let owned = logical_group(100, &[101, 102], "rows");
+        let shared = copy_shared_snapshot(&owned, &worker);
+        let successor = copy_shared_snapshot(&shared, &worker);
+        let mut window = AccessibilityNode::new(AccessibilityRole::Window);
+        window.id = AccessibilityId(1);
+        let mut previous = AccessibilityTree::new(window);
+        for id in [10, 20] {
+            let mut group = AccessibilityNode::new(AccessibilityRole::Group);
+            group.id = AccessibilityId(id);
+            previous.insert(group);
+            previous.set_parent(AccessibilityId(id), previous.root);
+        }
+        previous.nodes.attach(shared);
+        previous.set_parent(AccessibilityId(100), AccessibilityId(10));
+        let mut current = previous.clone();
+        current.nodes.attach(successor);
+        assert!(
+            !current
+                .nodes
+                .shares_snapshot(AccessibilityId(100), &previous.nodes)
+        );
+        assert_delta_matches_effective_maps(&current.nodes, &previous.nodes);
+        assert!(current.delta(Some(&previous)).nodes.is_empty());
+        current.get_mut(AccessibilityId(101)).unwrap().label = Some("fresh overlay".into());
+        current.get_mut(AccessibilityId(101)).unwrap().states |= AccessibilityState::FOCUSED;
+        current.remove(AccessibilityId(102));
+        current
+            .get_mut(AccessibilityId(10))
+            .unwrap()
+            .children
+            .clear();
+        current.set_parent(AccessibilityId(100), AccessibilityId(20));
+        // Masking the record also updates the effective parent's child list in
+        // the native exporter; the immutable shared parent remains unchanged.
+        assert_delta_matches_effective_maps(&current.nodes, &previous.nodes);
+        assert_eq!(
+            current.delta(Some(&previous)).removed,
+            vec![AccessibilityId(102)]
+        );
+        assert_eq!(
+            owned.get(AccessibilityId(101)).unwrap().label.as_deref(),
+            Some("rows row 101")
+        );
+        let mut consumer =
+            accesskit_consumer::Tree::new(previous.to_accesskit_tree_update(None, None), true);
+        let mut changes = Changes::default();
+        consumer.update_and_process_changes(
+            current.to_accesskit_tree_update_after(Some(&previous), None, None),
+            &mut changes,
+        );
+        assert_eq!(changes.removed, 1);
+        assert_eq!(
+            consumer
+                .state()
+                .node_by_tree_local_id(accesskit::NodeId(101), accesskit::TreeId::ROOT)
+                .unwrap()
+                .label()
+                .as_deref(),
+            Some("fresh overlay")
+        );
+        assert!(
+            consumer
+                .state()
+                .node_by_tree_local_id(accesskit::NodeId(102), accesskit::TreeId::ROOT)
+                .is_none()
+        );
+        assert_eq!(
+            consumer
+                .state()
+                .node_by_tree_local_id(accesskit::NodeId(100), accesskit::TreeId::ROOT)
+                .unwrap()
+                .parent()
+                .unwrap()
+                .locate()
+                .0,
+            accesskit::NodeId(20)
+        );
+        assert_delta_matches_effective_maps(&previous.nodes, &current.nodes);
+    }
+
+    #[test]
+    fn shared_record_builder_checks_complete_graph_and_poisoned_input() {
+        let cx = crate::TestAppContext::single();
+        let worker = cx.background_executor.clone();
+        let owned = logical_group(100, &[101], "root");
+        let mut missing_root =
+            AccessibilitySnapshot::sharing_builder(AccessibilityId(100), 2, &worker);
+        missing_root
+            .reuse_from(&owned, AccessibilityId(101))
+            .unwrap();
+        assert!(missing_root.finish().is_err());
+        let mut missing_child =
+            AccessibilitySnapshot::sharing_builder(AccessibilityId(100), 1, &worker);
+        missing_child
+            .reuse_from(&owned, AccessibilityId(100))
+            .unwrap();
+        assert!(missing_child.finish().is_err());
+        let mut duplicate =
+            AccessibilitySnapshot::sharing_builder(AccessibilityId(100), 2, &worker);
+        duplicate.reuse_from(&owned, AccessibilityId(100)).unwrap();
+        assert!(duplicate.reuse_from(&owned, AccessibilityId(100)).is_err());
+        duplicate
+            .reuse_from(&owned, AccessibilityId(101))
+            .unwrap_err();
+        assert!(duplicate.finish().is_err());
+        let mut unknown = AccessibilitySnapshot::sharing_builder(AccessibilityId(100), 2, &worker);
+        assert!(unknown.reuse_from(&owned, AccessibilityId(999)).is_err());
+        assert!(unknown.finish().is_err());
+        let mut root = owned.get(AccessibilityId(100)).unwrap().clone();
+        let mut row = owned.get(AccessibilityId(101)).unwrap().clone();
+        row.parent = Some(AccessibilityId(999));
+        let mut wrong_parent = AccessibilitySnapshot::sharing_builder(root.id, 2, &worker);
+        wrong_parent.insert(root.clone()).unwrap();
+        wrong_parent.insert(row.clone()).unwrap();
+        assert!(wrong_parent.finish().is_err());
+        root.parent = Some(row.id);
+        row.parent = Some(root.id);
+        row.children.push(root.id);
+        let mut cycle = AccessibilitySnapshot::sharing_builder(root.id, 2, &worker);
+        cycle.insert(root).unwrap();
+        cycle.insert(row).unwrap();
+        assert!(cycle.finish().is_err());
+        let mut unreachable =
+            AccessibilitySnapshot::sharing_builder(AccessibilityId(100), 3, &worker);
+        unreachable
+            .reuse_from(&owned, AccessibilityId(100))
+            .unwrap();
+        unreachable
+            .reuse_from(&owned, AccessibilityId(101))
+            .unwrap();
+        let mut orphan = AccessibilityNode::new(AccessibilityRole::TreeItem);
+        orphan.id = AccessibilityId(102);
+        unreachable.insert(orphan).unwrap();
+        assert!(unreachable.finish().is_err());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn shared_record_builder_retires_partial_error_unwind_and_finished_maps_in_batches() {
+        let mut cx = crate::TestAppContext::single();
+        cx.run_until_parked();
+        let worker = cx.background_executor.clone();
+        let dispatcher = worker.dispatcher.as_test().unwrap();
+        assert!(!dispatcher.tick(true));
+        let empty_reserved =
+            AccessibilitySnapshot::sharing_builder(AccessibilityId(100), 1000, &worker);
+        drop(empty_reserved);
+        assert!(
+            dispatcher.tick(true),
+            "an abandoned reserved table must retire on the worker"
+        );
+        assert!(!dispatcher.tick(true));
+        let mut batch = AccessibilitySnapshot::sharing_builder(AccessibilityId(100), 32, &worker);
+        for id in 200..232 {
+            let mut node = AccessibilityNode::new(AccessibilityRole::TreeItem)
+                .with_label(format!("payload {id}"));
+            node.id = AccessibilityId(id);
+            node.actions = vec![crate::AccessibilityAction::Focus];
+            batch.insert(node).unwrap();
+        }
+        let AccessibilitySnapshotNodes::Shared(nodes) = &batch.nodes else {
+            unreachable!()
+        };
+        let records = nodes.values().map(Arc::downgrade).collect::<Vec<_>>();
+        drop(batch);
+        assert!(records.iter().all(|record| record.upgrade().is_some()));
+        assert!(dispatcher.tick(true));
+        assert!(records.iter().all(|record| record.upgrade().is_none()));
+        assert!(
+            !dispatcher.tick(true),
+            "one map is one retirement job, not a job per record"
+        );
+        let make = || {
+            let mut builder =
+                AccessibilitySnapshot::sharing_builder(AccessibilityId(100), 1, &worker);
+            let mut node =
+                AccessibilityNode::new(AccessibilityRole::Tree).with_label("retire payload");
+            node.id = AccessibilityId(100);
+            builder.insert(node).unwrap();
+            let AccessibilitySnapshotNodes::Shared(nodes) = &builder.nodes else {
+                unreachable!()
+            };
+            let record = Arc::downgrade(&nodes[&AccessibilityId(100)]);
+            (builder, record)
+        };
+        let (partial, record) = make();
+        drop(partial);
+        assert!(
+            record.upgrade().is_some(),
+            "unfinished builder defers accepted payload destruction"
+        );
+        cx.run_until_parked();
+        assert!(record.upgrade().is_none());
+        let (mut invalid, record) = make();
+        assert!(
+            invalid
+                .reuse_from(&logical_group(100, &[], "duplicate"), AccessibilityId(100))
+                .is_err()
+        );
+        assert!(invalid.finish().is_err());
+        assert!(record.upgrade().is_some());
+        cx.run_until_parked();
+        assert!(record.upgrade().is_none());
+        let (unwinding, record) = make();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let _builder = unwinding;
+                panic!("controlled partial-builder unwind");
+            }))
+            .is_err()
+        );
+        assert!(record.upgrade().is_some());
+        cx.run_until_parked();
+        assert!(record.upgrade().is_none());
+        let (complete, record) = make();
+        let complete = complete.finish().unwrap();
+        drop(complete);
+        assert!(
+            record.upgrade().is_some(),
+            "finished snapshot also defers its last map owner"
+        );
+        cx.run_until_parked();
+        assert!(record.upgrade().is_none());
+    }
+
+    #[test]
+    fn shared_record_builder_preserves_focus_and_text_owner_bookkeeping() {
+        let cx = crate::TestAppContext::single();
+        let worker = cx.background_executor.clone();
+        let mut root = AccessibilityNode::new(AccessibilityRole::Tree);
+        root.id = AccessibilityId(100);
+        let mut row =
+            AccessibilityNode::new(AccessibilityRole::TextInput).with_label("Unicode text");
+        row.id = AccessibilityId(101);
+        row.parent = Some(root.id);
+        row.states |= AccessibilityState::FOCUSED;
+        row.text_document = Some(crate::AccessibilityTextDocument::new("日本語 👩🏽‍💻 café"));
+        root.children.push(row.id);
+        let owned = AccessibilitySnapshot::new(root.id, [root, row]).unwrap();
+        let shared = copy_shared_snapshot(&owned, &worker);
+        let next = copy_shared_snapshot(&shared, &worker);
+        assert_eq!(owned, shared);
+        assert_eq!(shared, next);
+        assert_eq!(next.focused, Some(AccessibilityId(101)));
+        assert_eq!(next.text_owners, vec![AccessibilityId(101)]);
+        assert!(std::ptr::eq(
+            next.get(AccessibilityId(101)).unwrap(),
+            shared.get(AccessibilityId(101)).unwrap()
+        ));
+        let mut map = AccessibilityNodeMap::default();
+        map.attach(next);
+        let document = owned
+            .get(AccessibilityId(101))
+            .unwrap()
+            .text_document
+            .as_ref()
+            .unwrap();
+        let run = document
+            .runs_for_bytes(0..document.len_bytes())
+            .next()
+            .unwrap()
+            .id;
+        assert_eq!(map.text_owner(run).unwrap().id, AccessibilityId(101));
     }
 }

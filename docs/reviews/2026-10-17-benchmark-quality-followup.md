@@ -954,3 +954,18 @@ selected compiled inputs in the primary checkout match the isolated tested
 graph. Four updated guides pass documentation checks. This is headless
 correctness proof; fresh native, package and later-source performance checks
 remain separate.
+
+The [immutable tree-record checkpoint](2026-10-18-tree-shared-record-validation.json)
+shares unchanged accessibility payloads across adjacent snapshots while preserving
+full logical nodes, native identities and owned public value contracts. In the
+100,025-row headless workload, five fixed alternating CPU pairs reduce warm whole
+pipeline CPU by 22.02–34.68%; separate allocator runs reduce preparation requested
+bytes by 90.19–91.26% and two-generation overlap payload by 43.90–44.28%. All 66
+predeclared cost gates pass. Initial/replacement allocation counts rise about 50%
+and one replacement median is 7.58% slower; these tradeoffs remain explicit.
+Unfiltered native suites pass 2,241 core tests (the same two opt-in ignores) and
+all 560 UI tests, with strict lint, production Wasm, supplemental joint Wasm test
+compilation and formatting. Existing optional-Lottie test portability and
+standalone UI Wasm test-feature limitations are recorded separately. This is
+requested-payload and headless CPU evidence; latest-source native RSS, platform
+acceptance and the matched GPUI Kit comparison remain separate.
