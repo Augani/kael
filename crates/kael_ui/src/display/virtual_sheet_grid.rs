@@ -1289,22 +1289,33 @@ impl VirtualSheetGrid {
                 .await;
             let _ = grid.update(cx, |grid, cx| {
                 grid.accessibility_task = None;
-                if grid.accessibility_revision == revision {
+                let published = grid.accessibility_revision == revision;
+                if published {
                     grid.accessibility_snapshot = Some(snapshot);
                     grid.accessibility_snapshot_revision = revision;
                 }
                 grid.prepare_accessibility(cx);
-                cx.notify();
+                if published {
+                    cx.notify();
+                }
             });
         }));
     }
 
     fn semantic_cell_node(&mut self, position: SheetCellPosition) -> AccessibilityNode {
         let value = self.loaded_value(position);
+        self.semantic_cell_node_with_value(position, value.as_ref().map(SharedString::as_str))
+    }
+
+    fn semantic_cell_node_with_value(
+        &self,
+        position: SheetCellPosition,
+        value: Option<&str>,
+    ) -> AccessibilityNode {
         let mut node = sheet_accessibility::cell_node(
             self.accessibility_ids,
             position,
-            value.as_ref().map(|value| value.as_ref()),
+            value,
             self.column_headers
                 .get(&position.column)
                 .map(|header| header.as_ref()),
@@ -1440,7 +1451,7 @@ impl VirtualSheetGrid {
             (tokens.foreground, tokens.border, tokens.accent, tokens.card)
         };
         let selected = self.selection.contains(position);
-        let value = self.loaded_value(position).unwrap_or_default();
+        let value = self.loaded_value(position);
         let editing = self.editing_cell == Some(position);
         let input = if editing {
             self.edit_input.clone()
@@ -1452,7 +1463,8 @@ impl VirtualSheetGrid {
         if selected {
             states |= AccessibilityState::SELECTED;
         }
-        let node = self.semantic_cell_node(position);
+        let node =
+            self.semantic_cell_node_with_value(position, value.as_ref().map(SharedString::as_str));
         let mut attributes = AccessibilityAttributes::new(AccessibilityRole::Cell)
             .id(node.id)
             .row_index(position.row + 2)
@@ -1517,7 +1529,8 @@ impl VirtualSheetGrid {
                 },
             ));
         } else {
-            cell = cell.child(StyledText::new(value).accessibility_hidden(true));
+            cell =
+                cell.child(StyledText::new(value.unwrap_or_default()).accessibility_hidden(true));
         }
         let _ = window;
         cell.into_any_element()
@@ -2696,5 +2709,412 @@ mod tests {
                 assert_eq!(commits.borrow()[1].value.as_ref(), "remote original");
             })
         });
+    }
+}
+
+#[cfg(test)]
+mod mounted_cell_value_reuse_regressions {
+    use super::*;
+    use kael::TestAppContext;
+
+    #[::core::prelude::v1::test]
+    fn mounted_empty_pending_unicode_and_edited_cells_keep_distinct_semantics() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| crate::theme::install_theme(cx, Theme::astryx_neutral()));
+        let (grid, window) = cx.add_window_view(|_, cx| {
+            VirtualSheetGrid::new(1, 4, cx)
+                .unwrap()
+                .with_tile_shape(1, 1)
+                .unwrap()
+                .with_frozen_panes(0, 1)
+                .unwrap()
+        });
+        window.update(|window, cx| {
+            grid.update(cx, |grid, cx| {
+                for (column, value) in [
+                    (0, SharedString::new_static("")),
+                    (2, "日".repeat(1_366).into()),
+                    (3, SharedString::new_static("original")),
+                ] {
+                    let request = grid
+                        .request_for_key(SheetTileKey {
+                            tile_row: 0,
+                            tile_column: column,
+                        })
+                        .unwrap();
+                    grid.pending.insert(request.key);
+                    grid.provide_tile(request, vec![value]).unwrap();
+                }
+                let pending = grid
+                    .request_for_key(SheetTileKey {
+                        tile_row: 0,
+                        tile_column: 1,
+                    })
+                    .unwrap();
+                grid.pending.insert(pending.key);
+                grid.set_column_header(2, "Notes").unwrap();
+                grid.set_cell_value(SheetCellPosition::new(0, 3), "edited 日本語", window, cx)
+                    .unwrap();
+                grid.select(SheetCellPosition::new(0, 3), false).unwrap();
+            });
+            window.draw(cx).clear();
+            let ids = std::array::from_fn::<_, 4, _>(|column| {
+                grid.read(cx)
+                    .accessibility_id(SheetCellPosition::new(0, column))
+                    .unwrap()
+            });
+            let tree = window.accessibility_tree();
+            let empty = &tree.nodes[&ids[0]];
+            assert!(empty.bounds.is_some());
+            assert_eq!(empty.value, Some(AccessibilityValue::Text(String::new())));
+            assert!(!empty.states.contains(AccessibilityState::BUSY));
+            let pending = &tree.nodes[&ids[1]];
+            assert!(pending.bounds.is_some());
+            assert_eq!(pending.value, None);
+            assert!(pending.states.contains(AccessibilityState::BUSY));
+            let long = &tree.nodes[&ids[2]];
+            assert!(long.bounds.is_some());
+            assert_eq!(long.label.as_deref(), Some("Notes, row 1"));
+            assert_eq!(
+                long.value,
+                Some(AccessibilityValue::Text(format!("{}…", "日".repeat(1_365))))
+            );
+            assert!(
+                long.description
+                    .as_ref()
+                    .is_some_and(|text| text.contains("preview"))
+            );
+            let edited = &tree.nodes[&ids[3]];
+            assert!(edited.bounds.is_some());
+            assert_eq!(
+                edited.value,
+                Some(AccessibilityValue::Text("edited 日本語".into()))
+            );
+            assert!(edited.states.contains(AccessibilityState::SELECTED));
+            for id in ids {
+                let node = &tree.nodes[&id];
+                assert_eq!(
+                    node.actions,
+                    vec![
+                        AccessibilityAction::Focus,
+                        AccessibilityAction::Click,
+                        AccessibilityAction::ScrollToVisible,
+                        AccessibilityAction::SetValue,
+                    ]
+                );
+                for action in &node.actions {
+                    assert!(window.has_accessibility_action_handler(id, *action));
+                }
+            }
+            grid.update(cx, |grid, cx| {
+                let request = grid
+                    .request_for_key(SheetTileKey {
+                        tile_row: 0,
+                        tile_column: 1,
+                    })
+                    .unwrap();
+                grid.provide_tile(request, vec![SharedString::new_static("")])
+                    .unwrap();
+                grid.start_editing(SheetCellPosition::new(0, 3), window, cx)
+                    .unwrap();
+            });
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            let now_empty = &tree.nodes[&ids[1]];
+            assert_eq!(
+                now_empty.value,
+                Some(AccessibilityValue::Text(String::new()))
+            );
+            assert!(!now_empty.states.contains(AccessibilityState::BUSY));
+            assert_eq!(
+                tree.nodes[&ids[3]].value,
+                Some(AccessibilityValue::Text("edited 日本語".into()))
+            );
+            assert_eq!(
+                grid.read(cx).editing_cell(),
+                Some(SheetCellPosition::new(0, 3))
+            );
+        });
+    }
+}
+
+#[cfg(all(test, debug_assertions))]
+mod accessibility_publication_regressions {
+    use super::*;
+    use kael::TestAppContext;
+    use std::cell::Cell;
+
+    fn observe_notifications(cx: &mut Context<VirtualSheetGrid>, count: Rc<Cell<usize>>) {
+        cx.observe_self(move |_, _| count.set(count.get() + 1))
+            .detach();
+    }
+
+    fn queue_stale_preparation(grid: &Entity<VirtualSheetGrid>, cx: &mut TestAppContext) -> u64 {
+        grid.update(cx, |grid, cx| {
+            assert!(grid.accessibility_task.is_none());
+            let retained_revision = grid.accessibility_snapshot_revision;
+            grid.set_column_header(0, "Captured old header").unwrap();
+            grid.prepare_accessibility(cx);
+            assert!(grid.accessibility_task.is_some());
+            // Arc::make_mut gives the newest header map its own ownership;
+            // the old task still owns the captured older map.
+            grid.set_column_header(0, "Latest 日本語").unwrap();
+            assert_eq!(Arc::strong_count(&grid.column_headers), 1);
+            retained_revision
+        })
+    }
+
+    fn stop_after_stale_completion_schedules_latest(
+        grid: &Entity<VirtualSheetGrid>,
+        retained_revision: u64,
+        cx: &mut TestAppContext,
+    ) {
+        // This is a private scheduling checkpoint, not a new production hook:
+        // latest input capture occurs synchronously inside the actual stale
+        // completion before its new foreground task can be polled. Every tick
+        // is on this thread and outside App/entity borrows.
+        for _ in 0..512 {
+            let captured_latest = cx.read(|cx| {
+                let grid = grid.read(cx);
+                grid.accessibility_snapshot_revision == retained_revision
+                    && Arc::strong_count(&grid.column_headers) == 2
+            });
+            if captured_latest {
+                cx.read(|cx| {
+                    let grid = grid.read(cx);
+                    assert!(grid.accessibility_task.is_some());
+                    assert_ne!(grid.accessibility_revision, retained_revision);
+                });
+                return;
+            }
+            assert!(
+                cx.dispatcher.tick(false),
+                "latest preparation was not scheduled"
+            );
+        }
+        panic!("actual stale completion did not reach its latest input capture");
+    }
+
+    fn assert_latest_snapshot(grid: &VirtualSheetGrid) {
+        assert!(grid.accessibility_task.is_none());
+        assert_eq!(
+            grid.accessibility_snapshot_revision,
+            grid.accessibility_revision
+        );
+        let snapshot = grid.accessibility_snapshot.as_ref().unwrap();
+        assert_eq!(
+            snapshot
+                .get(grid.accessibility_ids.header(0).unwrap())
+                .unwrap()
+                .label
+                .as_deref(),
+            Some("Latest 日本語")
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn stale_completion_does_not_notify_and_latest_publication_notifies_once() {
+        let mut cx = TestAppContext::single();
+        cx.executor().run_until_parked();
+        let notifications = Rc::new(Cell::new(0));
+        let grid = cx.new(|cx| {
+            observe_notifications(cx, notifications.clone());
+            VirtualSheetGrid::new(4, 2, cx).unwrap()
+        });
+        let retained = queue_stale_preparation(&grid, &mut cx);
+        stop_after_stale_completion_schedules_latest(&grid, retained, &mut cx);
+        assert_eq!(
+            notifications.get(),
+            0,
+            "a discarded snapshot notified observers"
+        );
+        cx.executor().run_until_parked();
+        assert_eq!(
+            notifications.get(),
+            1,
+            "latest publication must notify exactly once"
+        );
+        cx.read(|cx| assert_latest_snapshot(grid.read(cx)));
+        cx.executor().run_until_parked();
+        assert_eq!(notifications.get(), 1, "settled preparation must stay idle");
+    }
+
+    #[::core::prelude::v1::test]
+    fn stale_completion_preserves_settled_draws_until_latest_publication() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| crate::theme::install_theme(cx, Theme::astryx_neutral()));
+        let notifications = Rc::new(Cell::new(0));
+        let (grid, window) = cx.add_window_view(|_, cx| {
+            observe_notifications(cx, notifications.clone());
+            VirtualSheetGrid::new(4, 2, cx).unwrap()
+        });
+        window.simulate_platform_frame();
+        window.simulate_platform_frame();
+        let settled = window.update(|window, _| window.frame_timeline().len());
+        window.simulate_platform_frame();
+        assert_eq!(
+            window.update(|window, _| window.frame_timeline().len()),
+            settled
+        );
+        notifications.set(0);
+        let retained = queue_stale_preparation(&grid, &mut window.cx);
+        stop_after_stale_completion_schedules_latest(&grid, retained, &mut window.cx);
+        // The latest input is captured but its task has not published. Observe
+        // this stale-only interval before any helper drains that independent task.
+        let after_stale = window.update(|window, _| window.frame_timeline().len());
+        window.read(|cx| {
+            assert_eq!(grid.read(cx).accessibility_snapshot_revision, retained);
+        });
+        assert_eq!(
+            after_stale, settled,
+            "a discarded snapshot changed the settled draw timeline"
+        );
+        assert_eq!(
+            notifications.get(),
+            0,
+            "a discarded snapshot notified observers"
+        );
+
+        // The public frame helper also drains the executor. Drain explicitly so
+        // its valid publication draw is not attributed to the stale completion.
+        // Raw callback-only TestWindow APIs are private to the kael crate.
+        window.executor().run_until_parked();
+        assert_eq!(
+            notifications.get(),
+            1,
+            "latest publication must notify once"
+        );
+        window.read(|cx| assert_latest_snapshot(grid.read(cx)));
+        let after_latest = window.update(|window, _| window.frame_timeline().len());
+        assert_eq!(
+            after_latest,
+            settled + 1,
+            "latest publication must add exactly one draw"
+        );
+        window.simulate_platform_frame();
+        assert_eq!(
+            window.update(|window, _| window.frame_timeline().len()),
+            after_latest
+        );
+        window.update(|window, cx| {
+            let grid = grid.read(cx);
+            let ids = grid.accessibility_ids;
+            assert_eq!(
+                window
+                    .accessibility_tree()
+                    .get(ids.header(0).unwrap())
+                    .unwrap()
+                    .label
+                    .as_deref(),
+                Some("Latest 日本語")
+            );
+            let active = ids.cell(SheetCellPosition::new(0, 0)).unwrap();
+            assert!(window.accessibility_tree().get(active).is_some());
+            for action in [AccessibilityAction::Focus, AccessibilityAction::Click] {
+                assert!(window.has_accessibility_action_handler(active, action));
+            }
+        });
+        window.simulate_platform_frame();
+        assert_eq!(
+            window.update(|window, _| window.frame_timeline().len()),
+            after_latest
+        );
+        assert_eq!(notifications.get(), 1, "settled publication must stay idle");
+    }
+
+    #[::core::prelude::v1::test]
+    fn replacing_dataset_cancels_old_preparation_and_keeps_current_native_action_ids() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| crate::theme::install_theme(cx, Theme::astryx_neutral()));
+        let notifications = Rc::new(Cell::new(0));
+        let (grid, window) = cx.add_window_view(|_, cx| {
+            observe_notifications(cx, notifications.clone());
+            VirtualSheetGrid::new(4, 2, cx).unwrap()
+        });
+        window.simulate_platform_frame();
+        window.simulate_platform_frame();
+        let old = grid.update(&mut window.cx, |grid, cx| {
+            grid.set_column_header(0, "Old query").unwrap();
+            grid.prepare_accessibility(cx);
+            assert!(grid.accessibility_task.is_some());
+            let old = grid
+                .accessibility_ids
+                .cell(SheetCellPosition::new(1, 1))
+                .unwrap();
+            grid.reset_data(cx);
+            assert!(grid.accessibility_task.is_none());
+            grid.set_column_header(0, "Latest 日本語").unwrap();
+            grid.prepare_accessibility(cx);
+            assert!(grid.accessibility_task.is_some());
+            assert_ne!(
+                old,
+                grid.accessibility_ids
+                    .cell(SheetCellPosition::new(1, 1))
+                    .unwrap()
+            );
+            old
+        });
+        notifications.set(0); // Exclude reset_data's independently required notify.
+        window.executor().run_until_parked();
+        assert_eq!(notifications.get(), 1);
+        window.read(|cx| assert_latest_snapshot(grid.read(cx)));
+        window.simulate_platform_frame();
+        let current = window.update(|window, cx| {
+            let grid = grid.read(cx);
+            let current = grid
+                .accessibility_ids
+                .cell(SheetCellPosition::new(1, 1))
+                .unwrap();
+            assert!(window.accessibility_tree().get(old).is_none());
+            assert!(!window.has_accessibility_action_handler(old, AccessibilityAction::Click));
+            assert!(window.accessibility_tree().get(current).is_some());
+            assert!(window.has_accessibility_action_handler(current, AccessibilityAction::Click));
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                old,
+                AccessibilityAction::Click,
+            ));
+            current
+        });
+        window.run_until_parked();
+        window.read(|cx| assert_eq!(grid.read(cx).selection.focus, SheetCellPosition::new(0, 0)));
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                current,
+                AccessibilityAction::Click,
+            ))
+        });
+        window.run_until_parked();
+        window.read(|cx| assert_eq!(grid.read(cx).selection.focus, SheetCellPosition::new(1, 1)));
+    }
+
+    #[::core::prelude::v1::test]
+    fn teardown_while_real_snapshot_is_ready_does_not_publish_or_retain_grid() {
+        let mut cx = TestAppContext::single();
+        cx.executor().run_until_parked();
+        let notifications = Rc::new(Cell::new(0));
+        let grid = cx.new(|cx| {
+            observe_notifications(cx, notifications.clone());
+            VirtualSheetGrid::new(4, 2, cx).unwrap()
+        });
+        grid.update(&mut cx, |grid, cx| grid.prepare_accessibility(cx));
+        // Startup is drained: poll the foreground loader once, then run only
+        // its real background preparation, leaving the foreground result queued.
+        assert!(cx.dispatcher.tick(false));
+        for _ in 0..512 {
+            if cx.read(|cx| Arc::strong_count(&grid.read(cx).column_headers) == 1) {
+                break;
+            }
+            assert!(cx.dispatcher.tick(true));
+        }
+        cx.read(|cx| {
+            assert_eq!(Arc::strong_count(&grid.read(cx).column_headers), 1);
+            assert_eq!(grid.read(cx).accessibility_snapshot_revision, 0);
+        });
+        let weak = grid.downgrade();
+        drop(grid);
+        cx.update(|_| {});
+        cx.executor().run_until_parked();
+        assert!(weak.upgrade().is_none());
+        assert_eq!(notifications.get(), 0);
     }
 }

@@ -451,3 +451,13 @@ selected compiled inputs in the primary checkout match the isolated tested
 graph. Four updated guides pass documentation checks. This is headless
 correctness proof; fresh native, package and later-source performance checks
 remain separate.
+
+The [Grid value/publication checkpoint](2026-10-18-grid-value-and-publication-validation.json)
+shares one mounted-cell value between painting and accessibility, and avoids
+notifications or redraws when outdated snapshot work is discarded. The candidate
+passes all nineteen focused cases; the baseline reproduces three fixed regressions.
+The maintained five regressions pass with all 565 UI tests, strict UI lint,
+production and test Wasm compilation and formatting. The earlier frame-test
+failure remains archived: its helper also drained a valid latest publication;
+a separately named case now checks those two intervals independently. This is
+headless behavior evidence, with no new CPU/RSS or native-presentation claim.

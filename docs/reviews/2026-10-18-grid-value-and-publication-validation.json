@@ -1,0 +1,214 @@
+{
+  "schema": 1,
+  "status": "EXACT_MAINTAINED_SOURCE_PROMOTED",
+  "recorded_at_utc": "2026-10-18T04:52:57.218123+00:00",
+  "scope": "Reuse one mounted Grid cell value for visual and semantic output; notify/redraw only when asynchronous accessibility preparation publishes the current revision. Public Grid contracts unchanged.",
+  "source_file": {
+    "path": "crates/kael_ui/src/display/virtual_sheet_grid.rs",
+    "sha256": "d19fe208bd34458e1a523145c43e74f8e41fb9dda51a28af052aedf26ddfa914"
+  },
+  "preimage_sha256": "a8885d2f7c3f76089bf89567369408235e1843d289af9b867445563447336621",
+  "source_checkpoint_before_change": "b411223c7d6e846c9f35a6f04a53d8bf4a73593a",
+  "common_source_inputs": 3155,
+  "focused_comparison": {
+    "receipt": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-grid-combined-nineteen-actual-v5/result.json",
+      "sha256": "62887e4a7fd0ecced37dc8e6b70a6305e808991828e3a47144a6ab4a9dc108c0",
+      "bytes": 3280725
+    },
+    "baseline": {
+      "executed": 19,
+      "passed": 16,
+      "expected_assertion_failures": 3,
+      "ignored": 0
+    },
+    "candidate": {
+      "executed": 19,
+      "passed": 19,
+      "failed": 0,
+      "ignored": 0
+    },
+    "numeric_baseline_regressions": {
+      "mounted_cached_value_acquisitions": [
+        2,
+        1
+      ],
+      "discarded_preparation_notifications": [
+        1,
+        0
+      ],
+      "discarded_preparation_draw_timeline": [
+        3,
+        2
+      ]
+    },
+    "identical_new_tests_both_inputs": true,
+    "fresh_owned_Cargo_binaries": true,
+    "old_across_drain_candidate_failure_preserved": {
+      "receipt": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-grid-combined-nineteen-actual-v4/result.json",
+        "sha256": "acd7d1aede068abc0192bd9836f7d347348dfd19b5446ba90b8eb58b405e0cb9",
+        "bytes": 3267940
+      },
+      "case": "stale_completion_does_not_invalidate_a_clean_mounted_platform_frame",
+      "candidate_left": 3,
+      "candidate_right": 2,
+      "finding": "The public platform-frame helper drains the latest valid publication; its draw was incorrectly attributed to stale completion. A separately named prospective case observes the stale-only interval first, then requires exactly one latest-publication draw and notification. The original failed case is not relabeled as passed."
+    }
+  },
+  "maintained_new_functional_cases": [
+    "display::virtual_sheet_grid::mounted_cell_value_reuse_regressions::mounted_empty_pending_unicode_and_edited_cells_keep_distinct_semantics",
+    "display::virtual_sheet_grid::accessibility_publication_regressions::stale_completion_does_not_notify_and_latest_publication_notifies_once",
+    "display::virtual_sheet_grid::accessibility_publication_regressions::stale_completion_preserves_settled_draws_until_latest_publication",
+    "display::virtual_sheet_grid::accessibility_publication_regressions::replacing_dataset_cancels_old_preparation_and_keeps_current_native_action_ids",
+    "display::virtual_sheet_grid::accessibility_publication_regressions::teardown_while_real_snapshot_is_ready_does_not_publish_or_retain_grid"
+  ],
+  "private_cache_diagnostic_promoted": false,
+  "actual_validation": {
+    "receipt": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-grid-final-broad-validation/result.json",
+      "sha256": "838c41d5bc895a2eabf1af5b49773c2f4ffb6fce16ccad8ff8ce9ebf21dcb364",
+      "bytes": 2363472
+    },
+    "full_UI": {
+      "passed": 565,
+      "failed": 0,
+      "ignored": 0,
+      "filtered_out": 0,
+      "default_parallel": true
+    },
+    "inventory": 565,
+    "binary": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-grid-final-broad-validation/ui-frozen-test-binary",
+      "sha256": "0546564b575d8c0d1e3d1ac22217c9574904116a6f4f2010ff9f1b9af84e5872",
+      "bytes": 137565048
+    },
+    "checks": [
+      {
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-j1",
+          "-p",
+          "kael_ui",
+          "--lib",
+          "--features",
+          "kael/lottie,kael/test-support",
+          "--no-run",
+          "--message-format=json"
+        ],
+        "exit_code": 0,
+        "timed_out": false
+      },
+      {
+        "argv": [
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-grid-final-broad-validation/ui-frozen-test-binary",
+          "--list"
+        ],
+        "exit_code": 0,
+        "timed_out": false
+      },
+      {
+        "argv": [
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-grid-final-broad-validation/ui-frozen-test-binary",
+          "--show-output"
+        ],
+        "exit_code": 0,
+        "timed_out": false
+      },
+      {
+        "argv": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "kael_ui",
+          "--all-targets",
+          "--features",
+          "kael/lottie,kael/test-support",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "timed_out": false
+      },
+      {
+        "argv": [
+          "cargo",
+          "check",
+          "--locked",
+          "-p",
+          "kael_ui",
+          "--lib",
+          "--target",
+          "wasm32-unknown-unknown",
+          "--no-default-features",
+          "--features",
+          "browser,kael/lottie"
+        ],
+        "exit_code": 0,
+        "timed_out": false
+      },
+      {
+        "argv": [
+          "cargo",
+          "check",
+          "--locked",
+          "-p",
+          "kael",
+          "-p",
+          "kael_ui",
+          "--tests",
+          "--target",
+          "wasm32-unknown-unknown",
+          "--no-default-features",
+          "--features",
+          "browser,test-support,lottie,kael/test-support,kael/lottie"
+        ],
+        "exit_code": 0,
+        "timed_out": false
+      },
+      {
+        "argv": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "timed_out": false
+      }
+    ],
+    "full_core_rerun": false
+  },
+  "source_only_final_cleanup": "Two rustfmt assertion line wraps and removal of one artifact-status comment; production prefix and test tokens unchanged. Final maintained source received the full validation above.",
+  "boundaries": [
+    "Headless behavior and compiler checks; no new CPU, allocation, RSS, GPU, native AT, compositor or power measurement.",
+    "The private one-versus-two cache-acquisition diagnostic is an implementation probe and is excluded from the maintained tests.",
+    "The unchanged Wasm core test safe_gpu_dimension dead-code warning remains.",
+    "Current matched GPUI Kit benchmark at b411 predates this Grid change."
+  ],
+  "source_review": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-grid-v3-v5-independent-renderer-review/review.json",
+    "sha256": "5130520c8dc0d26fedd96bcef1d4acef43454dd215605413630d0b8534faf96c",
+    "bytes": 17188
+  },
+  "focused_independent_audit": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-grid-v5-actual-independent-memory-audit/review.json",
+    "sha256": "822b34ca0af364e55f8362521e69a3815d97ce2b4374723b90304f5f341e8497",
+    "bytes": 77435
+  },
+  "promotion": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-grid-primary-promotion/receipt.json",
+    "sha256": "b5dcfdb3151818cfd4147070344ceb2ba0b622ebec3b7877c22a116e36719a4f",
+    "bytes": 1137
+  },
+  "broad_independent_audit": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-grid-final-broad-independent-memory-audit/review.json",
+    "sha256": "d11eddb3801cab8c2a254871436db19677ac80e79c19f9e4806dcf1c38f71f0a",
+    "bytes": 17533
+  }
+}
