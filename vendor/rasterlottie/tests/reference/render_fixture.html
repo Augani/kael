@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>rasterlottie reference renderer</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+      }
+
+      #container,
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="container"></div>
+    <script src="https://cdn.jsdelivr.net/npm/lottie-web@5.13.0/build/player/lottie.min.js"></script>
+    <script>
+      async function main() {
+        const params = new URLSearchParams(window.location.search);
+        const fixtureName = params.get("fixture");
+        const frame = Number(params.get("frame") ?? "0");
+        if (!fixtureName) {
+          throw new Error("Missing fixture query parameter.");
+        }
+
+        const response = await fetch(`../fixtures/${fixtureName}`);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch fixture ${fixtureName}: ${response.status}`);
+        }
+
+        const animationData = await response.json();
+        const width = Number(animationData.w);
+        const height = Number(animationData.h);
+        if (!Number.isFinite(width) || !Number.isFinite(height)) {
+          throw new Error(`Fixture ${fixtureName} does not define finite width and height.`);
+        }
+
+        const container = document.getElementById("container");
+        container.style.width = `${width}px`;
+        container.style.height = `${height}px`;
+
+        window.__referenceReady = false;
+        const animation = lottie.loadAnimation({
+          container,
+          renderer: "canvas",
+          loop: false,
+          autoplay: false,
+          animationData,
+          rendererSettings: {
+            clearCanvas: true,
+            preserveAspectRatio: "xMidYMid meet",
+          },
+        });
+
+        const renderFrame = async () => {
+          animation.goToAndStop(frame, true);
+          await new Promise((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(resolve)),
+          );
+        };
+
+        await new Promise((resolve, reject) => {
+          animation.addEventListener("data_failed", () => reject(new Error("data_failed")));
+          animation.addEventListener("DOMLoaded", () => resolve());
+          if (animation.isLoaded) {
+            resolve();
+          }
+        });
+
+        await renderFrame();
+        window.__referenceReady = true;
+      }
+
+      main().catch((error) => {
+        console.error(error);
+        window.__referenceError = String(error);
+      });
+    </script>
+  </body>
+</html>

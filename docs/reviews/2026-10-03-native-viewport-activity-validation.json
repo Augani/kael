@@ -1,0 +1,870 @@
+{
+  "source_commit": "01e1cadb6f7f152586bf6af7da36ca1fa22f0f0a",
+  "scope": "Awake physical native geometry/activity validation, one full run per engine and contract: four accepted pairs (eight runs), rejected tree pair (Kael completes; GPUI aborts).",
+  "limitations": [
+    "Single repetition on a shared M2 Pro desktop; no comparative performance, power or GPU display-latency claim.",
+    "Actual viewport equality and active/churn painting are checked by schema 3; whole cross-platform acceptance remains open.",
+    "The GPUI tree churn capture aborts because original reveal target 100024 is not mounted after the fresh-frame wait. The pair is excluded, with raw failure retained."
+  ],
+  "results": [
+    {
+      "contract": "native-navigation-detail-v1",
+      "accepted_pair": true,
+      "collector_exit_code": 0,
+      "completed_runs": [
+        {
+          "engine": "gpui-kit",
+          "binary_sha256": "3008e669e4fd3de8d384c45c7c3116e8c9e85f03545ba1670a770ebe03dc5605",
+          "relative_raw_path": "native-navigation-detail-v1/00-gpui-kit.json",
+          "raw_sha256": "2769b571489c618c0c35cbfe3e938fd04342535a9d675931d37ce4b9df26cc19",
+          "native_geometry": [
+            {
+              "phase": "idle-before",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-before",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            }
+          ],
+          "phase_frame_counts": [
+            {
+              "phase": "idle-before",
+              "renders": 1,
+              "draws": 1,
+              "submissions": 1
+            },
+            {
+              "phase": "active",
+              "renders": 664,
+              "draws": 664,
+              "submissions": 664
+            },
+            {
+              "phase": "idle-after",
+              "renders": 1,
+              "draws": 1,
+              "submissions": 1
+            },
+            {
+              "phase": "churn",
+              "renders": 656,
+              "draws": 656,
+              "submissions": 656
+            }
+          ],
+          "all_phase_oracles_pass": null
+        },
+        {
+          "engine": "kael",
+          "binary_sha256": "45f62edf56a0b7db71e1691dd7857c44c7dab16829e7e2226d7a592b5165202b",
+          "relative_raw_path": "native-navigation-detail-v1/00-kael.json",
+          "raw_sha256": "10b37bc9fa7128558bde1b04e697f1bda820d2266e471de90ad6cd4d734937aa",
+          "native_geometry": [
+            {
+              "phase": "idle-before",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-before",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            }
+          ],
+          "phase_frame_counts": [
+            {
+              "phase": "idle-before",
+              "renders": 2,
+              "draws": 2,
+              "submissions": 2
+            },
+            {
+              "phase": "active",
+              "renders": 692,
+              "draws": 692,
+              "submissions": 692
+            },
+            {
+              "phase": "idle-after",
+              "renders": 1,
+              "draws": 1,
+              "submissions": 1
+            },
+            {
+              "phase": "churn",
+              "renders": 667,
+              "draws": 667,
+              "submissions": 667
+            }
+          ],
+          "all_phase_oracles_pass": null
+        }
+      ],
+      "collector_log_sha256": "e3b5f524b1d98ee100b6405155bcdc96f8aee6567cf9344c5aee8c204e95f7c6"
+    },
+    {
+      "contract": "native-editor-document-v1",
+      "accepted_pair": true,
+      "collector_exit_code": 0,
+      "completed_runs": [
+        {
+          "engine": "gpui-kit",
+          "binary_sha256": "bd99937498ebac1ad2a8a128e50d042ab9e2e0e5e304639e0c9614da0be074a0",
+          "relative_raw_path": "native-editor-document-v1/00-gpui-kit.json",
+          "raw_sha256": "094916171a38d64357cca010dfebe740ef98e266ccf696b72dc59cf78878e80d",
+          "native_geometry": [
+            {
+              "phase": "idle-before",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-before",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            }
+          ],
+          "phase_frame_counts": [
+            {
+              "phase": "idle-before",
+              "renders": 1,
+              "draws": 1,
+              "submissions": 1
+            },
+            {
+              "phase": "active",
+              "renders": 711,
+              "draws": 711,
+              "submissions": 711
+            },
+            {
+              "phase": "idle-after",
+              "renders": 64,
+              "draws": 64,
+              "submissions": 64
+            },
+            {
+              "phase": "churn",
+              "renders": 306,
+              "draws": 306,
+              "submissions": 306
+            }
+          ],
+          "all_phase_oracles_pass": true
+        },
+        {
+          "engine": "kael",
+          "binary_sha256": "c2e98338a17f174d5d1982695ef7937b2837da1a74f53787cc5157741696d55c",
+          "relative_raw_path": "native-editor-document-v1/00-kael.json",
+          "raw_sha256": "70520b82ca5e0b36a8f933e654f2d069382481f7fefb04160014b932eba634c6",
+          "native_geometry": [
+            {
+              "phase": "idle-before",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-before",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            }
+          ],
+          "phase_frame_counts": [
+            {
+              "phase": "idle-before",
+              "renders": 2,
+              "draws": 2,
+              "submissions": 2
+            },
+            {
+              "phase": "active",
+              "renders": 734,
+              "draws": 734,
+              "submissions": 734
+            },
+            {
+              "phase": "idle-after",
+              "renders": 3,
+              "draws": 3,
+              "submissions": 3
+            },
+            {
+              "phase": "churn",
+              "renders": 732,
+              "draws": 732,
+              "submissions": 732
+            }
+          ],
+          "all_phase_oracles_pass": true
+        }
+      ],
+      "collector_log_sha256": "c1fc710cca9fae2ed0d0fe8d3f9e515379380a75ece55e8c84b442dd58dcc6b9"
+    },
+    {
+      "contract": "native-data-table-v1",
+      "accepted_pair": true,
+      "collector_exit_code": 0,
+      "completed_runs": [
+        {
+          "engine": "gpui-kit",
+          "binary_sha256": "4920aae1f55e2a61de98d4d7d232d0f995c5ff1dccd25dbdafde63ae557f38a6",
+          "relative_raw_path": "native-data-table-v1/00-gpui-kit.json",
+          "raw_sha256": "74ee7798cdb451053dbbac819b01dc2dfae8cf9e691be4dba9b21949b1172b74",
+          "native_geometry": [
+            {
+              "phase": "idle-before",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-before",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            }
+          ],
+          "phase_frame_counts": [
+            {
+              "phase": "idle-before",
+              "renders": 1,
+              "draws": 1,
+              "submissions": 1
+            },
+            {
+              "phase": "active",
+              "renders": 715,
+              "draws": 715,
+              "submissions": 715
+            },
+            {
+              "phase": "idle-after",
+              "renders": 63,
+              "draws": 63,
+              "submissions": 63
+            },
+            {
+              "phase": "churn",
+              "renders": 714,
+              "draws": 714,
+              "submissions": 714
+            }
+          ],
+          "all_phase_oracles_pass": true
+        },
+        {
+          "engine": "kael",
+          "binary_sha256": "70230dff350f3e80d39b74f841fbd5afa5bfee104adc7cee801ebb0a9f5c68c6",
+          "relative_raw_path": "native-data-table-v1/00-kael.json",
+          "raw_sha256": "fcb39fd9b09a1cf529eb159a366d1904564316b154024525528c763f21c9db8c",
+          "native_geometry": [
+            {
+              "phase": "idle-before",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-before",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            }
+          ],
+          "phase_frame_counts": [
+            {
+              "phase": "idle-before",
+              "renders": 2,
+              "draws": 2,
+              "submissions": 2
+            },
+            {
+              "phase": "active",
+              "renders": 992,
+              "draws": 992,
+              "submissions": 992
+            },
+            {
+              "phase": "idle-after",
+              "renders": 1,
+              "draws": 1,
+              "submissions": 1
+            },
+            {
+              "phase": "churn",
+              "renders": 993,
+              "draws": 993,
+              "submissions": 993
+            }
+          ],
+          "all_phase_oracles_pass": true
+        }
+      ],
+      "collector_log_sha256": "5e15dbfdbea019fa4bed4ebc73d848173bd203738c8d224d16005f32859cd9b7"
+    },
+    {
+      "contract": "native-virtual-tree-v1",
+      "accepted_pair": false,
+      "collector_exit_code": 1,
+      "completed_runs": [
+        {
+          "engine": "kael",
+          "binary_sha256": "92a288442b0bb7df05ce1b22fca1fcfbb15379b2718373950950432b14990bbd",
+          "relative_raw_path": "native-virtual-tree-v1/00-kael.json",
+          "raw_sha256": "667db33117636002fc80b0e8f2409c8800a51789eb49fd0c821cfe468c69806e",
+          "native_geometry": [
+            {
+              "phase": "idle-before",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-before",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            }
+          ],
+          "phase_frame_counts": [
+            {
+              "phase": "idle-before",
+              "renders": 2,
+              "draws": 2,
+              "submissions": 2
+            },
+            {
+              "phase": "active",
+              "renders": 324,
+              "draws": 324,
+              "submissions": 324
+            },
+            {
+              "phase": "idle-after",
+              "renders": 1,
+              "draws": 1,
+              "submissions": 1
+            },
+            {
+              "phase": "churn",
+              "renders": 282,
+              "draws": 282,
+              "submissions": 282
+            }
+          ],
+          "all_phase_oracles_pass": true
+        }
+      ],
+      "collector_log_sha256": "c6dd4add4cd6c157d334335d3a734389323ffa30c8e6f26db79192e29037f8df"
+    },
+    {
+      "contract": "native-dock-workspace-v1",
+      "accepted_pair": true,
+      "collector_exit_code": 0,
+      "completed_runs": [
+        {
+          "engine": "gpui-kit",
+          "binary_sha256": "b1d7557523c0174f49f9a1abf29cc617e11d82383f4b51ad706becea1c2d11d9",
+          "relative_raw_path": "native-dock-workspace-v1/00-gpui-kit.json",
+          "raw_sha256": "652cbc06a3f39cc7d7ba26b54116e0b9e41849c5685d09033e2455dd563b3dd2",
+          "native_geometry": [
+            {
+              "phase": "idle-before",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-before",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            }
+          ],
+          "phase_frame_counts": [
+            {
+              "phase": "idle-before",
+              "renders": 1,
+              "draws": 1,
+              "submissions": 1
+            },
+            {
+              "phase": "active",
+              "renders": 1031,
+              "draws": 1031,
+              "submissions": 1031
+            },
+            {
+              "phase": "idle-after",
+              "renders": 1,
+              "draws": 1,
+              "submissions": 1
+            },
+            {
+              "phase": "churn",
+              "renders": 1054,
+              "draws": 1054,
+              "submissions": 1054
+            }
+          ],
+          "all_phase_oracles_pass": true
+        },
+        {
+          "engine": "kael",
+          "binary_sha256": "85d8b4021a980fb0a722b86b21d3384dfe507eac46f3ebab045b89b385a98c38",
+          "relative_raw_path": "native-dock-workspace-v1/00-kael.json",
+          "raw_sha256": "8de779732df33ad3c37a5549859680309cb79e268bd1b22e9ace501d76214fe3",
+          "native_geometry": [
+            {
+              "phase": "idle-before",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-before",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "active",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "idle-after",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "begin",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            },
+            {
+              "phase": "churn",
+              "boundary": "end",
+              "viewport_width_px": 1100.0,
+              "viewport_height_px": 760.0,
+              "scale_factor": 2.0
+            }
+          ],
+          "phase_frame_counts": [
+            {
+              "phase": "idle-before",
+              "renders": 2,
+              "draws": 2,
+              "submissions": 2
+            },
+            {
+              "phase": "active",
+              "renders": 689,
+              "draws": 689,
+              "submissions": 689
+            },
+            {
+              "phase": "idle-after",
+              "renders": 2,
+              "draws": 2,
+              "submissions": 2
+            },
+            {
+              "phase": "churn",
+              "renders": 685,
+              "draws": 685,
+              "submissions": 685
+            }
+          ],
+          "all_phase_oracles_pass": true
+        }
+      ],
+      "collector_log_sha256": "d3498d0386c11103cf915e7d8dfe58280d014297344f0d8ad9a2111fd47bf05e"
+    }
+  ]
+}

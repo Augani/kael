@@ -19,6 +19,22 @@ while let Some(frame) = frames.next_frame()? {
 # Ok::<(), kael_media::MediaDecodeError>(())
 ```
 
+## Native dependencies
+
+The locked `ffmpeg-next` bindings support FFmpeg 8. On macOS, use Homebrew's
+[versioned formula](https://formulae.brew.sh/formula/ffmpeg@8) and select its
+headers and libraries explicitly:
+
+```sh
+brew install ffmpeg@8 pkg-config
+export PKG_CONFIG_PATH="$(brew --prefix ffmpeg@8)/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+export PATH="$(brew --prefix ffmpeg@8)/bin:$PATH"
+```
+
+`pkg-config --modversion libavcodec` should report major version 62. FFmpeg 9
+requires updated bindings; selecting an unversioned Homebrew installation can
+otherwise fail while compiling the optional native media backend.
+
 ## Production notes
 
 - Local file sources must resolve to regular files. Remote sources accept only credential-free `http` and `https` URLs, FFmpeg receives a restricted protocol allowlist, and network I/O has a 30-second timeout. Applications that accept untrusted URLs must enforce their own host and network policy before constructing a source.

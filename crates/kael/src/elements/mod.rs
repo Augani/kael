@@ -27,6 +27,8 @@ mod popover;
 mod progress;
 mod radio_group;
 mod recycling_list;
+#[cfg(feature = "custom-shaders")]
+mod render_target;
 mod rich_text;
 mod select;
 mod semantic;
@@ -73,6 +75,8 @@ pub use popover::*;
 pub use progress::*;
 pub use radio_group::*;
 pub use recycling_list::*;
+#[cfg(feature = "custom-shaders")]
+pub use render_target::*;
 pub use rich_text::*;
 pub use scroll_bar::*;
 pub use select::*;

@@ -7,6 +7,15 @@ disk tier. `MemoryCache` and `DiskCache` are also available
 independently when an application needs only one tier. The crate has no UI
 dependency and works with Kael's runtime primitives or another interface layer.
 
+For variable-size payloads, use `CacheManager::with_memory_byte_budget(config,
+memory_max_bytes)` to bound both memory entries and retained serialized bytes.
+Oversized values stay on disk and are read without memory promotion; a zero
+byte budget disables the memory tier. `memory_used_bytes()` reports retained
+payload bytes. `MemoryCache::with_byte_budget(max_entries, max_bytes, weigh)`
+provides the same limit for standalone caches using a caller-supplied weight
+function. Keys, cache metadata, temporary buffers, and values held by callers
+are outside the payload budget; entry limits also bound metadata entry counts.
+
 ## Quick start
 
 ```rust,no_run

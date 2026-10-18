@@ -41,7 +41,7 @@ pub(crate) fn cached_prepaint(
         if !caching_disabled
             && !window.refreshing
             && let Some(mut element_state) = element_state
-            && element_state.is_reusable(&cache_key, cx)
+            && element_state.is_reusable(&cache_key, cx, window.cache_paint_epoch())
         {
             let prepaint_start = window.prepaint_index();
             window.reuse_prepaint(element_state.prepaint_range.clone());
@@ -83,43 +83,46 @@ pub(crate) fn cached_paint(
     cx: &mut App,
     composite: impl FnOnce(&mut Window, &CachedSurface),
 ) {
-    window.with_element_state::<SubtreeCacheState, _>(global_id, |element_state, window| {
-        let mut element_state = element_state.unwrap();
-        let paint_start = window.paint_index();
+    window.with_accessibility_cache_scope(global_id, |window| {
+        window.with_element_state::<SubtreeCacheState, _>(global_id, |element_state, window| {
+            let mut element_state = element_state.unwrap();
+            let paint_start = window.paint_index();
 
-        if let Some(element) = prepaint {
-            let accessibility_start = window.accessibility_node_index();
-            element.paint(window, cx);
-            element_state.accessibility_nodes =
-                window.accessibility_nodes_since(accessibility_start);
-            let paint_end = window.paint_index();
-            let paint_scene_range = paint_start.scene_index..paint_end.scene_index;
-            element_state.paint_range = paint_start..paint_end;
-            element_state.prepare_surface(
-                global_id,
-                bounds,
-                window.scale_factor(),
-                window.sprite_atlas(),
-            );
-            if let Some(surface) = element_state.surface.as_ref() {
-                window.request_cached_surface_snapshot(paint_scene_range, surface);
+            if let Some(element) = prepaint {
+                element_state.accessibility_parent = Some(window.accessibility_parent());
+                let accessibility_start = window.accessibility_node_index();
+                element.paint(window, cx);
+                element_state.accessibility_nodes =
+                    window.accessibility_nodes_since(accessibility_start);
+                let paint_end = window.paint_index();
+                let paint_scene_range = paint_start.scene_index..paint_end.scene_index;
+                element_state.paint_range = paint_start..paint_end;
+                element_state.prepare_surface(
+                    global_id,
+                    bounds,
+                    window.scale_factor(),
+                    window.sprite_atlas(),
+                );
+                if let Some(surface) = element_state.surface.as_ref() {
+                    window.request_cached_surface_snapshot(paint_scene_range, surface);
+                }
+            } else {
+                window.replay_cached_accessibility(&mut element_state);
+                if let Some(surface) = element_state.surface.as_ref() {
+                    window.reuse_paint_without_scene(element_state.paint_range.clone());
+                    composite(window, surface);
+                } else {
+                    window.reuse_paint(element_state.paint_range.clone());
+                }
+
+                let paint_end = window.paint_index();
+                element_state.paint_range = paint_start..paint_end;
             }
-        } else if let Some(surface) = element_state.surface.as_ref() {
-            window.replay_accessibility_nodes(&element_state.accessibility_nodes);
-            window.reuse_paint_without_scene(element_state.paint_range.clone());
-            composite(window, surface);
 
-            let paint_end = window.paint_index();
-            element_state.paint_range = paint_start..paint_end;
-        } else {
-            window.replay_accessibility_nodes(&element_state.accessibility_nodes);
-            window.reuse_paint(element_state.paint_range.clone());
+            element_state.record_paint(window.cache_paint_epoch());
 
-            let paint_end = window.paint_index();
-            element_state.paint_range = paint_start..paint_end;
-        }
-
-        ((), element_state)
+            ((), element_state)
+        })
     })
 }
 

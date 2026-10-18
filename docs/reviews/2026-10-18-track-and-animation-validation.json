@@ -1,0 +1,399 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-10-18T00:23:19.207072+00:00",
+  "status": "PRIMARY_EIGHT_REVIEWED_FILES_ADOPTED_COMBINED_CHECKS_AND_NATIVE_TRACK_PASS",
+  "source_base": "0d15aff4288e8e98a54032e6ed149e080ea13104",
+  "paths": [
+    {
+      "path": "scripts/ci/verify-lottie-admission.py",
+      "primary_before_sha256": "6342b278c9883c2d59e1127f2769160535ec157b57eec388dfea2bd1de91c2b7",
+      "candidate_sha256": "7b69478caaf9c61756e89383178177b4711c812b7e3945a1583c00a3542ec5dd",
+      "mode_octal": "0o644",
+      "bytes": 9066
+    },
+    {
+      "path": "scripts/ci/verify-rasterlottie-fork.py",
+      "primary_before_sha256": "9384fd649d0dba43db4c53a102ed14be75520680f2bf3e4bf39be41d5f579743",
+      "candidate_sha256": "657c36885044d2707bac484761cc8fa895ea446ecffb671a2af0c8fd609d52ef",
+      "mode_octal": "0o755",
+      "bytes": 13245
+    },
+    {
+      "path": "vendor/rasterlottie/PATCHES.md",
+      "primary_before_sha256": "33b696402a70e94e4abe59247fb04b52ed952e7edbbad2597dbf43aee2129323",
+      "candidate_sha256": "dc3dce605a38a24865f317e9caa138b0ec3213dd68bc2830ed7caca09d0b3166",
+      "mode_octal": "0o644",
+      "bytes": 13928
+    },
+    {
+      "path": "vendor/rasterlottie/zip9-compatibility.patch",
+      "primary_before_sha256": "971163b1585f225919d7a6640005f45e45b742f1df343c7c8e024edb685c6339",
+      "candidate_sha256": "844d03d7a91480ae08b751f0e6251c6f213c7a1c43a45e6663c0a004efdb7239",
+      "mode_octal": "0o644",
+      "bytes": 129763
+    },
+    {
+      "path": "vendor/rasterlottie/src/render/layer_effects.rs",
+      "primary_before_sha256": "836cea2ecf59e02b31e9bbb18acdcf40bf5e2f1c757ed9b4fa742de305e6c3dc",
+      "candidate_sha256": "031d37e4469a4554b90650c875c49b0be1aba643823490ca811993009c89cf11",
+      "mode_octal": "0o644",
+      "bytes": 9289
+    },
+    {
+      "path": "vendor/rasterlottie/tests/zip9_compatibility.rs",
+      "primary_before_sha256": "2dccbcf224f2922f3fc2766bc7a7c7ed70c6d4894420a26659c57fcc2e11b654",
+      "candidate_sha256": "6d4421331337adcc07c86737880960328d537f5ecf0be2fa03e3ee8204ac59cc",
+      "mode_octal": "0o644",
+      "bytes": 25497
+    },
+    {
+      "path": "crates/kael/src/elements/scroll_bar.rs",
+      "primary_before_sha256": "a7f2c13b018689f5bf7f27d2d6c47b1de3c7b87008b889f1fd192e1c31395207",
+      "candidate_sha256": "764bad5a079675ffd1722ea37d36fb7596cb8623ed0fb637836ad9be68cb58d3",
+      "mode_octal": "0o644"
+    },
+    {
+      "path": "crates/kael_ui/src/display/data_table.rs",
+      "primary_before_sha256": "7be5f2948edadf66cde606e3f120a37aec9d02ed2da515a319263b1687857a6a",
+      "candidate_sha256": "733ee85a89d58c03603349ad75a78885b67bd20ace5eb0465f64e448791251e3",
+      "mode_octal": "0o644"
+    }
+  ],
+  "scrollbar": {
+    "production_change": "Expose existing base style through Styled; table horizontal bar uses w_full. Primitive12x160/160x12 defaults preserved.",
+    "actual_baseline_failure": "Table viewport472\u2192322\u2192452 while old track remained160; x\u221240/y\u221296 preserved.",
+    "isolated_targeted_unique_passes": 51,
+    "groups": {
+      "layout": 16,
+      "dropdown": 25,
+      "scrollbar": 10
+    },
+    "native_track": "Real click at screenshot1650,1148 beyond former160logicalpx track moves0\u2192198; Left198\u2192158; vertical scroll preserves158 and bounded aligned table/footer.",
+    "native_zoom": "Exposed native window zoom changes outer screenshot1800x1264\u21923456x2168 with bounded header/body/footer. No arbitrary edge-drag claim.",
+    "pending_separate_identity_failures": 4,
+    "unpromoted_identity_tests_and_source_preserved": true
+  },
+  "animation_arithmetic": {
+    "change": "Separate sign from unsigned radius, clip to finite pixmap dimensions and use saturating endpoints/usize indexing. Finite/no-op thresholds and clipped alpha-only kernel semantics preserved.",
+    "fixture_maximum_pixels": 6,
+    "baseline": {
+      "exact_pixel_passes": 39,
+      "actual_debug_overflow_panics": 6,
+      "timeouts": 0
+    },
+    "final": {
+      "exact_pixel_passes": 45,
+      "panics": 0,
+      "timeouts": 0
+    },
+    "identical_fork_validation": {
+      "execution_scope": "Isolated byte-identical81-file fork before primary promotion; not a second primary fork test execution.",
+      "native_passed": 140,
+      "native_suite_counts": [
+        119,
+        1,
+        1,
+        1,
+        16,
+        2
+      ],
+      "actual_chrome_passed": 17,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0,
+      "skipped": 0,
+      "strict_all_feature_all_target_clippy": true
+    },
+    "provenance": {
+      "original_files": 74,
+      "reconstructed_files": 81,
+      "reviewed_modified_original_rust_paths": 10,
+      "patch_bytes": 129763,
+      "unchanged_patch_cap_bytes": 131072,
+      "negative_probes_rejected": 19,
+      "original_license_and_index_unchanged": true,
+      "strengthened_mandatory_runtime_regressions_and_count_minima": true
+    }
+  },
+  "primary_integration": {
+    "source_frozen": true,
+    "checks": [
+      {
+        "name": "clippy",
+        "argv": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "-p",
+          "kael",
+          "-p",
+          "kael_ui",
+          "--all-targets",
+          "--features",
+          "kael/lottie",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 74.84205524998833,
+        "log_sha256": "3dee1bdf3557efe39ad3b6ec3ed4362b2e34a06d5dee0ae9c8b53c5111950d3c"
+      },
+      {
+        "name": "core",
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "kael",
+          "--lib",
+          "--no-default-features",
+          "--features",
+          "font-kit,test-support,lottie",
+          "--",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "seconds": 97.32220787499682,
+        "log_sha256": "ea788475f7d66a441fe15a85b24d5ef5508377526947745e7091bb16f0536106"
+      },
+      {
+        "name": "ui",
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "kael_ui",
+          "--lib",
+          "--features",
+          "kael/lottie",
+          "--",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "seconds": 105.67935720799142,
+        "log_sha256": "0c53eb78422f72e355786373fd10c3e10a2de0526b7b237b8d334d2bc2339f84"
+      },
+      {
+        "name": "wasm",
+        "argv": [
+          "cargo",
+          "check",
+          "--locked",
+          "-p",
+          "kael_ui",
+          "--target",
+          "wasm32-unknown-unknown",
+          "--no-default-features",
+          "--features",
+          "kael/browser,kael/lottie"
+        ],
+        "exit_code": 0,
+        "seconds": 21.325763124972582,
+        "log_sha256": "acdb95c7b51348b00e9d77034d5b91ddcf69d7c2c7761127c8bfb21a2232a697"
+      },
+      {
+        "name": "example-tests",
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "kael_ui",
+          "--example",
+          "compact_records",
+          "--no-default-features",
+          "--features",
+          "native"
+        ],
+        "exit_code": 0,
+        "seconds": 41.103014541993616,
+        "log_sha256": "25795a9e84690021b22798ba7e78f0bc48880ef1e8a492717ac75dfba47429cb"
+      },
+      {
+        "name": "example-build",
+        "argv": [
+          "cargo",
+          "build",
+          "--locked",
+          "-p",
+          "kael_ui",
+          "--example",
+          "compact_records",
+          "--no-default-features",
+          "--features",
+          "native",
+          "--message-format=json"
+        ],
+        "exit_code": 0,
+        "seconds": 3.1067409589886665,
+        "log_sha256": "37d51aa21f741a2baec4396a1cc4d874efba1f3c8d6e748e27b06d1f4ae587a4"
+      },
+      {
+        "name": "benchmark-kael-timing",
+        "argv": [
+          "cargo",
+          "check",
+          "--locked",
+          "--manifest-path",
+          "benchmarks/desktop-comparison/Cargo.toml",
+          "--bins",
+          "--no-default-features",
+          "--features",
+          "kael-engine,frame-timing"
+        ],
+        "exit_code": 0,
+        "seconds": 23.468968583008973,
+        "log_sha256": "233a9475c1c6582b7a547068c8b10f478568d424ea642cdbce8e4e8b795144c0"
+      },
+      {
+        "name": "benchmark-gpui-timing",
+        "argv": [
+          "cargo",
+          "check",
+          "--locked",
+          "--manifest-path",
+          "benchmarks/desktop-comparison/Cargo.toml",
+          "--bins",
+          "--no-default-features",
+          "--features",
+          "gpui-kit-engine,frame-timing"
+        ],
+        "exit_code": 0,
+        "seconds": 0.7205188329971861,
+        "log_sha256": "019f1622067fd743b96f5fe733ccc66c0bce792e064cd20aab15655c86f030c0"
+      },
+      {
+        "name": "benchmark-kael-no-timing",
+        "argv": [
+          "cargo",
+          "check",
+          "--locked",
+          "--manifest-path",
+          "benchmarks/desktop-comparison/Cargo.toml",
+          "--bins",
+          "--no-default-features",
+          "--features",
+          "kael-engine"
+        ],
+        "exit_code": 0,
+        "seconds": 19.703838958987035,
+        "log_sha256": "505ac1d5c7f0e5b57df4ff5c4f77bd2fe34a757be02404c97d84a3f1909e1590"
+      },
+      {
+        "name": "benchmark-gpui-no-timing",
+        "argv": [
+          "cargo",
+          "check",
+          "--locked",
+          "--manifest-path",
+          "benchmarks/desktop-comparison/Cargo.toml",
+          "--bins",
+          "--no-default-features",
+          "--features",
+          "gpui-kit-engine"
+        ],
+        "exit_code": 0,
+        "seconds": 0.8565606249903794,
+        "log_sha256": "92a81c67566d5573e1b09505ecb8e3662632a8e911f1b673a894c1a3ee41af9d"
+      },
+      {
+        "name": "fmt",
+        "argv": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 36.75810416700551,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "docs",
+        "argv": [
+          "bash",
+          "scripts/ci/verify-docs.sh"
+        ],
+        "exit_code": 0,
+        "seconds": 0.3367059999727644,
+        "log_sha256": "0fb87ecae09e05f755df5b77bb290e1636d51926a57bb5e2361c5a19dddcce3f"
+      }
+    ],
+    "core_passed": 2199,
+    "core_existing_opt_in_ignored": 2,
+    "new_ignores": 0,
+    "ui_passed": 538,
+    "ui_ignored": 0,
+    "records_example_tests_passed": 2,
+    "benchmark_compile_targets": 20,
+    "native_all_target_strict_clippy": true,
+    "browser_consumer_check": true,
+    "format_and_docs": true,
+    "package_39_preflight": "Pending later final combined source; no new package claim.",
+    "diff_check": "Ordinary changed sources clean. Canonical unified patch has three added blank context markers consisting of one space; preserved exact patch bytes reconstruct all81 files under unchanged cap."
+  },
+  "evidence": [
+    {
+      "path": ".artifacts/2026-10-18-controls-animation-primary/promotion.json",
+      "sha256": "e78bb69418c814adc6218a22607424c92c93f8805d7e0529f378eeb8aa160491",
+      "bytes": 4145
+    },
+    {
+      "path": ".artifacts/2026-10-18-controls-animation-primary/integration.json",
+      "sha256": "a9f77d16da29604e9805158d4014c34a7f43e3d0d5080691a160bafc920b4215",
+      "bytes": 6674
+    },
+    {
+      "path": ".artifacts/2026-10-18-track-width-native/validation.json",
+      "sha256": "c46d179ac152e5b0bc2f6c565d5ecbba27dcc5b60224632461d6402cbdcb853c",
+      "bytes": 5881
+    },
+    {
+      "path": ".artifacts/2026-10-17-scrollbar-track-width-candidate/manifest.json",
+      "sha256": "adca579b8202f2c07693e4c1d491fef633831528b4c501feb857f5bde4f4bbf9",
+      "bytes": 10709
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-choker-adoption/adoption-manifest.json",
+      "sha256": "85b5c6562106aa94d7e419373677b6099f1dd0dc45b028a6350be00daf317dbd",
+      "bytes": 13201
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-choker-adoption/independent-review.json",
+      "sha256": "614721ea9aecd9685302cb59c2ce07cc0701863f22a272c42ae06794596725c7",
+      "bytes": 8348
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-choker-arithmetic/runs/baseline/result.json",
+      "sha256": "288c2277b9680dd77139faeaf9fe99b26386549132e3d54bba7c4328bb43650f",
+      "bytes": 55236
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-choker-arithmetic/final-runs/candidate/result.json",
+      "sha256": "0e676db6f4471ef24683898baeda1d7eb668ac9b859d8babd44599f23286e634",
+      "bytes": 56165
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-choker-admission/validation.json",
+      "sha256": "e38c78e17935acfbd6fcbf88a43eba5abf527cf8051d5b6e65f6bf5c5d5cf889",
+      "bytes": 7127
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-choker-provenance/negative-probes.json",
+      "sha256": "a8a9b0d3f1efce721e46150f19d21878c305b7b0f348c423bdec0e90f97da3cd",
+      "bytes": 4586
+    }
+  ],
+  "limitations": [
+    "No CPU/RSS, latency, power or overall performance ranking.",
+    "Animation worst-case pixel/kernel work remains quadratic; active/model/layer/effect scratch/output and process-wide unified memory remain additional.",
+    "No OS numeric NSNumber SetValue/secondary scrollbar protocol or nonzero native horizontal wheel acceptance claim.",
+    "Four original separate Select/Combobox stale-action failures remain preserved outside this sizing fix; no identity fix or ignore is smuggled into this slice.",
+    "Hosted platform and full matched comparison at0d15 predate these later eight source changes.",
+    "The existing two opt-in core diagnostics remain ignored in the broad core invocation, with historical explicit native proof separate."
+  ]
+}

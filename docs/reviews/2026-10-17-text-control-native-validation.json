@@ -1,0 +1,348 @@
+{
+  "date": "2026-10-17",
+  "scope": "Local text shaping, shared Select/Combobox lifecycle and physical macOS Metal correctness at the frozen source checkpoint; no framework ranking or power claim",
+  "source_checkpoint": "922720761366ac4aeb1bfe05f9359054a2720c9e",
+  "source_files_sha256": {
+    "crates/kael/src/text_system.rs": "fb5c11574e785a64611976d579a537cf781793778b0dbac9fecd240ce21ee11b",
+    "crates/kael/src/text_system/line.rs": "dd437fb5978962b7fca9c67898ff621fb2ccbddbef4890f2f555d6cc6188f1f4",
+    "crates/kael/src/platform/mac/text_system.rs": "39f42d6e59d4bc667d83c1ed4e0716e0869473959b6c43852611b781efdc8796",
+    "crates/kael/src/platform/mac/display_link.rs": "ddc8a6c023b83e6e05920c5042a1d93ed4e83b2de95b7b82041814d24ab76a51",
+    "crates/kael/src/platform/mac/window.rs": "3f2850829331cd6df9c0203882bc87701692c29762dc8fc8389697c9cbea0500",
+    "crates/kael/src/platform/mac/metal_renderer.rs": "0ed6a771b4ab2cda8aa33813b7b236e5661bedf35aeb9b42946ae3d8b8e08ef0",
+    "crates/kael/src/platform/mac/metal_atlas.rs": "5538a9c5e3aae37d87d7aa1411c9940418378ebe0162b8adcffc4690952fdf62",
+    "crates/kael/src/accessibility.rs": "ada57711a131801e6317502cc271febcd4c01f870dfe8ae3cd01cd43efb1fd6a",
+    "crates/kael/src/window.rs": "ef373b1e4f96003c698bc8d1c34f78516ca8370078cfd38521a3534c3b384a0b",
+    "crates/kael/src/cache.rs": "b0dda9b73b7d12b42362cc972ba7168108f36a1aa02b693c24482b311a9e0f88",
+    "crates/kael/src/view.rs": "6dfccfce267cb6bdbfd069f753b8ad27f3cddc49e76b0a7c5a003edbf9eb18fa",
+    "crates/kael/src/elements/div.rs": "49cce18bf265eebe6d64c4e03d1f42ccc36940f7f1fd32347f11a16cc0422b2a",
+    "crates/kael/src/elements/cached.rs": "11b9ec09cf8e6dcc28a2b405224d96827c2a40236b5afcfff4f4fb019b80ec75",
+    "crates/kael/src/elements/deferred.rs": "b46f7a5f59d24bd5c5d04c640565a33a39906aabe2654f27a335b84561f9d64c",
+    "crates/kael_ui/src/components/select.rs": "6ecf7c321d12ad9d66dbb20b6fc06bfd588742f30e88ed3833eb10aa4a26cc37",
+    "crates/kael_ui/src/components/combobox.rs": "ce0de2c2a89819cf4a840a5064c26e86a55f15729317e7f49928bc84fe5cf5a6",
+    "crates/kael/examples/native_renderer_smoke.rs": "275d33e1ba67d7f8cf3d570fc077eac28553bb5e6ffe6d88bd055be26f12cc71"
+  },
+  "compiler": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: aarch64-apple-darwin\nrelease: 1.97.1\nLLVM version: 22.1.6",
+  "environment": {
+    "machine": "arm64",
+    "os": "ProductName:\t\tmacOS\nProductVersion:\t\t27.2\nBuildVersion:\t\t26B5112a",
+    "cpu": "Apple M2 Pro",
+    "logical_cpus": 12,
+    "memory_bytes": 17179869184
+  },
+  "commands": {
+    "core": "KAEL_HEADLESS=1 CARGO_TARGET_DIR=/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target cargo test --locked -p kael --lib --no-default-features --features font-kit,test-support -- --test-threads=1",
+    "ui": "KAEL_HEADLESS=1 CARGO_TARGET_DIR=/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target cargo test --locked -p kael_ui --lib -- --test-threads=1",
+    "strict_native": "KAEL_HEADLESS=1 CARGO_TARGET_DIR=/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target cargo clippy --locked -p kael -p kael_ui --all-targets -- -D warnings",
+    "programmable": "python3 scripts/ci/verify-programmable-renderer.py --backend metal --evidence .artifacts/2026-10-17-text-native-quality/programmable",
+    "native_window": {
+      "command": "cargo run -p kael --example native_renderer_smoke --no-default-features --features font-kit,runtime_shaders",
+      "environment": {
+        "KAEL_HEADLESS": "unset",
+        "CARGO_TARGET_DIR": "/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target",
+        "KAEL_GPU_FRAME_TIMING_SMOKE": "1",
+        "KAEL_GPU_FRAME_TIMING_TRACE": "1",
+        "KAEL_NATIVE_RENDERER_SMOKE_PNG": ".artifacts/2026-10-17-text-native-quality/native-renderer.png"
+      },
+      "provenance": "Invocation reconstructed from runner configuration and confirmed by the root agent; the raw log records the executed binary, not the complete environment or cargo invocation."
+    }
+  },
+  "core": {
+    "log": ".artifacts/2026-10-17-third-core-tests.log",
+    "sha256": "3915a36c6b43c86cfe8130c12e56a767c57aa3937b29ed6e0f8e2d41acbd4b95",
+    "passed": 2162,
+    "failed": 0,
+    "ignored": 2,
+    "ignored_tests": [
+      "platform::mac::display_link::tests::native_retained_display_link_probe ... ignored, explicit runtime probe: requires an awake native macOS display",
+      "platform::mac::text_system::tests::native_sized_font_shaping_diagnostic ... ignored, explicit native shaping timing diagnostic"
+    ],
+    "scope": "Headless library graph with native font-kit and test-support; two opt-in native diagnostics are reported separately below.",
+    "executable": "benchmarks/desktop-comparison/target/debug/deps/kael-cf4175f694c126f9"
+  },
+  "ui": {
+    "log": ".artifacts/2026-10-17-third-ui-tests.log",
+    "sha256": "1029a62f7f80835d4d219af03c72d9378dee88d964fbede397ff523a528c7ddb",
+    "passed": 497,
+    "failed": 0,
+    "ignored": 0,
+    "scope": "Mounted/headless component tests, simulated pointer/keyboard/native accessibility action dispatch and AccessKit export. Test-support effect flushing can draw dirty windows automatically; this is not an isolated production frame-clock test.",
+    "executable": "benchmarks/desktop-comparison/target/debug/deps/kael_ui-f5a964efb5fdbe7e"
+  },
+  "focused": {
+    "select": {
+      "log": ".artifacts/2026-10-17-select-lifecycle-green.log",
+      "sha256": "bf6ebaa85c617930e67a7f05beb88f10420c4679192d8fd032c1edb1b9593f8a",
+      "passed": 18,
+      "failed": 0,
+      "ignored": 0
+    },
+    "combobox": {
+      "log": ".artifacts/2026-10-17-combobox-active-window-synchronous-blur.log",
+      "sha256": "2cd884e84ca9771c4ae1b23e7efea1e0a40924eeb3cabccae2f80a0173fc924e",
+      "passed": 14,
+      "failed": 0,
+      "ignored": 0
+    },
+    "styled_label_fonts": {
+      "log": ".artifacts/2026-10-17-styled-label-font-green.log",
+      "sha256": "fb3bd08ee688ae64e2c8236c4dc0c3f994f2d4e3ab0546dca9d1789b6453d966",
+      "passed": 16,
+      "failed": 0,
+      "ignored": 1
+    }
+  },
+  "strict_native": {
+    "log": ".artifacts/2026-10-17-third-native-clippy.log",
+    "sha256": "283b06040877a59e5cfe25f06ee0b91ea897cce4eb62eb5ea14f97d7dcca1fd5",
+    "result": "pass",
+    "known_dependency_warning": "block v0.1.6 future-incompatibility notice is retained in the log."
+  },
+  "programmable_features": [
+    "font-kit",
+    "runtime_shaders",
+    "custom-shaders"
+  ],
+  "programmable_runner": {
+    "path": "scripts/ci/verify-programmable-renderer.py",
+    "sha256": "c5ad56421bc4e95ca22250000914be35d2ba7807844d0c543cdf84c2b81f2a90",
+    "log": ".artifacts/2026-10-17-text-native-quality-programmable.log",
+    "log_sha256": "58d9f2730fbd3cedad96f3a12e81e52614d7b551bfd1514ccf39b3217b8eb69b",
+    "result": "pass",
+    "mandatory_missing_device_skip_or_ignored_rejected": true
+  },
+  "programmable_test_groups": [
+    {
+      "log": ".artifacts/2026-10-17-text-native-quality/programmable/custom-shaders-and-compute.log",
+      "sha256": "36e7549163c4d026020a9cfe557185f07dc5156c2238ac14e59fcb082b68a7cb",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "filter": "custom_shaders::tests",
+      "command": "cargo test --locked -p kael --lib --no-default-features --features font-kit,runtime_shaders,custom-shaders custom_shaders::tests -- --nocapture --test-threads=1"
+    },
+    {
+      "log": ".artifacts/2026-10-17-text-native-quality/programmable/mixed-gpu-graph.log",
+      "sha256": "3f42c6da3c470763fd81d9424b6c85d22162d0581fd547fbdfbb74876c0da9c7",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "filter": "graph_tests",
+      "command": "cargo test --locked -p kael --lib --no-default-features --features font-kit,runtime_shaders,custom-shaders graph_tests -- --nocapture --test-threads=1"
+    },
+    {
+      "log": ".artifacts/2026-10-17-text-native-quality/programmable/offscreen-scenes.log",
+      "sha256": "5b16172152dcef1e0464a0252b9a45f920f586fc4683cbb57d30a742164e5027",
+      "passed": 26,
+      "failed": 0,
+      "ignored": 0,
+      "filter": "offscreen_tests",
+      "command": "cargo test --locked -p kael --lib --no-default-features --features font-kit,runtime_shaders,custom-shaders offscreen_tests -- --nocapture --test-threads=1"
+    },
+    {
+      "log": ".artifacts/2026-10-17-text-native-quality/programmable/ordered-atlas-uploads.log",
+      "sha256": "89a33e4b6e3b7911a4138f1880b51df9d38d53cdd3f3f3ed25443d229c48e1e7",
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0,
+      "filter": "metal_atlas::tests",
+      "command": "cargo test --locked -p kael --lib --no-default-features --features font-kit,runtime_shaders,custom-shaders metal_atlas::tests -- --nocapture --test-threads=1"
+    },
+    {
+      "log": ".artifacts/2026-10-17-text-native-quality/programmable/atlas-identity-lifetimes.log",
+      "sha256": "6ad41e3fb573afc6df83c30504969b77497d9dc474af296801d9204318f75a45",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "filter": "native_atlas_identity",
+      "command": "cargo test --locked -p kael --lib --no-default-features --features font-kit,runtime_shaders,custom-shaders native_atlas_identity -- --nocapture --test-threads=1"
+    },
+    {
+      "log": ".artifacts/2026-10-17-text-native-quality/programmable/atlas-tile-residency.log",
+      "sha256": "adba20345d32cfefc694f16a02d93aa542995f016121d9b10cc8c66b4c1a8d38",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "filter": "atlas_tile_allocations::tests",
+      "command": "cargo test --locked -p kael --lib --no-default-features --features font-kit,runtime_shaders,custom-shaders atlas_tile_allocations::tests -- --nocapture --test-threads=1"
+    }
+  ],
+  "programmable_total_passed": 59,
+  "programmable_total_failed": 0,
+  "programmable_total_ignored": 0,
+  "native_window": {
+    "features": [
+      "font-kit",
+      "runtime_shaders"
+    ],
+    "backend": "metal",
+    "software": false,
+    "initial_client_size": [
+      720,
+      460
+    ],
+    "initial_viewport_size": [
+      720,
+      460
+    ],
+    "client_size_coordinate_space": "logical pixels",
+    "scale": 2,
+    "initial_client_geometry_verified": true,
+    "final_viewport_size": [
+      723,
+      460
+    ],
+    "resize_contract": "Revision 1 uses only model notification after 1,250 ms idle. Revisions 2 and 3 deliberately resize the macOS client to WIDTH + revision at constant height: 722\u00d7460 then 723\u00d7460 logical pixels.",
+    "idle_model_wake_without_input_resize_or_refresh": true,
+    "idle_model_wait_ms": 1250,
+    "idle_model_evidence_scope": "Model notification resumed CPU render and platform submission; compositor presentation is verified separately, not attributed to the model-only revision.",
+    "gpu_completed_and_displayed_frames": 60,
+    "unique_presentation_record_count": 60,
+    "presentation_frame_ids": [
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      82
+    ],
+    "presentation_clock": "monotonic_host_seconds",
+    "presentation_validation": "Each retained record has positive submission time, GPU start no earlier than submission within 100 \u00b5s, GPU end >= start, and presentation no earlier than GPU end within 100 \u00b5s.",
+    "rendered_revisions": 4,
+    "render_calls": 9,
+    "text_probe_pixels": 6067,
+    "raw_log": ".artifacts/2026-10-17-text-native-quality/native-renderer.log",
+    "raw_log_sha256": "265dff98be4a14089b136a80e492c95beb47cd5cabdcad737f49ec7604ad50f6",
+    "png": ".artifacts/2026-10-17-text-native-quality/native-renderer.png",
+    "png_sha256": "d23fafef2b093bc30849664e7d9dde778e3643fdbf3fb561a0d1c7e60667b09d",
+    "png_size_bytes": 110304,
+    "png_dimensions_device_pixels": [
+      1446,
+      920
+    ],
+    "png_source": "Window.export_frame_png uses bounded retained-scene readback through the same Metal backend; this image is not an OS desktop screenshot or a per-presentation drawable capture.",
+    "png_visual_review": "Full title/subtitle and retained-layer labels are readable; image shows final frame revision 3."
+  },
+  "executable_sha256": {
+    "benchmarks/desktop-comparison/target/debug/deps/kael-cf4175f694c126f9": "7ad5dbd9f393469e36bcd9e49d568c3d6dc0db3cf09728b674da531c702788bf",
+    "benchmarks/desktop-comparison/target/debug/deps/kael_ui-f5a964efb5fdbe7e": "70d4104bab41cd8315b5cae4b25c7abdcbd27a485b3343eb498aad746109ab90",
+    "benchmarks/desktop-comparison/target/debug/deps/kael-c8a86da3fb1aa4ae": "4265afde30972985a16f6f4efa5595e850820b71b03ebf43b6386770f7911a1d",
+    "benchmarks/desktop-comparison/target/debug/examples/native_renderer_smoke": "3bb380c9ceb8f1b2ff7c34872704d3e21fb7da49b31a9e86ff87e648167b44d1"
+  },
+  "retained_opt_in_native_font_diagnostic": {
+    "log": ".artifacts/2026-10-17-native-shaping-cache-diagnostic.log",
+    "sha256": "e1801753d5df770304da62ecf90bc59ef116a64eec43582c8d47d2fd11eda943",
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "metadata": ".artifacts/2026-10-17-native-shaping-cache-diagnostic.json",
+    "metadata_sha256": "a2256c8a46490cdc0feabdbcb7dead3982c071580c8ef7d9d726c14b819ee94c",
+    "command": "KAEL_HEADLESS=1 /Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target/debug/deps/kael-cf4175f694c126f9 platform::mac::text_system::tests::native_sized_font_shaping_diagnostic --exact --ignored --nocapture --test-threads=1",
+    "recorded_git_head": "581165273011b922238d4be3e838e510fbfca7d3",
+    "source_hashes_at_execution": {
+      "crates/kael/src/platform/mac/text_system.rs": "39f42d6e59d4bc667d83c1ed4e0716e0869473959b6c43852611b781efdc8796",
+      "crates/kael/src/text_system.rs": "fb5c11574e785a64611976d579a537cf781793778b0dbac9fecd240ce21ee11b"
+    },
+    "recorded_executable_sha256": "7ad5dbd9f393469e36bcd9e49d568c3d6dc0db3cf09728b674da531c702788bf",
+    "execution_scope": "Native CoreText shaping diagnostic only; debug/test build; no framework speedup claim",
+    "result_interpretation": "Essentially tied: no demonstrated timing improvement. Application-level before/after measurement remains required.",
+    "counter_semantics": "native_creations counts calls to the sized-font factory (clone_with_font_size), not physical native allocations; CoreText may return an existing font.",
+    "font_scope": ".SystemUIFont at14px with mixed-script labels; profiled navigation uses .AppleSystemUIFont and mostly Latin labels.",
+    "rerun_at_source_checkpoint": false,
+    "native_source_matches_checkpoint": true
+  },
+  "retained_opt_in_display_link_probe": {
+    "log": ".artifacts/2026-10-17-native-display-link-probe.log",
+    "sha256": "1bdf5dd28bfe27eacfd197eadcbada9dce71908e3bdbaf4098f0924f77100845",
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "stop_start_cycles": 128,
+    "native_objects_constructed": 1,
+    "other_display_retargets": 1,
+    "final_stopped": true,
+    "source_file": "crates/kael/src/platform/mac/display_link.rs",
+    "source_sha256": "ddc8a6c023b83e6e05920c5042a1d93ed4e83b2de95b7b82041814d24ab76a51",
+    "source_unchanged_from_prior_report": "docs/reviews/2026-10-17-control-native-validation.json",
+    "rerun_at_source_checkpoint": false,
+    "scope": "Retained earlier October 17 explicit native object lifecycle result; no original executable hash is recorded for this probe. Current compositor proof is reported separately in native_window."
+  },
+  "limitations": [
+    "Test counts are per test graph/filter, overlap, and are not a unique aggregate. In particular native_atlas_identity_rejects_foreign_atlas_and_late_release appears in both the atlas group of 13 tests and the identity group of four tests.",
+    "The core graph intentionally ignores two opt-in tests. Their separately executed artifacts are retained historical evidence with recorded scope/source hashes, not reruns at 9227207.",
+    "Mounted Select/Combobox tests establish headless input dispatch, exported accessibility structure and active-window Tab behavior. Test-support App effect flushing may draw dirty windows automatically; they do not isolate the production native frame clock or prove physical pointer/IME/screen-reader use.",
+    "Select dismissal on OS-window/app deactivation is an explicit follow-up; the owner-focus deferred guard and current acceptance cover Tab to another control in an active window.",
+    "Native Metal scene/presentation smoke does not establish physical Select/Combobox interaction or current Windows/Linux/browser runtime acceptance.",
+    "The 60 presentation records validate completed/displayed timestamps for records retained by the smoke. They are not the total number of rendered frames, per-revision latency, comparative GPU throughput, or power/energy measurements.",
+    "Other correctness builds/tests could run during native GPU capture. No comparative timing is inferred from these correctness results.",
+    "Metal reports platform identity unavailable for the device name; the hardware backend/software=false result does not establish a precise GPU model.",
+    "These local artifacts do not waive hosted-platform mandatory presentation gates or establish an overall framework performance ranking."
+  ],
+  "benchmark_consumers": {
+    "timed": {
+      "result": "pass",
+      "command": "CARGO_TARGET_DIR=/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target cargo clippy --manifest-path benchmarks/desktop-comparison/Cargo.toml --locked --no-default-features --features kael-engine,frame-timing --all-targets -- -D warnings",
+      "log": ".artifacts/2026-10-17-third-consumer-timed-clippy.log",
+      "log_sha256": "37bec18f5fd7f618f74a5e665d626f0e8d654fa123f0dbe14d0db7688600e6bf"
+    },
+    "untimed": {
+      "result": "pass",
+      "command": "CARGO_TARGET_DIR=/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target cargo clippy --manifest-path benchmarks/desktop-comparison/Cargo.toml --locked --no-default-features --features kael-engine --all-targets -- -D warnings",
+      "log": ".artifacts/2026-10-17-third-consumer-untimed-clippy.log",
+      "log_sha256": "36c31ca19c2cb2e2119606eb062f8deef6916a402cbf45ccaf2329d75cf9e1ef"
+    }
+  }
+}

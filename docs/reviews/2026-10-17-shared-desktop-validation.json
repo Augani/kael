@@ -1,0 +1,80 @@
+{
+  "date": "2026-10-17",
+  "source_checkpoint": "8c0de53a2bbb0fd2f0b2aabf7adb453233dd3dbf",
+  "source_files_sha256": {
+    "crates/kael/src/elements/image_cache.rs": "b0bd5ea826060be764bbbdcf261bb1b83b39f07fb54cc4137069338677605dad",
+    "crates/kael/src/accessibility.rs": "ada57711a131801e6317502cc271febcd4c01f870dfe8ae3cd01cd43efb1fd6a",
+    "crates/kael/src/elements/cached.rs": "83731520e9123be8602c38f9540580eccf23c1490b46d04bd22292c52a355515",
+    "crates/kael/src/elements/deferred.rs": "b46f7a5f59d24bd5c5d04c640565a33a39906aabe2654f27a335b84561f9d64c",
+    "crates/kael/src/view.rs": "ddd4ae4b05a0633d67109d3c7095b4f0bfe36ea26afeb50231767881f0a41301",
+    "crates/kael/src/window.rs": "3b9e0add2a6788906f84a2a566853369d92b1a72c1aee8dcaf14bc2c30d79355",
+    "crates/kael/src/platform/mac/display_link.rs": "ddc8a6c023b83e6e05920c5042a1d93ed4e83b2de95b7b82041814d24ab76a51",
+    "crates/kael/src/platform/mac/window.rs": "3f2850829331cd6df9c0203882bc87701692c29762dc8fc8389697c9cbea0500",
+    "crates/kael_ui/src/components/sparkline.rs": "845f44c155a02e970a523ff39c2ddb932e58a54ace9c8468a4b9b215481de838",
+    "crates/kael_ui/src/components/select.rs": "dee61779bda130f5eca432f9f104b9011f375ce2fe4bb3d0bc2df9d71f84b029",
+    "crates/kael_ui/src/display/data_table.rs": "1b90cdbae2787ddd7c3c15a4a844c1932316b53a5f948074f0346a99dbcac434",
+    "crates/kael_ui/src/overlays/popover_menu.rs": "30b9f7f2e65d293ac5cc3b6ed7117cec3d7fbeb2efb320a344f1985713b0ddf3"
+  },
+  "scope": "Shared desktop components, cache/accessibility and native lifecycle correctness; no application performance ranking",
+  "commands": {
+    "core": "KAEL_HEADLESS=1 cargo test --locked -p kael --lib --no-default-features --features font-kit,test-support -- --test-threads=1",
+    "ui": "KAEL_HEADLESS=1 cargo test --locked -p kael_ui --lib -- --test-threads=1",
+    "strict_native": "KAEL_HEADLESS=1 cargo clippy --locked -p kael -p kael_ui --all-targets -- -D warnings"
+  },
+  "core": {
+    "log": ".artifacts/2026-10-17-core-tests.log",
+    "sha256": "7b40b863a11336ce28323746c354e5542574807fec65a012702a2024de1ed470",
+    "passed": 2147,
+    "failed": 0,
+    "ignored": 1
+  },
+  "ui": {
+    "log": ".artifacts/2026-10-17-final-ui-tests.log",
+    "sha256": "e72551d2f210f94d172b6a4981b24bfe08c8c35dfc48b830ff1ed55932506dfa",
+    "passed": 471,
+    "failed": 0,
+    "ignored": 0
+  },
+  "focused": {
+    "data_table": {
+      "log": ".artifacts/2026-10-17-data-table-transient-identity-tests.log",
+      "sha256": "040b97c98770be0775aff62e8c32ccf19130c0163dbd62595bc26b8868980713",
+      "passed": 28,
+      "failed": 0,
+      "ignored": 0
+    },
+    "popover_menu": {
+      "log": ".artifacts/2026-10-17-popover-menu-native-green.log",
+      "sha256": "4f14dbd2c51766a368cca46096485673b24ed3ed87ac29858fb86b50da3740b6",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    "anonymous_cache_matrix": {
+      "log": ".artifacts/kael-anonymous-cache-scope-green.log",
+      "sha256": "026b1a86fb032a71703b108749c2fed01e52f6f1133c644086b3820f0f7d0b4b",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    }
+  },
+  "strict_native": {
+    "log": ".artifacts/2026-10-17-final-native-clippy.log",
+    "sha256": "3210db5a17c2107492226ad3598f9de146ee00f21e7cd798237bf1cc30d412f0",
+    "result": "pass"
+  },
+  "collector": {
+    "tests": 21,
+    "log": ".artifacts/2026-10-17-collector-tests.log",
+    "sha256": "b483d9089e564c420b65732ab29a005592a2006c08f2b5c255d2a2593df3c5ba",
+    "result": "pass"
+  },
+  "physical_metal_report": "docs/reviews/2026-10-17-native-metal-validation.json",
+  "native_sizing_report": "docs/reviews/2026-10-17-native-sizing-validation.json",
+  "limitations": [
+    "Counts are per test graph and overlap; they are not unique aggregate test counts.",
+    "The core graph ignores an opt-in native display-link probe, explicitly passed separately in the physical Metal report.",
+    "Headless dispatch and native-tree export do not establish screen-reader exploration or current Windows/Linux runtime acceptance.",
+    "Frozen b11ed50 comparison binaries predate these shared changes."
+  ]
+}

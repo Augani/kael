@@ -21,8 +21,16 @@ case "$mode" in
     # backends simultaneously; lint every optional path there while exempting
     # only the dead code created by that mutually exclusive combination.
     run cargo clippy --workspace --all-targets -- -D warnings
-    run cargo clippy --workspace --all-targets --all-features -- -D warnings -A dead-code
-    run cargo test --workspace --all-targets --all-features
+    # The maintained Unix adapter preserves upstream's mutually exclusive
+    # async-io/tokio runtimes. Kael selects async-io as a dependency; excluding
+    # the adapter as a root prevents --all-features from selecting both.
+    run cargo clippy --workspace --exclude kael_accesskit_unix --all-targets --all-features -- -D warnings -A dead-code
+    run cargo test --workspace --exclude kael_accesskit_unix --all-targets --all-features
+    if [[ "$(uname -s)" == "Linux" ]]; then
+      run cargo test -p kael_accesskit_unix --all-targets
+      run cargo clippy -p kael_accesskit_unix --all-targets --no-default-features --features tokio -- -D warnings
+      run cargo test -p kael_accesskit_unix --all-targets --no-default-features --features tokio
+    fi
     run cargo check -p kael_http_client --no-default-features
     run cargo check -p kael --lib --features "platform-foundation"
     run cargo check -p kael --lib --features "document"

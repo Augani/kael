@@ -1,8 +1,51 @@
 mod app_menu;
+mod atlas_policy;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        any(feature = "x11", feature = "wayland"),
+        not(feature = "webview-wayland-gtk4")
+    )
+))]
+mod atlas_tile_allocations;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        any(feature = "x11", feature = "wayland"),
+        not(feature = "webview-wayland-gtk4")
+    )
+))]
+use atlas_tile_allocations::AtlasTileAllocations;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        any(feature = "x11", feature = "wayland"),
+        not(feature = "webview-wayland-gtk4")
+    )
+))]
+mod atlas_texture_list;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        any(feature = "x11", feature = "wayland"),
+        not(feature = "webview-wayland-gtk4")
+    )
+))]
+use atlas_texture_list::{AtlasTextureList, allocate_native_atlas_texture_id};
 /// Pure-logic core for the XDG GlobalShortcuts desktop portal used by Wayland global hotkeys.
 pub(crate) mod global_hotkey_portal;
 mod keyboard;
 mod keystroke;
+pub use atlas_policy::AtlasAdmissionLimits;
+pub(crate) use atlas_policy::AtlasPolicy;
 /// Cross-platform single instance enforcement using Unix domain sockets and Windows named mutexes.
 pub mod single_instance;
 /// Cross-platform window tab manager for Windows and Linux backends.
@@ -79,8 +122,8 @@ use crate::{
     SystemWindowTab, Task, TaskLabel, Window, WindowCaptureError, WindowControlArea,
     WindowPlacement,
     assets::{
-        checked_image_frame_len, collect_animation_frames, decode_static_image,
-        image_decode_limits, validate_image_source_bytes,
+        MAX_DECODED_IMAGE_BYTES, checked_image_frame_len, collect_animation_frames_with_budget,
+        decode_static_image_with_budget, image_decode_limits, validate_image_source_bytes,
     },
     hash, point,
     print::PlatformPrintJob,
@@ -101,7 +144,6 @@ use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::io::Cursor;
-use std::ops;
 use std::time::Duration;
 use std::{
     fmt::{self, Debug},
@@ -1119,6 +1161,105 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         })
     }
     fn draw(&self, scene: &Scene);
+    #[cfg(feature = "custom-shaders")]
+    fn create_gpu_buffer(
+        &self,
+        _descriptor: crate::GpuBufferDescriptor,
+    ) -> Result<crate::GpuBuffer, crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no native compute/upload renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn validate_gpu_buffer(
+        &self,
+        _buffer: &crate::GpuBuffer,
+    ) -> Result<(), crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no native compute/upload renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn write_gpu_buffer(
+        &self,
+        _buffer: &crate::GpuBuffer,
+        _offset: u64,
+        _bytes: &[u8],
+    ) -> Result<(), crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no native compute/upload renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn read_gpu_buffer(
+        &self,
+        _buffer: &crate::GpuBuffer,
+    ) -> Result<Vec<u8>, crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no native compute/upload renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn dispatch_compute(
+        &self,
+        _shader: &crate::ComputeHandle,
+        _bindings: &crate::ComputeBindings,
+        _groups: [u32; 3],
+    ) -> Result<(), crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no native compute/upload renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn write_render_target(
+        &self,
+        _target: &crate::RenderTarget,
+        _pixels: &[u8],
+    ) -> Result<(), crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no native compute/upload renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn create_render_target(
+        &self,
+        _descriptor: crate::RenderTargetDescriptor,
+    ) -> Result<crate::RenderTarget, crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no custom GPU renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn render_shader(
+        &self,
+        _target: &crate::RenderTarget,
+        _shader: &crate::ShaderHandle,
+        _bindings: &crate::ShaderBindings,
+    ) -> Result<(), crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no custom GPU renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn read_render_target(
+        &self,
+        _target: &crate::RenderTarget,
+    ) -> Result<crate::RenderTargetReadback, crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no custom GPU renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn validate_render_target(
+        &self,
+        _target: &crate::RenderTarget,
+    ) -> Result<(), crate::RenderTargetError> {
+        Err(crate::RenderTargetError::Unsupported(
+            "this window has no custom GPU renderer",
+        ))
+    }
+    #[cfg(feature = "custom-shaders")]
+    fn set_render_target_byte_budget(&self, _bytes: u64) {}
     fn completed_frame(&self) {}
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
 
@@ -1225,6 +1366,24 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// -used atlas tiles are evicted to the budget at the end of each frame. `None` (default)
     /// disables eviction. No-op on backends that do not yet implement atlas eviction.
     fn set_atlas_byte_budget(&self, _budget: Option<u64>) {}
+
+    /// Shed unused renderer caches under memory pressure. Implementations must
+    /// preserve live resources and retire submitted GPU work before destruction.
+    fn shed_memory(&self, _level: crate::MemoryPressureLevel) {}
+
+    /// Actual GPU allocation bytes reported by the native device, when the
+    /// renderer provides a counter. A shared device includes all its windows.
+    fn gpu_allocated_bytes(&self) -> Option<u64> {
+        None
+    }
+
+    fn set_gpu_frame_timing_enabled(&self, _enabled: bool) -> bool {
+        false
+    }
+
+    fn take_gpu_frame_timings(&self) -> Vec<crate::GpuFrameTiming> {
+        Vec::new()
+    }
     fn set_progress_bar(&self, _state: ProgressBarState) {}
 
     /// Get the display refresh rate for this window's current display.
@@ -1279,6 +1438,9 @@ pub(crate) trait PlatformTextSystem: Send + Sync {
     fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>>;
     fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>>;
     fn glyph_for_char(&self, font_id: FontId, ch: char) -> Option<GlyphId>;
+    /// Declare the exact bitmap extent before native atlas admission, including
+    /// subpixel antialias padding. `rasterize_glyph` must return this same size;
+    /// it cannot enlarge storage after the atlas reserves the declared bounds.
     fn glyph_raster_bounds(&self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>>;
     fn rasterize_glyph(
         &self,
@@ -1295,6 +1457,20 @@ pub(crate) trait PlatformTextSystem: Send + Sync {
     }
 
     fn layout_line(&self, text: &str, font_size: Pixels, runs: &[FontRun]) -> LineLayout;
+
+    /// Actual native caret/cluster edges for requested mounted UTF-8 spans.
+    /// Backends without this optional capability return None. Geometry is not
+    /// stored on every shared LineLayout or generated for offscreen documents.
+    fn layout_line_geometry(
+        &self,
+        text: &str,
+        font_size: Pixels,
+        runs: &[FontRun],
+        byte_ranges: &[std::ops::Range<usize>],
+    ) -> Option<crate::LineTextGeometry> {
+        let _ = (text, font_size, runs, byte_ranges);
+        None
+    }
 
     /// Layout text with additional OpenType font features applied.
     ///
@@ -1524,6 +1700,15 @@ pub(crate) fn validate_atlas_payload(
     kind: AtlasTextureKind,
     byte_len: usize,
 ) -> Result<usize> {
+    let expected = atlas_payload_len(size, kind)?;
+    anyhow::ensure!(
+        byte_len == expected,
+        "atlas payload length mismatch: expected {expected} bytes, received {byte_len}"
+    );
+    Ok(expected)
+}
+
+pub(crate) fn atlas_payload_len(size: Size<DevicePixels>, kind: AtlasTextureKind) -> Result<usize> {
     let width = usize::try_from(size.width.0)
         .ok()
         .filter(|width| *width > 0 && *width <= MAX_ATLAS_TEXTURE_DIMENSION as usize)
@@ -1544,10 +1729,6 @@ pub(crate) fn validate_atlas_payload(
         .checked_mul(height)
         .and_then(|pixels| pixels.checked_mul(bytes_per_pixel))
         .ok_or_else(|| anyhow::anyhow!("atlas payload size overflow"))?;
-    anyhow::ensure!(
-        byte_len == expected,
-        "atlas payload length mismatch: expected {expected} bytes, received {byte_len}"
-    );
     Ok(expected)
 }
 
@@ -1667,51 +1848,29 @@ impl From<crate::shadow_cache::ShadowAtlasParams> for AtlasKey {
 }
 
 pub(crate) trait PlatformAtlas: Send + Sync {
+    /// Legacy internal entrypoint used by renderer fixtures with no predeclared dimensions.
+    #[allow(dead_code)]
     fn get_or_insert_with<'a>(
         &self,
         key: &AtlasKey,
         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
     ) -> Result<Option<AtlasTile>>;
+    /// Reserve checked dimensions before invoking expensive raster work.
+    fn get_or_insert_with_size<'a>(
+        &self,
+        key: &AtlasKey,
+        size: Size<DevicePixels>,
+        build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
+    ) -> Result<Option<AtlasTile>>;
+    fn set_hard_admission_limits(&self, limits: AtlasAdmissionLimits);
+    fn needs_retirement_frames(&self) -> bool {
+        false
+    }
     fn remove(&self, key: &AtlasKey);
 
     /// Remove all cached atlas entries, for example after browser fonts change.
     #[cfg(target_arch = "wasm32")]
     fn clear(&self) {}
-}
-
-struct AtlasTextureList<T> {
-    textures: Vec<Option<T>>,
-    free_list: Vec<usize>,
-}
-
-impl<T> Default for AtlasTextureList<T> {
-    fn default() -> Self {
-        Self {
-            textures: Vec::default(),
-            free_list: Vec::default(),
-        }
-    }
-}
-
-impl<T> ops::Index<usize> for AtlasTextureList<T> {
-    type Output = Option<T>;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.textures[index]
-    }
-}
-
-impl<T> AtlasTextureList<T> {
-    #[allow(unused)]
-    fn drain(&mut self) -> std::vec::Drain<'_, Option<T>> {
-        self.free_list.clear();
-        self.textures.drain(..)
-    }
-
-    #[allow(dead_code)]
-    fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut T> {
-        self.textures.iter_mut().flatten()
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1726,7 +1885,8 @@ pub(crate) struct AtlasTile {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub(crate) struct AtlasTextureId {
-    // We use u32 instead of usize for Metal Shader Language compatibility
+    // Logical identity, never a physical slot. Native backends issue checked
+    // process-wide IDs; u32 preserves the shared Metal/HLSL/WGSL tile ABI.
     pub(crate) index: u32,
     pub(crate) kind: AtlasTextureKind,
 }
@@ -1745,7 +1905,7 @@ pub(crate) enum AtlasTextureKind {
     Polychrome = 1,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(C)]
 pub(crate) struct TileId(pub(crate) u32);
 
@@ -1892,9 +2052,24 @@ impl PlatformInputHandler {
             .ok();
     }
 
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     fn bounds_for_range(&mut self, range_utf16: Range<usize>) -> Option<Bounds<Pixels>> {
         self.cx
             .update(|window, cx| self.handler.bounds_for_range(range_utf16, window, cx))
+            .ok()
+            .flatten()
+    }
+
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn bounds_for_range_with_actual_range(
+        &mut self,
+        range_utf16: Range<usize>,
+    ) -> Option<(Bounds<Pixels>, Range<usize>)> {
+        self.cx
+            .update(|window, cx| {
+                self.handler
+                    .bounds_for_range_with_actual_range(range_utf16, window, cx)
+            })
             .ok()
             .flatten()
     }
@@ -2017,6 +2192,28 @@ pub trait InputHandler: 'static {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<Bounds<Pixels>>;
+
+    /// Get the first logical rectangle and the UTF-16 range it actually covers.
+    /// Multiline or disjoint bidi ranges may cover only the first fragment;
+    /// native grapheme or ligature geometry may expand its character boundaries.
+    /// An insertion point has an empty range and a zero-width rectangle.
+    ///
+    /// Existing handlers keep their requested range by default. Override this
+    /// when [`Self::bounds_for_range`] returns an adjusted fragment.
+    fn bounds_for_range_with_actual_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<(Bounds<Pixels>, Range<usize>)> {
+        self.bounds_for_range(range_utf16.clone(), window, cx)
+            .map(|mut bounds| {
+                if range_utf16.is_empty() {
+                    bounds.size.width = crate::px(0.0);
+                }
+                (bounds, range_utf16)
+            })
+    }
 
     /// Get the character offset for the given point in terms of UTF16 characters
     ///
@@ -8124,23 +8321,50 @@ impl Image {
 
     /// Convert the clipboard image to an `ImageData` object.
     pub fn to_image_data(&self, svg_renderer: SvgRenderer) -> Result<Arc<RenderImage>> {
+        self.to_image_data_with_budget(svg_renderer, MAX_DECODED_IMAGE_BYTES as u64)
+    }
+
+    pub(crate) fn to_image_data_with_budget(
+        &self,
+        svg_renderer: SvgRenderer,
+        max_bytes: u64,
+    ) -> Result<Arc<RenderImage>> {
         validate_image_source_bytes(&self.bytes)?;
 
         let frames = match self.format {
             ImageFormat::Gif => {
                 let mut decoder = GifDecoder::new(Cursor::new(&self.bytes))?;
-                decoder.set_limits(image_decode_limits())?;
+                let mut limits = image_decode_limits();
+                limits.max_alloc = Some(max_bytes.min(MAX_DECODED_IMAGE_BYTES as u64));
+                decoder.set_limits(limits)?;
                 let (width, height) = decoder.dimensions();
-                checked_image_frame_len(width, height)?;
-                collect_animation_frames(decoder.into_frames())?
+                anyhow::ensure!(
+                    checked_image_frame_len(width, height)? as u64 <= max_bytes,
+                    "declared decoded image dimensions exceed the cache byte budget"
+                );
+                collect_animation_frames_with_budget(decoder.into_frames(), max_bytes)?
             }
-            ImageFormat::Png => decode_static_image(&self.bytes, image::ImageFormat::Png)?,
-            ImageFormat::Jpeg => decode_static_image(&self.bytes, image::ImageFormat::Jpeg)?,
-            ImageFormat::Webp => decode_static_image(&self.bytes, image::ImageFormat::WebP)?,
-            ImageFormat::Bmp => decode_static_image(&self.bytes, image::ImageFormat::Bmp)?,
-            ImageFormat::Tiff => decode_static_image(&self.bytes, image::ImageFormat::Tiff)?,
+            ImageFormat::Png => {
+                decode_static_image_with_budget(&self.bytes, image::ImageFormat::Png, max_bytes)?
+            }
+            ImageFormat::Jpeg => {
+                decode_static_image_with_budget(&self.bytes, image::ImageFormat::Jpeg, max_bytes)?
+            }
+            ImageFormat::Webp => {
+                decode_static_image_with_budget(&self.bytes, image::ImageFormat::WebP, max_bytes)?
+            }
+            ImageFormat::Bmp => {
+                decode_static_image_with_budget(&self.bytes, image::ImageFormat::Bmp, max_bytes)?
+            }
+            ImageFormat::Tiff => {
+                decode_static_image_with_budget(&self.bytes, image::ImageFormat::Tiff, max_bytes)?
+            }
             ImageFormat::Svg => {
-                let pixmap = svg_renderer.render_pixmap(&self.bytes, SvgSize::ScaleFactor(1.0))?;
+                let pixmap = svg_renderer.render_pixmap_with_budget(
+                    &self.bytes,
+                    SvgSize::ScaleFactor(1.0),
+                    max_bytes,
+                )?;
 
                 let buffer =
                     image::ImageBuffer::from_raw(pixmap.width(), pixmap.height(), pixmap.take())

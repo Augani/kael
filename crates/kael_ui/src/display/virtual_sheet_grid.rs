@@ -5,6 +5,8 @@
 //! materialized. This makes the same component suitable for native and WebAssembly
 //! applications without asking either platform to allocate a million rows.
 
+pub use super::sheet_accessibility::VIRTUAL_SHEET_ACCESSIBILITY_CACHE_CELLS;
+use super::sheet_accessibility::{self, SheetAccessibilityIds, SheetSemanticTarget};
 use crate::components::input::{Input, InputSize};
 use crate::components::input_state::InputState;
 use crate::theme::Theme;
@@ -14,6 +16,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::ops::Range;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Maximum logical row count supported by the spreadsheet primitive.
 pub const VIRTUAL_SHEET_MAX_ROWS: usize = 1_000_000;
@@ -192,6 +195,7 @@ pub struct SheetViewportMetrics {
 pub enum VirtualSheetGridError {
     InvalidDimensions,
     CellOutOfBounds,
+    CellValueUnavailable,
     InvalidTileShape,
     InvalidFrozenPane,
     StaleTileGeneration { expected: u64, received: u64 },
@@ -215,6 +219,9 @@ impl fmt::Display for VirtualSheetGridError {
                 formatter.write_str("sheet dimensions are outside supported bounds")
             }
             Self::CellOutOfBounds => formatter.write_str("cell is outside sheet bounds"),
+            Self::CellValueUnavailable => {
+                formatter.write_str("load the source cell before editing")
+            }
             Self::InvalidTileShape => formatter.write_str("tile shape is outside supported bounds"),
             Self::InvalidFrozenPane => {
                 formatter.write_str("frozen pane count is outside supported bounds")
@@ -296,11 +303,13 @@ impl EditBatch {
 pub struct VirtualSheetGrid {
     row_count: usize,
     column_count: usize,
+    column_headers: std::sync::Arc<HashMap<usize, SharedString>>,
     tile_rows: usize,
     tile_columns: usize,
     generation: u64,
     cache: HashMap<SheetTileKey, CachedTile>,
     pending: HashSet<SheetTileKey>,
+    source_error: Option<SharedString>,
     lru_clock: u64,
     cache_tile_limit: usize,
     pending_tile_limit: usize,
@@ -328,6 +337,12 @@ pub struct VirtualSheetGrid {
     viewport_metrics: SheetViewportMetrics,
     on_fetch_tile: Option<FetchTileCallback>,
     on_commit_edit: Option<CommitEditCallback>,
+    require_loaded_edits: bool,
+    accessibility_ids: SheetAccessibilityIds,
+    accessibility_snapshot: Option<Arc<AccessibilitySnapshot>>,
+    accessibility_revision: u64,
+    accessibility_snapshot_revision: u64,
+    accessibility_task: Option<Task<()>>,
 }
 
 impl VirtualSheetGrid {
@@ -348,11 +363,13 @@ impl VirtualSheetGrid {
         Ok(Self {
             row_count,
             column_count,
+            column_headers: Default::default(),
             tile_rows: DEFAULT_TILE_ROWS,
             tile_columns: DEFAULT_TILE_COLUMNS,
             generation: 1,
             cache: HashMap::new(),
             pending: HashSet::new(),
+            source_error: None,
             lru_clock: 0,
             cache_tile_limit: VIRTUAL_SHEET_DEFAULT_CACHE_TILES,
             pending_tile_limit: VIRTUAL_SHEET_DEFAULT_PENDING_TILES,
@@ -380,6 +397,12 @@ impl VirtualSheetGrid {
             viewport_metrics: SheetViewportMetrics::default(),
             on_fetch_tile: None,
             on_commit_edit: None,
+            require_loaded_edits: false,
+            accessibility_ids: SheetAccessibilityIds::new(row_count, column_count)?,
+            accessibility_snapshot: None,
+            accessibility_revision: 1,
+            accessibility_snapshot_revision: 0,
+            accessibility_task: None,
         })
     }
 
@@ -389,6 +412,20 @@ impl VirtualSheetGrid {
 
     pub fn column_count(&self) -> usize {
         self.column_count
+    }
+
+    /// Customize a logical column without materializing headers offscreen.
+    pub fn set_column_header(
+        &mut self,
+        column: usize,
+        label: impl Into<SharedString>,
+    ) -> Result<(), VirtualSheetGridError> {
+        if column >= self.column_count {
+            return Err(VirtualSheetGridError::CellOutOfBounds);
+        }
+        std::sync::Arc::make_mut(&mut self.column_headers).insert(column, label.into());
+        self.invalidate_accessibility();
+        Ok(())
     }
 
     pub fn generation(&self) -> u64 {
@@ -401,6 +438,11 @@ impl VirtualSheetGrid {
 
     pub fn pending_tile_count(&self) -> usize {
         self.pending.len()
+    }
+
+    /// A bounded source failure pauses new requests until `reload` retries it.
+    pub fn source_error(&self) -> Option<&str> {
+        self.source_error.as_ref().map(|message| message.as_ref())
     }
 
     pub fn sparse_edit_count(&self) -> usize {
@@ -510,13 +552,49 @@ impl VirtualSheetGrid {
         self
     }
 
+    /// Require known previous values before editing or pasting. Remote record
+    /// sources should enable this so undo cannot write an invented empty value
+    /// for a cell whose original value has never been fetched.
+    pub fn with_require_loaded_edits(mut self, required: bool) -> Self {
+        self.require_loaded_edits = required;
+        self
+    }
+
     /// Advance the request generation and discard cache/pending state. Sparse
     /// edits remain as the local overlay.
     pub fn reload(&mut self) {
         self.generation = self.generation.wrapping_add(1).max(1);
         self.cache.clear();
         self.pending.clear();
+        self.source_error = None;
         self.lru_clock = 0;
+        self.invalidate_accessibility();
+    }
+
+    /// Replace the logical dataset, retiring positional edits and history.
+    /// Use this when a query/sort changes which records occupy row positions;
+    /// ordinary `reload` intentionally preserves edits for the same dataset.
+    pub fn reset_data(&mut self, cx: &mut Context<Self>) {
+        self.reload();
+        self.accessibility_ids = SheetAccessibilityIds::new(self.row_count, self.column_count)
+            .expect("accessibility identity space exhausted");
+        self.accessibility_snapshot = None;
+        self.accessibility_task = None;
+        let edits = std::mem::take(&mut self.edits);
+        let undo = std::mem::take(&mut self.undo);
+        let redo = std::mem::take(&mut self.redo);
+        cx.background_executor()
+            .spawn(async move {
+                drop((edits, undo, redo));
+            })
+            .detach();
+        self.edit_byte_count = 0;
+        self.undo_cell_count = 0;
+        self.undo_byte_count = 0;
+        self.editing_cell = None;
+        self.edit_input = None;
+        self.selection = SheetCellRange::default();
+        cx.notify();
     }
 
     fn request_for_key(&self, key: SheetTileKey) -> Option<SheetTileRequest> {
@@ -552,6 +630,9 @@ impl VirtualSheetGrid {
             return Err(VirtualSheetGridError::CellOutOfBounds);
         };
         if rows.is_empty() || columns.is_empty() {
+            return Ok(0);
+        }
+        if self.source_error.is_some() {
             return Ok(0);
         }
         let Some(callback) = self.on_fetch_tile.clone() else {
@@ -601,7 +682,7 @@ impl VirtualSheetGrid {
         let Some(expected_request) = self.request_for_key(request.key) else {
             return Err(VirtualSheetGridError::UnexpectedTile);
         };
-        if request != expected_request || !self.pending.remove(&request.key) {
+        if request != expected_request || !self.pending.contains(&request.key) {
             return Err(VirtualSheetGridError::UnexpectedTile);
         }
         let expected = request
@@ -630,6 +711,7 @@ impl VirtualSheetGrid {
                 limit: VIRTUAL_SHEET_MAX_TILE_BYTES,
             });
         }
+        self.pending.remove(&request.key);
         self.lru_clock = self.lru_clock.wrapping_add(1);
         self.cache.insert(
             request.key,
@@ -640,6 +722,29 @@ impl VirtualSheetGrid {
             },
         );
         self.evict_cache();
+        self.invalidate_accessibility();
+        Ok(())
+    }
+
+    /// Fail one live request and pause fetching, avoiding a redraw/retry loop.
+    /// Error text is truncated to 1,024 characters. Retry explicitly via reload.
+    pub fn fail_tile(
+        &mut self,
+        request: &SheetTileRequest,
+        message: &str,
+    ) -> Result<(), VirtualSheetGridError> {
+        if request.generation != self.generation {
+            return Err(VirtualSheetGridError::StaleTileGeneration {
+                expected: self.generation,
+                received: request.generation,
+            });
+        }
+        if self.request_for_key(request.key).as_ref() != Some(request)
+            || !self.pending.remove(&request.key)
+        {
+            return Err(VirtualSheetGridError::UnexpectedTile);
+        }
+        self.source_error = Some(message.chars().take(1024).collect::<String>().into());
         Ok(())
     }
 
@@ -763,6 +868,9 @@ impl VirtualSheetGrid {
         cx: &mut Context<Self>,
     ) -> Result<(), VirtualSheetGridError> {
         self.validate_position(position)?;
+        if self.require_loaded_edits && self.loaded_value(position).is_none() {
+            return Err(VirtualSheetGridError::CellValueUnavailable);
+        }
         let value = self.loaded_value(position).unwrap_or_default();
         let input = cx.new(|cx| {
             let mut state = InputState::new(cx);
@@ -816,6 +924,9 @@ impl VirtualSheetGrid {
             .map_err(|_| VirtualSheetGridError::AllocationFailed)?;
         for (position, value) in &values {
             self.validate_position(*position)?;
+            if self.require_loaded_edits && self.loaded_value(*position).is_none() {
+                return Err(VirtualSheetGridError::CellValueUnavailable);
+            }
             if value.len() > VIRTUAL_SHEET_MAX_CELL_BYTES {
                 return Err(VirtualSheetGridError::CellByteLimit {
                     limit: VIRTUAL_SHEET_MAX_CELL_BYTES,
@@ -878,6 +989,7 @@ impl VirtualSheetGrid {
             self.undo_byte_count = self.undo_byte_count.saturating_add(batch.byte_count());
             self.undo.push_back(batch);
             self.trim_undo();
+            self.invalidate_accessibility();
         }
         Ok(())
     }
@@ -961,6 +1073,7 @@ impl VirtualSheetGrid {
             );
         }
         self.redo.push_back(batch);
+        self.invalidate_accessibility();
         cx.notify();
         true
     }
@@ -984,6 +1097,7 @@ impl VirtualSheetGrid {
         }
         self.undo.push_back(batch);
         self.trim_undo();
+        self.invalidate_accessibility();
         cx.notify();
         true
     }
@@ -1116,6 +1230,199 @@ impl VirtualSheetGrid {
         Ok(pasted)
     }
 
+    /// Stable identity for a coordinate in the current logical dataset.
+    /// Reserving its ID does not allocate a node. Mounted cells, the active
+    /// descendant and at most 1,024 cached cells have exported semantics.
+    pub fn accessibility_id(&self, position: SheetCellPosition) -> Option<AccessibilityId> {
+        self.accessibility_ids.cell(position)
+    }
+
+    /// Retained semantic node count, including every logical column header.
+    pub fn accessibility_snapshot_node_count(&self) -> usize {
+        self.accessibility_snapshot
+            .as_ref()
+            .map_or(0, |snapshot| snapshot.len())
+    }
+
+    fn invalidate_accessibility(&mut self) {
+        self.accessibility_revision = self.accessibility_revision.wrapping_add(1);
+    }
+
+    fn prepare_accessibility(&mut self, cx: &mut Context<Self>) {
+        if self.accessibility_task.is_some()
+            || self.accessibility_snapshot_revision == self.accessibility_revision
+        {
+            return;
+        }
+        let revision = self.accessibility_revision;
+        let ids = self.accessibility_ids;
+        let headers = self.column_headers.clone();
+        // The sample is bounded even if an application opts into a larger
+        // source cache. Default caches fit entirely in this candidate set.
+        let mut tiles = self
+            .cache
+            .values()
+            .take(VIRTUAL_SHEET_ACCESSIBILITY_CACHE_CELLS)
+            .collect::<Vec<_>>();
+        tiles.sort_unstable_by_key(|tile| std::cmp::Reverse(tile.last_used));
+        let mut cells = Vec::with_capacity(VIRTUAL_SHEET_ACCESSIBILITY_CACHE_CELLS);
+        'tiles: for tile in tiles {
+            let width = tile.request.columns.len();
+            for (index, value) in tile.values.iter().enumerate() {
+                if cells.len() == VIRTUAL_SHEET_ACCESSIBILITY_CACHE_CELLS {
+                    break 'tiles;
+                }
+                let position = SheetCellPosition::new(
+                    tile.request.rows.start + index / width,
+                    tile.request.columns.start + index % width,
+                );
+                cells.push((position, self.edits.get(&position).unwrap_or(value).clone()));
+            }
+        }
+        let background = cx.background_executor().clone();
+        let reclaimer = background.clone();
+        self.accessibility_task = Some(cx.spawn(async move |grid, cx| {
+            let snapshot = background
+                .spawn(async move {
+                    sheet_accessibility::prepare_snapshot(ids, headers, cells, &reclaimer)
+                })
+                .await;
+            let _ = grid.update(cx, |grid, cx| {
+                grid.accessibility_task = None;
+                let published = grid.accessibility_revision == revision;
+                if published {
+                    grid.accessibility_snapshot = Some(snapshot);
+                    grid.accessibility_snapshot_revision = revision;
+                }
+                grid.prepare_accessibility(cx);
+                if published {
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
+    fn semantic_cell_node(&mut self, position: SheetCellPosition) -> AccessibilityNode {
+        let value = self.loaded_value(position);
+        self.semantic_cell_node_with_value(position, value.as_ref().map(SharedString::as_str))
+    }
+
+    fn semantic_cell_node_with_value(
+        &self,
+        position: SheetCellPosition,
+        value: Option<&str>,
+    ) -> AccessibilityNode {
+        let mut node = sheet_accessibility::cell_node(
+            self.accessibility_ids,
+            position,
+            value,
+            self.column_headers
+                .get(&position.column)
+                .map(|header| header.as_ref()),
+        );
+        if self.selection.contains(position) {
+            node.states |= AccessibilityState::SELECTED;
+        }
+        node
+    }
+
+    fn handle_accessibility_action(
+        &mut self,
+        request: &AccessibilityActionRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target) = self.accessibility_ids.resolve(request.node_id) else {
+            return; // An outgoing query's IDs never alias a new record identity.
+        };
+        let position = match target {
+            SheetSemanticTarget::Root => self.selection.focus,
+            SheetSemanticTarget::HeaderRow => return,
+            SheetSemanticTarget::Header(column) => {
+                SheetCellPosition::new(self.selection.focus.row, column)
+            }
+            SheetSemanticTarget::Row(row) => {
+                SheetCellPosition::new(row, self.selection.focus.column)
+            }
+            SheetSemanticTarget::Cell(position) => position,
+        };
+        match request.action {
+            AccessibilityAction::Focus | AccessibilityAction::Click => {
+                let _ = self.select(position, false);
+                window.focus(&self.focus_handle);
+            }
+            AccessibilityAction::ScrollToVisible => {}
+            AccessibilityAction::SetValue => {
+                if let Some(AccessibilityActionPayload::Value(value)) = &request.payload {
+                    let _ = self.set_cell_value(position, value.clone(), window, cx);
+                }
+            }
+            _ => return,
+        }
+        let _ = self.scroll_to_cell(position);
+        let _ = self.request_viewport(
+            position.row..position.row + 1,
+            position.column..position.column + 1,
+            window,
+            cx,
+        );
+        cx.notify();
+    }
+
+    fn register_active_accessibility_handlers(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let row = self
+            .accessibility_ids
+            .row(self.selection.focus.row)
+            .unwrap();
+        let cell = self.accessibility_ids.cell(self.selection.focus).unwrap();
+        for (id, actions) in [
+            (
+                row,
+                &[
+                    AccessibilityAction::Focus,
+                    AccessibilityAction::Click,
+                    AccessibilityAction::ScrollToVisible,
+                ][..],
+            ),
+            (
+                cell,
+                &[
+                    AccessibilityAction::Focus,
+                    AccessibilityAction::Click,
+                    AccessibilityAction::ScrollToVisible,
+                    AccessibilityAction::SetValue,
+                ][..],
+            ),
+        ] {
+            for action in actions {
+                let grid = cx.entity().downgrade();
+                let handle = window.window_handle();
+                let async_cx = cx.to_async();
+                let executor = cx.foreground_executor().clone();
+                window.on_accessibility_action(id, *action, move |request| {
+                    let grid = grid.clone();
+                    let mut async_cx = async_cx.clone();
+                    executor
+                        .spawn(async move {
+                            let _ = handle.update(&mut async_cx, |_, window, cx| {
+                                if !window
+                                    .accessibility_tree()
+                                    .get(request.node_id)
+                                    .is_some_and(|node| node.actions.contains(&request.action))
+                                {
+                                    return;
+                                }
+                                let _ = grid.update(cx, |grid, cx| {
+                                    grid.handle_accessibility_action(&request, window, cx);
+                                });
+                            });
+                        })
+                        .detach();
+                });
+            }
+        }
+    }
+
     /// Content-safe runtime diagnostics. Counts and limits are reported, never
     /// cell values, edit values, or clipboard contents.
     pub fn to_text(&self) -> String {
@@ -1139,9 +1446,12 @@ impl VirtualSheetGrid {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = Theme::of(cx).clone();
+        let (foreground, border, accent, card) = {
+            let tokens = &Theme::of(cx).tokens;
+            (tokens.foreground, tokens.border, tokens.accent, tokens.card)
+        };
         let selected = self.selection.contains(position);
-        let value = self.loaded_value(position).unwrap_or_default();
+        let value = self.loaded_value(position);
         let editing = self.editing_cell == Some(position);
         let input = if editing {
             self.edit_input.clone()
@@ -1153,17 +1463,23 @@ impl VirtualSheetGrid {
         if selected {
             states |= AccessibilityState::SELECTED;
         }
+        let node =
+            self.semantic_cell_node_with_value(position, value.as_ref().map(SharedString::as_str));
+        let mut attributes = AccessibilityAttributes::new(AccessibilityRole::Cell)
+            .id(node.id)
+            .row_index(position.row + 2)
+            .column_index(position.column + 1)
+            .states(states | node.states)
+            .actions(node.actions);
+        attributes.label = node.label;
+        attributes.value = node.value;
+        attributes.description = node.description;
         let mut cell = div()
             .id((
                 "virtual-sheet-cell",
                 position.row * VIRTUAL_SHEET_MAX_COLUMNS + position.column,
             ))
-            .accessibility(
-                AccessibilityAttributes::new(AccessibilityRole::Cell)
-                    .row_index(position.row + 2)
-                    .column_index(position.column + 1)
-                    .states(states),
-            )
+            .accessibility(attributes)
             .flex()
             .items_center()
             .w(self.column_width)
@@ -1171,16 +1487,12 @@ impl VirtualSheetGrid {
             .flex_shrink_0()
             .px(px(8.0))
             .text_size(px(13.0))
-            .text_color(theme.tokens.foreground)
+            .text_color(foreground)
             .border_r_1()
             .border_b_1()
-            .border_color(theme.tokens.border.opacity(0.65))
+            .border_color(border.opacity(0.65))
             .overflow_hidden()
-            .bg(if selected {
-                theme.tokens.accent
-            } else {
-                theme.tokens.card
-            })
+            .bg(if selected { accent } else { card })
             .on_mouse_down(
                 MouseButton::Left,
                 move |event: &MouseDownEvent, window, cx| {
@@ -1194,6 +1506,19 @@ impl VirtualSheetGrid {
                     });
                 },
             );
+        for action in [
+            AccessibilityAction::Focus,
+            AccessibilityAction::Click,
+            AccessibilityAction::ScrollToVisible,
+            AccessibilityAction::SetValue,
+        ] {
+            let grid = cx.entity().downgrade();
+            cell = cell.on_accessibility_action(action, move |request, window, cx| {
+                let _ = grid.update(cx, |grid, cx| {
+                    grid.handle_accessibility_action(request, window, cx)
+                });
+            });
+        }
         if let Some(input) = input {
             let entity = cx.entity().clone();
             cell = cell.child(Input::new(&input).size(InputSize::Sm).on_submit(
@@ -1204,7 +1529,8 @@ impl VirtualSheetGrid {
                 },
             ));
         } else {
-            cell = cell.child(value);
+            cell =
+                cell.child(StyledText::new(value.unwrap_or_default()).accessibility_hidden(true));
         }
         let _ = window;
         cell.into_any_element()
@@ -1242,7 +1568,7 @@ impl VirtualSheetGrid {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = Theme::of(cx).clone();
+        let card = Theme::of(cx).tokens.card;
         if self.frozen_columns > 0 {
             let _ = self.request_viewport(row..row + 1, 0..self.frozen_columns, window, cx);
         }
@@ -1264,34 +1590,63 @@ impl VirtualSheetGrid {
             },
         )
         .track_scroll(&horizontal_scroll)
+        .restrict_scroll_to_axis(true)
         .overscan(2)
         .h(self.row_height)
         .flex_1();
-        div()
+        let mut element = div()
             .id(("virtual-sheet-row", row))
             .accessibility(
                 AccessibilityAttributes::new(AccessibilityRole::Row)
+                    .id(self.accessibility_ids.row(row).unwrap())
                     .label(format!("Row {}", row + 1))
-                    .row_index(row + 2),
+                    .row_index(row + 2)
+                    .actions(vec![
+                        AccessibilityAction::Focus,
+                        AccessibilityAction::Click,
+                        AccessibilityAction::ScrollToVisible,
+                    ]),
             )
             .flex()
             .w_full()
             .h(self.row_height)
-            .bg(theme.tokens.card)
+            .bg(card)
             .children(frozen)
-            .child(scrolled)
-            .into_any_element()
+            .child(scrolled);
+        for action in [
+            AccessibilityAction::Focus,
+            AccessibilityAction::Click,
+            AccessibilityAction::ScrollToVisible,
+        ] {
+            let grid = cx.entity().downgrade();
+            element = element.on_accessibility_action(action, move |request, window, cx| {
+                let _ = grid.update(cx, |grid, cx| {
+                    grid.handle_accessibility_action(request, window, cx)
+                });
+            });
+        }
+        element.into_any_element()
     }
 
-    fn render_column_header(column: usize, width: Pixels, height: Pixels, cx: &App) -> AnyElement {
+    fn render_column_header(
+        column: usize,
+        label: Option<SharedString>,
+        id: AccessibilityId,
+        width: Pixels,
+        height: Pixels,
+        cx: &App,
+    ) -> AnyElement {
         let theme = Theme::of(cx);
-        let label = column_label(column);
+        let label = label.unwrap_or_else(|| column_label(column).into());
         div()
             .id(("virtual-sheet-column-header", column))
             .accessibility(
                 AccessibilityAttributes::new(AccessibilityRole::ColumnHeader)
-                    .label(label.clone())
-                    .column_index(column + 1),
+                    .id(id)
+                    .label(label.to_string())
+                    .column_index(column + 1)
+                    .row_index(1)
+                    .actions(vec![AccessibilityAction::ScrollToVisible]),
             )
             .flex()
             .items_center()
@@ -1305,7 +1660,7 @@ impl VirtualSheetGrid {
             .border_b_1()
             .border_color(theme.tokens.border)
             .bg(theme.tokens.muted)
-            .child(label)
+            .child(StyledText::new(label).accessibility_hidden(true))
             .into_any_element()
     }
 }
@@ -1318,17 +1673,62 @@ impl Focusable for VirtualSheetGrid {
 
 impl Render for VirtualSheetGrid {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx).clone();
+        self.prepare_accessibility(cx);
+        let ids = self.accessibility_ids;
+        if let Some(snapshot) = self.accessibility_snapshot.clone() {
+            _window.register_accessibility_snapshot(snapshot.clone());
+            let grid = cx.entity().downgrade();
+            _window.on_accessibility_subtree_action(
+                snapshot,
+                move |request, window, cx| {
+                    let _ = grid.update(cx, |grid, cx| {
+                        grid.handle_accessibility_action(&request, window, cx);
+                    });
+                },
+                cx,
+            );
+        }
+        // The logical active cell remains exported when independent scrolling
+        // moves its row offscreen. This adds two bounded overlays, not a row
+        // or cell allocation for every possible sheet coordinate.
+        let active = self.selection.focus;
+        let active_cell = self.semantic_cell_node(active);
+        let mut active_row = self
+            .accessibility_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.get(ids.row(active.row).unwrap()))
+            .cloned()
+            .unwrap_or_else(|| sheet_accessibility::row_node(ids, active.row));
+        if !active_row.children.contains(&active_cell.id) {
+            active_row.children.push(active_cell.id);
+        }
+        _window.register_accessibility_node(active_row);
+        _window.register_accessibility_node(active_cell);
+        self.register_active_accessibility_handlers(_window, cx);
+        let (border, radius, card) = {
+            let tokens = &Theme::of(cx).tokens;
+            (tokens.border, tokens.radius_md, tokens.card)
+        };
         let entity = cx.entity().clone();
         let horizontal_scroll = self.horizontal_scroll.clone();
         let header_height = self.header_height;
         let frozen_headers = (0..self.frozen_columns)
-            .map(|column| Self::render_column_header(column, self.column_width, header_height, cx))
+            .map(|column| {
+                Self::render_column_header(
+                    column,
+                    self.column_headers.get(&column).cloned(),
+                    ids.header(column).unwrap(),
+                    self.column_width,
+                    header_height,
+                    cx,
+                )
+            })
             .collect::<Vec<_>>();
         let frozen_width = self.column_width * self.frozen_columns as f32;
         let scrollable_column_count = self.column_count.saturating_sub(self.frozen_columns);
         let frozen_columns = self.frozen_columns;
         let column_width = self.column_width;
+        let column_headers = self.column_headers.clone();
         let scrolled_headers = hlist_uniform(
             "virtual-sheet-column-headers",
             scrollable_column_count,
@@ -1338,6 +1738,8 @@ impl Render for VirtualSheetGrid {
                     .map(|relative| {
                         Self::render_column_header(
                             relative + frozen_columns,
+                            column_headers.get(&(relative + frozen_columns)).cloned(),
+                            ids.header(relative + frozen_columns).unwrap(),
                             column_width,
                             header_height,
                             cx,
@@ -1347,10 +1749,16 @@ impl Render for VirtualSheetGrid {
             },
         )
         .track_scroll(&horizontal_scroll)
+        .restrict_scroll_to_axis(true)
         .overscan(2)
         .h(self.header_height)
         .flex_1();
         let header = div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Row)
+                    .id(ids.header_row())
+                    .row_index(1),
+            )
             .flex()
             .w_full()
             .h(self.header_height)
@@ -1393,6 +1801,7 @@ impl Render for VirtualSheetGrid {
             },
         )
         .track_scroll(&vertical_scroll)
+        .restrict_scroll_to_axis(true)
         .overscan(3)
         .flex_1();
 
@@ -1401,11 +1810,22 @@ impl Render for VirtualSheetGrid {
             .id("virtual-sheet-grid")
             .accessibility(
                 AccessibilityAttributes::new(AccessibilityRole::Grid)
+                    .id(ids.root())
                     .label("Spreadsheet grid")
                     .row_count(self.row_count + 1)
-                    .column_count(self.column_count),
+                    .column_count(self.column_count)
+                    .active_descendant(ids.cell(active).unwrap())
+                    .actions(vec![AccessibilityAction::Focus]),
             )
             .track_focus(&self.focus_handle)
+            .on_accessibility_action(AccessibilityAction::Focus, {
+                let grid = cx.entity().downgrade();
+                move |request, window, cx| {
+                    let _ = grid.update(cx, |grid, cx| {
+                        grid.handle_accessibility_action(request, window, cx)
+                    });
+                }
+            })
             .on_key_down(move |event: &KeyDownEvent, window, cx| {
                 let key = event.keystroke.key.as_str();
                 entity_for_keys.update(cx, |grid, cx| {
@@ -1479,10 +1899,10 @@ impl Render for VirtualSheetGrid {
             .size_full()
             .min_h(px(120.0))
             .border_1()
-            .border_color(theme.tokens.border)
-            .rounded(theme.tokens.radius_md)
+            .border_color(border)
+            .rounded(radius)
             .overflow_hidden()
-            .bg(theme.tokens.card)
+            .bg(card)
             .child(header)
             .children(frozen_rows)
             .child(body)
@@ -1680,7 +2100,7 @@ fn push_parsed_cell(
     Ok(())
 }
 
-fn column_label(mut index: usize) -> String {
+pub(crate) fn column_label(mut index: usize) -> String {
     let mut label = [0u8; 4];
     let mut cursor = label.len();
     index += 1;
@@ -1959,6 +2379,101 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn loaded_remote_values_reach_paint_without_scrolling_and_wheel_axes_are_independent() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| crate::theme::install_theme(cx, Theme::astryx_neutral()));
+        let (grid, window) = cx.add_window_view(|_, cx| {
+            VirtualSheetGrid::new(10_000, 64, cx)
+                .unwrap()
+                .on_fetch_tile(|_, _, _, _| {})
+                .with_tile_shape(64, 16)
+                .unwrap()
+                .with_frozen_panes(1, 2)
+                .unwrap()
+        });
+        window.enable_styled_text_paint_trace();
+        window.simulate_resize(size(px(700.0), px(420.0)));
+        window.update(|window, cx| window.draw(cx).clear());
+        assert!(
+            !window
+                .painted_styled_text()
+                .iter()
+                .any(|(text, _, _)| text.starts_with("Record "))
+        );
+        window.update(|_, cx| {
+            grid.update(cx, |grid, cx| {
+                let requests = grid
+                    .pending
+                    .iter()
+                    .filter_map(|key| grid.request_for_key(*key))
+                    .collect::<Vec<_>>();
+                assert!(!requests.is_empty());
+                for request in requests {
+                    let values = (0..request.cell_count().unwrap())
+                        .map(|i| SharedString::from(format!("Record {i} 日本語")))
+                        .collect();
+                    grid.provide_tile(request, values).unwrap();
+                }
+                cx.notify();
+            })
+        });
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+        let painted = window.painted_styled_text();
+        let values = painted
+            .iter()
+            .filter(|(text, bounds, clip)| {
+                text.starts_with("Record ") && !bounds.intersect(clip).is_empty()
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            values.len() > 20,
+            "loaded baseline text must enter visible paint without scrolling: {painted:?}"
+        );
+        assert!(
+            values
+                .iter()
+                .any(|(text, _, _)| text.as_ref() == "Record 0 日本語")
+        );
+        let (before_x, before_y) = window.update(|_, cx| {
+            grid.update(cx, |grid, _| {
+                (
+                    grid.horizontal_scroll.offset().x,
+                    grid.vertical_scroll.offset().y,
+                )
+            })
+        });
+        window.simulate_event(ScrollWheelEvent {
+            position: point(px(500.0), px(200.0)),
+            delta: ScrollDelta::Pixels(point(px(0.0), px(-80.0))),
+            ..Default::default()
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        let (after_x, after_y) = window.update(|_, cx| {
+            grid.update(cx, |grid, _| {
+                (
+                    grid.horizontal_scroll.offset().x,
+                    grid.vertical_scroll.offset().y,
+                )
+            })
+        });
+        assert_eq!(after_x, before_x, "vertical wheel must not scroll columns");
+        assert!(after_y < before_y, "vertical wheel scrolls rows");
+        window.simulate_event(ScrollWheelEvent {
+            position: point(px(500.0), px(200.0)),
+            delta: ScrollDelta::Pixels(point(px(-80.0), px(0.0))),
+            ..Default::default()
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        window.update(|_, cx| {
+            grid.update(cx, |grid, _| {
+                assert!(grid.horizontal_scroll.offset().x < after_x);
+                assert_eq!(grid.vertical_scroll.offset().y, after_y);
+            })
+        });
+    }
+
+    #[::core::prelude::v1::test]
     fn rendered_accessibility_is_logical_and_mount_bounded() {
         let mut cx = TestAppContext::single();
         cx.update(|cx| crate::theme::install_theme(cx, Theme::astryx_neutral()));
@@ -1981,6 +2496,13 @@ mod tests {
             assert!(nodes.iter().any(|node| {
                 node.role == AccessibilityRole::ColumnHeader && node.column_index == Some(1)
             }));
+            assert_eq!(
+                nodes
+                    .iter()
+                    .filter(|node| node.role == AccessibilityRole::ColumnHeader)
+                    .count(),
+                VIRTUAL_SHEET_MAX_COLUMNS
+            );
             assert!(
                 nodes.iter().any(|node| {
                     node.role == AccessibilityRole::Row && node.row_index == Some(2)
@@ -1992,8 +2514,9 @@ mod tests {
                     && node.column_index == Some(1)
             }));
             let metrics = grid.read(cx).viewport_metrics();
+            let mounted_nodes = nodes.iter().filter(|node| node.bounds.is_some()).count();
             assert!(
-                nodes.len()
+                mounted_nodes
                     <= metrics
                         .mounted_cells
                         .saturating_mul(3)
@@ -2001,10 +2524,14 @@ mod tests {
                         .saturating_add(metrics.mounted_columns.saturating_mul(2))
                         .saturating_add(16),
                 "mounted accessibility tree was unbounded: nodes={}, rows={}, columns={}, cells={}",
-                nodes.len(),
+                mounted_nodes,
                 metrics.mounted_rows,
                 metrics.mounted_columns,
                 metrics.mounted_cells
+            );
+            assert!(
+                grid.read(cx).accessibility_snapshot_node_count()
+                    <= VIRTUAL_SHEET_MAX_COLUMNS + 2 + VIRTUAL_SHEET_ACCESSIBILITY_CACHE_CELLS * 2
             );
 
             grid.update(cx, |grid, _| {
@@ -2025,5 +2552,569 @@ mod tests {
                 );
             });
         });
+    }
+
+    #[::core::prelude::v1::test]
+    fn active_descendant_survives_scroll_and_offscreen_actions_reveal_current_coordinates() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| crate::theme::install_theme(cx, Theme::astryx_neutral()));
+        let (grid, window) = cx.add_window_view(|_, cx| {
+            VirtualSheetGrid::new(100_000, 8, cx)
+                .unwrap()
+                .with_tile_shape(16, 8)
+                .unwrap()
+                .with_cache_limits(16, 4)
+                .on_fetch_tile(|request, entity, _, cx| {
+                    let values = request
+                        .rows
+                        .clone()
+                        .flat_map(|row| {
+                            request
+                                .columns
+                                .clone()
+                                .map(move |column| format!("r{row}-c{column}").into())
+                        })
+                        .collect();
+                    cx.defer(move |cx| {
+                        entity.update(cx, |grid, cx| {
+                            grid.provide_tile(request, values).unwrap();
+                            cx.notify();
+                        })
+                    });
+                })
+        });
+        window.run_until_parked();
+        let position = SheetCellPosition::new(24, 2);
+        let target = window.update(|window, cx| {
+            window.focus(&grid.read(cx).focus_handle(cx));
+            grid.update(cx, |grid, _| {
+                grid.scroll_to_cell(SheetCellPosition::new(50_000, 0))
+                    .unwrap()
+            });
+            window.draw(cx).clear();
+            grid.read(cx).accessibility_id(position).unwrap()
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let root = &window.accessibility_tree().nodes[&grid.read(cx).accessibility_ids.root()];
+            assert_eq!(window.accessibility_tree().focused_node_count(), 1);
+            assert!(root.states.contains(AccessibilityState::FOCUSED));
+            assert_eq!(
+                root.active_descendant,
+                grid.read(cx).accessibility_id(SheetCellPosition::new(0, 0))
+            );
+            let offscreen = &window.accessibility_tree().nodes[&target];
+            assert!(offscreen.bounds.is_none());
+            assert_eq!(
+                offscreen.value,
+                Some(AccessibilityValue::Text("r24-c2".into()))
+            );
+            assert!(window.has_accessibility_action_handler(target, AccessibilityAction::Focus));
+            assert!(
+                grid.read(cx).accessibility_snapshot_node_count()
+                    <= 8 + 2 + VIRTUAL_SHEET_ACCESSIBILITY_CACHE_CELLS * 2
+            );
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                target,
+                AccessibilityAction::Focus,
+            ));
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(grid.read(cx).selection().focus, position);
+            assert!(window.accessibility_tree().nodes[&target].bounds.is_some());
+            assert_eq!(window.accessibility_tree().focused_node_count(), 1);
+            window.dispatch_accessibility_action_for_test(
+                AccessibilityActionRequest::with_payload(
+                    target,
+                    AccessibilityAction::SetValue,
+                    AccessibilityActionPayload::Value("日本語 via AT".into()),
+                ),
+            );
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            grid.update(cx, |grid, _| {
+                assert_eq!(grid.cell_value(position).unwrap().as_ref(), "日本語 via AT")
+            });
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                target,
+                AccessibilityAction::Click,
+            ));
+            grid.update(cx, |grid, cx| grid.reset_data(cx));
+            assert_ne!(grid.read(cx).accessibility_id(position), Some(target));
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            assert_eq!(
+                grid.read(cx).selection().focus,
+                SheetCellPosition::new(0, 0)
+            )
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn remote_edits_require_known_baselines_and_mixed_paste_is_atomic() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| crate::theme::install_theme(cx, Theme::astryx_neutral()));
+        let commits = Rc::new(RefCell::new(Vec::new()));
+        let (grid, window) = cx.add_window_view({
+            let commits = commits.clone();
+            move |_, cx| {
+                VirtualSheetGrid::new(2, 2, cx)
+                    .unwrap()
+                    .with_tile_shape(1, 1)
+                    .unwrap()
+                    .with_require_loaded_edits(true)
+                    .on_commit_edit(move |edit, _, _| commits.borrow_mut().push(edit))
+            }
+        });
+        window.update(|window, cx| {
+            grid.update(cx, |grid, cx| {
+                let request = grid
+                    .request_for_key(SheetTileKey {
+                        tile_row: 0,
+                        tile_column: 0,
+                    })
+                    .unwrap();
+                grid.pending.insert(request.key);
+                grid.provide_tile(request, vec!["remote original".into()])
+                    .unwrap();
+                assert_eq!(
+                    grid.paste_tsv("changed\tunloaded", window, cx),
+                    Err(VirtualSheetGridError::CellValueUnavailable)
+                );
+                assert_eq!(
+                    grid.cell_value(SheetCellPosition::new(0, 0))
+                        .unwrap()
+                        .as_ref(),
+                    "remote original"
+                );
+                assert_eq!(grid.sparse_edit_count(), 0);
+                assert!(grid.undo.is_empty());
+                assert!(commits.borrow().is_empty());
+                assert_eq!(
+                    grid.start_editing(SheetCellPosition::new(1, 1), window, cx),
+                    Err(VirtualSheetGridError::CellValueUnavailable)
+                );
+                assert!(grid.editing_cell().is_none());
+                grid.set_cell_value(SheetCellPosition::new(0, 0), "known edit", window, cx)
+                    .unwrap();
+                grid.reload();
+                assert!(grid.undo(window, cx));
+                assert_eq!(commits.borrow().len(), 2);
+                assert_eq!(commits.borrow()[1].reason, SheetEditReason::Undo);
+                assert_eq!(commits.borrow()[1].value.as_ref(), "remote original");
+            })
+        });
+    }
+}
+
+#[cfg(test)]
+mod mounted_cell_value_reuse_regressions {
+    use super::*;
+    use kael::TestAppContext;
+
+    #[::core::prelude::v1::test]
+    fn mounted_empty_pending_unicode_and_edited_cells_keep_distinct_semantics() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| crate::theme::install_theme(cx, Theme::astryx_neutral()));
+        let (grid, window) = cx.add_window_view(|_, cx| {
+            VirtualSheetGrid::new(1, 4, cx)
+                .unwrap()
+                .with_tile_shape(1, 1)
+                .unwrap()
+                .with_frozen_panes(0, 1)
+                .unwrap()
+        });
+        window.update(|window, cx| {
+            grid.update(cx, |grid, cx| {
+                for (column, value) in [
+                    (0, SharedString::new_static("")),
+                    (2, "日".repeat(1_366).into()),
+                    (3, SharedString::new_static("original")),
+                ] {
+                    let request = grid
+                        .request_for_key(SheetTileKey {
+                            tile_row: 0,
+                            tile_column: column,
+                        })
+                        .unwrap();
+                    grid.pending.insert(request.key);
+                    grid.provide_tile(request, vec![value]).unwrap();
+                }
+                let pending = grid
+                    .request_for_key(SheetTileKey {
+                        tile_row: 0,
+                        tile_column: 1,
+                    })
+                    .unwrap();
+                grid.pending.insert(pending.key);
+                grid.set_column_header(2, "Notes").unwrap();
+                grid.set_cell_value(SheetCellPosition::new(0, 3), "edited 日本語", window, cx)
+                    .unwrap();
+                grid.select(SheetCellPosition::new(0, 3), false).unwrap();
+            });
+            window.draw(cx).clear();
+            let ids = std::array::from_fn::<_, 4, _>(|column| {
+                grid.read(cx)
+                    .accessibility_id(SheetCellPosition::new(0, column))
+                    .unwrap()
+            });
+            let tree = window.accessibility_tree();
+            let empty = &tree.nodes[&ids[0]];
+            assert!(empty.bounds.is_some());
+            assert_eq!(empty.value, Some(AccessibilityValue::Text(String::new())));
+            assert!(!empty.states.contains(AccessibilityState::BUSY));
+            let pending = &tree.nodes[&ids[1]];
+            assert!(pending.bounds.is_some());
+            assert_eq!(pending.value, None);
+            assert!(pending.states.contains(AccessibilityState::BUSY));
+            let long = &tree.nodes[&ids[2]];
+            assert!(long.bounds.is_some());
+            assert_eq!(long.label.as_deref(), Some("Notes, row 1"));
+            assert_eq!(
+                long.value,
+                Some(AccessibilityValue::Text(format!("{}…", "日".repeat(1_365))))
+            );
+            assert!(
+                long.description
+                    .as_ref()
+                    .is_some_and(|text| text.contains("preview"))
+            );
+            let edited = &tree.nodes[&ids[3]];
+            assert!(edited.bounds.is_some());
+            assert_eq!(
+                edited.value,
+                Some(AccessibilityValue::Text("edited 日本語".into()))
+            );
+            assert!(edited.states.contains(AccessibilityState::SELECTED));
+            for id in ids {
+                let node = &tree.nodes[&id];
+                assert_eq!(
+                    node.actions,
+                    vec![
+                        AccessibilityAction::Focus,
+                        AccessibilityAction::Click,
+                        AccessibilityAction::ScrollToVisible,
+                        AccessibilityAction::SetValue,
+                    ]
+                );
+                for action in &node.actions {
+                    assert!(window.has_accessibility_action_handler(id, *action));
+                }
+            }
+            grid.update(cx, |grid, cx| {
+                let request = grid
+                    .request_for_key(SheetTileKey {
+                        tile_row: 0,
+                        tile_column: 1,
+                    })
+                    .unwrap();
+                grid.provide_tile(request, vec![SharedString::new_static("")])
+                    .unwrap();
+                grid.start_editing(SheetCellPosition::new(0, 3), window, cx)
+                    .unwrap();
+            });
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            let now_empty = &tree.nodes[&ids[1]];
+            assert_eq!(
+                now_empty.value,
+                Some(AccessibilityValue::Text(String::new()))
+            );
+            assert!(!now_empty.states.contains(AccessibilityState::BUSY));
+            assert_eq!(
+                tree.nodes[&ids[3]].value,
+                Some(AccessibilityValue::Text("edited 日本語".into()))
+            );
+            assert_eq!(
+                grid.read(cx).editing_cell(),
+                Some(SheetCellPosition::new(0, 3))
+            );
+        });
+    }
+}
+
+#[cfg(all(test, debug_assertions))]
+mod accessibility_publication_regressions {
+    use super::*;
+    use kael::TestAppContext;
+    use std::cell::Cell;
+
+    fn observe_notifications(cx: &mut Context<VirtualSheetGrid>, count: Rc<Cell<usize>>) {
+        cx.observe_self(move |_, _| count.set(count.get() + 1))
+            .detach();
+    }
+
+    fn queue_stale_preparation(grid: &Entity<VirtualSheetGrid>, cx: &mut TestAppContext) -> u64 {
+        grid.update(cx, |grid, cx| {
+            assert!(grid.accessibility_task.is_none());
+            let retained_revision = grid.accessibility_snapshot_revision;
+            grid.set_column_header(0, "Captured old header").unwrap();
+            grid.prepare_accessibility(cx);
+            assert!(grid.accessibility_task.is_some());
+            // Arc::make_mut gives the newest header map its own ownership;
+            // the old task still owns the captured older map.
+            grid.set_column_header(0, "Latest 日本語").unwrap();
+            assert_eq!(Arc::strong_count(&grid.column_headers), 1);
+            retained_revision
+        })
+    }
+
+    fn stop_after_stale_completion_schedules_latest(
+        grid: &Entity<VirtualSheetGrid>,
+        retained_revision: u64,
+        cx: &mut TestAppContext,
+    ) {
+        // This is a private scheduling checkpoint, not a new production hook:
+        // latest input capture occurs synchronously inside the actual stale
+        // completion before its new foreground task can be polled. Every tick
+        // is on this thread and outside App/entity borrows.
+        for _ in 0..512 {
+            let captured_latest = cx.read(|cx| {
+                let grid = grid.read(cx);
+                grid.accessibility_snapshot_revision == retained_revision
+                    && Arc::strong_count(&grid.column_headers) == 2
+            });
+            if captured_latest {
+                cx.read(|cx| {
+                    let grid = grid.read(cx);
+                    assert!(grid.accessibility_task.is_some());
+                    assert_ne!(grid.accessibility_revision, retained_revision);
+                });
+                return;
+            }
+            assert!(
+                cx.dispatcher.tick(false),
+                "latest preparation was not scheduled"
+            );
+        }
+        panic!("actual stale completion did not reach its latest input capture");
+    }
+
+    fn assert_latest_snapshot(grid: &VirtualSheetGrid) {
+        assert!(grid.accessibility_task.is_none());
+        assert_eq!(
+            grid.accessibility_snapshot_revision,
+            grid.accessibility_revision
+        );
+        let snapshot = grid.accessibility_snapshot.as_ref().unwrap();
+        assert_eq!(
+            snapshot
+                .get(grid.accessibility_ids.header(0).unwrap())
+                .unwrap()
+                .label
+                .as_deref(),
+            Some("Latest 日本語")
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn stale_completion_does_not_notify_and_latest_publication_notifies_once() {
+        let mut cx = TestAppContext::single();
+        cx.executor().run_until_parked();
+        let notifications = Rc::new(Cell::new(0));
+        let grid = cx.new(|cx| {
+            observe_notifications(cx, notifications.clone());
+            VirtualSheetGrid::new(4, 2, cx).unwrap()
+        });
+        let retained = queue_stale_preparation(&grid, &mut cx);
+        stop_after_stale_completion_schedules_latest(&grid, retained, &mut cx);
+        assert_eq!(
+            notifications.get(),
+            0,
+            "a discarded snapshot notified observers"
+        );
+        cx.executor().run_until_parked();
+        assert_eq!(
+            notifications.get(),
+            1,
+            "latest publication must notify exactly once"
+        );
+        cx.read(|cx| assert_latest_snapshot(grid.read(cx)));
+        cx.executor().run_until_parked();
+        assert_eq!(notifications.get(), 1, "settled preparation must stay idle");
+    }
+
+    #[::core::prelude::v1::test]
+    fn stale_completion_preserves_settled_draws_until_latest_publication() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| crate::theme::install_theme(cx, Theme::astryx_neutral()));
+        let notifications = Rc::new(Cell::new(0));
+        let (grid, window) = cx.add_window_view(|_, cx| {
+            observe_notifications(cx, notifications.clone());
+            VirtualSheetGrid::new(4, 2, cx).unwrap()
+        });
+        window.simulate_platform_frame();
+        window.simulate_platform_frame();
+        let settled = window.update(|window, _| window.frame_timeline().len());
+        window.simulate_platform_frame();
+        assert_eq!(
+            window.update(|window, _| window.frame_timeline().len()),
+            settled
+        );
+        notifications.set(0);
+        let retained = queue_stale_preparation(&grid, &mut window.cx);
+        stop_after_stale_completion_schedules_latest(&grid, retained, &mut window.cx);
+        // The latest input is captured but its task has not published. Observe
+        // this stale-only interval before any helper drains that independent task.
+        let after_stale = window.update(|window, _| window.frame_timeline().len());
+        window.read(|cx| {
+            assert_eq!(grid.read(cx).accessibility_snapshot_revision, retained);
+        });
+        assert_eq!(
+            after_stale, settled,
+            "a discarded snapshot changed the settled draw timeline"
+        );
+        assert_eq!(
+            notifications.get(),
+            0,
+            "a discarded snapshot notified observers"
+        );
+
+        // The public frame helper also drains the executor. Drain explicitly so
+        // its valid publication draw is not attributed to the stale completion.
+        // Raw callback-only TestWindow APIs are private to the kael crate.
+        window.executor().run_until_parked();
+        assert_eq!(
+            notifications.get(),
+            1,
+            "latest publication must notify once"
+        );
+        window.read(|cx| assert_latest_snapshot(grid.read(cx)));
+        let after_latest = window.update(|window, _| window.frame_timeline().len());
+        assert_eq!(
+            after_latest,
+            settled + 1,
+            "latest publication must add exactly one draw"
+        );
+        window.simulate_platform_frame();
+        assert_eq!(
+            window.update(|window, _| window.frame_timeline().len()),
+            after_latest
+        );
+        window.update(|window, cx| {
+            let grid = grid.read(cx);
+            let ids = grid.accessibility_ids;
+            assert_eq!(
+                window
+                    .accessibility_tree()
+                    .get(ids.header(0).unwrap())
+                    .unwrap()
+                    .label
+                    .as_deref(),
+                Some("Latest 日本語")
+            );
+            let active = ids.cell(SheetCellPosition::new(0, 0)).unwrap();
+            assert!(window.accessibility_tree().get(active).is_some());
+            for action in [AccessibilityAction::Focus, AccessibilityAction::Click] {
+                assert!(window.has_accessibility_action_handler(active, action));
+            }
+        });
+        window.simulate_platform_frame();
+        assert_eq!(
+            window.update(|window, _| window.frame_timeline().len()),
+            after_latest
+        );
+        assert_eq!(notifications.get(), 1, "settled publication must stay idle");
+    }
+
+    #[::core::prelude::v1::test]
+    fn replacing_dataset_cancels_old_preparation_and_keeps_current_native_action_ids() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| crate::theme::install_theme(cx, Theme::astryx_neutral()));
+        let notifications = Rc::new(Cell::new(0));
+        let (grid, window) = cx.add_window_view(|_, cx| {
+            observe_notifications(cx, notifications.clone());
+            VirtualSheetGrid::new(4, 2, cx).unwrap()
+        });
+        window.simulate_platform_frame();
+        window.simulate_platform_frame();
+        let old = grid.update(&mut window.cx, |grid, cx| {
+            grid.set_column_header(0, "Old query").unwrap();
+            grid.prepare_accessibility(cx);
+            assert!(grid.accessibility_task.is_some());
+            let old = grid
+                .accessibility_ids
+                .cell(SheetCellPosition::new(1, 1))
+                .unwrap();
+            grid.reset_data(cx);
+            assert!(grid.accessibility_task.is_none());
+            grid.set_column_header(0, "Latest 日本語").unwrap();
+            grid.prepare_accessibility(cx);
+            assert!(grid.accessibility_task.is_some());
+            assert_ne!(
+                old,
+                grid.accessibility_ids
+                    .cell(SheetCellPosition::new(1, 1))
+                    .unwrap()
+            );
+            old
+        });
+        notifications.set(0); // Exclude reset_data's independently required notify.
+        window.executor().run_until_parked();
+        assert_eq!(notifications.get(), 1);
+        window.read(|cx| assert_latest_snapshot(grid.read(cx)));
+        window.simulate_platform_frame();
+        let current = window.update(|window, cx| {
+            let grid = grid.read(cx);
+            let current = grid
+                .accessibility_ids
+                .cell(SheetCellPosition::new(1, 1))
+                .unwrap();
+            assert!(window.accessibility_tree().get(old).is_none());
+            assert!(!window.has_accessibility_action_handler(old, AccessibilityAction::Click));
+            assert!(window.accessibility_tree().get(current).is_some());
+            assert!(window.has_accessibility_action_handler(current, AccessibilityAction::Click));
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                old,
+                AccessibilityAction::Click,
+            ));
+            current
+        });
+        window.run_until_parked();
+        window.read(|cx| assert_eq!(grid.read(cx).selection.focus, SheetCellPosition::new(0, 0)));
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                current,
+                AccessibilityAction::Click,
+            ))
+        });
+        window.run_until_parked();
+        window.read(|cx| assert_eq!(grid.read(cx).selection.focus, SheetCellPosition::new(1, 1)));
+    }
+
+    #[::core::prelude::v1::test]
+    fn teardown_while_real_snapshot_is_ready_does_not_publish_or_retain_grid() {
+        let mut cx = TestAppContext::single();
+        cx.executor().run_until_parked();
+        let notifications = Rc::new(Cell::new(0));
+        let grid = cx.new(|cx| {
+            observe_notifications(cx, notifications.clone());
+            VirtualSheetGrid::new(4, 2, cx).unwrap()
+        });
+        grid.update(&mut cx, |grid, cx| grid.prepare_accessibility(cx));
+        // Startup is drained: poll the foreground loader once, then run only
+        // its real background preparation, leaving the foreground result queued.
+        assert!(cx.dispatcher.tick(false));
+        for _ in 0..512 {
+            if cx.read(|cx| Arc::strong_count(&grid.read(cx).column_headers) == 1) {
+                break;
+            }
+            assert!(cx.dispatcher.tick(true));
+        }
+        cx.read(|cx| {
+            assert_eq!(Arc::strong_count(&grid.read(cx).column_headers), 1);
+            assert_eq!(grid.read(cx).accessibility_snapshot_revision, 0);
+        });
+        let weak = grid.downgrade();
+        drop(grid);
+        cx.update(|_| {});
+        cx.executor().run_until_parked();
+        assert!(weak.upgrade().is_none());
+        assert_eq!(notifications.get(), 0);
     }
 }

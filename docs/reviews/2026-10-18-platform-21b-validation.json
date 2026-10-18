@@ -1,0 +1,928 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-10-18T13:25:42.414099+00:00",
+  "status": "21B_PLATFORM_COHORT_FAILED_NO_WAIVERS",
+  "run_id": 39125118926,
+  "run_url": "https://github.com/Augani/kael/actions/runs/39125118926",
+  "workflow_head": "21b393294c89148fdba25bad35822c831f6dc0d7",
+  "event": "pull_request",
+  "conclusion": "failure",
+  "actual_checkout": {
+    "sha": "359e00c210dfcb6aef3d2976a696e3ff7de92526",
+    "tree": "c7486732fb27f1cb5868cf5a618faf626216b3a1",
+    "head_tree_equal": true,
+    "distinct_commit_from_head": true,
+    "head_is_parent": true,
+    "raw_API": {
+      "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/actual-merge-commit.json",
+      "sha256": "8a57512e29ce9b4423348335ecfa7ee727145916ae4c10288758a2c9ed29a33c",
+      "bytes": 2558
+    }
+  },
+  "jobs": [
+    {
+      "id": 117668501500,
+      "name": "Classify change",
+      "conclusion": "success",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39125118926/job/117668501500",
+      "failed_steps": [],
+      "skipped_steps": []
+    },
+    {
+      "id": 117668522482,
+      "name": "Linux Renderer / WebView Runtime",
+      "conclusion": "success",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39125118926/job/117668522482",
+      "failed_steps": [],
+      "skipped_steps": []
+    },
+    {
+      "id": 117668522505,
+      "name": "Windows Native / WebView / MSI (windows-2022)",
+      "conclusion": "success",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39125118926/job/117668522505",
+      "failed_steps": [],
+      "skipped_steps": [
+        "Locate Windows vcpkg for the canonical compile runner",
+        "Restore Windows media cache",
+        "Install Windows media dependencies",
+        "Compile and lint the complete Windows workspace"
+      ]
+    },
+    {
+      "id": 117668522506,
+      "name": "WebAssembly / WebGL2 Browser",
+      "conclusion": "success",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39125118926/job/117668522506",
+      "failed_steps": [],
+      "skipped_steps": []
+    },
+    {
+      "id": 117668522521,
+      "name": "Windows Native / WebView / MSI (windows-2025-vs2026)",
+      "conclusion": "success",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39125118926/job/117668522521",
+      "failed_steps": [],
+      "skipped_steps": []
+    },
+    {
+      "id": 117668522549,
+      "name": "Quality / Native (Linux)",
+      "conclusion": "failure",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39125118926/job/117668522549",
+      "failed_steps": [
+        "Audit locked dependencies"
+      ],
+      "skipped_steps": [
+        "Install macOS media dependencies",
+        "Verify macOS Blade Renderer",
+        "Execute native WKWebView IPC and JavaScript smoke",
+        "Upload macOS WKWebView smoke log",
+        "Execute Metal retained-scene runtime proof",
+        "Diagnose same-job Apple drawable presentation",
+        "Execute native macOS outline accessibility protocol",
+        "Execute real macOS Editor native text protocol",
+        "Install pinned Python for macOS browser performance",
+        "Restore pinned Playwright Chromium",
+        "Install macOS browser performance runner",
+        "Enforce real Metal-backed browser performance",
+        "Upload macOS native and browser evidence"
+      ]
+    },
+    {
+      "id": 117668522647,
+      "name": "Quality / Native (macOS)",
+      "conclusion": "failure",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39125118926/job/117668522647",
+      "failed_steps": [
+        "Execute Metal retained-scene runtime proof",
+        "Diagnose same-job Apple drawable presentation"
+      ],
+      "skipped_steps": [
+        "Install Linux dependencies",
+        "Check formatting, Linux backends, templates, and release metadata",
+        "Check documentation",
+        "Audit locked dependencies",
+        "Post Restore pinned Playwright Chromium",
+        "Post Install pinned Python for macOS browser performance"
+      ]
+    },
+    {
+      "id": 117668523696,
+      "name": "Focused Linux / GTK4 native accessibility",
+      "conclusion": "skipped",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39125118926/job/117668523696",
+      "failed_steps": [],
+      "skipped_steps": []
+    },
+    {
+      "id": 117677385517,
+      "name": "Platform readiness",
+      "conclusion": "failure",
+      "html_url": "https://github.com/Augani/kael/actions/runs/39125118926/job/117677385517",
+      "failed_steps": [
+        "Enforce required build results"
+      ],
+      "skipped_steps": []
+    }
+  ],
+  "independent_audit": {
+    "receipt": {
+      "path": ".artifacts/2026-10-18-platform-21b-independent-renderer-audit/review.json",
+      "sha256": "4c0f9702ed16dabec460e4a86cef0a39ec6398f3b4e1600ec9985402480c9b43",
+      "bytes": 149438
+    },
+    "runtime_font_supplement": {
+      "path": ".artifacts/2026-10-18-platform-21b-independent-renderer-audit/runtime-and-font-supplement.json",
+      "sha256": "11c2763ce6865d0af5822a9981d8167cdec24d8af66911321b212f205998215c",
+      "bytes": 14882
+    },
+    "capture": {
+      "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/capture.json",
+      "sha256": "9de6102558a5aa98c8af825dd207b8d3c1bd85efafe137d8a6ed09ebfb62f606",
+      "bytes": 96230
+    },
+    "scope": "Projection of independently audited terminal official artifacts and logs; no new CI dispatch or runtime."
+  },
+  "downloads": {
+    "artifact_count": 10,
+    "extracted_files_rehashed": 249,
+    "records": [
+      {
+        "id": 12137136293,
+        "name": "windows-release-evidence-windows-2025-vs2026",
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/artifact-12137136293/stdout",
+          "sha256": "fdcd13d38e9ccd9a7e46897812de1e32ce7e36d83a8ee6b177dd21fc1039c671",
+          "bytes": 418973
+        },
+        "verified_files": 36
+      },
+      {
+        "id": 12136811701,
+        "name": "macos-runtime-evidence",
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/artifact-12136811701/stdout",
+          "sha256": "2ba483f3eea49f67f2aab453d83374fa3cc2fcf464c3c0185a2037b471cb1fdd",
+          "bytes": 434746
+        },
+        "verified_files": 32
+      },
+      {
+        "id": 12136455103,
+        "name": "webgl2-programmable-runtime-evidence",
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/artifact-12136455103/stdout",
+          "sha256": "f53b35283c99c09612e2a33ac70646fc722b13fed91f55495015557c14e9c2c3",
+          "bytes": 32426
+        },
+        "verified_files": 5
+      },
+      {
+        "id": 12136247403,
+        "name": "browser-smoke",
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/artifact-12136247403/stdout",
+          "sha256": "113be221753459baa6764227287afd6dcaee551820a6265c4948b3113493f5e8",
+          "bytes": 17588320
+        },
+        "verified_files": 69
+      },
+      {
+        "id": 12136171177,
+        "name": "lottie-admission-native-Linux",
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/artifact-12136171177/stdout",
+          "sha256": "bb5457dbf31d140e4e97671c53972dc6098de71810bca2d217acc2015b25da6c",
+          "bytes": 11818
+        },
+        "verified_files": 4
+      },
+      {
+        "id": 12136024135,
+        "name": "macos-wkwebview-smoke",
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/artifact-12136024135/stdout",
+          "sha256": "dee3d0432eb583c14d7e2cdd7effe69d568708c9f5e3d9d7412385636b273b18",
+          "bytes": 652
+        },
+        "verified_files": 1
+      },
+      {
+        "id": 12135918513,
+        "name": "linux-runtime-evidence",
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/artifact-12135918513/stdout",
+          "sha256": "6a97a1fb196f672f209c212f00fb4a23eb6126bc2cb3c18f3ef8141b0b62344f",
+          "bytes": 91791
+        },
+        "verified_files": 57
+      },
+      {
+        "id": 12135692856,
+        "name": "windows-release-evidence-windows-2022",
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/artifact-12135692856/stdout",
+          "sha256": "da3f2402948057ca7f473ebc92e27b5d8aa31315e2f6439af3d697deb3bebd5e",
+          "bytes": 419366
+        },
+        "verified_files": 36
+      },
+      {
+        "id": 12135553360,
+        "name": "lottie-admission-chrome",
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/artifact-12135553360/stdout",
+          "sha256": "c482d88a42824347ef90edb240b010a51ec8e9ca60f3ff24887e07ebbd40b24d",
+          "bytes": 8955
+        },
+        "verified_files": 5
+      },
+      {
+        "id": 12135423969,
+        "name": "lottie-admission-native-macOS",
+        "archive": {
+          "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/artifact-12135423969/stdout",
+          "sha256": "810e675a21a0ab1c4545179a4ab2694a6505e08c1d22cd4e2dfe07bca26a8866",
+          "bytes": 4524
+        },
+        "verified_files": 4
+      }
+    ],
+    "full_job_logs": {
+      "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/full-job-logs/stdout",
+      "sha256": "6c9f337e7370e622b2e5eb0979ccddbb73084c52bb5a7d538b5a5f73b0953d4f",
+      "bytes": 4933728
+    }
+  },
+  "macOS": {
+    "programmable_GPU_invocations": 59,
+    "distinct_GPU_test_names": 58,
+    "ignored_GPU_cases": 0,
+    "native_GPU_completions": 46,
+    "drawable_callbacks": 44,
+    "positive_presentation_timestamps": 0,
+    "presentation_failure": "no positive drawable presentation timestamp within two seconds",
+    "independent_Apple_controls": [
+      {
+        "name": "mtk",
+        "exit_code": 1,
+        "passed": false,
+        "summary": "CONTROL_RESULT mode=mtk transaction=0 handler_after_present=0 submitted=60 completed=60 callbacks=60 presented=0 dropped=60 failures=0 geometry=1 result=FAIL",
+        "fields": {
+          "mode": "mtk",
+          "transaction": "0",
+          "handler_after_present": "0",
+          "submitted": "60",
+          "completed": "60",
+          "callbacks": "60",
+          "presented": "0",
+          "dropped": "60",
+          "failures": "0",
+          "geometry": "1",
+          "result": "FAIL"
+        }
+      },
+      {
+        "name": "layer",
+        "exit_code": 1,
+        "passed": false,
+        "summary": "CONTROL_RESULT mode=layer transaction=0 handler_after_present=0 submitted=60 completed=60 callbacks=60 presented=0 dropped=60 failures=0 geometry=1 result=FAIL",
+        "fields": {
+          "mode": "layer",
+          "transaction": "0",
+          "handler_after_present": "0",
+          "submitted": "60",
+          "completed": "60",
+          "callbacks": "60",
+          "presented": "0",
+          "dropped": "60",
+          "failures": "0",
+          "geometry": "1",
+          "result": "FAIL"
+        }
+      },
+      {
+        "name": "layer-transaction",
+        "exit_code": 1,
+        "passed": false,
+        "summary": "CONTROL_RESULT mode=layer transaction=1 handler_after_present=0 submitted=60 completed=60 callbacks=60 presented=0 dropped=60 failures=0 geometry=1 result=FAIL",
+        "fields": {
+          "mode": "layer",
+          "transaction": "1",
+          "handler_after_present": "0",
+          "submitted": "60",
+          "completed": "60",
+          "callbacks": "60",
+          "presented": "0",
+          "dropped": "60",
+          "failures": "0",
+          "geometry": "1",
+          "result": "FAIL"
+        }
+      }
+    ],
+    "control_source_sha256": "e61912654259c3a3495181401a0290c20053aaa93bd2dd121bdfc29010413fba",
+    "control_binary_sha256": "c5afe0ae78ad38dac1a38d6314c34db3041e3e4b59dbd4f78130b4768692c4cb",
+    "session": {
+      "console_logged_in": true,
+      "display_asleep": false,
+      "lock_state": "UNKNOWN"
+    },
+    "idle_1250ms_CPU_submission_marker": true,
+    "separate_hardware_class_browser": {
+      "raw_report": {
+        "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/extracted/12136811701/browser-hardware-macos/report.json",
+        "sha256": "aeb798fa6be5026daeead4d17f58d392105323ae8c367b03c7783f0dc7b040aa",
+        "bytes": 11181
+      },
+      "failure_count": 0,
+      "engines": [
+        {
+          "engine": "chromium",
+          "browser_version": "151.0.7922.34",
+          "smoke": [
+            {
+              "viewport": {
+                "height": 800,
+                "width": 1280
+              },
+              "gpu": {
+                "gpu-device": "ANGLE (Apple, ANGLE Metal Renderer: Apple Paravirtual device, Unspecified Version)",
+                "gpu-driver-info": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+                "gpu-probe": "reported",
+                "gpu-software-emulated": "false",
+                "gpu-vendor": "Google Inc. (Apple)"
+              },
+              "performance": {
+                "long-tasks": "0",
+                "performance": "passed",
+                "performance-class": "hardware-performance",
+                "performance-long-task-budget": "3",
+                "performance-p95-budget-ms": "80",
+                "performance-p99-budget-ms": "160",
+                "performance-samples": "24",
+                "performance-warmup-samples": "8",
+                "scroll-p95-ms": "37.700",
+                "scroll-p99-ms": "47.500"
+              },
+              "pixel_readback_context_recovery": true
+            },
+            {
+              "viewport": {
+                "height": 720,
+                "width": 430
+              },
+              "gpu": {
+                "gpu-device": "ANGLE (Apple, ANGLE Metal Renderer: Apple Paravirtual device, Unspecified Version)",
+                "gpu-driver-info": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+                "gpu-probe": "reported",
+                "gpu-software-emulated": "false",
+                "gpu-vendor": "Google Inc. (Apple)"
+              },
+              "performance": {
+                "long-tasks": "0",
+                "performance": "passed",
+                "performance-class": "hardware-performance",
+                "performance-long-task-budget": "3",
+                "performance-p95-budget-ms": "80",
+                "performance-p99-budget-ms": "160",
+                "performance-samples": "24",
+                "performance-warmup-samples": "8",
+                "scroll-p95-ms": "21.100",
+                "scroll-p99-ms": "24.200"
+              },
+              "pixel_readback_context_recovery": true
+            }
+          ],
+          "suite_viewports": [],
+          "capture": null
+        }
+      ],
+      "hardware_performance_gates": true
+    },
+    "interpretation": "Same-job independent controls also return zero positive presentations. This supports a runner/session/display investigation; it does not identify a unique cause, prove a source regression absent, or turn Kael failure into PASS."
+  },
+  "Linux": {
+    "strict_denied_advisories": [
+      {
+        "crate": "zbus_names",
+        "version": "4.3.4",
+        "advisory": "RUSTSEC-2026-0371",
+        "category": "unmaintained"
+      },
+      {
+        "crate": "zvariant",
+        "version": "5.13.1",
+        "advisory": "RUSTSEC-2026-0370",
+        "category": "unmaintained"
+      },
+      {
+        "crate": "zvariant_derive",
+        "version": "5.13.1",
+        "advisory": "RUSTSEC-2026-0372",
+        "category": "unmaintained"
+      }
+    ],
+    "strict_audit_failed": true,
+    "runtime_native_protocol_markers": [
+      {
+        "log": {
+          "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/extracted/12135918513/kael/kael/target/native-accessibility-smoke/linux-text/atspi-client.log",
+          "sha256": "f91c74498b6bbd4dd6979747e8d2ad0d2451328eea74e6bfaccfd46333969148",
+          "bytes": 545
+        },
+        "marker": "NATIVE_TEXT_ACCESSIBILITY_OK platform=linux utf8=105391 scalars=63390 utf16=66983 lines=1001 selection=true geometry=true hit_test=true words=true eof=true reveal=true clipboard=true editable=true atomic_undo=true readonly=true disabled=true replacement=true"
+      },
+      {
+        "log": {
+          "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/extracted/12135918513/kael/kael/target/native-accessibility-smoke/linux-gtk4/atspi-client.log",
+          "sha256": "306038b05b7619ad94aab849013695cae7c37786c3561dda4516ca76033a368c",
+          "bytes": 658
+        },
+        "marker": "NATIVE_ACCESSIBILITY_RUNTIME_OK: backend=atspi rows=100025 projects=25 children=4000 last=100024 idle_select=true native_focus=true native_disclosure=true stable_identity=true"
+      },
+      {
+        "log": {
+          "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/extracted/12135918513/kael/kael/target/native-accessibility-smoke/linux/atspi-client.log",
+          "sha256": "a1db8d430a85f7ad7cb41bea105c162cfdce3ece0a223c9ff7384c9eff7f64fd",
+          "bytes": 504
+        },
+        "marker": "NATIVE_ACCESSIBILITY_RUNTIME_OK: backend=atspi rows=100025 projects=25 children=4000 last=100024 idle_select=true native_focus=true native_disclosure=true stable_identity=true"
+      },
+      {
+        "log": {
+          "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/extracted/12135918513/kael/kael/target/native-accessibility-smoke/linux-gtk4-text/atspi-client.log",
+          "sha256": "0fccc860474fafba00804c570c1578e1eb126311164f022536b6d70e9f3b84c9",
+          "bytes": 699
+        },
+        "marker": "NATIVE_TEXT_ACCESSIBILITY_OK platform=linux utf8=105391 scalars=63390 utf16=66983 lines=1001 selection=true geometry=true hit_test=true words=true eof=true reveal=true clipboard=true editable=true atomic_undo=true readonly=true disabled=true replacement=true"
+      }
+    ],
+    "programmable_invocations": 28,
+    "distinct_programmable_names": 28,
+    "package_operations_completed": 39,
+    "package_archives_independently_audited_in_this_hosted_cohort": false,
+    "auxiliary_post_cache_error": "ENOENT target/tests/target (post step); retained separately from strict audit failure and official conclusions"
+  },
+  "Windows": [
+    {
+      "runner": "windows-2022",
+      "software_backend": true,
+      "GPU_invocations": 23,
+      "distinct_GPU_names": 23,
+      "viewport": [
+        720,
+        460
+      ],
+      "revisions": 4,
+      "render_calls": 6,
+      "DirectWrite_cases": 3,
+      "UIA_provider_cases": 4,
+      "MSI": {
+        "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/extracted/12135692856/release-artifacts/Kael.msi",
+        "sha256": "06dbc9c61bd9ef7f07c6274d0cc0378216955eee394bef86df17c71b2316597b",
+        "bytes": 188416
+      },
+      "administrative_database": {
+        "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/extracted/12135692856/windows-msi-verification/extracted/Kael.msi",
+        "sha256": "61eb5d14b14cc593a7a0ec374f79f42f65c171e5b627691dc57c844e3d307897",
+        "bytes": 32768
+      },
+      "administrative_extraction_exit0": true,
+      "extracted_executable": {
+        "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/extracted/12135692856/windows-msi-verification/extracted/PFiles64/Kael/Kael.exe",
+        "sha256": "8066e1a0215f0a0ada83c9b0a580cd4ed92a32ef87a01ef15e0ac4f82dc0e4e4",
+        "bytes": 379392
+      }
+    },
+    {
+      "runner": "windows-2025-vs2026",
+      "software_backend": true,
+      "GPU_invocations": 23,
+      "distinct_GPU_names": 23,
+      "viewport": [
+        720,
+        460
+      ],
+      "revisions": 4,
+      "render_calls": 6,
+      "DirectWrite_cases": 3,
+      "UIA_provider_cases": 4,
+      "MSI": {
+        "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/extracted/12137136293/release-artifacts/Kael.msi",
+        "sha256": "dfd9f33191030fc05e00560ac0ac597469408faa83f628fed02dfdde4de6df0e",
+        "bytes": 188416
+      },
+      "administrative_database": {
+        "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/extracted/12137136293/windows-msi-verification/extracted/Kael.msi",
+        "sha256": "b2a984f0691b99abd18003c5725b6653594549584454672d4ad47ca55c868173",
+        "bytes": 32768
+      },
+      "administrative_extraction_exit0": true,
+      "extracted_executable": {
+        "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/extracted/12137136293/windows-msi-verification/extracted/PFiles64/Kael/Kael.exe",
+        "sha256": "7ba56575599ae49c028df19b3b0524c5b91aa5b3d0737776fdc99028cf5db073",
+        "bytes": 379392
+      }
+    }
+  ],
+  "ordinary_browser": {
+    "failure_count": 0,
+    "engines": [
+      {
+        "engine": "chromium",
+        "browser_version": "151.0.7922.34",
+        "smoke": [
+          {
+            "viewport": {
+              "height": 800,
+              "width": 1280
+            },
+            "gpu": {
+              "gpu-device": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+              "gpu-driver-info": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+              "gpu-probe": "reported",
+              "gpu-software-emulated": "true",
+              "gpu-vendor": "Google Inc. (Google)"
+            },
+            "performance": {
+              "long-tasks": "5",
+              "performance": "passed",
+              "performance-class": "software-fallback-liveness",
+              "performance-long-task-budget": "not-enforced",
+              "performance-p95-budget-ms": "not-enforced",
+              "performance-p99-budget-ms": "not-enforced",
+              "performance-samples": "24",
+              "performance-warmup-samples": "8",
+              "scroll-p95-ms": "687.300",
+              "scroll-p99-ms": "1334.200"
+            },
+            "pixel_readback_context_recovery": true
+          },
+          {
+            "viewport": {
+              "height": 720,
+              "width": 430
+            },
+            "gpu": {
+              "gpu-device": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+              "gpu-driver-info": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+              "gpu-probe": "reported",
+              "gpu-software-emulated": "true",
+              "gpu-vendor": "Google Inc. (Google)"
+            },
+            "performance": {
+              "long-tasks": "0",
+              "performance": "passed",
+              "performance-class": "software-fallback-liveness",
+              "performance-long-task-budget": "not-enforced",
+              "performance-p95-budget-ms": "not-enforced",
+              "performance-p99-budget-ms": "not-enforced",
+              "performance-samples": "24",
+              "performance-warmup-samples": "8",
+              "scroll-p95-ms": "25.600",
+              "scroll-p99-ms": "25.800"
+            },
+            "pixel_readback_context_recovery": true
+          }
+        ],
+        "suite_viewports": [
+          {
+            "height": 800,
+            "width": 1280
+          },
+          {
+            "height": 720,
+            "width": 760
+          }
+        ],
+        "capture": {
+          "frame_delivery": "passed",
+          "query": {
+            "__kael_capture_pass__": "1",
+            "async_error": "passed",
+            "bounds": "passed",
+            "enumeration": "passed",
+            "fixture": "frame-delivery",
+            "frame_count": "2",
+            "frames": "passed",
+            "lifecycle": "passed",
+            "pause": "passed",
+            "pause_hold": "passed",
+            "resume": "passed",
+            "resume_state": "passed",
+            "start": "passed",
+            "stop": "passed",
+            "validity_mask": "31"
+          },
+          "trusted_picker": "not-automated-requires-user-activation",
+          "frame_contract": {
+            "bytes": 8192,
+            "format": "rgba32",
+            "height": 32,
+            "width": 64
+          }
+        }
+      },
+      {
+        "engine": "firefox",
+        "browser_version": "153.0",
+        "smoke": [
+          {
+            "viewport": {
+              "height": 800,
+              "width": 1280
+            },
+            "gpu": {
+              "gpu-device": "llvmpipe, or similar",
+              "gpu-driver-info": "WebGL 2.0",
+              "gpu-probe": "reported",
+              "gpu-software-emulated": "true",
+              "gpu-vendor": "Mesa"
+            },
+            "performance": {
+              "long-tasks": "0",
+              "performance": "passed",
+              "performance-class": "software-fallback-liveness",
+              "performance-long-task-budget": "not-enforced",
+              "performance-p95-budget-ms": "not-enforced",
+              "performance-p99-budget-ms": "not-enforced",
+              "performance-samples": "24",
+              "performance-warmup-samples": "8",
+              "scroll-p95-ms": "75.000",
+              "scroll-p99-ms": "76.000"
+            },
+            "pixel_readback_context_recovery": true
+          },
+          {
+            "viewport": {
+              "height": 720,
+              "width": 430
+            },
+            "gpu": {
+              "gpu-device": "llvmpipe, or similar",
+              "gpu-driver-info": "WebGL 2.0",
+              "gpu-probe": "reported",
+              "gpu-software-emulated": "true",
+              "gpu-vendor": "Mesa"
+            },
+            "performance": {
+              "long-tasks": "0",
+              "performance": "passed",
+              "performance-class": "software-fallback-liveness",
+              "performance-long-task-budget": "not-enforced",
+              "performance-p95-budget-ms": "not-enforced",
+              "performance-p99-budget-ms": "not-enforced",
+              "performance-samples": "24",
+              "performance-warmup-samples": "8",
+              "scroll-p95-ms": "26.000",
+              "scroll-p99-ms": "26.000"
+            },
+            "pixel_readback_context_recovery": true
+          }
+        ],
+        "suite_viewports": [
+          {
+            "height": 800,
+            "width": 1280
+          },
+          {
+            "height": 720,
+            "width": 760
+          }
+        ],
+        "capture": {
+          "frame_delivery": "passed",
+          "query": {
+            "__kael_capture_pass__": "1",
+            "async_error": "passed",
+            "bounds": "passed",
+            "enumeration": "passed",
+            "fixture": "frame-delivery",
+            "frame_count": "2",
+            "frames": "passed",
+            "lifecycle": "passed",
+            "pause": "passed",
+            "pause_hold": "passed",
+            "resume": "passed",
+            "resume_state": "passed",
+            "start": "passed",
+            "stop": "passed",
+            "validity_mask": "31"
+          },
+          "trusted_picker": "not-automated-requires-user-activation",
+          "frame_contract": {
+            "bytes": 8192,
+            "format": "rgba32",
+            "height": 32,
+            "width": 64
+          }
+        }
+      },
+      {
+        "engine": "webkit",
+        "browser_version": "26.5",
+        "smoke": [
+          {
+            "viewport": {
+              "height": 800,
+              "width": 1280
+            },
+            "gpu": {
+              "gpu-device": "Apple GPU",
+              "gpu-driver-info": "WebGL 2.0",
+              "gpu-probe": "reported",
+              "gpu-software-emulated": "false",
+              "gpu-vendor": "Apple Inc."
+            },
+            "performance": {
+              "long-tasks": "0",
+              "performance": "passed",
+              "performance-class": "software-fallback-liveness",
+              "performance-long-task-budget": "not-enforced",
+              "performance-p95-budget-ms": "not-enforced",
+              "performance-p99-budget-ms": "not-enforced",
+              "performance-samples": "24",
+              "performance-warmup-samples": "8",
+              "scroll-p95-ms": "86.000",
+              "scroll-p99-ms": "89.000"
+            },
+            "pixel_readback_context_recovery": true
+          },
+          {
+            "viewport": {
+              "height": 720,
+              "width": 430
+            },
+            "gpu": {
+              "gpu-device": "Apple GPU",
+              "gpu-driver-info": "WebGL 2.0",
+              "gpu-probe": "reported",
+              "gpu-software-emulated": "false",
+              "gpu-vendor": "Apple Inc."
+            },
+            "performance": {
+              "long-tasks": "0",
+              "performance": "passed",
+              "performance-class": "software-fallback-liveness",
+              "performance-long-task-budget": "not-enforced",
+              "performance-p95-budget-ms": "not-enforced",
+              "performance-p99-budget-ms": "not-enforced",
+              "performance-samples": "24",
+              "performance-warmup-samples": "8",
+              "scroll-p95-ms": "29.000",
+              "scroll-p99-ms": "33.000"
+            },
+            "pixel_readback_context_recovery": true
+          }
+        ],
+        "suite_viewports": [
+          {
+            "height": 800,
+            "width": 1280
+          },
+          {
+            "height": 720,
+            "width": 760
+          }
+        ],
+        "capture": {
+          "frame_delivery": "automation-unavailable",
+          "query": {
+            "__kael_capture_pass__": "1",
+            "async_error": "passed",
+            "bounds": "passed",
+            "enumeration": "passed",
+            "fixture": "live-track-no-decodable-frames",
+            "frame_count": "0",
+            "frames": "automation-unavailable",
+            "lifecycle": "passed",
+            "pause": "passed",
+            "pause_hold": "passed",
+            "resume": "passed",
+            "resume_state": "passed",
+            "start": "passed",
+            "stop": "passed",
+            "validity_mask": "0"
+          },
+          "trusted_picker": "not-automated-requires-user-activation",
+          "frame_contract": {
+            "bytes": 8192,
+            "format": "rgba32",
+            "height": 32,
+            "width": 64
+          }
+        }
+      }
+    ],
+    "performance_scope": "Liveness/pixel/context-recovery gates; ordinary software matrix timing budgets are not enforced. Device strings alone are not physical GPU attestation."
+  },
+  "WebGL2": {
+    "selected_programmable_invocations": 15
+  },
+  "Lottie": [
+    {
+      "artifact_id": "12135423969",
+      "backend": "native",
+      "passes": 140,
+      "default_loader_policy": {
+        "passed": 1,
+        "test_name": "public_loader_admission_regression::public_loader_starts_two_of_three_across_apps_and_direct_constructors_still_work",
+        "runtime_log_sha256": "95a5c7a138850f4d68aca9e19b912cf7995ba5ec46d63555d2213c9dbd396848",
+        "integration_source_sha256": "ecff5e14d132332a035ac9df25980555ceb0ac6c54808314db9b7703a9e04058",
+        "core_loader_source_sha256": "00339465e5423fc013b1c981ad62a9e25368b78344d2fc5eb543bfde3379ed27",
+        "KAEL_HEADLESS": "1"
+      },
+      "receipt": {
+        "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/extracted/12135423969/result.json",
+        "sha256": "2274abb16a0529e3b4776e4424ad64830609aea07140a71ab327c1b59ec956f8",
+        "bytes": 742
+      }
+    },
+    {
+      "artifact_id": "12136171177",
+      "backend": "native",
+      "passes": 140,
+      "default_loader_policy": {
+        "passed": 1,
+        "test_name": "public_loader_admission_regression::public_loader_starts_two_of_three_across_apps_and_direct_constructors_still_work",
+        "runtime_log_sha256": "3874852c45855a8050d49ecd3f6f981e49fbbd7d3d41ccd7b22a06ecb5e58c5b",
+        "integration_source_sha256": "ecff5e14d132332a035ac9df25980555ceb0ac6c54808314db9b7703a9e04058",
+        "core_loader_source_sha256": "00339465e5423fc013b1c981ad62a9e25368b78344d2fc5eb543bfde3379ed27",
+        "KAEL_HEADLESS": "1"
+      },
+      "receipt": {
+        "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/extracted/12136171177/result.json",
+        "sha256": "d1c78e40902be57803e205c678bb6f57a0d09a0f20ffd4edff2402976ea7a4dc",
+        "bytes": 742
+      }
+    },
+    {
+      "artifact_id": "12135553360",
+      "backend": "chrome",
+      "passes": 17,
+      "default_loader_policy": null,
+      "receipt": {
+        "path": ".artifacts/2026-10-18-platform-21b-terminal-capture/extracted/12135553360/result.json",
+        "sha256": "bf948446257b545fe24b67d8c7e7636d484eddb8138b9f476227460321b5a4d6",
+        "bytes": 408
+      }
+    }
+  ],
+  "font_source21b": {
+    "Quality / Native (Linux)": {
+      "shared_cases_passed": 8,
+      "exact_lines": [
+        "Quality / Native (Linux)\tUNKNOWN STEP\t2026-10-18T12:08:42.5349272Z test text_system::shared_negative_font_cache_regressions::backend_callbacks_and_error_formatting_run_without_descriptor_lock ... ok",
+        "Quality / Native (Linux)\tUNKNOWN STEP\t2026-10-18T12:08:42.5350467Z test text_system::shared_negative_font_cache_regressions::failed_registration_without_mutation_allows_one_retry_then_negative_cache ... ok",
+        "Quality / Native (Linux)\tUNKNOWN STEP\t2026-10-18T12:08:42.5351369Z test text_system::shared_negative_font_cache_regressions::generation_exhaustion_disables_negative_admission_not_successes ... ok",
+        "Quality / Native (Linux)\tUNKNOWN STEP\t2026-10-18T12:08:42.5353175Z test text_system::shared_negative_font_cache_regressions::in_flight_old_error_cannot_poison_successful_registration ... ok",
+        "Quality / Native (Linux)\tUNKNOWN STEP\t2026-10-18T12:08:42.5354070Z test text_system::shared_negative_font_cache_regressions::partial_registration_error_still_retries_prior_missing_family ... ok",
+        "Quality / Native (Linux)\tUNKNOWN STEP\t2026-10-18T12:08:42.5354907Z test text_system::shared_negative_font_cache_regressions::previously_missing_family_resolves_after_successful_registration ... ok",
+        "Quality / Native (Linux)\tUNKNOWN STEP\t2026-10-18T12:08:42.5356486Z test text_system::shared_negative_font_cache_regressions::registration_preserves_successful_ids_and_live_cached_layouts ... ok",
+        "Quality / Native (Linux)\tUNKNOWN STEP\t2026-10-18T12:08:42.5359921Z test text_system::shared_negative_font_cache_regressions::unwinding_partial_registration_invalidates_negative_cache ... ok"
+      ]
+    },
+    "Quality / Native (macOS)": {
+      "shared_cases_passed": 8,
+      "exact_lines": [
+        "Quality / Native (macOS)\tUNKNOWN STEP\t2026-10-18T12:09:08.3626620Z test text_system::shared_negative_font_cache_regressions::backend_callbacks_and_error_formatting_run_without_descriptor_lock ... ok",
+        "Quality / Native (macOS)\tUNKNOWN STEP\t2026-10-18T12:09:08.3630210Z test text_system::shared_negative_font_cache_regressions::failed_registration_without_mutation_allows_one_retry_then_negative_cache ... ok",
+        "Quality / Native (macOS)\tUNKNOWN STEP\t2026-10-18T12:09:08.3631780Z test text_system::shared_negative_font_cache_regressions::generation_exhaustion_disables_negative_admission_not_successes ... ok",
+        "Quality / Native (macOS)\tUNKNOWN STEP\t2026-10-18T12:09:08.3634350Z test text_system::shared_negative_font_cache_regressions::in_flight_old_error_cannot_poison_successful_registration ... ok",
+        "Quality / Native (macOS)\tUNKNOWN STEP\t2026-10-18T12:09:08.3635720Z test text_system::shared_negative_font_cache_regressions::partial_registration_error_still_retries_prior_missing_family ... ok",
+        "Quality / Native (macOS)\tUNKNOWN STEP\t2026-10-18T12:09:08.3636890Z test text_system::shared_negative_font_cache_regressions::previously_missing_family_resolves_after_successful_registration ... ok",
+        "Quality / Native (macOS)\tUNKNOWN STEP\t2026-10-18T12:09:08.3638720Z test text_system::shared_negative_font_cache_regressions::registration_preserves_successful_ids_and_live_cached_layouts ... ok",
+        "Quality / Native (macOS)\tUNKNOWN STEP\t2026-10-18T12:09:08.3730760Z test text_system::shared_negative_font_cache_regressions::unwinding_partial_registration_invalidates_negative_cache ... ok"
+      ]
+    },
+    "real_CoreText_arrival": {
+      "cases_passed": 1,
+      "line": "Quality / Native (macOS)\tUNKNOWN STEP\t2026-10-18T12:09:01.4983670Z test platform::mac::text_system::native_font_arrival_regressions::registered_unique_face_replaces_shared_miss_without_invalidating_live_fonts ... ok",
+      "scope": "Window-free real native registration/identity test; no physical IME/window/presentation claim."
+    }
+  },
+  "future_incompatibility": {
+    "package": "block",
+    "version": "0.1.6",
+    "future_Rust_rejection_warning": true,
+    "not_current_compile_failure": true
+  },
+  "qualifications": [
+    "This terminal cohort binds font-source21b through the distinct same-tree PR merge. Prior40b/b091 failures and b091 comparison stay separate and immutable.",
+    "No current physical Mac proof or wheel/IME acceptance is supplied by hosted evidence.",
+    "59 Mac GPU invocations contain58 distinct names; repeated native_atlas_identity_rejects_foreign_atlas_and_late_release is intentional across two groups.",
+    "Windows WARP/Microsoft Basic Render Driver and Linux llvmpipe are software rendering, not hardware GPU performance evidence.",
+    "Ordinary browser matrix has liveness/pixel gates; its performance budgets are not enforced, including WebKit whose reported device string alone is insufficient hardware attestation.",
+    "WebKit capture frame delivery is automation-unavailable; trusted capture picker is not automated for any engine.",
+    "Mac Chromium hardware class reports Apple Paravirtual Metal and passes both80/160ms/3longtask budgets. That result does not prove native drawable presentation or physical GPU identity.",
+    "MSI here verifies uploaded package bytes/extraction and successful CI verifier, not interactive install/uninstall on user systems.",
+    "No overall winner, comparative latency, RSS, power, physical input or presentation claim.",
+    "Windows2022 complete workspace compile/lint and the focused GTK4 job are skipped, not passed. GTK runtime evidence in the separate successful Linux runtime job stays scoped.",
+    "The current separate Metal-class browser budgets pass both80/160ms limits and long-task caps, without attributed repeatable improvement, physical GPU identity or proof of native drawable presentation.",
+    "The same three strict denied advisories remain open, with no ignore or waiver. The auxiliary missing cache directory is separate and has no quick-workaround acceptance.",
+    "Older40b24 and b091 cohorts remain historical records; the b091 matched GPUI0.7.3 comparison remains a different frozen source and supplies no current21b ranking.",
+    "This hosted report does not close local horizontal wheel, IME, presentation or any R1\u2013R12 required final scope."
+  ]
+}

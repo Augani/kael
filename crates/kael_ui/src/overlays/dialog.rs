@@ -737,6 +737,21 @@ impl Render for Dialog {
                     .occlude()
                     .key_context("Dialog")
                     .track_focus(&self.focus_handle)
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        let modifiers = event.keystroke.modifiers;
+                        if event.keystroke.key != "tab"
+                            || modifiers.number_of_modifiers() != u8::from(modifiers.shift)
+                        {
+                            return;
+                        }
+                        if modifiers.shift {
+                            window.focus_prev_within(&this.focus_handle);
+                        } else {
+                            window.focus_next_within(&this.focus_handle);
+                        }
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    }))
                     .when(self.close_on_backdrop_click, |this| {
                         this.on_mouse_down_out(cx.listener(|this, _, window, cx| {
                             this.handle_close(window, cx);
@@ -1073,5 +1088,913 @@ mod tests {
             assert!(!dialog.to_text().contains("rebuilt body"));
             assert!(!dialog.to_text().contains("rebuilt footer"));
         });
+    }
+}
+
+// Real mounted Tab-routing baselines. The fixture does not install a focus trap.
+#[cfg(test)]
+mod dialog_modal_focus_mounted_baseline {
+    use super::*;
+    use crate::components::button::Button;
+    use kael::{TestAppContext, VisualTestContext};
+    use std::{cell::Cell, rc::Rc};
+
+    struct Body {
+        prefix: &'static str,
+        middle_disabled: bool,
+        omit_last: bool,
+        nested: Option<Entity<Dialog>>,
+    }
+
+    impl Render for Body {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let button = |part: &str| {
+                Button::new(
+                    ElementId::Name(format!("{}-{part}", self.prefix).into()),
+                    format!("{} {part}", self.prefix),
+                )
+                .on_click(|_, _, _| {})
+            };
+            div()
+                .relative()
+                .w_full()
+                .h(px(220.0))
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(button("first"))
+                .child(button("middle").disabled(self.middle_disabled))
+                .when(!self.omit_last, |this| this.child(button("last")))
+                .children(self.nested.clone())
+        }
+    }
+
+    struct Host {
+        modal: Option<Entity<Dialog>>,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .relative()
+                .size_full()
+                .child(
+                    div()
+                        .p(px(16.0))
+                        .flex()
+                        .gap(px(8.0))
+                        .child(
+                            Button::new("outside-before", "Outside before").on_click(|_, _, _| {}),
+                        )
+                        .child(
+                            Button::new("outside-after", "Outside after").on_click(|_, _, _| {}),
+                        ),
+                )
+                .children(self.modal.clone())
+        }
+    }
+
+    struct Fixture {
+        _host: Entity<Host>,
+        body: Entity<Body>,
+        _modal: Entity<Dialog>,
+        window: VisualTestContext,
+        _closes: Rc<Cell<usize>>,
+    }
+
+    fn button_id(window: &Window, label: &str) -> AccessibilityId {
+        let matches = window
+            .accessibility_tree()
+            .nodes
+            .values()
+            .filter(|node| {
+                node.role == AccessibilityRole::Button && node.label.as_deref() == Some(label)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(matches.len(), 1, "expected one real button {label}");
+        matches[0].id
+    }
+
+    fn button_labels(window: &Window) -> Vec<String> {
+        let mut labels = window
+            .accessibility_tree()
+            .nodes
+            .values()
+            .filter(|node| node.role == AccessibilityRole::Button)
+            .map(|node| node.label.clone().expect("every fixture button is named"))
+            .collect::<Vec<_>>();
+        labels.sort();
+        labels
+    }
+
+    fn assert_button_inventory(window: &Window, expected: &[&str]) {
+        let mut expected = expected
+            .iter()
+            .map(|label| (*label).to_owned())
+            .collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(
+            button_labels(window),
+            expected,
+            "complete mounted button inventory"
+        );
+    }
+
+    fn assert_focused(window: &mut VisualTestContext, label: &str) {
+        window.update(|window, cx| {
+            assert!(
+                window.focused(cx).is_some(),
+                "actual window focus must exist"
+            );
+            let tree = window.accessibility_tree();
+            assert_eq!(tree.focused_node_count(), 1, "one exported focus owner");
+            assert_eq!(
+                tree.focused_node(),
+                Some(button_id(window, label)),
+                "actual focused button must be {label}"
+            );
+        });
+    }
+
+    fn focus_button(window: &mut VisualTestContext, label: &str) {
+        window.update(|window, _| {
+            let id = button_id(window, label);
+            assert!(window.has_accessibility_action_handler(id, AccessibilityAction::Focus));
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                id,
+                AccessibilityAction::Focus,
+            ));
+        });
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+        assert_focused(window, label);
+    }
+
+    fn key(window: &mut VisualTestContext, keystroke: &str, expected: &str) {
+        let before = window.update(|window, _| button_labels(window));
+        window.simulate_keystrokes(keystroke);
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(
+                button_labels(window),
+                before,
+                "Tab must not remove fixture controls"
+            );
+        });
+        assert_focused(window, expected);
+    }
+
+    fn mounted() -> Fixture {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let body = cx.new(|_| Body {
+            prefix: "Modal",
+            middle_disabled: true,
+            omit_last: false,
+            nested: None,
+        });
+        let closes = Rc::new(Cell::new(0));
+        let (host, borrowed_window) = cx.add_window_view(|_, _| Host { modal: None });
+        let mut window = borrowed_window.clone();
+        window.simulate_resize(size(px(640.0), px(480.0)));
+        window.deactivate_window();
+        window.update(|window, _| window.activate_window());
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert!(
+                window.is_window_active(),
+                "focus lifecycle needs an active test window"
+            );
+            window.draw(cx).clear();
+            assert_button_inventory(window, &["Outside before", "Outside after"]);
+        });
+        // Establish ordinary global Tab behavior before mounting any modal.
+        focus_button(&mut window, "Outside before");
+        key(&mut window, "tab", "Outside after");
+        focus_button(&mut window, "Outside before");
+        let weak_host = host.downgrade();
+        let content = body.clone();
+        let close_count = closes.clone();
+        let modal = window.update(|_, cx| {
+            cx.new(|cx| {
+                Dialog::new(cx)
+                    .id("outer-modal")
+                    .title("Outer modal")
+                    .show_close_button(false)
+                    .close_on_backdrop_click(false)
+                    .content_builder(move || content.clone())
+                    .on_close(move |_, cx| {
+                        close_count.set(close_count.get() + 1);
+                        let _ = weak_host.update(cx, |host, cx| {
+                            host.modal = None;
+                            cx.notify();
+                        });
+                    })
+            })
+        });
+        window.update(|window, cx| {
+            host.update(cx, |host, cx| {
+                host.modal = Some(modal.clone());
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            assert!(window.accessibility_tree().nodes.values().any(|node| {
+                node.role == AccessibilityRole::Dialog
+                    && node.label.as_deref() == Some("Outer modal")
+            }));
+            assert_button_inventory(
+                window,
+                &[
+                    "Outside before",
+                    "Outside after",
+                    "Modal first",
+                    "Modal middle",
+                    "Modal last",
+                ],
+            );
+            let disabled = window
+                .accessibility_tree()
+                .get(button_id(window, "Modal middle"))
+                .unwrap();
+            assert!(disabled.states.contains(AccessibilityState::DISABLED));
+        });
+        Fixture {
+            _host: host,
+            body,
+            _modal: modal,
+            window,
+            _closes: closes,
+        }
+    }
+
+    fn add_nested(f: &mut Fixture) -> Rc<Cell<usize>> {
+        focus_button(&mut f.window, "Modal first");
+        let inner_body = f.window.update(|_, cx| {
+            cx.new(|_| Body {
+                prefix: "Inner",
+                middle_disabled: true,
+                omit_last: false,
+                nested: None,
+            })
+        });
+        let closes = Rc::new(Cell::new(0));
+        let close_count = closes.clone();
+        let weak_body = f.body.downgrade();
+        let inner = f.window.update(|_, cx| {
+            cx.new(|cx| {
+                Dialog::new(cx)
+                    .id("inner-modal")
+                    .title("Inner modal")
+                    .show_close_button(false)
+                    .close_on_backdrop_click(false)
+                    .content_builder(move || inner_body.clone())
+                    .on_close(move |_, cx| {
+                        close_count.set(close_count.get() + 1);
+                        let _ = weak_body.update(cx, |body, cx| {
+                            body.nested = None;
+                            cx.notify();
+                        });
+                    })
+            })
+        });
+        f.window.update(|window, cx| {
+            f.body.update(cx, |body, cx| {
+                body.nested = Some(inner);
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            assert!(window.accessibility_tree().nodes.values().any(|node| {
+                node.role == AccessibilityRole::Dialog
+                    && node.label.as_deref() == Some("Inner modal")
+            }));
+            assert_button_inventory(
+                window,
+                &[
+                    "Outside before",
+                    "Outside after",
+                    "Modal first",
+                    "Modal middle",
+                    "Modal last",
+                    "Inner first",
+                    "Inner middle",
+                    "Inner last",
+                ],
+            );
+        });
+        closes
+    }
+
+    #[::core::prelude::v1::test]
+    fn dialog_tab_wraps_inside_modal_with_outside_controls() {
+        let mut f = mounted();
+        focus_button(&mut f.window, "Modal last");
+        key(&mut f.window, "tab", "Modal first");
+        key(&mut f.window, "tab", "Modal last");
+    }
+
+    #[::core::prelude::v1::test]
+    fn dialog_shift_tab_wraps_inside_modal_with_outside_controls() {
+        let mut f = mounted();
+        focus_button(&mut f.window, "Modal first");
+        key(&mut f.window, "shift-tab", "Modal last");
+        key(&mut f.window, "shift-tab", "Modal first");
+    }
+
+    #[::core::prelude::v1::test]
+    fn dialog_tab_uses_current_disabled_and_removed_children() {
+        let mut f = mounted();
+        let removed = f.window.update(|window, _| button_id(window, "Modal last"));
+        focus_button(&mut f.window, "Modal first");
+        f.window.update(|window, cx| {
+            f.body.update(cx, |body, cx| {
+                body.middle_disabled = false;
+                body.omit_last = true;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            assert!(window.accessibility_tree().get(removed).is_none());
+            assert!(!window.has_accessibility_action_handler(removed, AccessibilityAction::Focus));
+            let middle = window
+                .accessibility_tree()
+                .get(button_id(window, "Modal middle"))
+                .unwrap();
+            assert!(!middle.states.contains(AccessibilityState::DISABLED));
+            assert_button_inventory(
+                window,
+                &[
+                    "Outside before",
+                    "Outside after",
+                    "Modal first",
+                    "Modal middle",
+                ],
+            );
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                removed,
+                AccessibilityAction::Focus,
+            ));
+        });
+        f.window.run_until_parked();
+        f.window.update(|window, cx| window.draw(cx).clear());
+        assert_focused(&mut f.window, "Modal first");
+        key(&mut f.window, "tab", "Modal middle");
+        key(&mut f.window, "tab", "Modal first");
+    }
+
+    #[::core::prelude::v1::test]
+    fn dialog_nested_modal_has_the_innermost_tab_scope() {
+        let mut f = mounted();
+        let _inner_closes = add_nested(&mut f);
+        focus_button(&mut f.window, "Inner last");
+        key(&mut f.window, "tab", "Inner first");
+        key(&mut f.window, "shift-tab", "Inner last");
+        assert_eq!(f._closes.get(), 0);
+    }
+}
+
+#[cfg(test)]
+mod empty_dialog_focus_mounted {
+    use super::*;
+    use crate::components::button::Button;
+    use kael::{TestAppContext, VisualTestContext};
+
+    struct EmptyHost {
+        modal: Option<Entity<Dialog>>,
+    }
+    impl Render for EmptyHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .relative()
+                .size_full()
+                .child(
+                    Button::new("empty-modal-opener", "Empty modal opener").on_click(|_, _, _| {}),
+                )
+                .child(Button::new("empty-modal-after", "Empty modal after").on_click(|_, _, _| {}))
+                .children(self.modal.clone())
+        }
+    }
+
+    fn assert_empty_root(
+        window: &mut VisualTestContext,
+        modal: &Entity<Dialog>,
+        expected: Option<AccessibilityId>,
+    ) -> AccessibilityId {
+        window.update(|window, cx| {
+            assert!(window.is_window_active());
+            assert!(window.focused(cx).is_some());
+            assert!(
+                modal.read(cx).focus_handle.is_focused(window),
+                "the actual empty-modal handle must own focus"
+            );
+            let tree = window.accessibility_tree();
+            let roots = tree
+                .nodes
+                .values()
+                .filter(|node| {
+                    node.role == AccessibilityRole::Dialog
+                        && node.label.as_deref() == Some("Empty Dialog")
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(roots.len(), 1);
+            let root = roots[0].id;
+            if let Some(expected) = expected {
+                assert_eq!(root, expected, "semantic identity must survive traversal");
+            }
+            assert_eq!(tree.focused_node_count(), 1, "one semantic focus owner");
+            assert_eq!(tree.focused_node(), Some(root));
+            let mut buttons = tree
+                .nodes
+                .values()
+                .filter(|node| node.role == AccessibilityRole::Button)
+                .map(|node| node.label.as_deref().unwrap())
+                .collect::<Vec<_>>();
+            buttons.sort_unstable();
+            assert_eq!(
+                buttons,
+                ["Empty modal after", "Empty modal opener"],
+                "no hidden close/content tab stops"
+            );
+            let export = tree.to_accesskit_tree_update(None, None);
+            assert_eq!(
+                export.focus.0, root.0,
+                "actual AccessKit focus must name the semantic Dialog"
+            );
+            assert!(export.nodes.iter().any(|(id, _)| id.0 == root.0));
+            root
+        })
+    }
+
+    #[::core::prelude::v1::test]
+    fn empty_dialog_tab_and_shift_tab_keep_one_exported_dialog_focus_owner() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let (host, borrowed) = cx.add_window_view(|_, _| EmptyHost { modal: None });
+        let mut window = borrowed.clone();
+        window.simulate_resize(size(px(640.0), px(480.0)));
+        window.deactivate_window();
+        window.update(|window, _| window.activate_window());
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(window.is_window_active());
+            let opener = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| {
+                    node.role == AccessibilityRole::Button
+                        && node.label.as_deref() == Some("Empty modal opener")
+                })
+                .unwrap()
+                .id;
+            assert!(window.has_accessibility_action_handler(opener, AccessibilityAction::Focus));
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                opener,
+                AccessibilityAction::Focus,
+            ));
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            assert_eq!(tree.focused_node_count(), 1);
+            assert_eq!(
+                tree.get(tree.focused_node().unwrap())
+                    .unwrap()
+                    .label
+                    .as_deref(),
+                Some("Empty modal opener")
+            );
+            assert!(window.focused(cx).is_some());
+        });
+        let modal = window.update(|_, cx| {
+            cx.new(|cx| {
+                Dialog::new(cx)
+                    .id("empty-dialog-root")
+                    .title("Empty Dialog")
+                    .show_close_button(false)
+                    .close_on_backdrop_click(false)
+            })
+        });
+        window.update(|window, cx| {
+            host.update(cx, |host, cx| {
+                host.modal = Some(modal.clone());
+                cx.notify();
+            });
+            window.draw(cx).clear();
+        });
+        let root = assert_empty_root(&mut window, &modal, None);
+        for key in ["tab", "shift-tab", "tab", "tab", "shift-tab", "shift-tab"] {
+            window.simulate_keystrokes(key);
+            window.run_until_parked();
+            window.update(|window, cx| window.draw(cx).clear());
+            assert_empty_root(&mut window, &modal, Some(root));
+        }
+        window.update(|window, _| window.remove_window());
+        drop(modal);
+        drop(host);
+        drop(window);
+        cx.quit();
+    }
+}
+
+// Investigate render-time autofocus after an independently retained opener is cached.
+#[cfg(test)]
+mod cached_opener_dialog_focus {
+    use super::*;
+    use crate::components::button::Button;
+    use kael::{AnyView, StyleRefinement, TestAppContext};
+    use std::{cell::Cell, rc::Rc};
+
+    struct CachedOpener {
+        renders: Rc<Cell<usize>>,
+    }
+
+    impl Render for CachedOpener {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.renders.set(self.renders.get().checked_add(1).unwrap());
+            div().size_full().child(
+                Button::new("cached-modal-opener", "Cached modal opener").on_click(|_, _, _| {}),
+            )
+        }
+    }
+
+    struct Host {
+        opener: Entity<CachedOpener>,
+        modal: Option<Entity<Dialog>>,
+        control_epoch: usize,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let mut style = StyleRefinement::default();
+            style.size.width = Some(px(200.0).into());
+            style.size.height = Some(px(40.0).into());
+            div()
+                .relative()
+                .size_full()
+                .child(AnyView::from(self.opener.clone()).cached(style))
+                .children(self.modal.clone())
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn cached_opener_replay_after_dialog_render_autofocus_has_current_semantic_focus() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let renders = Rc::new(Cell::new(0));
+        let opener = cx.new({
+            let renders = renders.clone();
+            move |_| CachedOpener { renders }
+        });
+        let (host, borrowed) = cx.add_window_view({
+            let opener = opener.clone();
+            move |_, _| Host {
+                opener,
+                modal: None,
+                control_epoch: 0,
+            }
+        });
+        let mut window = borrowed.clone();
+        window.simulate_resize(size(px(640.0), px(480.0)));
+        window.deactivate_window();
+        window.update(|window, _| window.activate_window());
+        window.run_until_parked();
+        let opener_id = window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(window.is_window_active());
+            let matches = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .filter(|node| {
+                    node.role == AccessibilityRole::Button
+                        && node.label.as_deref() == Some("Cached modal opener")
+                })
+                .map(|node| node.id)
+                .collect::<Vec<_>>();
+            assert_eq!(matches.len(), 1);
+            let id = matches[0];
+            assert!(window.has_accessibility_action_handler(id, AccessibilityAction::Focus));
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                id,
+                AccessibilityAction::Focus,
+            ));
+            id
+        });
+        window.run_until_parked();
+        let opener_bounds = window.update(|window, cx| {
+            // Native Focus refreshes caches. Establish the settled, focused
+            // cache before either reuse assertion; this is setup, not a rescue
+            // draw after the modal has mounted.
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            assert_eq!(tree.focused_node_count(), 1);
+            assert_eq!(tree.focused_node(), Some(opener_id));
+            let bounds = tree.get(opener_id).unwrap().bounds;
+            assert!(bounds.is_some());
+            bounds
+        });
+        let settled_renders = renders.get();
+        assert!(settled_renders > 0);
+        window.update(|window, cx| {
+            host.update(cx, |host, cx| {
+                host.control_epoch += 1;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            assert_eq!(
+                renders.get(),
+                settled_renders,
+                "fixture eligibility: Host-only control must reuse the cached opener",
+            );
+            let tree = window.accessibility_tree();
+            assert_eq!(tree.get(opener_id).unwrap().bounds, opener_bounds);
+            assert_eq!(tree.focused_node_count(), 1);
+            assert_eq!(tree.focused_node(), Some(opener_id));
+        });
+        let modal = window.update(|_, cx| {
+            cx.new(|cx| {
+                Dialog::new(cx)
+                    .id("cached-opener-dialog")
+                    .title("Cached opener Dialog")
+                    .show_close_button(false)
+                    .close_on_backdrop_click(false)
+            })
+        });
+        window.update(|window, cx| {
+            host.update(cx, |host, cx| {
+                host.modal = Some(modal.clone());
+                cx.notify();
+            });
+            // Exactly one mount draw. Dialog autofocus happens in its Render;
+            // no direct focus call, defer, timer, trap or follow-up draw here.
+            window.draw(cx).clear();
+            assert_eq!(
+                renders.get(),
+                settled_renders,
+                "fixture eligibility: mount must preserve actual cached-opener reuse",
+            );
+            assert!(modal.read(cx).focus_handle.is_focused(window));
+            let tree = window.accessibility_tree();
+            assert_eq!(tree.get(opener_id).unwrap().bounds, opener_bounds);
+            let dialogs = tree
+                .nodes
+                .values()
+                .filter(|node| {
+                    node.role == AccessibilityRole::Dialog
+                        && node.label.as_deref() == Some("Cached opener Dialog")
+                })
+                .map(|node| node.id)
+                .collect::<Vec<_>>();
+            assert_eq!(dialogs.len(), 1);
+            let dialog = dialogs[0];
+            assert_eq!(tree.focused_node_count(), 1, "one exported focus owner");
+            assert_eq!(tree.focused_node(), Some(dialog));
+            let export = tree.to_accesskit_tree_update(None, None);
+            assert_eq!(export.focus.0, dialog.0);
+            assert!(export.nodes.iter().any(|(id, _)| id.0 == dialog.0));
+        });
+        window.update(|window, _| window.remove_window());
+        drop(modal);
+        drop(host);
+        drop(opener);
+        drop(window);
+        cx.quit();
+    }
+}
+
+// Investigate render-time autofocus after an independently retained opener is cached.
+#[cfg(test)]
+mod cached_opener_paint_gap_policy {
+    use super::*;
+    use crate::components::button::Button;
+    use kael::{AnyView, StyleRefinement, TestAppContext};
+    use std::{cell::Cell, rc::Rc};
+
+    struct CachedOpener {
+        renders: Rc<Cell<usize>>,
+    }
+
+    impl Render for CachedOpener {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.renders.set(self.renders.get().checked_add(1).unwrap());
+            div().size_full().child(
+                Button::new("cached-modal-opener", "Cached modal opener").on_click(|_, _, _| {}),
+            )
+        }
+    }
+
+    struct Host {
+        opener: Entity<CachedOpener>,
+        modal: Option<Entity<Dialog>>,
+        control_epoch: usize,
+        hidden: bool,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let mut style = StyleRefinement::default();
+            style.size.width = Some(px(200.0).into());
+            style.size.height = Some(px(40.0).into());
+            div()
+                .relative()
+                .size_full()
+                .child(
+                    div()
+                        .id("cached-opener-visibility")
+                        .w(px(200.0))
+                        .h(px(40.0))
+                        .when(self.hidden, |this| this.invisible())
+                        .child(AnyView::from(self.opener.clone()).cached(style)),
+                )
+                .children(self.modal.clone())
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn cached_opener_rebuilds_after_hidden_paint_gap_then_reuses_for_dialog_autofocus() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let renders = Rc::new(Cell::new(0));
+        let opener = cx.new({
+            let renders = renders.clone();
+            move |_| CachedOpener { renders }
+        });
+        let (host, borrowed) = cx.add_window_view({
+            let opener = opener.clone();
+            move |_, _| Host {
+                opener,
+                modal: None,
+                control_epoch: 0,
+                hidden: false,
+            }
+        });
+        let mut window = borrowed.clone();
+        window.simulate_resize(size(px(640.0), px(480.0)));
+        window.deactivate_window();
+        window.update(|window, _| window.activate_window());
+        window.run_until_parked();
+        let opener_id = window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(window.is_window_active());
+            let matches = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .filter(|node| {
+                    node.role == AccessibilityRole::Button
+                        && node.label.as_deref() == Some("Cached modal opener")
+                })
+                .map(|node| node.id)
+                .collect::<Vec<_>>();
+            assert_eq!(matches.len(), 1);
+            let id = matches[0];
+            assert!(window.has_accessibility_action_handler(id, AccessibilityAction::Focus));
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                id,
+                AccessibilityAction::Focus,
+            ));
+            id
+        });
+        window.run_until_parked();
+        let opener_bounds = window.update(|window, cx| {
+            // Native Focus refreshes caches. Establish the settled, focused
+            // cache before either reuse assertion; this is setup, not a rescue
+            // draw after the modal has mounted.
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            assert_eq!(tree.focused_node_count(), 1);
+            assert_eq!(tree.focused_node(), Some(opener_id));
+            let bounds = tree.get(opener_id).unwrap().bounds;
+            assert!(bounds.is_some());
+            bounds
+        });
+        let settled_renders = renders.get();
+        assert!(settled_renders > 0);
+        window.update(|window, cx| {
+            host.update(cx, |host, cx| {
+                host.control_epoch += 1;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            assert_eq!(
+                renders.get(),
+                settled_renders,
+                "fixture eligibility: Host-only control must reuse the cached opener",
+            );
+            let tree = window.accessibility_tree();
+            assert_eq!(tree.get(opener_id).unwrap().bounds, opener_bounds);
+            assert_eq!(tree.focused_node_count(), 1);
+            assert_eq!(tree.focused_node(), Some(opener_id));
+        });
+        window.update(|window, cx| {
+            host.update(cx, |host, cx| {
+                host.hidden = true;
+                cx.notify();
+            });
+            // One hidden draw retains the child Entity and its layout slot.
+            window.draw(cx).clear();
+            assert_eq!(
+                renders.get(),
+                settled_renders,
+                "fixture eligibility: hiding must retain the already cached child",
+            );
+            let tree = window.accessibility_tree();
+            assert!(
+                tree.get(opener_id).is_none(),
+                "fixture eligibility: the hidden cached opener must not be painted",
+            );
+            assert!(
+                tree.nodes.values().all(|node| {
+                    node.role != AccessibilityRole::Button
+                        || node.label.as_deref() != Some("Cached modal opener")
+                }),
+                "fixture eligibility: no replacement hidden opener semantic is allowed",
+            );
+        });
+        let shown_renders = window.update(|window, cx| {
+            host.update(cx, |host, cx| {
+                host.hidden = false;
+                cx.notify();
+            });
+            // A skipped paint invalidates its old frame ranges. One show draw
+            // must rebuild exactly once without notifying/replacing the child.
+            window.draw(cx).clear();
+            assert_eq!(
+                renders.get(),
+                settled_renders.checked_add(1).unwrap(),
+                "paint-gap policy: one show draw must rebuild the cached child once",
+            );
+            let tree = window.accessibility_tree();
+            let shown = tree
+                .get(opener_id)
+                .expect("fixture eligibility: cached semantic identity must be restored");
+            assert_eq!(shown.bounds, opener_bounds);
+            assert_eq!(shown.label.as_deref(), Some("Cached modal opener"));
+            assert_eq!(tree.focused_node_count(), 1);
+            assert_eq!(tree.focused_node(), Some(opener_id));
+            renders.get()
+        });
+        let modal = window.update(|_, cx| {
+            cx.new(|cx| {
+                Dialog::new(cx)
+                    .id("cached-opener-dialog")
+                    .title("Cached opener Dialog")
+                    .show_close_button(false)
+                    .close_on_backdrop_click(false)
+            })
+        });
+        window.update(|window, cx| {
+            host.update(cx, |host, cx| {
+                host.modal = Some(modal.clone());
+                cx.notify();
+            });
+            // Exactly one mount draw. Dialog autofocus happens in its Render;
+            // no direct focus call, defer, timer, trap or follow-up draw here.
+            window.draw(cx).clear();
+            assert_eq!(
+                renders.get(),
+                shown_renders,
+                "fixture eligibility: mount must reuse the freshly rebuilt opener cache",
+            );
+            assert!(modal.read(cx).focus_handle.is_focused(window));
+            let tree = window.accessibility_tree();
+            assert_eq!(tree.get(opener_id).unwrap().bounds, opener_bounds);
+            let dialogs = tree
+                .nodes
+                .values()
+                .filter(|node| {
+                    node.role == AccessibilityRole::Dialog
+                        && node.label.as_deref() == Some("Cached opener Dialog")
+                })
+                .map(|node| node.id)
+                .collect::<Vec<_>>();
+            assert_eq!(dialogs.len(), 1);
+            let dialog = dialogs[0];
+            assert_eq!(tree.focused_node_count(), 1, "one exported focus owner");
+            assert_eq!(tree.focused_node(), Some(dialog));
+            let export = tree.to_accesskit_tree_update(None, None);
+            assert_eq!(export.focus.0, dialog.0);
+            assert!(export.nodes.iter().any(|(id, _)| id.0 == dialog.0));
+        });
+        window.update(|window, _| window.remove_window());
+        drop(modal);
+        drop(host);
+        drop(opener);
+        drop(window);
+        cx.quit();
     }
 }

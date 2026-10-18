@@ -1,5 +1,6 @@
 #[cfg(any(feature = "inspector", debug_assertions))]
 use crate::Inspector;
+use crate::asset_cache::AssetConsumer;
 use crate::{
     AbsoluteLength, Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App,
     AppContext, Arena, Asset, AsyncWindowContext, AvailableSpace, Background, BlendMode,
@@ -3150,16 +3151,40 @@ pub(crate) struct TooltipRequest {
     tooltip: AnyTooltip,
 }
 
+pub(crate) type DeferredAccessibilityContext = (
+    Option<crate::AccessibilityId>,
+    // Cache scope identity and its normalized external parent, if scoped.
+    Option<(crate::AccessibilityId, crate::AccessibilityId)>,
+);
+pub(crate) type DeferredAccessibilityState = Rc<Cell<DeferredAccessibilityContext>>;
+
 pub(crate) struct DeferredDraw {
     current_view: EntityId,
     priority: usize,
     parent_node: DispatchNodeId,
+    accessibility_context: DeferredAccessibilityState,
+    accessibility_nodes: Option<Arc<[crate::AccessibilityNode]>>,
     element_id_stack: SmallVec<[ElementId; 32]>,
     text_style_stack: SmallVec<[TextStyleRefinement; 4]>,
     element: Option<AnyElement>,
     absolute_offset: Point<Pixels>,
     prepaint_range: Range<PrepaintStateIndex>,
     paint_range: Range<PaintIndex>,
+}
+
+struct AccessibilityCacheScope(crate::AccessibilityId);
+
+#[derive(Clone, Copy)]
+struct AccessibilityScopeContext {
+    id: crate::AccessibilityId,
+    external_parent: crate::AccessibilityId,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+struct AnonymousAccessibilityOwner {
+    view: Option<EntityId>,
+    cache: Option<crate::AccessibilityId>,
+    parent: crate::AccessibilityId,
 }
 
 pub(crate) struct Frame {
@@ -3361,6 +3386,8 @@ pub struct Window {
     pub(crate) tooltip_bounds: Option<TooltipBounds>,
     next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>>,
     pending_animation_frame_entities: Rc<RefCell<FxHashSet<EntityId>>>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) painted_styled_text: Option<Vec<(SharedString, Bounds<Pixels>, Bounds<Pixels>)>>,
     pub(crate) dirty_views: FxHashSet<EntityId>,
     focus_listeners: SubscriberSet<(), AnyWindowFocusListener>,
     pub(crate) focus_lost_listeners: SubscriberSet<(), AnyObserver>,
@@ -3395,23 +3422,50 @@ pub struct Window {
     pub(crate) client_inset: Option<Pixels>,
     pub(crate) accessibility_tree: crate::AccessibilityTree,
     accessibility_parent_stack: SmallVec<[crate::AccessibilityId; 16]>,
-    accessibility_path_ids: FxHashMap<(crate::AccessibilityId, u32), crate::AccessibilityId>,
-    accessibility_child_ordinals: FxHashMap<crate::AccessibilityId, u32>,
+    accessibility_scope: Option<AccessibilityScopeContext>,
+    accessibility_path_ids: FxHashMap<(AnonymousAccessibilityOwner, u32), crate::AccessibilityId>,
+    // Only painted tracked semantics; raw IDs retain no FocusHandle or Entity.
+    // Retained entries also describe nodes replayed from subtree caches.
+    accessibility_focus_handles: FxHashMap<crate::AccessibilityId, FocusId>,
+    accessibility_child_ordinals: FxHashMap<AnonymousAccessibilityOwner, u32>,
     pub(crate) accessibility_announcements: Vec<String>,
     accessibility_action_router: crate::AccessibilityActionRouter,
+    accessibility_snapshots: std::collections::HashMap<
+        crate::AccessibilityId,
+        std::sync::Arc<crate::AccessibilitySnapshot>,
+    >,
     pending_accessibility_actions: Vec<crate::AccessibilityActionRequest>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     inspector: Option<Entity<Inspector>>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     frame_timeline: crate::FrameTimeline,
+    // Cache ranges refer only to the preceding completed draw in every build.
+    cache_paint_epoch: u64,
     #[cfg(any(feature = "inspector", debug_assertions))]
     frame_counter: u64,
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    frame_submissions: std::collections::VecDeque<WindowFrameSubmission>,
     frame_view_render_us: u64,
     frame_taffy_compute_us: u64,
     frame_layout_nodes: u64,
     frame_layout_measure_count: u64,
     frame_layout_measure_us: u64,
     reuse_layout_on_next_frame: bool,
+}
+
+/// CPU-side submission of a newly drawn frame to the native/browser platform.
+/// Available with `inspector` or in debug builds. A submission is distinct from
+/// GPU completion and compositor presentation; those timings require native
+/// GPU/compositor instrumentation.
+#[cfg(any(feature = "inspector", debug_assertions))]
+#[derive(Clone, Copy, Debug)]
+pub struct WindowFrameSubmission {
+    /// The corresponding draw record's frame number.
+    pub frame_number: u64,
+    /// Monotonic time when the platform draw/submission returned.
+    pub submitted_at: Instant,
+    /// CPU time spent in platform draw/submission, in microseconds.
+    pub duration_us: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -3839,6 +3893,8 @@ impl Window {
             next_hitbox_id: HitboxId(0),
             next_tooltip_id: TooltipId::default(),
             tooltip_bounds: None,
+            #[cfg(any(test, feature = "test-support"))]
+            painted_styled_text: None,
             dirty_views: FxHashSet::default(),
             focus_listeners: SubscriberSet::new(),
             focus_lost_listeners: SubscriberSet::new(),
@@ -3875,18 +3931,24 @@ impl Window {
                 crate::AccessibilityRole::Window,
             )),
             accessibility_parent_stack: SmallVec::new(),
+            accessibility_scope: None,
             accessibility_path_ids: FxHashMap::default(),
+            accessibility_focus_handles: FxHashMap::default(),
             accessibility_child_ordinals: FxHashMap::default(),
             accessibility_announcements: Vec::new(),
             accessibility_action_router: crate::AccessibilityActionRouter::new(),
+            accessibility_snapshots: std::collections::HashMap::new(),
             pending_accessibility_actions: Vec::new(),
             image_cache_stack: SmallVec::new(),
             #[cfg(any(feature = "inspector", debug_assertions))]
             inspector: None,
             #[cfg(any(feature = "inspector", debug_assertions))]
             frame_timeline: crate::FrameTimeline::new(),
+            cache_paint_epoch: 0,
             #[cfg(any(feature = "inspector", debug_assertions))]
             frame_counter: 0,
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            frame_submissions: std::collections::VecDeque::new(),
             frame_view_render_us: 0,
             frame_taffy_compute_us: 0,
             frame_layout_nodes: 0,
@@ -4104,7 +4166,14 @@ impl Window {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    #[allow(dead_code)]
+    pub(crate) fn record_styled_text_paint(&mut self, text: &SharedString, bounds: Bounds<Pixels>) {
+        let clip = self.content_mask().bounds;
+        if let Some(trace) = &mut self.painted_styled_text {
+            trace.push((text.clone(), bounds, clip));
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn rendered_scene(&self) -> &Scene {
         &self.rendered_frame.scene
     }
@@ -4231,13 +4300,21 @@ impl Window {
 
     /// Return a stable identity for an accessible element without an explicit id.
     pub fn next_anonymous_accessibility_id(&mut self) -> crate::AccessibilityId {
-        let parent = self
-            .accessibility_parent_stack
-            .last()
-            .copied()
-            .unwrap_or(self.accessibility_tree.root);
-        let ordinal = self.accessibility_child_ordinals.entry(parent).or_default();
-        let key = (parent, *ordinal);
+        let parent = self.accessibility_parent();
+        // Cached output does not consume fresh-node ordinals. Keep each view
+        // and keyed cache boundary independent so replay cannot alias a sibling.
+        let owner = AnonymousAccessibilityOwner {
+            view: self.rendered_entity_stack.last().copied(),
+            cache: self.accessibility_scope.map(|scope| scope.id),
+            // External semantics may be replaced without invalidating this
+            // cache. Its roots keep their identity on both replay and repaint.
+            parent: self
+                .accessibility_scope
+                .filter(|scope| scope.external_parent == parent)
+                .map_or(parent, |scope| scope.id),
+        };
+        let ordinal = self.accessibility_child_ordinals.entry(owner).or_default();
+        let key = (owner, *ordinal);
         *ordinal = ordinal.saturating_add(1);
         *self
             .accessibility_path_ids
@@ -4246,11 +4323,102 @@ impl Window {
     }
 
     /// Register an accessibility node for the current frame.
-    pub fn register_accessibility_node(&mut self, mut node: crate::AccessibilityNode) {
+    pub fn register_accessibility_node(&mut self, node: crate::AccessibilityNode) {
+        self.register_accessibility_node_with_focus(node, None);
+    }
+
+    pub(crate) fn register_accessibility_node_with_focus(
+        &mut self,
+        mut node: crate::AccessibilityNode,
+        focus: Option<FocusId>,
+    ) {
         if node.parent.is_none() {
             node.parent = self.accessibility_parent_stack.last().copied();
         }
+        if let Some(focus) = focus {
+            self.accessibility_focus_handles.insert(node.id, focus);
+        } else {
+            // A fresh untracked registration may reuse a formerly tracked ID.
+            self.accessibility_focus_handles.remove(&node.id);
+        }
         self.next_frame.accessibility_nodes.push(node);
+    }
+
+    /// Attach actual text geometry produced during this frame's paint. The
+    /// owner must already be registered with the same immutable document.
+    /// This visits mounted frame nodes only, never logical document runs.
+    pub fn set_accessibility_text_geometry(
+        &mut self,
+        owner: crate::AccessibilityId,
+        geometry: std::sync::Arc<crate::AccessibilityTextGeometry>,
+    ) -> bool {
+        let Some(node) = self
+            .next_frame
+            .accessibility_nodes
+            .iter_mut()
+            .rev()
+            .find(|node| node.id == owner)
+        else {
+            return false;
+        };
+        if !node
+            .text_document
+            .as_ref()
+            .is_some_and(|document| document.id() == geometry.document_id())
+        {
+            return false;
+        }
+        node.text_geometry = Some(geometry);
+        true
+    }
+
+    /// Attach a retained logical subtree to its explicitly identified painted root.
+    /// Reusing the same Arc avoids copying offscreen nodes on redraws. A subtree
+    /// is released when its root is no longer painted, including cached replay.
+    pub fn register_accessibility_snapshot(
+        &mut self,
+        snapshot: std::sync::Arc<crate::AccessibilitySnapshot>,
+    ) {
+        self.accessibility_snapshots.insert(snapshot.root, snapshot);
+    }
+
+    /// Handle all supported logical subtree actions through one retained callback.
+    pub fn on_accessibility_subtree_action(
+        &mut self,
+        snapshot: std::sync::Arc<crate::AccessibilitySnapshot>,
+        handler: impl FnMut(crate::AccessibilityActionRequest, &mut Window, &mut App) + 'static,
+        cx: &mut App,
+    ) {
+        let handler = Rc::new(RefCell::new(handler));
+        let subtree_root = snapshot.root;
+        let window = Window::window_handle(self);
+        let async_cx = cx.to_async();
+        let executor = cx.foreground_executor().clone();
+        self.accessibility_action_router
+            .on_subtree(snapshot, move |request| {
+                let handler = handler.clone();
+                let mut async_cx = async_cx.clone();
+                executor
+                    .spawn(async move {
+                        let _ = window.update(&mut async_cx, |_, window, cx| {
+                            if !window
+                                .accessibility_tree
+                                .nodes
+                                .snapshots
+                                .contains_key(&subtree_root)
+                                || !window
+                                    .accessibility_tree
+                                    .get(request.node_id)
+                                    .is_some_and(|node| node.actions.contains(&request.action))
+                            {
+                                return;
+                            }
+                            (handler.borrow_mut())(request, window, cx);
+                            window.refresh();
+                        });
+                    })
+                    .detach();
+            });
     }
 
     pub(crate) fn accessibility_node_index(&self) -> usize {
@@ -4263,6 +4431,75 @@ impl Window {
 
     pub(crate) fn replay_accessibility_nodes(&mut self, nodes: &[crate::AccessibilityNode]) {
         self.next_frame.accessibility_nodes.extend_from_slice(nodes);
+    }
+
+    pub(crate) fn accessibility_parent(&self) -> crate::AccessibilityId {
+        self.accessibility_parent_stack
+            .last()
+            .copied()
+            .unwrap_or(self.accessibility_tree.root)
+    }
+
+    pub(crate) fn replay_cached_accessibility(
+        &mut self,
+        cache: &mut crate::cache::SubtreeCacheState,
+    ) {
+        let parent = self.accessibility_parent();
+        if let Some(previous) = cache.accessibility_parent.replace(parent)
+            && previous != parent
+        {
+            let window_root = self.accessibility_tree.root;
+            Self::rebase_accessibility_node_parents(
+                &mut cache.accessibility_nodes,
+                window_root,
+                previous,
+                parent,
+            );
+            // Deferred content paints after the cache's own node capture and
+            // retains its nodes separately. Rebase only this cache's draws.
+            let deferred_range = cache.prepaint_range.start.deferred_draws_index
+                ..cache.prepaint_range.end.deferred_draws_index;
+            for draw in &mut self.next_frame.deferred_draws[deferred_range] {
+                let (mut captured_parent, mut scope) = draw.accessibility_context.get();
+                if captured_parent.unwrap_or(window_root) == previous {
+                    captured_parent = Some(parent);
+                }
+                if let Some((_, scope_parent)) = scope.as_mut()
+                    && *scope_parent == previous
+                {
+                    *scope_parent = parent;
+                }
+                draw.accessibility_context.set((captured_parent, scope));
+                if let Some(nodes) = draw.accessibility_nodes.as_mut()
+                    && nodes
+                        .iter()
+                        .any(|node| node.parent.unwrap_or(window_root) == previous)
+                {
+                    // The preceding frame (or another retained owner) may
+                    // still share these nodes. Ordinary replay never copies it.
+                    Self::rebase_accessibility_node_parents(
+                        Arc::make_mut(nodes),
+                        window_root,
+                        previous,
+                        parent,
+                    );
+                }
+            }
+        }
+        self.replay_accessibility_nodes(&cache.accessibility_nodes);
+    }
+
+    fn rebase_accessibility_node_parents(
+        nodes: &mut [crate::AccessibilityNode],
+        window_root: crate::AccessibilityId,
+        previous: crate::AccessibilityId,
+        parent: crate::AccessibilityId,
+    ) {
+        for node in nodes {
+            if node.parent.unwrap_or(window_root) == previous {
+                node.parent = Some(parent);
+            }
+        }
     }
 
     /// Register an accessibility node, stamping its screen-space bounds from the
@@ -4293,12 +4530,50 @@ impl Window {
             .accessibility_nodes
             .drain(..)
             .collect::<Vec<_>>();
+        let painted: std::collections::HashSet<_> = nodes.iter().map(|node| node.id).collect();
+        self.accessibility_focus_handles
+            .retain(|id, _| painted.contains(id));
+        self.accessibility_snapshots
+            .retain(|root, _| painted.contains(root));
+        for snapshot in self.accessibility_snapshots.values() {
+            tree.nodes.attach(snapshot.clone());
+        }
         for node in &nodes {
-            tree.insert(node.clone());
+            let mut node = node.clone();
+            if let Some(focus) = self.accessibility_focus_handles.get(&node.id) {
+                // Render/prepaint can move focus after a cached sibling's
+                // replay was selected. Reconcile only tracked painted nodes
+                // against final frame focus; leave logical semantics authored.
+                node.states.set(
+                    crate::AccessibilityState::FOCUSED,
+                    self.focus == Some(*focus),
+                );
+            }
+            if let Some(base) = tree.nodes.base(&node.id) {
+                if node.children.is_empty() {
+                    node.children = base.children.clone();
+                }
+                if base.parent.is_some() {
+                    node.parent = base.parent;
+                }
+                if node.label.is_none() {
+                    node.label = base.label.clone();
+                }
+            }
+            tree.insert(node);
         }
         for node in nodes {
+            if tree
+                .nodes
+                .base(&node.id)
+                .is_some_and(|base| base.parent.is_some())
+            {
+                continue;
+            }
             tree.set_parent(node.id, node.parent.unwrap_or(root_id));
         }
+        self.accessibility_path_ids
+            .retain(|_, id| tree.nodes.contains_key(id));
         self.accessibility_tree = tree;
     }
 
@@ -4315,8 +4590,26 @@ impl Window {
         if let Some(node) = self.accessibility_tree.get_mut(id) {
             node.states |= crate::AccessibilityState::FOCUSED;
         }
-        for (_, node) in self.accessibility_tree.nodes.iter_mut() {
-            if node.id != id {
+        let mut previous = self
+            .accessibility_tree
+            .nodes
+            .frame
+            .values()
+            .filter(|node| {
+                node.id != id && node.states.contains(crate::AccessibilityState::FOCUSED)
+            })
+            .map(|node| node.id)
+            .collect::<Vec<_>>();
+        previous.extend(
+            self.accessibility_tree
+                .nodes
+                .snapshots
+                .values()
+                .filter_map(|snapshot| snapshot.focused)
+                .filter(|old| *old != id),
+        );
+        for old in previous {
+            if let Some(node) = self.accessibility_tree.get_mut(old) {
                 node.states &= !crate::AccessibilityState::FOCUSED;
             }
         }
@@ -4359,6 +4652,16 @@ impl Window {
     ) {
         self.accessibility_action_router
             .on_action(node_id, action, handler);
+    }
+
+    pub(crate) fn on_frame_accessibility_action(
+        &mut self,
+        node_id: crate::AccessibilityId,
+        action: crate::AccessibilityAction,
+        handler: impl FnMut(crate::AccessibilityActionRequest) + 'static,
+    ) {
+        self.accessibility_action_router
+            .on_frame_action(node_id, action, handler);
     }
 
     /// Return whether this window has a handler for one accessibility action.
@@ -4436,6 +4739,49 @@ impl Window {
         }
     }
 
+    /// Move focus to the next tab stop inside a rendered focus scope, wrapping.
+    ///
+    /// Membership follows the most recently rendered focus ancestry, including
+    /// cached subtrees. If the scope has no eligible stops, focus the scope itself.
+    /// An unrendered scope or a window with focus disabled leaves focus unchanged.
+    /// This selects a target before focusing and does not focus rejected stops.
+    pub fn focus_next_within(&mut self, scope: &FocusHandle) {
+        if !self.focus_enabled
+            || self
+                .rendered_frame
+                .dispatch_tree
+                .focusable_node_id(scope.id)
+                .is_none()
+        {
+            return;
+        }
+        let frame = &self.rendered_frame;
+        let next = frame.tab_stops.next_matching(self.focus.as_ref(), |id| {
+            frame.dispatch_tree.focus_contains(scope.id, id)
+        });
+        self.focus(next.as_ref().unwrap_or(scope));
+    }
+
+    /// Move focus to the previous tab stop inside a rendered focus scope, wrapping.
+    ///
+    /// See [`Window::focus_next_within`] for membership and empty-scope behavior.
+    pub fn focus_prev_within(&mut self, scope: &FocusHandle) {
+        if !self.focus_enabled
+            || self
+                .rendered_frame
+                .dispatch_tree
+                .focusable_node_id(scope.id)
+                .is_none()
+        {
+            return;
+        }
+        let frame = &self.rendered_frame;
+        let previous = frame.tab_stops.prev_matching(self.focus.as_ref(), |id| {
+            frame.dispatch_tree.focus_contains(scope.id, id)
+        });
+        self.focus(previous.as_ref().unwrap_or(scope));
+    }
+
     /// Move focus to the next tab stop within the currently focused tab group.
     pub fn focus_next_in_group(&mut self) {
         if !self.focus_enabled {
@@ -4481,6 +4827,26 @@ impl Window {
         let result = f(self);
         self.accessibility_parent_stack.pop();
         result
+    }
+
+    pub(crate) fn with_accessibility_cache_scope<R>(
+        &mut self,
+        global_id: &GlobalElementId,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint();
+        self.with_element_state::<AccessibilityCacheScope, _>(global_id, |scope, window| {
+            let scope =
+                scope.unwrap_or_else(|| AccessibilityCacheScope(crate::AccessibilityId::new()));
+            let context = AccessibilityScopeContext {
+                id: scope.0,
+                external_parent: window.accessibility_parent(),
+            };
+            let previous = mem::replace(&mut window.accessibility_scope, Some(context));
+            let result = f(window);
+            window.accessibility_scope = previous;
+            (result, scope)
+        })
     }
 
     /// Accessor for the text system.
@@ -5373,6 +5739,10 @@ impl Window {
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
         #[cfg(any(feature = "inspector", debug_assertions))]
         let frame_started_at = Instant::now();
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(trace) = self.painted_styled_text.as_mut() {
+            trace.clear();
+        }
         self.frame_view_render_us = 0;
         self.frame_taffy_compute_us = 0;
         self.frame_layout_nodes = 0;
@@ -5388,6 +5758,7 @@ impl Window {
         self.invalidator.set_dirty(false);
         self.requested_autoscroll = None;
         self.accessibility_parent_stack.clear();
+        self.accessibility_scope = None;
         self.accessibility_child_ordinals.clear();
 
         // Restore the previously-used input handler.
@@ -5417,7 +5788,7 @@ impl Window {
         self.next_frame.clear();
         self.update_accessibility_tree();
         self.accessibility_action_router
-            .retain_nodes(self.accessibility_tree.nodes.keys().copied());
+            .retain_tree(&self.accessibility_tree);
         let accessibility_actions = self
             .platform_window
             .update_accessibility_tree(&self.accessibility_tree);
@@ -5458,11 +5829,26 @@ impl Window {
         self.refreshing = false;
         self.invalidator.set_phase(DrawPhase::None);
         self.needs_present.set(true);
+        if self.sprite_atlas.needs_retirement_frames() {
+            // Retirement needs successful platform frames even when the new
+            // scene has the same checksum. This bounded drain runs outside a
+            // rendered view, so schedule a window refresh directly.
+            self.frame_skip.invalidate();
+            self.on_next_frame(|window, _| {
+                window.frame_skip.invalidate();
+                window.refresh();
+            });
+        }
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         self.record_frame_timing(frame_started_at, draw_roots_timing);
 
+        self.cache_paint_epoch = self.cache_paint_epoch.wrapping_add(1);
         ArenaClearNeeded
+    }
+
+    pub(crate) fn cache_paint_epoch(&self) -> u64 {
+        self.cache_paint_epoch
     }
 
     #[cfg(any(feature = "inspector", debug_assertions))]
@@ -5514,6 +5900,39 @@ impl Window {
         &self.frame_timeline
     }
 
+    /// The latest 300 platform submission records, in chronological order.
+    /// This measures CPU submission; it does not assert GPU completion or
+    /// compositor display. Unchanged frames skipped by damage checks have no
+    /// submission record. Borrowing this iterator does not allocate.
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub fn frame_submissions(&self) -> impl Iterator<Item = &WindowFrameSubmission> {
+        self.frame_submissions.iter()
+    }
+
+    /// Actual native device allocation counter, including other windows that
+    /// share that device. `None` means the backend lacks a counter.
+    pub fn gpu_allocated_bytes(&self) -> Option<u64> {
+        self.platform_window.gpu_allocated_bytes()
+    }
+
+    /// Enable opt-in native GPU completion and drawable presentation timing.
+    /// Returns `false` when this backend does not implement these measurements.
+    /// Enabled backends retain bounded records without polling or CPU readbacks.
+    pub fn set_gpu_frame_timing_enabled(&self, enabled: bool) -> bool {
+        self.platform_window.set_gpu_frame_timing_enabled(enabled)
+    }
+
+    /// Drain ready GPU frame timing records from this window's renderer.
+    /// Onscreen records wait for both completion and the drawable callback.
+    /// An absent presentation timestamp means no display time was reported,
+    /// including offscreen or dropped frames. GPU completion alone does not
+    /// establish display time. Backends retain at most 64 records; disabling
+    /// collection discards the session, and pressure from newer records can
+    /// discard the oldest records before collection.
+    pub fn take_gpu_frame_timings(&self) -> Vec<crate::GpuFrameTiming> {
+        self.platform_window.take_gpu_frame_timings()
+    }
+
     fn record_entities_accessed(&mut self, cx: &mut App) {
         let mut entities_ref = cx.entities.accessed_entities.borrow_mut();
         let mut entities = mem::take(entities_ref.deref_mut());
@@ -5558,7 +5977,24 @@ impl Window {
             return;
         }
 
+        #[cfg(any(feature = "inspector", debug_assertions))]
+        let submission_started = Instant::now();
         self.platform_window.draw(&self.rendered_frame.scene);
+        #[cfg(any(feature = "inspector", debug_assertions))]
+        {
+            let submitted_at = Instant::now();
+            if self.frame_submissions.len() == 300 {
+                self.frame_submissions.pop_front();
+            }
+            self.frame_submissions.push_back(WindowFrameSubmission {
+                frame_number: self.frame_counter.wrapping_sub(1),
+                submitted_at,
+                duration_us: submitted_at
+                    .duration_since(submission_started)
+                    .as_micros()
+                    .min(u128::from(u64::MAX)) as u64,
+            });
+        }
         self.needs_present.set(false);
         self.last_frame_presented_at = Instant::now();
         profiling::finish_frame!();
@@ -5796,11 +6232,31 @@ impl Window {
 
             let paint_start = self.paint_index();
             if let Some(element) = deferred_draw.element.as_mut() {
-                self.with_rendered_view(deferred_draw.current_view, |window| {
-                    element.paint(window, cx);
-                })
+                let accessibility_start = self.accessibility_node_index();
+                let mut paint = |window: &mut Window| {
+                    window.with_rendered_view(deferred_draw.current_view, |window| {
+                        element.paint(window, cx);
+                    });
+                };
+                let (parent, scope) = deferred_draw.accessibility_context.get();
+                let scope = scope.map(|(id, external_parent)| AccessibilityScopeContext {
+                    id,
+                    external_parent,
+                });
+                let previous_scope = mem::replace(&mut self.accessibility_scope, scope);
+                if let Some(parent) = parent {
+                    self.with_accessibility_parent(parent, paint);
+                } else {
+                    paint(self);
+                }
+                self.accessibility_scope = previous_scope;
+                let nodes = self.accessibility_nodes_since(accessibility_start);
+                deferred_draw.accessibility_nodes = (!nodes.is_empty()).then(|| nodes.into());
             } else {
                 self.reuse_paint(deferred_draw.paint_range.clone());
+                if let Some(nodes) = deferred_draw.accessibility_nodes.as_ref() {
+                    self.replay_accessibility_nodes(nodes);
+                }
             }
             let paint_end = self.paint_index();
             deferred_draw.paint_range = paint_start..paint_end;
@@ -5874,6 +6330,8 @@ impl Window {
                 .map(|deferred_draw| DeferredDraw {
                     current_view: deferred_draw.current_view,
                     parent_node: reused_subtree.refresh_node_id(deferred_draw.parent_node),
+                    accessibility_context: deferred_draw.accessibility_context.clone(),
+                    accessibility_nodes: deferred_draw.accessibility_nodes.clone(),
                     element_id_stack: deferred_draw.element_id_stack.clone(),
                     text_style_stack: deferred_draw.text_style_stack.clone(),
                     priority: deferred_draw.priority,
@@ -6366,40 +6824,121 @@ impl Window {
 
     /// Asynchronously load an asset, if the asset hasn't finished loading this will return None.
     /// Your view will be re-drawn once the asset has finished loading.
+    /// During drawing, a completed result is owned by the active keyed consumer
+    /// independently of completed-cache retention. That ready ownership retires
+    /// when its element/view leaves the frame; pending delivery remains weak.
+    /// Ready results include errors: ordinary LRU/clear does not retry them.
+    /// Call [`App::remove_asset`] to invalidate active consumers and retry.
     ///
     /// Note that the multiple calls to this method will only result in one `Asset::load` call at a
     /// time.
     pub fn use_asset<A: Asset>(&mut self, source: &A::Source, cx: &mut App) -> Option<A::Output> {
-        let (task, is_first) = cx.fetch_asset::<A>(source);
-        task.clone().now_or_never().or_else(|| {
-            if is_first {
-                let entity_id = self.current_view();
-                self.spawn(cx, {
-                    let task = task.clone();
-                    async move |cx| {
-                        task.await;
-
-                        cx.on_next_frame(move |_, cx| {
-                            cx.notify(entity_id);
-                        });
+        if self.has_asset_consumer_frame() {
+            match self.poll_frame_asset::<A>(source, true, cx) {
+                Ok(output) => {
+                    if output.is_none() {
+                        cx.defer_asset_retry(self.current_view());
                     }
-                })
-                .detach();
+                    return output;
+                }
+                Err(error) => {
+                    log::warn!("asset request deferred: {error}");
+                    cx.defer_asset_retry(self.current_view());
+                    return None;
+                }
             }
-
-            None
-        })
+        }
+        let (task, _) = match cx.fetch_asset_checked::<A>(source) {
+            Ok(request) => request,
+            Err(error) => {
+                log::warn!("asset request deferred: {error}");
+                cx.defer_asset_retry(self.current_view());
+                return None;
+            }
+        };
+        let output = task.now_or_never();
+        if output.is_none() {
+            // The App cache owns one completion observer. Register every view
+            // without creating detached Shared owners that outlive the view.
+            cx.defer_asset_retry(self.current_view());
+        }
+        output
     }
 
     /// Asynchronously load an asset, if the asset hasn't finished loading or doesn't exist this will return None.
     /// Your view will not be re-drawn once the asset has finished loading.
+    /// During drawing, ready ownership follows [`Self::use_asset`], including
+    /// error results, without opting into owner notifications. Outside drawing,
+    /// this retains its legacy cache-polling behavior. Use [`App::remove_asset`]
+    /// to invalidate active ready ownership for a reload.
     ///
     /// Note that the multiple calls to this method will only result in one `Asset::load` call at a
     /// time.
     pub fn get_asset<A: Asset>(&mut self, source: &A::Source, cx: &mut App) -> Option<A::Output> {
-        let (task, _) = cx.fetch_asset::<A>(source);
+        if self.has_asset_consumer_frame() {
+            return match self.poll_frame_asset::<A>(source, false, cx) {
+                Ok(output) => output,
+                Err(error) => {
+                    log::warn!("asset request deferred: {error}");
+                    None
+                }
+            };
+        }
+        let (task, _) = match cx.fetch_asset_checked::<A>(source) {
+            Ok(request) => request,
+            Err(error) => {
+                log::warn!("asset request deferred: {error}");
+                return None;
+            }
+        };
         task.now_or_never()
     }
+    fn has_asset_consumer_frame(&self) -> bool {
+        matches!(
+            self.invalidator.inner.borrow().draw_phase,
+            DrawPhase::Prepaint | DrawPhase::Paint
+        ) && !self.rendered_entity_stack.is_empty()
+    }
+
+    fn poll_frame_asset<A: Asset>(
+        &mut self,
+        source: &A::Source,
+        wake: bool,
+        cx: &mut App,
+    ) -> Result<Option<A::Output>> {
+        let source_hash = crate::hash(source);
+        let key = (TypeId::of::<A>(), source_hash);
+        let wake_view = wake.then(|| self.current_view());
+        // The generic state TypeId separates Asset implementations. Full keyed
+        // view/element namespaces separate consumers; repeated same-source calls
+        // inside one namespace intentionally share a single ready owner.
+        let id =
+            ElementId::NamedInteger(SharedString::new_static("kael-asset-consumer"), source_hash);
+        self.with_global_id(id, |global_id, window| {
+            let state_key = (
+                GlobalElementId(global_id.0.clone()),
+                TypeId::of::<AssetConsumer<A>>(),
+            );
+            let existing = window.next_frame.element_states.contains_key(&state_key)
+                || window
+                    .rendered_frame
+                    .element_states
+                    .contains_key(&state_key);
+            // Reject a new source before allocating a persistent frame cell or
+            // active-key subscription. Existing ready owners need no admission.
+            let initial_request = if existing {
+                None
+            } else {
+                Some(cx.fetch_asset_for_consumer::<A>(source, key)?)
+            };
+            window.with_element_state::<AssetConsumer<A>, _>(global_id, |consumer, _| {
+                let consumer = consumer.unwrap_or_else(|| AssetConsumer::new(key, cx));
+                let result = consumer.poll(source, key, wake_view, initial_request, cx);
+                (result, consumer)
+            })
+        })
+    }
+
     /// Obtain the current element offset. This method should only be called during the
     /// prepaint phase of element drawing.
     pub fn element_offset(&self) -> Point<Pixels> {
@@ -6629,15 +7168,27 @@ impl Window {
         absolute_offset: Point<Pixels>,
         priority: usize,
     ) {
+        self.defer_draw_with_accessibility(element, absolute_offset, priority);
+    }
+
+    pub(crate) fn defer_draw_with_accessibility(
+        &mut self,
+        element: AnyElement,
+        absolute_offset: Point<Pixels>,
+        priority: usize,
+    ) -> DeferredAccessibilityState {
         self.invalidator.debug_assert_prepaint();
         let parent_node = self
             .next_frame
             .dispatch_tree
             .active_node_id()
             .unwrap_or_else(|| panic!("deferred draw requested without an active dispatch node"));
+        let accessibility_context = Rc::new(Cell::new((None, None)));
         self.next_frame.deferred_draws.push(DeferredDraw {
             current_view: self.current_view(),
             parent_node,
+            accessibility_context: accessibility_context.clone(),
+            accessibility_nodes: None,
             element_id_stack: self.element_id_stack.clone(),
             text_style_stack: self.text_style_stack.clone(),
             priority,
@@ -6646,6 +7197,19 @@ impl Window {
             prepaint_range: PrepaintStateIndex::default()..PrepaintStateIndex::default(),
             paint_range: PaintIndex::default()..PaintIndex::default(),
         });
+        accessibility_context
+    }
+
+    pub(crate) fn capture_deferred_accessibility_context(
+        &self,
+        context: &Cell<DeferredAccessibilityContext>,
+    ) {
+        self.invalidator.debug_assert_paint();
+        context.set((
+            self.accessibility_parent_stack.last().copied(),
+            self.accessibility_scope
+                .map(|scope| (scope.id, scope.external_parent)),
+        ));
     }
 
     /// Creates a new painting layer for the specified bounds. A "layer" is a batch
@@ -6983,12 +7547,14 @@ impl Window {
 
         let raster_bounds = self.text_system().raster_bounds(&params)?;
         if !raster_bounds.is_zero() {
-            let Some(tile) =
-                self.sprite_atlas
-                    .get_or_insert_with(&params.clone().into(), &mut || {
-                        let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
-                        Ok(Some((size, Cow::Owned(bytes))))
-                    })?
+            let Some(tile) = self.sprite_atlas.get_or_insert_with_size(
+                &params.clone().into(),
+                raster_bounds.size,
+                &mut || {
+                    let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
+                    Ok(Some((size, Cow::Owned(bytes))))
+                },
+            )?
             else {
                 return Ok(());
             };
@@ -7076,12 +7642,14 @@ impl Window {
 
         let raster_bounds = self.text_system().raster_bounds(&params)?;
         if !raster_bounds.is_zero() {
-            let Some(tile) =
-                self.sprite_atlas
-                    .get_or_insert_with(&params.clone().into(), &mut || {
-                        let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
-                        Ok(Some((size, Cow::Owned(bytes))))
-                    })?
+            let Some(tile) = self.sprite_atlas.get_or_insert_with_size(
+                &params.clone().into(),
+                raster_bounds.size,
+                &mut || {
+                    let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
+                    Ok(Some((size, Cow::Owned(bytes))))
+                },
+            )?
             else {
                 return Ok(());
             };
@@ -7144,14 +7712,16 @@ impl Window {
             }),
         };
 
-        let Some(tile) =
-            self.sprite_atlas
-                .get_or_insert_with(&params.clone().into(), &mut || {
-                    let Some((size, bytes)) = cx.svg_renderer.render(&params)? else {
-                        return Ok(None);
-                    };
-                    Ok(Some((size, Cow::Owned(bytes))))
-                })?
+        let Some(tile) = self.sprite_atlas.get_or_insert_with_size(
+            &params.clone().into(),
+            params.size,
+            &mut || {
+                let Some((size, bytes)) = cx.svg_renderer.render(&params)? else {
+                    return Ok(None);
+                };
+                Ok(Some((size, Cow::Owned(bytes))))
+            },
+        )?
         else {
             return Ok(());
         };
@@ -7211,8 +7781,9 @@ impl Window {
             );
         };
 
-        let Some(atlas_tile) = self.sprite_atlas.get_or_insert_with(
+        let Some(atlas_tile) = self.sprite_atlas.get_or_insert_with_size(
             &crate::AtlasKey::IconAtlas(icon.atlas_params.clone()),
+            icon.atlas_size,
             &mut || Ok(Some((icon.atlas_size, Cow::Borrowed(icon.bytes)))),
         )?
         else {
@@ -7259,14 +7830,16 @@ impl Window {
             frame_index,
         };
 
-        let Some(tile) = self
-            .sprite_atlas
-            .get_or_insert_with(&params.into(), &mut || {
+        let Some(tile) = self.sprite_atlas.get_or_insert_with_size(
+            &params.into(),
+            data.size(frame_index),
+            &mut || {
                 let bytes = data
                     .as_bytes(frame_index)
                     .with_context(|| format!("invalid image frame index {frame_index}"))?;
                 Ok(Some((data.size(frame_index), Cow::Borrowed(bytes))))
-            })?
+            },
+        )?
         else {
             return Ok(());
         };
@@ -7314,8 +7887,177 @@ impl Window {
             order: 0,
             bounds,
             content_mask,
-            image_buffer,
+            source: crate::PaintSurfaceSource::CoreVideo(image_buffer),
         });
+    }
+
+    /// Allocate a zero-initialized GPU storage buffer. Buffers and targets share this window's 256 MiB default budget and 64 live-allocation limit.
+    #[cfg(feature = "custom-shaders")]
+    pub fn create_gpu_buffer(
+        &mut self,
+        descriptor: crate::GpuBufferDescriptor,
+    ) -> std::result::Result<crate::GpuBuffer, crate::RenderTargetError> {
+        self.platform_window.create_gpu_buffer(descriptor)
+    }
+
+    /// Check this buffer belongs to this window and remains valid.
+    #[cfg(feature = "custom-shaders")]
+    pub fn validate_gpu_buffer(
+        &self,
+        buffer: &crate::GpuBuffer,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.platform_window.validate_gpu_buffer(buffer)
+    }
+
+    /// Upload an aligned, in-bounds byte range. Both offset and length must be multiples of four.
+    #[cfg(feature = "custom-shaders")]
+    pub fn write_gpu_buffer(
+        &mut self,
+        buffer: &crate::GpuBuffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.platform_window
+            .write_gpu_buffer(buffer, offset, bytes)?;
+        self.refresh();
+        Ok(())
+    }
+
+    /// Read this entire GPU buffer after earlier queue work completes, with a bounded CPU wait.
+    #[cfg(feature = "custom-shaders")]
+    pub fn read_gpu_buffer(
+        &self,
+        buffer: &crate::GpuBuffer,
+    ) -> std::result::Result<Vec<u8>, crate::RenderTargetError> {
+        self.platform_window.read_gpu_buffer(buffer)
+    }
+
+    /// Dispatch native WGSL compute workgroups. Storage image colors must already be premultiplied linear RGBA. WebGL2 does not support compute.
+    #[cfg(feature = "custom-shaders")]
+    pub fn dispatch_compute(
+        &mut self,
+        shader: &crate::ComputeHandle,
+        bindings: &crate::ComputeBindings,
+        groups: [u32; 3],
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.platform_window
+            .dispatch_compute(shader, bindings, groups)?;
+        self.refresh();
+        Ok(())
+    }
+
+    /// Upload exactly packed pixels in the same encoding as read_render_target: canonical RGBA bytes, little-endian binary16, or R8. RGB must already be premultiplied. No color conversion is performed.
+    #[cfg(feature = "custom-shaders")]
+    pub fn write_render_target(
+        &mut self,
+        target: &crate::RenderTarget,
+        pixels: &[u8],
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.platform_window.write_render_target(target, pixels)?;
+        self.refresh();
+        Ok(())
+    }
+
+    /// Allocate a bounded GPU texture on this window's device.
+    ///
+    /// The per-window budget is 256 MiB by default, with at most 64 live
+    /// targets and storage buffers combined. Targets retain their storage until all handles and painted
+    /// scenes release them. Cross-window handles are rejected.
+    #[cfg(feature = "custom-shaders")]
+    pub fn create_render_target(
+        &mut self,
+        descriptor: crate::RenderTargetDescriptor,
+    ) -> std::result::Result<crate::RenderTarget, crate::RenderTargetError> {
+        self.platform_window.create_render_target(descriptor)
+    }
+
+    /// Check that a target is live and belongs to this window's current GPU
+    /// device, without allocating, submitting work, or reading pixels.
+    #[cfg(feature = "custom-shaders")]
+    pub fn validate_render_target(
+        &self,
+        target: &crate::RenderTarget,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.platform_window.validate_render_target(target)
+    }
+
+    /// Run a validated fragment shader over the entire target, clearing it
+    /// first. The shader returns straight linear RGBA; the target stores
+    /// premultiplied color. GPU submission is ordered before UI composition.
+    #[cfg(feature = "custom-shaders")]
+    pub fn render_shader(
+        &mut self,
+        target: &crate::RenderTarget,
+        shader: &crate::ShaderHandle,
+        bindings: &crate::ShaderBindings,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.platform_window
+            .render_shader(target, shader, bindings)?;
+        self.refresh();
+        Ok(())
+    }
+
+    /// Read tightly packed target pixels to the CPU, waiting for submitted GPU
+    /// work. Use the `render_target` element for display without readback.
+    #[cfg(feature = "custom-shaders")]
+    pub fn read_render_target(
+        &self,
+        target: &crate::RenderTarget,
+    ) -> std::result::Result<crate::RenderTargetReadback, crate::RenderTargetError> {
+        self.platform_window.read_render_target(target)
+    }
+
+    /// Change this window's target payload-byte budget. Live targets remain
+    /// valid; allocations fail while retained bytes exceed the new budget.
+    #[cfg(feature = "custom-shaders")]
+    pub fn set_render_target_byte_budget(&mut self, bytes: u64) {
+        self.platform_window.set_render_target_byte_budget(bytes);
+    }
+
+    /// Paint a custom target at the current z-index, without CPU pixel copies.
+    /// Call during the element paint phase, on the target's owning window.
+    #[cfg(feature = "custom-shaders")]
+    pub fn paint_render_target(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        target: crate::RenderTarget,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.paint_render_target_with_corners(bounds, Corners::default(), target)
+    }
+
+    /// Paint a custom target with rounded corners, preserving the surrounding
+    /// element's opacity, transform, color filter, and rounded clipping.
+    #[cfg(feature = "custom-shaders")]
+    pub fn paint_render_target_with_corners(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        target: crate::RenderTarget,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.invalidator.debug_assert_paint();
+        self.platform_window.validate_render_target(&target)?;
+        let scale_factor = self.scale_factor();
+        let bounds = bounds.scale(scale_factor);
+        let content_mask = self.content_mask().scale(scale_factor);
+        let revision = target.revision();
+        self.next_frame.scene.insert_primitive(crate::PaintSurface {
+            order: 0,
+            bounds,
+            content_mask,
+            source: crate::PaintSurfaceSource::RenderTarget {
+                target,
+                revision,
+                paint: crate::render_target::RenderTargetPaint {
+                    opacity: self.element_opacity(),
+                    corner_radii: corner_radii.map(|radius| radius.scale(scale_factor)),
+                    rounded_clip_bounds: self.rounded_clip.0,
+                    rounded_clip_radii: self.rounded_clip.1,
+                    transform: self.element_transform,
+                    color_filter: self.element_color_filter,
+                },
+            },
+        });
+        Ok(())
     }
 
     /// Register a native WebView for the next frame at the given bounds.
@@ -8775,9 +9517,15 @@ impl Window {
     /// Set a soft byte budget for this window's glyph/sprite atlas. When set, the renderer
     /// evicts least-recently-used atlas tiles down to the budget at the end of each frame,
     /// bounding glyph-atlas growth on long-running, text-churning UIs. `None` (the default)
-    /// disables eviction. Currently honored on the Metal backend.
+    /// disables soft eviction. Hard admission limits remain active. The native GPU,
+    /// browser, and GTK renderers honor this policy while protecting active resources.
     pub fn set_atlas_byte_budget(&self, budget: Option<u64>) {
         self.platform_window.set_atlas_byte_budget(budget);
+    }
+
+    pub(crate) fn shed_memory(&self, level: crate::MemoryPressureLevel) {
+        self.text_system.clear_shaped_text_cache();
+        self.platform_window.shed_memory(level);
     }
 
     /// Validate and set a soft byte budget for this window's glyph/sprite atlas.
@@ -8788,6 +9536,16 @@ impl Window {
         let budget = budget.build_checked()?;
         self.set_atlas_byte_budget(budget.max_bytes());
         Ok(budget)
+    }
+
+    /// Apply hard atlas admission limits before rasterization and texture allocation.
+    /// Existing live and in-flight resources survive a lower limit; new work is
+    /// rejected until enough storage retires. These limits are independent of
+    /// the soft LRU byte budget configured by `set_atlas_byte_budget`.
+    pub fn set_atlas_admission_limits(&self, limits: crate::AtlasAdmissionLimits) -> Result<()> {
+        self.sprite_atlas
+            .set_hard_admission_limits(limits.validate()?);
+        Ok(())
     }
 
     /// Toggle full screen status on the current window at the platform level.
@@ -9907,6 +10665,608 @@ pub fn outline(
         continuous_corners: true,
         transform: TransformationMatrix::unit(),
         blend_mode: BlendMode::Normal,
+    }
+}
+
+#[cfg(test)]
+mod accessibility_cache_tests {
+    use super::*;
+    use crate::{
+        AccessibilityAction, AccessibilityActionRequest, AccessibilityAttributes, AccessibilityId,
+        AccessibilityRole, AnyElement, AnyView, AppContext, Context, Entity, InteractiveElement,
+        IntoElement, ParentElement, Render, StyleRefinement, Styled, TestAppContext, cached,
+        canvas_with_prepaint, deferred, div,
+    };
+
+    #[derive(Clone, Copy)]
+    enum CacheKind {
+        View,
+        Element,
+    }
+
+    fn anonymous_branch(
+        cached_branch: bool,
+        deferred_branch: bool,
+        actions: Rc<Cell<usize>>,
+        paints: Rc<Cell<usize>>,
+    ) -> AnyElement {
+        let (parent, label) = if cached_branch {
+            ("Cached parent", "Cached action")
+        } else {
+            ("Fresh parent", "Fresh action")
+        };
+        let branch = div()
+            .size(px(100.0))
+            .accessibility(AccessibilityAttributes::new(AccessibilityRole::Group).label(parent))
+            .child(
+                div()
+                    .id(("explicit-neighbor", u64::from(cached_branch)))
+                    .accessibility(
+                        AccessibilityAttributes::new(AccessibilityRole::StaticText)
+                            .label("Explicit neighbor"),
+                    ),
+            )
+            .child(
+                div()
+                    .size(px(24.0))
+                    .accessibility(
+                        AccessibilityAttributes::new(AccessibilityRole::Button)
+                            .label(label)
+                            .actions(vec![AccessibilityAction::Click]),
+                    )
+                    .on_accessibility_action(AccessibilityAction::Click, move |_, _, _| {
+                        actions.set(actions.get() + 1);
+                    }),
+            )
+            .child(
+                canvas_with_prepaint(|_, _, _| (), move |_, _, _, _| paints.set(paints.get() + 1))
+                    .size(px(1.0)),
+            );
+        if deferred_branch {
+            deferred(branch).into_any_element()
+        } else {
+            branch.into_any_element()
+        }
+    }
+
+    struct CachedAnonymousView {
+        deferred: bool,
+        actions: Rc<Cell<usize>>,
+        paints: Rc<Cell<usize>>,
+    }
+
+    impl Render for CachedAnonymousView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            anonymous_branch(
+                true,
+                self.deferred,
+                self.actions.clone(),
+                self.paints.clone(),
+            )
+        }
+    }
+
+    struct AnonymousHost {
+        cached_view: Entity<CachedAnonymousView>,
+        kind: CacheKind,
+        deferred: bool,
+        fresh_first: bool,
+        generation: u64,
+        cached_actions: Rc<Cell<usize>>,
+        cached_paints: Rc<Cell<usize>>,
+        fresh_actions: Rc<Cell<usize>>,
+    }
+
+    impl Render for AnonymousHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let mut style = StyleRefinement::default();
+            style.size.width = Some(px(100.0).into());
+            style.size.height = Some(px(100.0).into());
+            let cached = match self.kind {
+                CacheKind::View => AnyView::from(self.cached_view.clone())
+                    .cached(style)
+                    .into_any_element(),
+                CacheKind::Element => cached(anonymous_branch(
+                    true,
+                    self.deferred,
+                    self.cached_actions.clone(),
+                    self.cached_paints.clone(),
+                ))
+                .id("anonymous-cache")
+                .into_any_element(),
+            };
+            let cached = div()
+                .id(("cached-slot", self.generation))
+                .absolute()
+                .top_0()
+                .left_0()
+                .size(px(100.0))
+                .child(cached)
+                .into_any_element();
+            let fresh = div()
+                .id("fresh-slot")
+                .absolute()
+                .top_0()
+                .left(px(100.0))
+                .size(px(100.0))
+                .child(anonymous_branch(
+                    false,
+                    self.deferred,
+                    self.fresh_actions.clone(),
+                    Rc::new(Cell::new(0)),
+                ))
+                .into_any_element();
+            div()
+                .id("shared-parent")
+                .size(px(200.0))
+                .accessibility(
+                    AccessibilityAttributes::new(AccessibilityRole::Group).label("Shared parent"),
+                )
+                .children(if self.fresh_first {
+                    vec![fresh, cached]
+                } else {
+                    vec![cached, fresh]
+                })
+        }
+    }
+
+    fn identities(window: &Window) -> [AccessibilityId; 4] {
+        let tree = window.accessibility_tree();
+        let find = |label| {
+            tree.nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some(label))
+                .unwrap_or_else(|| panic!("missing independent anonymous node {label}"))
+        };
+        let shared = find("Shared parent");
+        let cached_parent = find("Cached parent");
+        let cached_action = find("Cached action");
+        let fresh_parent = find("Fresh parent");
+        let fresh_action = find("Fresh action");
+        assert_eq!(shared.children.len(), 2);
+        for (parent, action) in [(cached_parent, cached_action), (fresh_parent, fresh_action)] {
+            assert_eq!(parent.parent, Some(shared.id));
+            assert_eq!(action.parent, Some(parent.id));
+            assert_eq!(parent.children.len(), 2);
+            assert!(parent.children.contains(&action.id));
+        }
+        assert_ne!(cached_parent.id, fresh_parent.id);
+        assert_ne!(cached_action.id, fresh_action.id);
+        [
+            cached_parent.id,
+            cached_action.id,
+            fresh_parent.id,
+            fresh_action.id,
+        ]
+    }
+
+    #[crate::test]
+    fn anonymous_ids_and_actions_survive_view_and_element_cache_replay(cx: &mut TestAppContext) {
+        for kind in [CacheKind::Element, CacheKind::View] {
+            for deferred in [false, true] {
+                let cached_actions = Rc::new(Cell::new(0));
+                let fresh_actions = Rc::new(Cell::new(0));
+                let paints = Rc::new(Cell::new(0));
+                let cached_view = cx.new({
+                    let actions = cached_actions.clone();
+                    let paints = paints.clone();
+                    move |_| CachedAnonymousView {
+                        deferred,
+                        actions,
+                        paints,
+                    }
+                });
+                let (host, window) = cx.add_window_view({
+                    let cached_actions = cached_actions.clone();
+                    let cached_paints = paints.clone();
+                    let fresh_actions = fresh_actions.clone();
+                    move |_, _| AnonymousHost {
+                        cached_view,
+                        kind,
+                        deferred,
+                        fresh_first: false,
+                        generation: 0,
+                        cached_actions,
+                        cached_paints,
+                        fresh_actions,
+                    }
+                });
+                let mut previous = None;
+                for (round, fresh_first) in [false, true, false].into_iter().enumerate() {
+                    let ids = window.update(|window, cx| {
+                        // Native actions refresh the prior round. Establish a fresh
+                        // baseline, then require an actual cache hit after reordering.
+                        window.draw(cx).clear();
+                        let before = paints.get();
+                        host.update(cx, |host, cx| {
+                            host.fresh_first = fresh_first;
+                            cx.notify();
+                        });
+                        window.draw(cx).clear();
+                        assert_eq!(paints.get(), before, "the cached branch must not repaint");
+                        let ids = identities(window);
+                        assert_eq!(window.accessibility_path_ids.len(), 4);
+                        ids
+                    });
+                    if let Some(previous) = previous {
+                        assert_eq!(
+                            ids, previous,
+                            "ordinary invalidation must preserve identities"
+                        );
+                    }
+                    previous = Some(ids);
+                    window.update(|window, _| {
+                        for id in [ids[1], ids[3]] {
+                            window.dispatch_accessibility_action_for_test(
+                                AccessibilityActionRequest::new(id, AccessibilityAction::Click),
+                            );
+                        }
+                    });
+                    window.run_until_parked();
+                    assert_eq!(cached_actions.get(), round + 1);
+                    assert_eq!(fresh_actions.get(), round + 1);
+                }
+                let mut retired = FxHashSet::default();
+                for generation in 1..=32 {
+                    let id = window.update(|window, cx| {
+                        host.update(cx, |host, cx| {
+                            host.generation = generation;
+                            cx.notify();
+                        });
+                        window.draw(cx).clear();
+                        assert_eq!(
+                            window.accessibility_path_ids.len(),
+                            4,
+                            "retired cache scopes must not accumulate anonymous path metadata"
+                        );
+                        identities(window)[1]
+                    });
+                    assert!(
+                        retired.insert(id),
+                        "retired identities must never be reused"
+                    );
+                }
+            }
+        }
+    }
+
+    struct ReparentedCacheHost {
+        child: Entity<CachedAnonymousView>,
+        kind: CacheKind,
+        deferred: bool,
+        parent: Option<AccessibilityId>,
+        actions: Rc<Cell<usize>>,
+        paints: Rc<Cell<usize>>,
+    }
+
+    impl Render for ReparentedCacheHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let mut style = StyleRefinement::default();
+            style.size.width = Some(px(100.0).into());
+            style.size.height = Some(px(100.0).into());
+            let child = match self.kind {
+                CacheKind::View => AnyView::from(self.child.clone())
+                    .cached(style)
+                    .into_any_element(),
+                CacheKind::Element => cached(anonymous_branch(
+                    true,
+                    self.deferred,
+                    self.actions.clone(),
+                    self.paints.clone(),
+                ))
+                .id("reparented-cache")
+                .into_any_element(),
+            };
+            div()
+                .id("stable-structural-parent")
+                .size(px(100.0))
+                .when_some(self.parent, |this, parent| {
+                    this.accessibility(
+                        AccessibilityAttributes::new(AccessibilityRole::Group)
+                            .id(parent)
+                            .label("External parent"),
+                    )
+                })
+                .child(child)
+        }
+    }
+
+    fn assert_cached_semantic_roots_rebase(
+        cx: &mut TestAppContext,
+        kind: CacheKind,
+        deferred: bool,
+    ) {
+        let parents = [
+            AccessibilityId::new(),
+            AccessibilityId::new(),
+            AccessibilityId::new(),
+        ];
+        let actions = Rc::new(Cell::new(0));
+        let paints = Rc::new(Cell::new(0));
+        let child = cx.new({
+            let actions = actions.clone();
+            let paints = paints.clone();
+            move |_| CachedAnonymousView {
+                deferred,
+                actions,
+                paints,
+            }
+        });
+        let (host, window) = cx.add_window_view({
+            let actions = actions.clone();
+            let paints = paints.clone();
+            move |_, _| ReparentedCacheHost {
+                child,
+                kind,
+                deferred,
+                parent: Some(parents[0]),
+                actions,
+                paints,
+            }
+        });
+        let find = |window: &Window, label: &str| {
+            window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some(label))
+                .expect("cached semantics must remain mounted")
+                .clone()
+        };
+        let (root, action, retained_deferred) = window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(paints.get(), 1);
+            let root = find(window, "Cached parent");
+            let action = find(window, "Cached action");
+            assert_eq!(root.parent, Some(parents[0]));
+            assert_eq!(action.parent, Some(root.id));
+            let retained = window
+                .rendered_frame
+                .deferred_draws
+                .first()
+                .and_then(|draw| draw.accessibility_nodes.clone());
+            (root.id, action.id, retained)
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(paints.get(), 1);
+            if let Some(original) = retained_deferred.as_ref() {
+                let current = window.rendered_frame.deferred_draws[0]
+                    .accessibility_nodes
+                    .as_ref()
+                    .unwrap();
+                assert!(
+                    Arc::ptr_eq(original, current),
+                    "an unchanged parent must reuse the retained node buffer"
+                );
+            }
+        });
+        let mut previous_parent = Some(parents[0]);
+        for parent in [Some(parents[1]), None, Some(parents[2]), Some(parents[1])] {
+            window.update(|window, cx| {
+                host.update(cx, |host, cx| {
+                    host.parent = parent;
+                    cx.notify();
+                });
+                window.draw(cx).clear();
+                assert_eq!(
+                    paints.get(),
+                    1,
+                    "semantic reparenting must use the actual cache hit"
+                );
+                let tree = window.accessibility_tree();
+                if let Some(previous_parent) = previous_parent {
+                    assert!(
+                        tree.get(previous_parent).is_none(),
+                        "retired external parent must be absent"
+                    );
+                }
+                let parent = parent.unwrap_or(tree.root);
+                let cached_root = find(window, "Cached parent");
+                let cached_action = find(window, "Cached action");
+                assert_eq!(cached_root.id, root);
+                assert_eq!(cached_action.id, action);
+                assert_eq!(
+                    cached_root.parent,
+                    Some(parent),
+                    "only the cached external root must move"
+                );
+                assert_eq!(
+                    cached_action.parent,
+                    Some(root),
+                    "internal semantic links must not move"
+                );
+                assert_eq!(tree.get(parent).unwrap().children.as_slice(), &[root]);
+                assert!(
+                    window.has_accessibility_action_handler(action, AccessibilityAction::Click)
+                );
+                assert_eq!(
+                    window.accessibility_path_ids.len(),
+                    2,
+                    "reparenting must not accumulate path metadata"
+                );
+                if deferred {
+                    let draw = &window.rendered_frame.deferred_draws[0];
+                    assert_eq!(draw.accessibility_context.get().0, Some(parent));
+                    let original = retained_deferred.as_ref().unwrap();
+                    assert_eq!(
+                        original.iter().find(|node| node.id == root).unwrap().parent,
+                        Some(parents[0]),
+                        "rebase must not mutate a shared retained node buffer"
+                    );
+                }
+            });
+            previous_parent = parent;
+        }
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                action,
+                AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        assert_eq!(
+            actions.get(),
+            1,
+            "native actions must survive cached semantic reparenting"
+        );
+        window.update(|window, cx| {
+            let before = paints.get();
+            window.refresh();
+            window.draw(cx).clear();
+            assert!(
+                paints.get() > before,
+                "the cache must actually repaint after invalidation"
+            );
+            assert_eq!(
+                find(window, "Cached parent").id,
+                root,
+                "ordinary repaint after rebasing must preserve anonymous identity"
+            );
+            assert_eq!(find(window, "Cached action").id, action);
+            assert_eq!(window.accessibility_path_ids.len(), 2);
+        });
+    }
+
+    #[crate::test]
+    fn cached_semantic_roots_rebase_view_direct(cx: &mut TestAppContext) {
+        assert_cached_semantic_roots_rebase(cx, CacheKind::View, false);
+    }
+
+    #[crate::test]
+    fn cached_semantic_roots_rebase_view_deferred(cx: &mut TestAppContext) {
+        assert_cached_semantic_roots_rebase(cx, CacheKind::View, true);
+    }
+
+    #[crate::test]
+    fn cached_semantic_roots_rebase_element_direct(cx: &mut TestAppContext) {
+        assert_cached_semantic_roots_rebase(cx, CacheKind::Element, false);
+    }
+
+    #[crate::test]
+    fn cached_semantic_roots_rebase_element_deferred(cx: &mut TestAppContext) {
+        assert_cached_semantic_roots_rebase(cx, CacheKind::Element, true);
+    }
+
+    struct SnapshotRebaseChild {
+        snapshot: Arc<crate::AccessibilitySnapshot>,
+        paints: Rc<Cell<usize>>,
+        actions: Rc<Cell<usize>>,
+    }
+
+    impl Render for SnapshotRebaseChild {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let snapshot = self.snapshot.clone();
+            let paints = self.paints.clone();
+            let actions = self.actions.clone();
+            canvas_with_prepaint(
+                |_, _, _| (),
+                move |_, _, window, cx| {
+                    paints.set(paints.get() + 1);
+                    window.register_accessibility_snapshot(snapshot.clone());
+                    window.register_accessibility_node(snapshot.nodes[&snapshot.root].clone());
+                    let actions = actions.clone();
+                    window.on_accessibility_subtree_action(
+                        snapshot.clone(),
+                        move |_, _, _| {
+                            actions.set(actions.get() + 1);
+                        },
+                        cx,
+                    );
+                },
+            )
+            .size(px(100.0))
+        }
+    }
+
+    struct SnapshotRebaseHost {
+        child: Entity<SnapshotRebaseChild>,
+        parent: AccessibilityId,
+    }
+
+    impl Render for SnapshotRebaseHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let mut style = StyleRefinement::default();
+            style.size.width = Some(px(100.0).into());
+            style.size.height = Some(px(100.0).into());
+            div()
+                .id("snapshot-external-parent")
+                .size(px(100.0))
+                .accessibility(
+                    AccessibilityAttributes::new(AccessibilityRole::Group).id(self.parent),
+                )
+                .child(AnyView::from(self.child.clone()).cached(style))
+        }
+    }
+
+    #[crate::test]
+    fn cached_semantic_roots_rebase_preserves_retained_snapshot_and_actions(
+        cx: &mut TestAppContext,
+    ) {
+        let mut root = crate::AccessibilityNode::new(AccessibilityRole::Group);
+        let mut logical_child = crate::AccessibilityNode::new(AccessibilityRole::Button);
+        logical_child.parent = Some(root.id);
+        logical_child.actions.push(AccessibilityAction::Click);
+        root.children.push(logical_child.id);
+        let snapshot =
+            crate::AccessibilitySnapshot::new(root.id, [root.clone(), logical_child.clone()])
+                .unwrap();
+        let paints = Rc::new(Cell::new(0));
+        let actions = Rc::new(Cell::new(0));
+        let child = cx.new({
+            let snapshot = snapshot.clone();
+            let paints = paints.clone();
+            let actions = actions.clone();
+            move |_| SnapshotRebaseChild {
+                snapshot,
+                paints,
+                actions,
+            }
+        });
+        let previous = AccessibilityId::new();
+        let next = AccessibilityId::new();
+        let (host, window) = cx.add_window_view(move |_, _| SnapshotRebaseHost {
+            child,
+            parent: previous,
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(paints.get(), 1);
+            assert_eq!(
+                window.accessibility_tree().get(root.id).unwrap().parent,
+                Some(previous)
+            );
+            host.update(cx, |host, cx| {
+                host.parent = next;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            assert_eq!(
+                paints.get(),
+                1,
+                "retained snapshots must rebase through the actual cache hit"
+            );
+            let tree = window.accessibility_tree();
+            assert!(tree.get(previous).is_none());
+            assert_eq!(tree.get(next).unwrap().children.as_slice(), &[root.id]);
+            assert_eq!(tree.get(root.id).unwrap().parent, Some(next));
+            assert_eq!(tree.get(logical_child.id).unwrap().parent, Some(root.id));
+            assert!(Arc::ptr_eq(&snapshot, &tree.nodes.snapshots[&root.id]));
+            assert!(
+                tree.get(root.id)
+                    .unwrap()
+                    .children
+                    .shares_storage(&root.children)
+            );
+            assert_eq!(snapshot.nodes[&root.id].parent, None);
+            assert_eq!(snapshot.nodes[&logical_child.id].parent, Some(root.id));
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                logical_child.id,
+                AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        assert_eq!(actions.get(), 1);
     }
 }
 

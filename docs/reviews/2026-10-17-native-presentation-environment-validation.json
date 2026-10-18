@@ -1,0 +1,184 @@
+{
+  "date": "2026-10-17",
+  "scope": "Independent Apple AppKit/MTKView and CAMetalLayer presentation environment diagnostic. No Kael production or primary workflow changes; no latency, power or framework acceptance claim.",
+  "diagnostic_source_commit": "d23773e234d32699d3a0224eb9e7a27fbaf462cc",
+  "source_files_sha256": {
+    "diagnostics/metal-presentation/probe.m": "e61912654259c3a3495181401a0290c20053aaa93bd2dd121bdfc29010413fba",
+    "diagnostics/metal-presentation/run-controls.py": "e40caf483379c8b0baef638dfa601fdf4aed4ed888f6562068f1225f2c8e98c7",
+    ".github/workflows/platform-readiness.yml": "83026ca820aa5070e3d9a14fe8941bd8ad30a8fa854b0a0d1640daf8bae4df5e"
+  },
+  "hosted": {
+    "run_url": "https://github.com/Augani/kael/actions/runs/39069182632",
+    "conclusion": "failure",
+    "artifact": {
+      "id": 12114183546,
+      "name": "independent-metal-presentation-control",
+      "compressed_bytes": 30378,
+      "github_reported_sha256": "15cabd7367e1d3c004ab02f0c4d6a6616bad81d78f5f58dce99ba763fea96b31"
+    },
+    "environment": {
+      "os": "macOS 26.6.2 (25G83)",
+      "hypervisor_present": true,
+      "metal_device": "Apple Paravirtual device",
+      "screen": "1024x768, scale1, online/active/awake before and after bounded wake assertion",
+      "session": "On-console and login complete. locked_known=0 means lock state unavailable; locked=0 must not be interpreted as unlocked."
+    },
+    "control_runs": [
+      {
+        "name": "mtk",
+        "exit_code": 1,
+        "summary": "CONTROL_RESULT mode=mtk transaction=0 handler_after_present=0 submitted=60 completed=60 callbacks=60 presented=0 dropped=60 failures=0 geometry=1 result=FAIL",
+        "fields": {
+          "mode": "mtk",
+          "transaction": "0",
+          "handler_after_present": "0",
+          "submitted": "60",
+          "completed": "60",
+          "callbacks": "60",
+          "presented": "0",
+          "dropped": "60",
+          "failures": "0",
+          "geometry": "1",
+          "result": "FAIL"
+        },
+        "passed": false
+      },
+      {
+        "name": "layer",
+        "exit_code": 1,
+        "summary": "CONTROL_RESULT mode=layer transaction=0 handler_after_present=0 submitted=60 completed=60 callbacks=60 presented=0 dropped=60 failures=0 geometry=1 result=FAIL",
+        "fields": {
+          "mode": "layer",
+          "transaction": "0",
+          "handler_after_present": "0",
+          "submitted": "60",
+          "completed": "60",
+          "callbacks": "60",
+          "presented": "0",
+          "dropped": "60",
+          "failures": "0",
+          "geometry": "1",
+          "result": "FAIL"
+        },
+        "passed": false
+      },
+      {
+        "name": "layer-transaction",
+        "exit_code": 1,
+        "summary": "CONTROL_RESULT mode=layer transaction=1 handler_after_present=0 submitted=60 completed=60 callbacks=60 presented=0 dropped=60 failures=0 geometry=1 result=FAIL",
+        "fields": {
+          "mode": "layer",
+          "transaction": "1",
+          "handler_after_present": "0",
+          "submitted": "60",
+          "completed": "60",
+          "callbacks": "60",
+          "presented": "0",
+          "dropped": "60",
+          "failures": "0",
+          "geometry": "1",
+          "result": "FAIL"
+        },
+        "passed": false
+      }
+    ],
+    "binary_sha256": "c5afe0ae78ad38dac1a38d6314c34db3041e3e4b59dbd4f78130b4768692c4cb",
+    "wake_assertion": "caffeinate -u -d -t45, terminated after controls; cannot unlock or change session permissions",
+    "independent_validation": "Root verified every preserved command log SHA and executable SHA against result.json, source against immutable diagnostic Git blobs, and all3 exit codes and raw 60 completed/callback, zero positive timestamps/zero GPU failure summaries."
+  },
+  "local": {
+    "frozen_result": {
+      "path": ".artifacts/2026-10-17-metal-presentation-probe/wake-result.json",
+      "sha256": "782ea7b236a5c2bc506c55cfb3904d4b7349704f9ee962de9958b6195478e6a8"
+    },
+    "observed": "Physical Apple M2 Pro Mac session reports locked_known=1, locked=1. Bounded display wake changed both displays to active/awake; all3 independent controls still completed60 GPU frames and callbacks but recorded zero positive presentation timestamps.",
+    "qualification": "These runs occurred during framework compilation and are correctness/environment diagnostics, not timing benchmarks. Earlier source-scoped positive physical Metal proof remains historical and does not establish current-source presentation."
+  },
+  "interpretation": [
+    "The hosted independent Apple MTKView control reproduces zero timestamps on an active/awake virtual display; a Kael-only failure is not established.",
+    "The display-sleep-only explanation is insufficient. No general paravirtual Metal limitation, specific compositor defect or production workaround is proven.",
+    "Current mandatory Kael presentation gate remains unchanged and failing until actual positive presentation evidence is obtained. Control failure is never converted into a pass, ignore or fallback acceptance."
+  ],
+  "raw_evidence": [
+    {
+      "path": ".artifacts/2026-10-17-hosted-metal-control/architecture.log",
+      "bytes": 6,
+      "sha256": "c1669e1d8edca98769c37d494b76442a1d6e5ffffd7b4da1fb63aef8ebaf6f01"
+    },
+    {
+      "path": ".artifacts/2026-10-17-hosted-metal-control/compile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".artifacts/2026-10-17-hosted-metal-control/compiler.log",
+      "bytes": 207,
+      "sha256": "6c263f4a0b378193483e8853193204a89db0eacf407199d789fb7e3125b8148b"
+    },
+    {
+      "path": ".artifacts/2026-10-17-hosted-metal-control/displays.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".artifacts/2026-10-17-hosted-metal-control/layer-transaction.log",
+      "bytes": 10698,
+      "sha256": "29654943007abe7f01c8c0f7338d489a066e61e4df2f172d760bbc91c4ee467b"
+    },
+    {
+      "path": ".artifacts/2026-10-17-hosted-metal-control/layer.log",
+      "bytes": 10698,
+      "sha256": "981eb58c851662eb105c24fa397aa69fbee6d703ef9e92f539cae023f3cd6d5c"
+    },
+    {
+      "path": ".artifacts/2026-10-17-hosted-metal-control/metal-presentation-control",
+      "bytes": 81288,
+      "sha256": "c5afe0ae78ad38dac1a38d6314c34db3041e3e4b59dbd4f78130b4768692c4cb"
+    },
+    {
+      "path": ".artifacts/2026-10-17-hosted-metal-control/mtk.log",
+      "bytes": 10694,
+      "sha256": "fa21a8201297f2df0fd41712a192045f071e71ba155b8ad53eb053c011287b0d"
+    },
+    {
+      "path": ".artifacts/2026-10-17-hosted-metal-control/os.log",
+      "bytes": 65,
+      "sha256": "cd5d6399b3785b04ceaae75045a9ca9f80f0bbc3526eff9d0c36b170ed1ec348"
+    },
+    {
+      "path": ".artifacts/2026-10-17-hosted-metal-control/post-controls.log",
+      "bytes": 234,
+      "sha256": "138abb66c85b2c398b722a58ab3bac447b825ea98e6ef6c61521b31d4790b799"
+    },
+    {
+      "path": ".artifacts/2026-10-17-hosted-metal-control/post-wake.log",
+      "bytes": 234,
+      "sha256": "1d73742fc01518374d130205ed2175c1d64ed0ac7807cad299abe3ba0789f688"
+    },
+    {
+      "path": ".artifacts/2026-10-17-hosted-metal-control/pre-wake.log",
+      "bytes": 234,
+      "sha256": "1d73742fc01518374d130205ed2175c1d64ed0ac7807cad299abe3ba0789f688"
+    },
+    {
+      "path": ".artifacts/2026-10-17-hosted-metal-control/result.json",
+      "bytes": 6758,
+      "sha256": "8da31080f7a7d86793e5cdd13fe2312e7d1bc4937ef428a9f9c777273f65d53c"
+    },
+    {
+      "path": ".artifacts/2026-10-17-hosted-metal-control/source-commit.log",
+      "bytes": 41,
+      "sha256": "dbf12e7caf10adebbecabeedea8ac905103cc84862ade036dcf32e7ce932a9b5"
+    },
+    {
+      "path": ".artifacts/2026-10-17-hosted-metal-control/virtualization.log",
+      "bytes": 23,
+      "sha256": "179859f175b8d68a470067a4ce6b5ac40fb5cff88ff5f57e5723e963fbd5f217"
+    },
+    {
+      "path": ".artifacts/2026-10-17-hosted-metal-control/wake-assertions.log",
+      "bytes": 2464,
+      "sha256": "d664e01aa3cdb8b7605ee7440343bfe42feba4c19305292180b5e9ff700aa7d3"
+    }
+  ]
+}

@@ -1,0 +1,252 @@
+{
+  "source_commit": "dacdea1a61ee46bbbebe9f1ca219df343cee8fd9",
+  "workflow_run": "https://github.com/Augani/kael/actions/runs/37134841337",
+  "artifact_id": 11279818428,
+  "raw_archive_sha256": "1bf1544b136d970356dabea956fbe4fc8d81c8474852007bdbd7ed78c944fb2a",
+  "host": {
+    "model": "Apple M1 (Virtual)",
+    "cpu_cores": 3,
+    "memory_bytes": 7516192768,
+    "os": "macOS 26.6.2",
+    "arch": "arm64",
+    "power_source": "AC",
+    "timebase_numer": 125,
+    "timebase_denom": 3
+  },
+  "scope": "80 completed same-requested-contract native runs, 4 contracts x 2 engines x 2 instrumentation modes x 5 repetitions; diagnostic only",
+  "limitations": [
+    "Requested native window dimensions were recorded; actual constrained viewport dimensions were not verified identical.",
+    "Full logical tree accessibility in Kael versus mounted rows in the pinned GPUI Kit.",
+    "No comparative GPU completion or presentation measurements.",
+    "Raw OS energy counters do not provide physical power measurements.",
+    "Virtual hosted hardware; uncontrolled system activity and incomplete display/thermal metadata.",
+    "Docking aborted after the first Kael run on an incorrect fixed-width harness ratio; remaining 19 docking runs absent.",
+    "Predates UTF-16 indexing, AT-SPI child-index caching and mounted accessibility callback retirement."
+  ],
+  "results": [
+    {
+      "contract": "navigation",
+      "engine": "kael",
+      "frame_timing": true,
+      "repetitions": 5,
+      "active_cpu_percent": 10.307452320039873,
+      "active_rss_median_bytes": 79380480,
+      "active_peak_footprint_median_bytes": 51054592,
+      "draw_p99_median_us": 13949,
+      "binary_sha256": [
+        "906a391da84862b554cb66ab91a8d914232d86bdd71725c901d12057e6e49c94"
+      ],
+      "relative_raw_directory": "native-navigation-detail"
+    },
+    {
+      "contract": "navigation",
+      "engine": "gpui-kit",
+      "frame_timing": true,
+      "repetitions": 5,
+      "active_cpu_percent": 14.367932504766774,
+      "active_rss_median_bytes": 84754432,
+      "active_peak_footprint_median_bytes": 44582848,
+      "draw_p99_median_us": 12533,
+      "binary_sha256": [
+        "5ffb6ca4a1aacafb585011939b028901fa0ed673a7afd2ab17be6c539d6b0337"
+      ],
+      "relative_raw_directory": "native-navigation-detail"
+    },
+    {
+      "contract": "navigation",
+      "engine": "kael",
+      "frame_timing": false,
+      "repetitions": 5,
+      "active_cpu_percent": 15.038542931287745,
+      "active_rss_median_bytes": 79380480.0,
+      "active_peak_footprint_median_bytes": 50661312,
+      "draw_p99_median_us": null,
+      "binary_sha256": [
+        "1dad6b4039774c2f47b924a69b9e9432c4baa5b4073674f985b0c5d3eef354ca"
+      ],
+      "relative_raw_directory": "navigation-detail-without-frame-timing"
+    },
+    {
+      "contract": "navigation",
+      "engine": "gpui-kit",
+      "frame_timing": false,
+      "repetitions": 5,
+      "active_cpu_percent": 15.416265471905907,
+      "active_rss_median_bytes": 79872000.0,
+      "active_peak_footprint_median_bytes": 37734336,
+      "draw_p99_median_us": null,
+      "binary_sha256": [
+        "105245678081d4485c1edfe18c6f1d9771176ce7ed9e5c340530ab59b29c758c"
+      ],
+      "relative_raw_directory": "navigation-detail-without-frame-timing"
+    },
+    {
+      "contract": "editor",
+      "engine": "kael",
+      "frame_timing": true,
+      "repetitions": 5,
+      "active_cpu_percent": 35.23616349097968,
+      "active_rss_median_bytes": 78315520.0,
+      "active_peak_footprint_median_bytes": 51759360,
+      "draw_p99_median_us": 10834,
+      "binary_sha256": [
+        "a0a1f0a100013dcb3c02da2727a42de7acb63d34309afc48ea8f2c9306848185"
+      ],
+      "relative_raw_directory": "native-editor-document"
+    },
+    {
+      "contract": "editor",
+      "engine": "gpui-kit",
+      "frame_timing": true,
+      "repetitions": 5,
+      "active_cpu_percent": 7.859618239484577,
+      "active_rss_median_bytes": 89276416,
+      "active_peak_footprint_median_bytes": 53348608,
+      "draw_p99_median_us": 7103,
+      "binary_sha256": [
+        "fa0da35c78369fdb182cd9dc7066acd48363e9bcb8b34673de5b873b576a3984"
+      ],
+      "relative_raw_directory": "native-editor-document"
+    },
+    {
+      "contract": "editor",
+      "engine": "kael",
+      "frame_timing": false,
+      "repetitions": 5,
+      "active_cpu_percent": 35.76042618790622,
+      "active_rss_median_bytes": 78454784.0,
+      "active_peak_footprint_median_bytes": 53807296,
+      "draw_p99_median_us": null,
+      "binary_sha256": [
+        "f7190de53750cb4178ff548b025d7cb278d1b882bf84d7e2df15826435a96e15"
+      ],
+      "relative_raw_directory": "editor-document-without-frame-timing"
+    },
+    {
+      "contract": "editor",
+      "engine": "gpui-kit",
+      "frame_timing": false,
+      "repetitions": 5,
+      "active_cpu_percent": 9.166430467466082,
+      "active_rss_median_bytes": 84729856.0,
+      "active_peak_footprint_median_bytes": 48695488,
+      "draw_p99_median_us": null,
+      "binary_sha256": [
+        "5b1b2a20d4980b6a44bb900035d18c925d52dd8586f85e0a1eb9ea55831c9963"
+      ],
+      "relative_raw_directory": "editor-document-without-frame-timing"
+    },
+    {
+      "contract": "data",
+      "engine": "kael",
+      "frame_timing": true,
+      "repetitions": 5,
+      "active_cpu_percent": 26.58888769512146,
+      "active_rss_median_bytes": 206438400,
+      "active_peak_footprint_median_bytes": 180046208,
+      "draw_p99_median_us": 17254,
+      "binary_sha256": [
+        "845bac7db0da853dbc569a105da2635bee06904083f1acda34ecd218870be6e9"
+      ],
+      "relative_raw_directory": "native-data-table"
+    },
+    {
+      "contract": "data",
+      "engine": "gpui-kit",
+      "frame_timing": true,
+      "repetitions": 5,
+      "active_cpu_percent": 22.35939220944988,
+      "active_rss_median_bytes": 147226624.0,
+      "active_peak_footprint_median_bytes": 109791488,
+      "draw_p99_median_us": 21215,
+      "binary_sha256": [
+        "02311caffab7524d0ea0acf7bedc3007b4eb1b4ff9da743cc894bd4eb32181a4"
+      ],
+      "relative_raw_directory": "native-data-table"
+    },
+    {
+      "contract": "data",
+      "engine": "kael",
+      "frame_timing": false,
+      "repetitions": 5,
+      "active_cpu_percent": 27.25379873771249,
+      "active_rss_median_bytes": 205586432,
+      "active_peak_footprint_median_bytes": 178506240,
+      "draw_p99_median_us": null,
+      "binary_sha256": [
+        "823cdf6e0bc9e8588e632192fcbcdccbb6096db0a6d48519a413b3d634a4012f"
+      ],
+      "relative_raw_directory": "data-table-without-frame-timing"
+    },
+    {
+      "contract": "data",
+      "engine": "gpui-kit",
+      "frame_timing": false,
+      "repetitions": 5,
+      "active_cpu_percent": 21.83322263353038,
+      "active_rss_median_bytes": 142934016,
+      "active_peak_footprint_median_bytes": 105335040,
+      "draw_p99_median_us": null,
+      "binary_sha256": [
+        "4945299e21790da042d36023dda349b8fceb4f780dfe97469864aa771313dbd5"
+      ],
+      "relative_raw_directory": "data-table-without-frame-timing"
+    },
+    {
+      "contract": "tree",
+      "engine": "kael",
+      "frame_timing": true,
+      "repetitions": 5,
+      "active_cpu_percent": 68.53005712934184,
+      "active_rss_median_bytes": 1614462976,
+      "active_peak_footprint_median_bytes": 2620710912,
+      "draw_p99_median_us": 7789,
+      "binary_sha256": [
+        "003eefda496ea965273ebbebe15a0b1796fd7aa86cdf131d517e82cef8483151"
+      ],
+      "relative_raw_directory": "native-virtual-tree"
+    },
+    {
+      "contract": "tree",
+      "engine": "gpui-kit",
+      "frame_timing": true,
+      "repetitions": 5,
+      "active_cpu_percent": 15.96831202797271,
+      "active_rss_median_bytes": 619282432,
+      "active_peak_footprint_median_bytes": 647712640,
+      "draw_p99_median_us": 8623,
+      "binary_sha256": [
+        "d2f9d5767d7989a2c4a7aa5ea0b43b3b9a56742bd497bd6dd0a546a1bfe74278"
+      ],
+      "relative_raw_directory": "native-virtual-tree"
+    },
+    {
+      "contract": "tree",
+      "engine": "kael",
+      "frame_timing": false,
+      "repetitions": 5,
+      "active_cpu_percent": 69.29125559842923,
+      "active_rss_median_bytes": 1721008128.0,
+      "active_peak_footprint_median_bytes": 2636341120,
+      "draw_p99_median_us": null,
+      "binary_sha256": [
+        "4da3bd8aff5e31315076910f6bcb6e9d7d77ff5b14d1c581e8dcb8ad0f92e263"
+      ],
+      "relative_raw_directory": "native-virtual-tree-without-frame-timing"
+    },
+    {
+      "contract": "tree",
+      "engine": "gpui-kit",
+      "frame_timing": false,
+      "repetitions": 5,
+      "active_cpu_percent": 15.994218040131557,
+      "active_rss_median_bytes": 632815616.0,
+      "active_peak_footprint_median_bytes": 643026816,
+      "draw_p99_median_us": null,
+      "binary_sha256": [
+        "22c8f964ae473fb18e285832f83e6b514f391a49e90da08fd6b0e3f72f18e054"
+      ],
+      "relative_raw_directory": "native-virtual-tree-without-frame-timing"
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "date": "2026-10-02",
+  "environment": {
+    "hardware": "Apple M2 Pro",
+    "system_memory_gib": 16,
+    "os": "macOS 27.2",
+    "target": "aarch64-apple-darwin",
+    "rustc": "1.97.1",
+    "before_source_commit": "a96dbd1"
+  },
+  "transient_allocation": {
+    "method": "Same maintained Cargo release benchmark with old/new assign_transient_memory source; excludes graph construction and compilation",
+    "command": "cargo bench --locked -p kael_render_graph --bench transient_allocation",
+    "resources": 30000,
+    "samples": 9,
+    "aggregation": "median",
+    "milliseconds": {
+      "overlapping": { "before": 280.899, "after": 0.429 },
+      "sequential": { "before": 0.136, "after": 0.129 },
+      "sequential_256_classes": { "before": 2.696, "after": 0.518 }
+    }
+  },
+  "gpu_budget_comparison": {
+    "method": "Identical standalone rustc -O -C lto=fat harness using extracted old/new manager source; one-byte weights and empty callbacks",
+    "resources": 30000,
+    "samples": 9,
+    "aggregation": "median",
+    "milliseconds": {
+      "register": { "before": 180.583, "after": 3.727 },
+      "touch_all": { "before": 183.458, "after": 4.560 },
+      "evict_all": { "before": 714.994, "after": 1.016 }
+    }
+  },
+  "gpu_budget_maintained": {
+    "command": "cargo bench --locked -p kael --bench gpu_budget",
+    "resources": 30000,
+    "samples": 9,
+    "aggregation": "median",
+    "milliseconds": { "register": 2.913, "touch_all": 3.282, "evict_all": 1.194 }
+  },
+  "frame_cache_comparison": {
+    "method": "Identical standalone rustc -O -C lto=fat harness using extracted old/new cache source; one-byte frames",
+    "frames": 30000,
+    "samples": 3,
+    "aggregation": "median",
+    "milliseconds": {
+      "insert": { "before": 2.546, "after": 2.632 },
+      "reverse_lookup": { "before": 0.438, "after": 0.538 },
+      "bulk_eviction": { "before": 1127.901, "after": 0.884 }
+    }
+  },
+  "frame_cache_maintained": {
+    "command": "cargo run --locked --release -p kael_media_engines --example frame_cache_pressure",
+    "samples": 7,
+    "aggregation": "median",
+    "results": [
+      { "evictions": 4096, "milliseconds": 0.122 },
+      { "evictions": 16384, "milliseconds": 0.505 },
+      { "evictions": 65536, "milliseconds": 2.601 }
+    ]
+  },
+  "metal_scratch_probe": {
+    "method": "Native GPU allocatedSize query for the previous eager texture descriptors",
+    "viewport": [3840, 2160],
+    "bytes": { "path": 33947648, "path_msaa_4x": 135790592, "cached_subtree": 33947648 },
+    "total_bytes": 203685888,
+    "total_mib": 194.25,
+    "after_quad_only_scratch_bytes": 0
+  },
+  "limits": "Synthetic CPU bookkeeping and specific GPU scratch allocations; does not measure total RSS, media decoding, application frame time, power, or cross-framework superiority. Browser and non-Metal hardware runtime evidence remains separate."
+}

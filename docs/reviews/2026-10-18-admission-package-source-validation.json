@@ -1,0 +1,409 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-10-18T02:08:18.007295+00:00",
+  "status": "THIRTY_NINE_EXTRACTED_PACKAGE_BUILDS_AND_EXACT_SOURCE_ARCHIVE_AUDIT_PASS",
+  "source_commit": "4bb5a44eff183992baafbec7b9a6742b91e6f468",
+  "version": "0.4.1",
+  "command": [
+    "bash",
+    "scripts/publish-all.sh",
+    "--preflight"
+  ],
+  "registry_upload": false,
+  "source_and_HEAD_unchanged": true,
+  "archive_count": 39,
+  "compressed_archive_bytes": 6077870,
+  "included_Rust_files": 930,
+  "included_Rust_bytes": 23517476,
+  "all_included_Rust_bytes_match_immutable_Git_commit": true,
+  "max_archive_bytes": 10485760,
+  "VCS": {
+    "all39_archived_commit_ids": "4bb5a44eff183992baafbec7b9a6742b91e6f468",
+    "dirty_field": {
+      "absent": 39,
+      "interpretation": "Unknown archived metadata; absence is not a clean or dirty checkout claim."
+    }
+  },
+  "source_scope": "Exact nine-path admission/CPU-effect follow-up plus preceding desktop quality source, committed before this fresh package run. All3014 combined-validation inputs still match; tree, mounted source-key and later component prototypes are excluded.",
+  "archive_policy": {
+    "licenses_and_notices": "Required Apache/MIT/Chromium/font/Lucide declarations and bytes match Git as appropriate for each package.",
+    "published_manifests": "Original manifests match Git, normalized dependencies contain no local paths, fork package alias/registry rewriting and ZIP9 policy verified.",
+    "fork": "All65 included source/test payloads and required provenance match immutable Git; development tools and historical ZIP8 upstream lock are excluded.",
+    "package_include_rules": "Examples/benches excluded except the two approved portable network examples; omitted source needs its separate consumer compilation evidence."
+  },
+  "packages": [
+    {
+      "name": "kael_sum_tree",
+      "archive_sha256": "3393ac831cbd108321117973c36e7cdb9496db2d01b9f1206e283a034ecee068",
+      "compressed_bytes": 24416,
+      "Rust_files": 3,
+      "Rust_bytes": 98712
+    },
+    {
+      "name": "kael_storage",
+      "archive_sha256": "01c4c58a483b1087f91b2733e14bf5038f03d5ca8053b883d74d7670dd570299",
+      "compressed_bytes": 38208,
+      "Rust_files": 14,
+      "Rust_bytes": 117915
+    },
+    {
+      "name": "kael_share",
+      "archive_sha256": "5c508ecf408bd608976630aa4f3448f7b1859aabf83fea4bf7e630309b6a1ca6",
+      "compressed_bytes": 33965,
+      "Rust_files": 7,
+      "Rust_bytes": 83466
+    },
+    {
+      "name": "kael_semantic_version",
+      "archive_sha256": "f707d5579afbe6ee5f491cd51e86793815edbd767a77638ccfa95876fca07cdc",
+      "compressed_bytes": 8004,
+      "Rust_files": 1,
+      "Rust_bytes": 7185
+    },
+    {
+      "name": "kael_secrets",
+      "archive_sha256": "0d3d7054c9e2601505bbef50377c4ee73b5d3750f56825b0e92ac8112d2650d7",
+      "compressed_bytes": 21127,
+      "Rust_files": 1,
+      "Rust_bytes": 25753
+    },
+    {
+      "name": "kael_render_graph",
+      "archive_sha256": "50cffb7d8d2c0e034cc17300da86c5e2f333495cc47e16c4174837aa5f405154",
+      "compressed_bytes": 43808,
+      "Rust_files": 1,
+      "Rust_bytes": 205886
+    },
+    {
+      "name": "kael_release",
+      "archive_sha256": "ad0fcbedaff1da448bc0a2b45a3c9fe6ecd533a351161a3774b359b784532723",
+      "compressed_bytes": 31056,
+      "Rust_files": 7,
+      "Rust_bytes": 79279
+    },
+    {
+      "name": "kael_pdf",
+      "archive_sha256": "1cdafa2d2e0dcfa7585ec2ebecd46947f1f5a562b9843ab56ceb646970b91066",
+      "compressed_bytes": 45789,
+      "Rust_files": 12,
+      "Rust_bytes": 129616
+    },
+    {
+      "name": "kael_office",
+      "archive_sha256": "0af050a3eb4aff53098803bf507dad07792f9aa1cd48c902ca9ea8ca4adc1834",
+      "compressed_bytes": 24706,
+      "Rust_files": 3,
+      "Rust_bytes": 70046
+    },
+    {
+      "name": "kael_notifications",
+      "archive_sha256": "2781039a056f97037c843e1ab2c78ca25b80357e848390ed385e33d6ee4ef03b",
+      "compressed_bytes": 36318,
+      "Rust_files": 10,
+      "Rust_bytes": 96861
+    },
+    {
+      "name": "kael_media_sys",
+      "archive_sha256": "fde159b34683d503d6b3f7b9e2dd11becd204487f5ff46fc4d38238ea45a85ea",
+      "compressed_bytes": 13255,
+      "Rust_files": 2,
+      "Rust_bytes": 24950
+    },
+    {
+      "name": "kael_markdown",
+      "archive_sha256": "7d0c11723e1e1050ed55e2381f6ea4a6d503e0acc074e8953b82b5b51d79e861",
+      "compressed_bytes": 11073,
+      "Rust_files": 1,
+      "Rust_bytes": 26410
+    },
+    {
+      "name": "kael_icons",
+      "archive_sha256": "d9af78341464f7dcb0fbaaab30d7b1fe83b0244a0625aa79964fb7adb119bcc3",
+      "compressed_bytes": 17002,
+      "Rust_files": 4,
+      "Rust_bytes": 15139
+    },
+    {
+      "name": "kael_i18n",
+      "archive_sha256": "53fe5fc3dcfcde55e105585dd5d7e079faa62c9821dcd4124b1fee8e45ce3895",
+      "compressed_bytes": 14567,
+      "Rust_files": 5,
+      "Rust_bytes": 39372
+    },
+    {
+      "name": "kael_gpu_budget",
+      "archive_sha256": "1109ecb3e2606401c2964b546e42a216f724dc1b2f32c9526ae6188f786be4f1",
+      "compressed_bytes": 9999,
+      "Rust_files": 1,
+      "Rust_bytes": 7468
+    },
+    {
+      "name": "kael_engines",
+      "archive_sha256": "f4701b488d4cdf4887213e4853b5d8e6c9f44f70097fd36dc9c64b4f0e4d3ea4",
+      "compressed_bytes": 39751,
+      "Rust_files": 9,
+      "Rust_bytes": 132580
+    },
+    {
+      "name": "kael_document",
+      "archive_sha256": "5bf00b8220f38b1183eea12999541fc0d4292f8f30f5ffbf251b359a6be98138",
+      "compressed_bytes": 51849,
+      "Rust_files": 18,
+      "Rust_bytes": 175101
+    },
+    {
+      "name": "kael_derive_refineable",
+      "archive_sha256": "09f9689d52e56205a0f51df4f4261e1b2bea923ca4df8f5170aaa44ecca69f27",
+      "compressed_bytes": 11107,
+      "Rust_files": 1,
+      "Rust_bytes": 25479
+    },
+    {
+      "name": "kael_collections",
+      "archive_sha256": "437cf752f237a290c63dee326e2609fc50a7955bec6410682dc79946db57eea5",
+      "compressed_bytes": 6824,
+      "Rust_files": 1,
+      "Rust_bytes": 1256
+    },
+    {
+      "name": "kael_cache",
+      "archive_sha256": "28ba66ac8d480d22add9ac709a5690e8f0eb2b37ccab39b41505865cabaefef2",
+      "compressed_bytes": 23362,
+      "Rust_files": 4,
+      "Rust_bytes": 68055
+    },
+    {
+      "name": "kael-media",
+      "archive_sha256": "7790798a1072a9209e3c13b2a18390954f004bd46db5fea4ed2d7a9c569206bc",
+      "compressed_bytes": 37553,
+      "Rust_files": 3,
+      "Rust_bytes": 85459
+    },
+    {
+      "name": "kael-macros",
+      "archive_sha256": "b831acc58a1488c38503d0e60493153e4bfa6479a3ccbc5778615650ed14285a",
+      "compressed_bytes": 28878,
+      "Rust_files": 21,
+      "Rust_bytes": 120315
+    },
+    {
+      "name": "kael-cli",
+      "archive_sha256": "aeddf2c65969febef0118907e101be8f0391af6cd59fc15e8c38c08c24817f38",
+      "compressed_bytes": 18925,
+      "Rust_files": 2,
+      "Rust_bytes": 43870
+    },
+    {
+      "name": "kael_net",
+      "archive_sha256": "c1066788e88a70e2e2d2ec9180466753a506f8e0bcad14e1c101093e80d5e1e6",
+      "compressed_bytes": 55059,
+      "Rust_files": 11,
+      "Rust_bytes": 174763
+    },
+    {
+      "name": "kael_media_engines",
+      "archive_sha256": "76dfb2dbd3c9d05e26163811ee6fb2b34ec70b02feccc052426eccaa4f83aca4",
+      "compressed_bytes": 85238,
+      "Rust_files": 16,
+      "Rust_bytes": 351580
+    },
+    {
+      "name": "kael_refineable",
+      "archive_sha256": "5e27850a4ec257383718b093036a0c37d7a924cad41303bb54a17bcaf90a6e9b",
+      "compressed_bytes": 11027,
+      "Rust_files": 1,
+      "Rust_bytes": 14269
+    },
+    {
+      "name": "kael_perf",
+      "archive_sha256": "74d72fd11cf88abfd9e32923e95963f872608955e110ed0e553418e601d5d3b0",
+      "compressed_bytes": 22657,
+      "Rust_files": 3,
+      "Rust_bytes": 57894
+    },
+    {
+      "name": "kael_audio",
+      "archive_sha256": "1426c5cb953e7c980655dee03b3e2ee944b9d1ec269ee8786d7e09ec79a165a4",
+      "compressed_bytes": 79178,
+      "Rust_files": 21,
+      "Rust_bytes": 271876
+    },
+    {
+      "name": "kael_util_macros",
+      "archive_sha256": "009cec797ce3a16421ab8cc9b20dc78d8aa2fd4e6e42e554074ecd583a600372",
+      "compressed_bytes": 11472,
+      "Rust_files": 1,
+      "Rust_bytes": 15257
+    },
+    {
+      "name": "kael_util",
+      "archive_sha256": "b24e31ab9d3b22d5388cdb4b0ca792b7a76d60397ae1cebc1efa6e7cdc9f700d",
+      "compressed_bytes": 68740,
+      "Rust_files": 18,
+      "Rust_bytes": 216380
+    },
+    {
+      "name": "kael_http_client",
+      "archive_sha256": "cde67c745afeb667e7f5252e282d189bf4fc1b3c4101e9cbc4d478aa24702ea7",
+      "compressed_bytes": 30639,
+      "Rust_files": 3,
+      "Rust_bytes": 50462
+    },
+    {
+      "name": "kael_diagnostics",
+      "archive_sha256": "421b43be39dd28cd85ad4499c9fe0ecabe323398912b4d59c1d45215c08c9607",
+      "compressed_bytes": 49997,
+      "Rust_files": 13,
+      "Rust_bytes": 145383
+    },
+    {
+      "name": "kael_accesskit_macos",
+      "archive_sha256": "59370edde5df728f8123372ca044c9c23a1242fc9bc2f437d5e0e8a7eaf1c500",
+      "compressed_bytes": 62686,
+      "Rust_files": 13,
+      "Rust_bytes": 156718
+    },
+    {
+      "name": "kael_accesskit_atspi_common",
+      "archive_sha256": "8d1f7a87a2704a90b91968732bdc68b31a23ad3dcfc99f22e142c049d5a0ac0f",
+      "compressed_bytes": 56362,
+      "Rust_files": 14,
+      "Rust_bytes": 172522
+    },
+    {
+      "name": "kael_accesskit_unix",
+      "archive_sha256": "c435f3666b08fd4f49d0f932aebeda2199af1f0141772a4091700829fc709843",
+      "compressed_bytes": 42387,
+      "Rust_files": 20,
+      "Rust_bytes": 85947
+    },
+    {
+      "name": "kael_accesskit_windows",
+      "archive_sha256": "c5061cfac2afc65a7e2d250e25e7f3daa10dffe471850b6c4ae25fca11e2a541",
+      "compressed_bytes": 85057,
+      "Rust_files": 14,
+      "Rust_bytes": 184709
+    },
+    {
+      "name": "kael_rasterlottie",
+      "archive_sha256": "51e95d706dd1cee4a681a70e01305fe9def11fe7f6b1378d38a4c53d43238062",
+      "compressed_bytes": 152899,
+      "Rust_files": 44,
+      "Rust_bytes": 508136
+    },
+    {
+      "name": "kael",
+      "archive_sha256": "4998feeebbfb913a68a9e76f8952da4a113f33703a1fa5253da1f8d4b4af4e5b",
+      "compressed_bytes": 2711989,
+      "Rust_files": 343,
+      "Rust_bytes": 14457462
+    },
+    {
+      "name": "kael_ui",
+      "archive_sha256": "484fcad917aa8c17db09d10d9cdafa39bb85eedcd0168325db65463f254c6896",
+      "compressed_bytes": 1960941,
+      "Rust_files": 264,
+      "Rust_bytes": 4973945
+    }
+  ],
+  "maintained_public_loader_policy_packaged": {
+    "path": "tests/lottie_loader_policy.rs",
+    "bytes": 4552,
+    "sha256": "ecff5e14d132332a035ac9df25980555ceb0ac6c54808314db9b7703a9e04058",
+    "git_source_path": "crates/kael/tests/lottie_loader_policy.rs",
+    "git_blob": "c2ebbc669f7ced45e257b7219513008bd7283703",
+    "scope": "Exact included test source only; package verification is not a new execution of this policy test."
+  },
+  "references": [
+    {
+      "path": ".artifacts/2026-10-18-package-preflight-admission/preflight.json",
+      "sha256": "ae2dcd120a0fbfc601766571e9ff6f39a7bebfdd559f91a15d6be336251c9889",
+      "bytes": 646
+    },
+    {
+      "path": ".artifacts/2026-10-18-package-preflight-admission/preflight.log",
+      "sha256": "65e3d645cc564c38fb49e48f55bcc52d0309c97c835755216de97643d2237b52",
+      "bytes": 60609
+    },
+    {
+      "path": ".artifacts/2026-10-18-package-preflight-admission/release-archives.json",
+      "sha256": "759b693c408b6f96583661e4a31cdd2f433e77939e0d4fb49509e24dbc814c02",
+      "bytes": 353703
+    },
+    {
+      "path": ".artifacts/2026-10-18-package-preflight-admission/preserved.json",
+      "sha256": "04368e724e8353d09510dd420d12e15840908a0ea3927be849cb68fbee1f6d67",
+      "bytes": 5864
+    },
+    {
+      "path": ".artifacts/2026-10-18-package-preflight-admission/source-before.json",
+      "sha256": "46136781f2ae9b5de8c1745e5419bde6ccc1f50927f90b394519e7ab6c83d851",
+      "bytes": 346171
+    },
+    {
+      "path": ".artifacts/2026-10-18-package-preflight-admission/metadata.json",
+      "sha256": "a6700041de9960e30fb88615b5daaab25b889ec83d044df3c9a2f8200ea0cdb7",
+      "bytes": 200260
+    },
+    {
+      "path": ".artifacts/2026-10-18-package-preflight-admission/run.py",
+      "sha256": "df7d961f0b3230677ca5b783b03bd7deacb7b15965dd744d042807593646cb73",
+      "bytes": 4109
+    },
+    {
+      "path": ".artifacts/2026-10-18-package-preflight-admission/project.py",
+      "sha256": "0a045457da5009ca193cfbbd393e861fa2c4f99670686a5267db11d005e0b209",
+      "bytes": 8377
+    },
+    {
+      "path": "docs/reviews/2026-10-18-asset-admission-validation.json",
+      "sha256": "4baa1f59c921db4d2f1f5814def3abc7d8ce645d483e4f2c53dde85861d2cefa",
+      "bytes": 13992
+    },
+    {
+      "path": ".artifacts/2026-10-18-desktop-admission-combined/integration.json",
+      "sha256": "b1238aa09c76251e7fc0538d1257d46d4f82a727b39f02fc7539b893844a3e90",
+      "bytes": 9353
+    },
+    {
+      "path": ".artifacts/2026-10-18-package-preflight-admission/final-source-rehash.json",
+      "sha256": "8ae9c3964050cf1446c0a4e16c3b3000b73c8ee3b4800bf07fec04c56f5b03d3",
+      "bytes": 355300
+    },
+    {
+      "path": ".artifacts/2026-10-17-verify-release-archives-v2.py",
+      "sha256": "e9055d29c2d848f948e7090df3ba08ebc6d0a6a625cad8ba2c80237dacc3dcfb",
+      "bytes": 16669
+    }
+  ],
+  "limitations": [
+    "All39 freshly extracted package builds and immutable Git source verification pass; no crates are uploaded.",
+    "This is packaging correctness and source identity, not comparative performance or physical/browser runtime evidence.",
+    "The earlier physical Metal proof bindsb279795; current hosted platform/presentation/advisory acceptance remains separate.",
+    "No later tree, mounted hash-key or modal/control prototype is included.",
+    "Known hosted/presentation and strict dependency-audit acceptance remains separate; package success does not waive those failures."
+  ],
+  "final_source_rehash_before_projection": {
+    "status": "FINAL_ELIGIBLE_INVENTORY_AND_ALL3014_SOURCE_BYTES_MATCH_BEFORE_PROJECTION",
+    "recorded_at_utc": "2026-10-18T02:08:18.430437+00:00",
+    "source_commit": "4bb5a44eff183992baafbec7b9a6742b91e6f468",
+    "combined_input_count": 3014,
+    "packaging_input_count": 3008,
+    "union_input_count": 3024,
+    "all_combined_inputs_match": true,
+    "all_packaging_inputs_match": true,
+    "same_exact_eligible_inventory": true,
+    "HEAD_matches_package_commit": true,
+    "combined_snapshot": {
+      "path": ".artifacts/2026-10-18-desktop-admission-combined/source-before.json",
+      "sha256": "81aab5160f3f65383dd45e11635fdfd23713f9a8fef81c2f24c6a8735dd67bad",
+      "bytes": 347185
+    },
+    "packaging_snapshot": {
+      "path": ".artifacts/2026-10-18-package-preflight-admission/source-before.json",
+      "sha256": "46136781f2ae9b5de8c1745e5419bde6ccc1f50927f90b394519e7ab6c83d851",
+      "bytes": 346171
+    },
+    "scope": "Observed final selected-source identity and readonly Git inventory; archived absent dirty fields remain unknown, not a whole-checkout cleanliness claim."
+  }
+}

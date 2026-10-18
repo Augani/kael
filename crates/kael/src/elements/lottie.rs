@@ -8,12 +8,22 @@ use crate::{
 };
 use std::{
     collections::VecDeque,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, LazyLock, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use util::ResultExt;
 use web_time::Instant;
 
 const DEFAULT_PREFETCH_FRAMES: usize = 5;
+
+// Limit element-owned CPU work across windows, independently of the number of
+// elements or retired requests. Each batch admits at most 256 MiB of output;
+// prepared assets, renderer scratch, ready results and frame caches are extra.
+// Two workers deliberately trade some throughput for bounded concurrent work.
+static RENDER_SLOTS: LazyLock<Arc<async_lock::Semaphore>> =
+    LazyLock::new(|| Arc::new(async_lock::Semaphore::new(2)));
 
 struct LottieStyle {
     object_fit: ObjectFit,
@@ -31,19 +41,132 @@ impl Default for LottieStyle {
     }
 }
 
-#[derive(Default)]
 struct LottieState {
     player: Option<LottiePlayer>,
     autoplay_started: bool,
     started_loading: Option<(Instant, Task<()>)>,
     pending_batch: Option<PendingFrameBatch>,
     frame_cache: LottieFrameCache,
+    render_lane: Arc<async_lock::Semaphore>,
+}
+
+impl Default for LottieState {
+    fn default() -> Self {
+        Self {
+            player: None,
+            autoplay_started: false,
+            started_loading: None,
+            pending_batch: None,
+            frame_cache: LottieFrameCache::default(),
+            render_lane: Arc::new(async_lock::Semaphore::new(1)),
+        }
+    }
 }
 
 struct PendingFrameBatch {
     render_size: crate::Size<DevicePixels>,
     requested_frames: Vec<usize>,
     result: Arc<Mutex<Option<Result<LottieRenderBatch, LottieError>>>>,
+    cancelled: Arc<AtomicBool>,
+    _task: Task<()>,
+}
+
+impl Drop for PendingFrameBatch {
+    fn drop(&mut self) {
+        // Task cancellation alone cannot preempt a background poll already
+        // rendering synchronously. Signal that poll before dropping its owner.
+        self.cancelled.store(true, Ordering::Release);
+    }
+}
+
+impl PendingFrameBatch {
+    fn spawn(
+        animation: Arc<LottieAnimation>,
+        render_size: crate::Size<DevicePixels>,
+        requested_frames: Vec<usize>,
+        render_lane: Arc<async_lock::Semaphore>,
+        render_slots: Arc<async_lock::Semaphore>,
+        cx: &App,
+        on_ready: impl FnOnce(&mut App) + 'static,
+    ) -> Self {
+        Self::spawn_with_renderer(
+            animation,
+            render_size,
+            requested_frames,
+            render_lane,
+            render_slots,
+            cx,
+            on_ready,
+            |animation, size, frames, cancelled| {
+                animation.render_batch_cancellable(size, frames, cancelled)
+            },
+        )
+    }
+
+    fn spawn_with_renderer(
+        animation: Arc<LottieAnimation>,
+        render_size: crate::Size<DevicePixels>,
+        requested_frames: Vec<usize>,
+        render_lane: Arc<async_lock::Semaphore>,
+        render_slots: Arc<async_lock::Semaphore>,
+        cx: &App,
+        on_ready: impl FnOnce(&mut App) + 'static,
+        render: impl FnOnce(
+            &LottieAnimation,
+            crate::Size<DevicePixels>,
+            &[usize],
+            &AtomicBool,
+        ) -> Result<Option<LottieRenderBatch>, LottieError>
+        + Send
+        + 'static,
+    ) -> Self {
+        let result = Arc::new(Mutex::new(None));
+        let result_slot = Arc::downgrade(&result);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = cancelled.clone();
+        let task_cancelled = cancelled.clone();
+        let frames = requested_frames.clone();
+        let task = cx.spawn(async move |cx| {
+            let rendered = cx
+                .background_executor()
+                .spawn(async move {
+                    // Keep both permits inside the worker, including while its
+                    // synchronous frame is finishing after cancellation. A new
+                    // size/source waits without blocking the UI thread.
+                    let _lane = render_lane.acquire_arc().await;
+                    if worker_cancelled.load(Ordering::Acquire) {
+                        return Ok(None);
+                    }
+                    let _slot = render_slots.acquire_arc().await;
+                    render(&animation, render_size, &frames, &worker_cancelled)
+                })
+                .await;
+            if task_cancelled.load(Ordering::Acquire) {
+                return;
+            }
+            let rendered = match rendered {
+                Ok(Some(batch)) => Ok(batch),
+                Ok(None) => return,
+                Err(error) => Err(error),
+            };
+            // The worker never owns the output slot. Retiring the element or
+            // request immediately drops any ready batch and prevents publishing.
+            if let Some(result_slot) = result_slot.upgrade()
+                && let Ok(mut guard) = result_slot.lock()
+            {
+                *guard = Some(rendered);
+                drop(guard);
+                let _ = cx.update(on_ready);
+            }
+        });
+        Self {
+            render_size,
+            requested_frames,
+            result,
+            cancelled,
+            _task: task,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -113,7 +236,9 @@ impl Lottie {
         self
     }
 
-    /// Set how many frames should be prefetched ahead of the current frame.
+    /// Set the upper bound on frames prefetched ahead of the current frame.
+    /// Large rendered frames reduce the effective prefetch and cache count to
+    /// fit the per-batch byte budget.
     pub fn prefetch_frames(mut self, prefetch_frames: usize) -> Self {
         self.prefetch_frames = prefetch_frames.max(1);
         self
@@ -147,7 +272,7 @@ impl Lottie {
         self.loop_mode
     }
 
-    /// Returns the number of frames this element prefetches ahead of playback.
+    /// Returns the configured prefetch upper bound ahead of playback.
     pub fn prefetch_frame_count(&self) -> usize {
         self.prefetch_frames
     }
@@ -267,11 +392,13 @@ impl Element for Lottie {
                                     layout_state.replacement = Some(element);
                                 }
                                 if let Some(state) = &mut state {
+                                    state.retire_animation();
                                     state.started_loading = None;
                                 }
                             }
                             None => {
                                 if let Some(state) = &mut state {
+                                    state.retire_animation();
                                     if let Some((started_loading, _)) =
                                         state.started_loading.as_ref()
                                     {
@@ -355,6 +482,17 @@ impl Element for Lottie {
                     let natural_size = animation.native_pixel_size();
                     let draw_bounds = self.style.object_fit.get_bounds(bounds, natural_size);
                     if draw_bounds.size.width <= px(0.0) || draw_bounds.size.height <= px(0.0) {
+                        window.with_optional_element_state(
+                            global_id,
+                            |state: Option<Option<LottieState>>, _| {
+                                let mut state = state.flatten();
+                                if let Some(state) = &mut state {
+                                    state.pending_batch = None;
+                                    state.frame_cache.clear();
+                                }
+                                ((), state)
+                            },
+                        );
                         return;
                     }
 
@@ -364,33 +502,29 @@ impl Element for Lottie {
                         |state: Option<Option<LottieState>>, window| {
                             let mut state = state.map(|state| state.unwrap_or_default());
                             let image = if let Some(state) = &mut state {
+                                let admitted_frames =
+                                    animation.max_admitted_frame_count(render_size).unwrap_or(0);
+                                let prefetch_frames = state.admitted_prefetch_frames(
+                                    self.prefetch_frames,
+                                    admitted_frames,
+                                );
                                 let animations_enabled = window.animations_enabled();
                                 state.sync_animation(
                                     animation.clone(),
                                     self.autoplay,
                                     animations_enabled,
                                     self.loop_mode,
-                                    self.prefetch_frames,
+                                    prefetch_frames,
                                     Instant::now(),
                                 );
                                 state.frame_cache.bind_atlas(window.sprite_atlas().clone());
-                                state.frame_cache.set_max_frames(self.prefetch_frames);
-                                state.frame_cache.set_render_size(render_size);
+                                state.frame_cache.set_max_frames(prefetch_frames);
+                                state.set_render_size(render_size);
                                 state.poll_pending_batch();
 
                                 let now = Instant::now();
-                                let (current_frame, requested_frames, is_animating) = {
-                                    let player =
-                                        state.player.as_mut().expect("player initialized above");
-                                    let current_frame = player.update(now);
-                                    let requested_frames = if player.is_animating() {
-                                        player.upcoming_frames(now, self.prefetch_frames)
-                                    } else {
-                                        vec![current_frame]
-                                    };
-                                    let is_animating = player.is_animating();
-                                    (current_frame, requested_frames, is_animating)
-                                };
+                                let (current_frame, requested_frames, should_animate) =
+                                    state.plan_frames(now, prefetch_frames);
 
                                 state.schedule_missing_frames(
                                     animation.clone(),
@@ -400,7 +534,7 @@ impl Element for Lottie {
                                     cx,
                                 );
 
-                                if is_animating {
+                                if should_animate {
                                     window.request_animation_frame();
                                 }
 
@@ -454,6 +588,37 @@ impl InteractiveElement for Lottie {
 }
 
 impl LottieState {
+    fn retire_animation(&mut self) {
+        self.pending_batch = None;
+        self.player = None;
+        self.autoplay_started = false;
+        self.frame_cache.clear();
+    }
+
+    fn admitted_prefetch_frames(&mut self, configured: usize, admitted: usize) -> usize {
+        let effective = configured.max(1).min(admitted);
+        self.frame_cache.set_max_frames(effective);
+        effective
+    }
+
+    fn plan_frames(&mut self, now: Instant, prefetch_frames: usize) -> (usize, Vec<usize>, bool) {
+        let player = self.player.as_mut().expect("player initialized above");
+        let current_frame = player.update(now);
+        let is_animating = player.is_animating();
+        let requested_frames = if prefetch_frames == 0 {
+            Vec::new()
+        } else if is_animating {
+            player.upcoming_frames(now, prefetch_frames)
+        } else {
+            vec![current_frame]
+        };
+        (
+            current_frame,
+            requested_frames,
+            is_animating && prefetch_frames > 0,
+        )
+    }
+
     fn sync_animation(
         &mut self,
         animation: Arc<LottieAnimation>,
@@ -491,7 +656,28 @@ impl LottieState {
         }
     }
 
+    fn set_render_size(&mut self, render_size: crate::Size<DevicePixels>) {
+        if self
+            .pending_batch
+            .as_ref()
+            .is_some_and(|pending| pending.render_size != render_size)
+        {
+            self.pending_batch = None;
+        }
+        self.frame_cache.set_render_size(render_size);
+    }
+
     fn poll_pending_batch(&mut self) {
+        // Also reject a ready stale batch if a caller already updated the cache
+        // geometry. The cache must never be reset to an obsolete request size.
+        if self
+            .pending_batch
+            .as_ref()
+            .is_some_and(|pending| self.frame_cache.render_size != Some(pending.render_size))
+        {
+            self.pending_batch = None;
+            return;
+        }
         let ready = self.pending_batch.as_ref().and_then(|pending| {
             let mut guard = pending.result.lock().ok()?;
             let result = guard.take()?;
@@ -538,34 +724,16 @@ impl LottieState {
             return;
         }
 
-        let result = Arc::new(Mutex::new(None));
-        let result_slot = result.clone();
-        let requested_frames = missing_frames.clone();
         let current_view = window.current_view();
-        window
-            .spawn(cx, move |cx: &mut crate::AsyncWindowContext| {
-                let animation = animation.clone();
-                let mut async_cx = cx.clone();
-                async move {
-                    let render_task = async_cx.background_executor().spawn(async move {
-                        animation.render_batch(render_size, &requested_frames)
-                    });
-                    let rendered = render_task.await;
-                    if let Ok(mut guard) = result_slot.lock() {
-                        *guard = Some(rendered);
-                    }
-                    let _ = async_cx.update(|_, cx: &mut App| {
-                        cx.notify(current_view);
-                    });
-                }
-            })
-            .detach();
-
-        self.pending_batch = Some(PendingFrameBatch {
+        self.pending_batch = Some(PendingFrameBatch::spawn(
+            animation,
             render_size,
-            requested_frames: missing_frames,
-            result,
-        });
+            missing_frames,
+            self.render_lane.clone(),
+            RENDER_SLOTS.clone(),
+            cx,
+            move |cx| cx.notify(current_view),
+        ));
     }
 }
 
@@ -684,9 +852,20 @@ fn object_fit_key(object_fit: &ObjectFit) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{LottieState, lottie};
-    use crate::{IntoElement, LoopMode, LottieAnimation, ObjectFit, ParentElement, div};
-    use std::{sync::Arc, time::Instant};
+    use super::{LottieState, PendingFrameBatch, lottie};
+    use crate::{
+        DevicePixels, IntoElement, LoopMode, LottieAnimation, ObjectFit, ParentElement,
+        TestAppContext, div, size,
+    };
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            mpsc,
+        },
+        time::Duration,
+    };
+    use web_time::Instant;
 
     const SIMPLE_LOTTIE: &str = r#"{
         "v":"5.7.6",
@@ -697,6 +876,234 @@ mod tests {
         "h":32,
         "layers":[]
     }"#;
+
+    fn tiny_animation() -> Arc<LottieAnimation> {
+        Arc::new(
+            LottieAnimation::from_json_str(r#"{"fr":30,"ip":0,"op":30,"w":1,"h":1,"layers":[]}"#)
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn dropped_element_cancels_queued_work_and_releases_source() {
+        let cx = TestAppContext::single();
+        let slots = Arc::new(async_lock::Semaphore::new(1));
+        let blocker = slots.try_acquire_arc().unwrap();
+        let animation = tiny_animation();
+        let source = Arc::downgrade(&animation);
+        let notified = Arc::new(AtomicBool::new(false));
+        let mut state = LottieState::default();
+        let ready = notified.clone();
+        state.pending_batch = Some(cx.update(|cx| {
+            PendingFrameBatch::spawn(
+                animation,
+                size(DevicePixels(1), DevicePixels(1)),
+                vec![0, 1],
+                state.render_lane.clone(),
+                slots.clone(),
+                cx,
+                move |_| ready.store(true, Ordering::SeqCst),
+            )
+        }));
+        let result = Arc::downgrade(&state.pending_batch.as_ref().unwrap().result);
+        cx.executor().run_until_parked();
+        assert!(source.upgrade().is_some());
+        assert!(!notified.load(Ordering::SeqCst));
+        drop(state);
+        assert!(result.upgrade().is_none());
+        cx.executor().run_until_parked();
+        assert!(source.upgrade().is_none());
+        drop(blocker);
+        cx.executor().run_until_parked();
+        assert!(!notified.load(Ordering::SeqCst));
+        assert!(slots.try_acquire_arc().is_some());
+    }
+
+    #[test]
+    fn source_and_size_replacements_retire_work_before_current_geometry_is_polled() {
+        let cx = TestAppContext::single();
+        let slots = Arc::new(async_lock::Semaphore::new(1));
+        let blocker = slots.try_acquire_arc().unwrap();
+        let mut state = LottieState::default();
+        let lane = state.render_lane.clone();
+        let old = tiny_animation();
+        let old_source = Arc::downgrade(&old);
+        let old_size = size(DevicePixels(1), DevicePixels(1));
+        let new_size = size(DevicePixels(2), DevicePixels(2));
+        state.sync_animation(old.clone(), true, true, LoopMode::Loop, 2, Instant::now());
+        state.set_render_size(old_size);
+        state.pending_batch = Some(cx.update(|cx| {
+            PendingFrameBatch::spawn(
+                old,
+                old_size,
+                vec![0, 1],
+                lane.clone(),
+                slots.clone(),
+                cx,
+                |_| {},
+            )
+        }));
+        cx.executor().run_until_parked();
+        let old_cancelled = state.pending_batch.as_ref().unwrap().cancelled.clone();
+        let current = tiny_animation();
+        state.sync_animation(
+            current.clone(),
+            true,
+            true,
+            LoopMode::Loop,
+            2,
+            Instant::now(),
+        );
+        assert!(old_cancelled.load(Ordering::Acquire));
+        assert!(Arc::ptr_eq(&lane, &state.render_lane));
+        cx.executor().run_until_parked();
+        assert!(old_source.upgrade().is_none());
+        state.pending_batch = Some(cx.update(|cx| {
+            PendingFrameBatch::spawn(
+                current.clone(),
+                old_size,
+                vec![0, 1],
+                lane.clone(),
+                slots.clone(),
+                cx,
+                |_| {},
+            )
+        }));
+        cx.executor().run_until_parked();
+        let old_cancelled = state.pending_batch.as_ref().unwrap().cancelled.clone();
+        state.set_render_size(new_size);
+        assert!(old_cancelled.load(Ordering::Acquire));
+        assert!(state.pending_batch.is_none());
+        cx.executor().run_until_parked();
+        let notified = Arc::new(AtomicUsize::new(0));
+        let ready = notified.clone();
+        state.pending_batch = Some(cx.update(|cx| {
+            PendingFrameBatch::spawn(current, new_size, vec![2, 3], lane, slots, cx, move |_| {
+                ready.fetch_add(1, Ordering::SeqCst);
+            })
+        }));
+        drop(blocker);
+        cx.executor().run_until_parked();
+        assert_eq!(notified.load(Ordering::SeqCst), 1);
+        state.poll_pending_batch();
+        assert_eq!(state.frame_cache.render_size, Some(new_size));
+        assert_eq!(state.frame_cache.get(2).unwrap().size(0), new_size);
+        assert_eq!(state.frame_cache.get(3).unwrap().size(0), new_size);
+    }
+
+    #[test]
+    fn shared_slots_bound_workers_without_blocking_foreground_or_starving_waiters() {
+        let cx = TestAppContext::single();
+        let slots = Arc::new(async_lock::Semaphore::new(2));
+        let first = slots.try_acquire_arc().unwrap();
+        let second = slots.try_acquire_arc().unwrap();
+        assert!(slots.try_acquire_arc().is_none());
+        let notified = Arc::new(AtomicUsize::new(0));
+        let mut pending = (0..3)
+            .map(|frame| {
+                let ready = notified.clone();
+                cx.update(|cx| {
+                    PendingFrameBatch::spawn(
+                        tiny_animation(),
+                        size(DevicePixels(1), DevicePixels(1)),
+                        vec![frame],
+                        Arc::new(async_lock::Semaphore::new(1)),
+                        slots.clone(),
+                        cx,
+                        move |_| {
+                            ready.fetch_add(1, Ordering::SeqCst);
+                        },
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let foreground_progress = Arc::new(AtomicBool::new(false));
+        let progress = foreground_progress.clone();
+        let ui = cx.foreground_executor().spawn(async move {
+            progress.store(true, Ordering::SeqCst);
+        });
+        cx.executor().run_until_parked();
+        assert!(foreground_progress.load(Ordering::SeqCst));
+        assert_eq!(notified.load(Ordering::SeqCst), 0);
+        assert!(
+            pending
+                .iter()
+                .all(|work| work.result.lock().unwrap().is_none())
+        );
+        drop(pending.remove(0));
+        cx.executor().run_until_parked();
+        // One released slot must service both remaining requests, even though
+        // the other is still occupied. A ready result does not hoard admission.
+        drop(first);
+        cx.executor().run_until_parked();
+        assert_eq!(notified.load(Ordering::SeqCst), 2);
+        for work in &pending {
+            let batch = work.result.lock().unwrap().take().unwrap().unwrap();
+            assert_eq!(batch.frames.len(), 1);
+            assert_eq!(
+                batch.frames[0].image.size(0),
+                size(DevicePixels(1), DevicePixels(1))
+            );
+        }
+        drop((second, ui));
+        assert!(slots.try_acquire_arc().is_some());
+    }
+
+    #[test]
+    fn running_retired_worker_holds_admission_until_its_current_frame_returns() {
+        let cx = TestAppContext::single();
+        let executor = cx.executor();
+        let slots = Arc::new(async_lock::Semaphore::new(1));
+        let lane = Arc::new(async_lock::Semaphore::new(1));
+        let animation = tiny_animation();
+        let source = Arc::downgrade(&animation);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let notified = Arc::new(AtomicBool::new(false));
+        let ready = notified.clone();
+        let pending = cx.update(|cx| {
+            PendingFrameBatch::spawn_with_renderer(
+                animation,
+                size(DevicePixels(1), DevicePixels(1)),
+                vec![0, 1, 2],
+                lane.clone(),
+                slots.clone(),
+                cx,
+                move |_| ready.store(true, Ordering::SeqCst),
+                move |animation, size, frames, cancelled| {
+                    animation.render_batch_with_control(size, frames, 12, |completed| {
+                        if completed == 1 {
+                            started_tx.send(()).unwrap();
+                            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                        }
+                        !cancelled.load(Ordering::Acquire)
+                    })
+                },
+            )
+        });
+        let output = Arc::downgrade(&pending.result);
+        assert!(executor.tick()); // Foreground owner starts the background task.
+        let worker_executor = executor.clone();
+        let worker = std::thread::spawn(move || assert!(worker_executor.tick()));
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(slots.try_acquire_arc().is_none());
+        assert!(lane.try_acquire_arc().is_none());
+        drop(pending);
+        // Run the task cancellation cleanup while its synchronous frame is
+        // genuinely inside a background poll. Neither permit may be released.
+        executor.run_until_parked();
+        assert!(output.upgrade().is_none());
+        assert!(source.upgrade().is_some());
+        assert!(slots.try_acquire_arc().is_none());
+        assert!(lane.try_acquire_arc().is_none());
+        release_tx.send(()).unwrap();
+        worker.join().unwrap();
+        executor.run_until_parked();
+        assert!(source.upgrade().is_none());
+        assert!(!notified.load(Ordering::SeqCst));
+        assert!(slots.try_acquire_arc().is_some());
+        assert!(lane.try_acquire_arc().is_some());
+    }
 
     #[test]
     fn sync_animation_stops_when_animations_are_disabled() {
@@ -720,6 +1127,75 @@ mod tests {
                 .is_some_and(|player| !player.is_animating())
         );
         assert!(!state.autoplay_started);
+    }
+
+    #[test]
+    fn admitted_prefetch_clips_real_plans_and_cache_while_frames_advance() {
+        let animation = Arc::new(
+            LottieAnimation::from_json_str(r#"{"fr":30,"ip":0,"op":30,"w":1,"h":1,"layers":[]}"#)
+                .unwrap(),
+        );
+        let render_size = size(DevicePixels(1), DevicePixels(1));
+        let admitted = animation
+            .max_admitted_frame_count_with_budget(render_size, 8)
+            .unwrap();
+        assert_eq!(admitted, 2);
+        let start = Instant::now();
+        let mut state = LottieState::default();
+        state.sync_animation(animation.clone(), true, true, LoopMode::Loop, 1000, start);
+        for (elapsed_ms, expected) in [(0, 0), (40, 1), (980, 29), (1040, 1)] {
+            let effective = state.admitted_prefetch_frames(1000, admitted);
+            let (current, requested, animating) =
+                state.plan_frames(start + Duration::from_millis(elapsed_ms), effective);
+            assert!(animating);
+            assert_eq!(current, expected);
+            assert_eq!(requested.len(), 2);
+            assert_eq!(requested[0], current);
+            let batch = animation
+                .render_batch_with_budget(render_size, &requested, 8)
+                .unwrap();
+            state.frame_cache.insert_batch(batch);
+            assert_eq!(state.frame_cache.max_frames, 2);
+            assert!(state.frame_cache.frames.len() <= 2);
+            assert!(state.frame_cache.get(current).is_some());
+        }
+        let effective = state.admitted_prefetch_frames(1000, 0);
+        let (_, requested, should_animate) =
+            state.plan_frames(start + Duration::from_millis(1080), effective);
+        assert!(requested.is_empty());
+        assert!(!should_animate);
+        assert!(state.player.as_ref().unwrap().is_animating());
+        let effective = state.admitted_prefetch_frames(1000, admitted);
+        let (current, requested, should_animate) =
+            state.plan_frames(start + Duration::from_millis(1120), effective);
+        assert_eq!(current, 3);
+        assert_eq!(requested[0], current);
+        assert_eq!(requested.len(), 2);
+        assert!(should_animate);
+    }
+
+    #[test]
+    fn ready_batch_for_previous_geometry_is_discarded() {
+        let animation =
+            LottieAnimation::from_json_str(r#"{"fr":30,"ip":0,"op":30,"w":1,"h":1,"layers":[]}"#)
+                .unwrap();
+        let old_size = size(DevicePixels(1), DevicePixels(1));
+        let current_size = size(DevicePixels(2), DevicePixels(2));
+        let batch = animation.render_batch(old_size, &[0, 1]).unwrap();
+        let old_image = Arc::downgrade(&batch.frames[0].image);
+        let mut state = LottieState::default();
+        state.frame_cache.set_render_size(current_size);
+        state.pending_batch = Some(super::PendingFrameBatch {
+            render_size: old_size,
+            requested_frames: vec![0, 1],
+            result: Arc::new(std::sync::Mutex::new(Some(Ok(batch)))),
+            cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            _task: crate::Task::ready(()),
+        });
+        state.poll_pending_batch();
+        assert_eq!(state.frame_cache.render_size, Some(current_size));
+        assert!(state.frame_cache.frames.is_empty());
+        assert!(old_image.upgrade().is_none());
     }
 
     #[test]

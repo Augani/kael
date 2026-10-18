@@ -1,9 +1,11 @@
 mod accessibility_tests;
+#[cfg(not(target_arch = "wasm32"))]
 mod atlas_policy_properties;
 mod auxiliary_exec_properties;
 mod clipboard_properties;
 mod crash_report_properties;
 mod event_dispatch_properties;
+#[cfg(not(target_arch = "wasm32"))]
 mod file_watcher_properties;
 mod font_feature_properties;
 #[cfg(target_os = "linux")]

@@ -1,0 +1,504 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-10-18T00:35:15.005568+00:00",
+  "run_url": "https://github.com/Augani/kael/actions/runs/39079017857",
+  "status": "INDEPENDENT_EVIDENCE_AUDIT_PASS__WHOLE_PLATFORM_RUN_REMAINS_FAILURE",
+  "run": {
+    "id": 39079017857,
+    "source_commit": "0d15aff4288e8e98a54032e6ed149e080ea13104",
+    "status": "completed",
+    "conclusion": "failure",
+    "job_conclusions": {
+      "success": 5,
+      "failure": 3,
+      "skipped": 1
+    },
+    "jobs": [
+      {
+        "name": "Classify change",
+        "id": 117531989412,
+        "conclusion": "success",
+        "failed_steps": []
+      },
+      {
+        "name": "Linux Renderer / WebView Runtime",
+        "id": 117532009771,
+        "conclusion": "success",
+        "failed_steps": []
+      },
+      {
+        "name": "Quality / Native (macOS)",
+        "id": 117532009780,
+        "conclusion": "failure",
+        "failed_steps": [
+          "Execute Metal retained-scene runtime proof"
+        ]
+      },
+      {
+        "name": "Windows Native / WebView / MSI (windows-2025-vs2026)",
+        "id": 117532009802,
+        "conclusion": "success",
+        "failed_steps": []
+      },
+      {
+        "name": "Quality / Native (Linux)",
+        "id": 117532009803,
+        "conclusion": "failure",
+        "failed_steps": [
+          "Audit locked dependencies"
+        ]
+      },
+      {
+        "name": "Windows Native / WebView / MSI (windows-2022)",
+        "id": 117532009811,
+        "conclusion": "success",
+        "failed_steps": []
+      },
+      {
+        "name": "WebAssembly / WebGL2 Browser",
+        "id": 117532009819,
+        "conclusion": "success",
+        "failed_steps": []
+      },
+      {
+        "name": "Focused Linux / GTK4 native accessibility",
+        "id": 117532010910,
+        "conclusion": "skipped",
+        "failed_steps": []
+      },
+      {
+        "name": "Platform readiness",
+        "id": 117541658738,
+        "conclusion": "failure",
+        "failed_steps": [
+          "Enforce required build results"
+        ]
+      }
+    ]
+  },
+  "source_scope": {
+    "checkout_merge": "d4395935e91b5beea4468924c40043f9a386519e",
+    "identical_source_tree": "b532caad3339cdefae8329a1f49d615f4f7dc500",
+    "predates_current_root19_followups": true,
+    "not_latest_primary_acceptance": true,
+    "immutable_helpers_and_lock": {
+      ".github/workflows/platform-readiness.yml": "d637e0c1cfc77dd0a4d45cca2d57d37890d30f763b515509c158d75ade95fce9",
+      "Cargo.lock": "df15e57c90e981bdfd8329be16f6840a68d1980d57a91b1f2c98d6104053d059",
+      "scripts/ci/audit-dependencies.sh": "ca1bf53da798371be8570f8494c478cbf86a2dcba6567c808c9589d8ac87b786",
+      "scripts/ci/verify-programmable-renderer.py": "c5ad56421bc4e95ca22250000914be35d2ba7807844d0c543cdf84c2b81f2a90",
+      "scripts/ci/verify-windows-msi.ps1": "49fa5b1f71acf3733162fd855b53998afa87ae2791d6c96779f8788e8bca2257",
+      "scripts/ci/verify-windows-native-accessibility.ps1": "be9a9e9936bf81f252dc5af0dfc456d8c4301763fa2fd468af3e90017aae0ea5",
+      "scripts/ci/verify-windows-native-renderer.ps1": "286bed6ea31885635e4a2f81b77646ec809080a1c241340830b900aa21bced01",
+      "scripts/verify-browser-matrix.sh": "c258bba29a8fbc67e7eed524a0880819f6779afb872e7a085bfe1fc7025ee15a",
+      "scripts/verify_browser_matrix.py": "f85b253d987c8720fc85eef6f662c76ef97761668a7fb764b009c3fcdeddbde4"
+    }
+  },
+  "integrity": {
+    "artifacts": 10,
+    "raw_extracted_files": 232,
+    "cohorts": {
+      "download-partial-1.json": 109,
+      "download-partial-2.json": 106,
+      "separately_verified_mac": 17
+    },
+    "all_api_digests_runheads_zip_CRCs_extracted_hashes": "verified",
+    "zip_members_not_executed": true,
+    "inputs_sha256": {
+      ".artifacts/2026-10-17-platform-0d15/run-final.json": "48c4e1462e2897a1fc2d93f4b014c35bf93de6c8ee81fdb0b6dabbdcff4f9277",
+      ".artifacts/2026-10-17-platform-0d15/failed-job-logs.txt": "f91ae0be4a19a5eee58b0375a3a86c4fde23a28a81a50545f6f43bd793efee99",
+      ".artifacts/2026-10-17-platform-0d15/download-partial-1.json": "534fa02a388e5ed7ecf09972ea754a3605738ed2d3c650566ad91bbd3878139f",
+      ".artifacts/2026-10-17-platform-0d15/download-partial-2.json": "de96aa1e8bd706a6f90caf3ef85aa7eb028b1347b31df7a47791352718de696b",
+      ".artifacts/2026-10-17-platform-0d15/artifact-metadata-partial-2.json": "c6cb67a13563b43053aecfc2dd863d13ada20b19b6f024ba4db37564bdc5a9db",
+      ".artifacts/2026-10-17-platform-0d15/partial-validation.json": "3c1394dedbf6c62d6fcdaa069c73c8a72cc3665ab1fc5d411a139dccd532b164",
+      ".artifacts/2026-10-18-macos-hosted-presentation-investigation/download-verified.json": "1e584ba5c9c8ca71b13ffca0832d11ce32e373e4e1ce0263084de1125acf96de",
+      ".artifacts/2026-10-18-macos-hosted-presentation-investigation/findings.json": "531b225e7b51e4fd8a73530672361682700a6caefe76b79150f919f41935fc7d",
+      ".artifacts/2026-10-18-macos-hosted-presentation-investigation/checkout-merge-commit.json": "2c47c63e1f368401354c4b12e64968fba8169da3e5616743ad03e74642158754",
+      ".artifacts/2026-10-17-platform-0d15/browser-smoke/browser-matrix/report.json": "108a4575ffd31c0ce4dc97b72ce2201c2c71fc0e9de74214efb9dd181a431246"
+    }
+  },
+  "windows": {
+    "windows-release-evidence-windows-2022": {
+      "programmable_unique_passed": 23,
+      "programmable_suites": {
+        "atlas-identity-lifetimes": {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        "atlas-tile-residency": {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        "custom-shaders-and-compute": {
+          "passed": 11,
+          "failed": 0,
+          "ignored": 0
+        },
+        "mixed-gpu-graph": {
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0
+        }
+      },
+      "native_png_dimensions": [
+        720,
+        460
+      ],
+      "gpu": "Direct3D11 forced WARP / Microsoft Basic Render Driver (software)",
+      "native_hierarchy_marker": "NATIVE_ACCESSIBILITY_RUNTIME_OK: backend=uia rows=100025 projects=25 children=4000 last=100024 idle_disclosure=true idle_focus=true idle_select=true native_selection_item=true",
+      "native_text_marker": "NATIVE_TEXT_ACCESSIBILITY_RUNTIME_OK: backend=uia bytes=105391 utf16=66983 lines=1000 unicode_search=true visible_ranges=true idle_reveal=true selection=true caret=true point=true readonly=true disabled=true stale=true",
+      "directwrite_geometry_tests": {
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      "uia_provider_tests": {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      "webview2_roundtrip": "passed",
+      "generated_window_visible": true,
+      "msi": "Verify MSI database, payload, and executable job step passed; archived payload hashes reverified",
+      "whole_windows_workspace_compile_lint": "intentionally skipped on2022 job"
+    },
+    "windows-release-evidence-windows-2025-vs2026": {
+      "programmable_unique_passed": 23,
+      "programmable_suites": {
+        "atlas-identity-lifetimes": {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        "atlas-tile-residency": {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        "custom-shaders-and-compute": {
+          "passed": 11,
+          "failed": 0,
+          "ignored": 0
+        },
+        "mixed-gpu-graph": {
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0
+        }
+      },
+      "native_png_dimensions": [
+        720,
+        460
+      ],
+      "gpu": "Direct3D11 forced WARP / Microsoft Basic Render Driver (software)",
+      "native_hierarchy_marker": "NATIVE_ACCESSIBILITY_RUNTIME_OK: backend=uia rows=100025 projects=25 children=4000 last=100024 idle_disclosure=true idle_focus=true idle_select=true native_selection_item=true",
+      "native_text_marker": "NATIVE_TEXT_ACCESSIBILITY_RUNTIME_OK: backend=uia bytes=105391 utf16=66983 lines=1000 unicode_search=true visible_ranges=true idle_reveal=true selection=true caret=true point=true readonly=true disabled=true stale=true",
+      "directwrite_geometry_tests": {
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      "uia_provider_tests": {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      "webview2_roundtrip": "passed",
+      "generated_window_visible": true,
+      "msi": "Verify MSI database, payload, and executable job step passed; archived payload hashes reverified",
+      "whole_windows_workspace_compile_lint": "passed on canonical2025 job"
+    }
+  },
+  "browser": {
+    "report_sha256": "108a4575ffd31c0ce4dc97b72ce2201c2c71fc0e9de74214efb9dd181a431246",
+    "playwright": "1.62.0",
+    "failures": {},
+    "engines": {
+      "chromium": {
+        "version": "151.0.7922.34",
+        "browser_smoke": [
+          {
+            "viewport": {
+              "height": 800,
+              "width": 1280
+            },
+            "mounted_rows": 19,
+            "framebuffer": [
+              1280,
+              800
+            ],
+            "driver_label": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+            "reported_software": "true",
+            "semantic_input": {
+              "animation_frames": 1,
+              "animation_observation_ms": 470.749,
+              "animation_required_frames": 1,
+              "clipboard": "passed",
+              "ime": "passed",
+              "pointer_action_count": 3
+            }
+          },
+          {
+            "viewport": {
+              "height": 720,
+              "width": 430
+            },
+            "mounted_rows": 7,
+            "framebuffer": [
+              430,
+              720
+            ],
+            "driver_label": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+            "reported_software": "true",
+            "semantic_input": "not repeated at second viewport"
+          }
+        ],
+        "suite_viewports": [
+          {
+            "height": 800,
+            "width": 1280
+          },
+          {
+            "height": 720,
+            "width": 760
+          }
+        ],
+        "virtual_suite": {
+          "sheet_rows": 1000000,
+          "sheet_columns": 16384,
+          "document_blocks": 250000,
+          "whiteboard_shapes": 100000,
+          "bounded_mounts": "passed"
+        },
+        "websocket_markers_passed": 12,
+        "capture": {
+          "status": "passed",
+          "frame_delivery": "passed",
+          "trusted_picker": "not-automated-requires-user-activation"
+        },
+        "capture_frames": 3,
+        "performance_scope": "software-fallback liveness; p95/p99/long-task budgets NOT enforced, regardless masked driver label"
+      },
+      "firefox": {
+        "version": "153.0",
+        "browser_smoke": [
+          {
+            "viewport": {
+              "height": 800,
+              "width": 1280
+            },
+            "mounted_rows": 19,
+            "framebuffer": [
+              1280,
+              800
+            ],
+            "driver_label": "llvmpipe, or similar",
+            "reported_software": "true",
+            "semantic_input": {
+              "animation_frames": 6,
+              "animation_observation_ms": 498.463,
+              "animation_required_frames": 1,
+              "clipboard": "automation-unavailable",
+              "ime": "passed",
+              "pointer_action_count": 3
+            }
+          },
+          {
+            "viewport": {
+              "height": 720,
+              "width": 430
+            },
+            "mounted_rows": 7,
+            "framebuffer": [
+              430,
+              720
+            ],
+            "driver_label": "llvmpipe, or similar",
+            "reported_software": "true",
+            "semantic_input": "not repeated at second viewport"
+          }
+        ],
+        "suite_viewports": [
+          {
+            "height": 800,
+            "width": 1280
+          },
+          {
+            "height": 720,
+            "width": 760
+          }
+        ],
+        "virtual_suite": {
+          "sheet_rows": 1000000,
+          "sheet_columns": 16384,
+          "document_blocks": 250000,
+          "whiteboard_shapes": 100000,
+          "bounded_mounts": "passed"
+        },
+        "websocket_markers_passed": 12,
+        "capture": {
+          "status": "passed",
+          "frame_delivery": "passed",
+          "trusted_picker": "not-automated-requires-user-activation"
+        },
+        "capture_frames": 2,
+        "performance_scope": "software-fallback liveness; p95/p99/long-task budgets NOT enforced, regardless masked driver label"
+      },
+      "webkit": {
+        "version": "26.5",
+        "browser_smoke": [
+          {
+            "viewport": {
+              "height": 800,
+              "width": 1280
+            },
+            "mounted_rows": 19,
+            "framebuffer": [
+              1280,
+              800
+            ],
+            "driver_label": "Apple GPU",
+            "reported_software": "false",
+            "semantic_input": {
+              "animation_frames": 7,
+              "animation_observation_ms": 204.607,
+              "animation_required_frames": 1,
+              "clipboard": "passed",
+              "ime": "passed",
+              "pointer_action_count": 3
+            }
+          },
+          {
+            "viewport": {
+              "height": 720,
+              "width": 430
+            },
+            "mounted_rows": 7,
+            "framebuffer": [
+              430,
+              720
+            ],
+            "driver_label": "Apple GPU",
+            "reported_software": "false",
+            "semantic_input": "not repeated at second viewport"
+          }
+        ],
+        "suite_viewports": [
+          {
+            "height": 800,
+            "width": 1280
+          },
+          {
+            "height": 720,
+            "width": 760
+          }
+        ],
+        "virtual_suite": {
+          "sheet_rows": 1000000,
+          "sheet_columns": 16384,
+          "document_blocks": 250000,
+          "whiteboard_shapes": 100000,
+          "bounded_mounts": "passed"
+        },
+        "websocket_markers_passed": 12,
+        "capture": {
+          "status": "passed",
+          "frame_delivery": "automation-unavailable",
+          "trusted_picker": "not-automated-requires-user-activation"
+        },
+        "capture_frames": 0,
+        "performance_scope": "software-fallback liveness; p95/p99/long-task budgets NOT enforced, regardless masked driver label"
+      }
+    },
+    "generated_project_parity": "passed Chromium; preserved report/source/hash and screenshot"
+  },
+  "failures": {
+    "macOS": {
+      "failed_step": "Execute Metal retained-scene runtime proof",
+      "ignored": 0,
+      "GPU_complete_status4": 42,
+      "presentation_callbacks": 40,
+      "positive_presented_time": 0,
+      "all_callbacks_zero_time": true,
+      "failure_wording": "no drawable presentation callback within two seconds",
+      "interpretation": "Callbacks arrived; none proved positive presentation. No native screenshot/device identity before failure; environment/source-cause remains unproved. Physical host passes do not turn this CI job green.",
+      "mandatory_gpu_successful_invocations": 59,
+      "mandatory_gpu_distinct_tests": 58,
+      "gpu_groups": 6
+    },
+    "Linux_quality": {
+      "failed_step": "Audit locked dependencies",
+      "exit_code": 1,
+      "denied_unmaintained_warnings": [
+        {
+          "crate": "zbus_names",
+          "version": "4.3.4",
+          "warning": "unmaintained",
+          "advisory": "RUSTSEC-2026-0371"
+        },
+        {
+          "crate": "zvariant",
+          "version": "5.13.1",
+          "warning": "unmaintained",
+          "advisory": "RUSTSEC-2026-0370"
+        },
+        {
+          "crate": "zvariant_derive",
+          "version": "5.13.1",
+          "warning": "unmaintained",
+          "advisory": "RUSTSEC-2026-0372"
+        }
+      ],
+      "vulnerability_scope": "Preserved failure output reports3 denied unmaintained advisories; no separate audit JSON downloaded here.",
+      "other_diagnostic": "Later rust-cache ENOENT target/tests/target is present in raw log; API post-cache step success, not the audit failure cause."
+    },
+    "aggregate": "Enforce required build results failed with NATIVE_RESULT=failure; Linux runtime/browser/Windows results success. Do not relabel whole run PASS."
+  },
+  "limitations": [
+    "WebKit capture status=passed covers lifecycle/error/bounds; actual frame_delivery=automation-unavailable, frame_count0, validity_mask0. No decoded-frame proof.",
+    "Trusted capture picker is not automated on any engine; user activation remains required. Other synthetic file payload/picker tests are distinct.",
+    "Browser matrix runs software-fallback-liveness, p95/p99/long-task budgets not enforced. Masked WebKit AppleGPU label does not establish native adapter/hardware performance.",
+    "Windows GPU proofs force WARP software rendering, not hardware acceleration. Full workspace compile/lint canonical2025 only;2022 intentionally skips that step.",
+    "Focused Linux/GTK4 job is skipped in this run; Linux renderer job contains separate maintained GTK4 runtime acceptance, not this skipped focused job.",
+    "No native/Cargo/binary execution, new CI dispatch, retry, source/Git mutation, or comparative timing/power claim in this audit.",
+    "Counts from aggregate and per-suite logs overlap and are not added. Mac has59 successful invocations covering58 distinct test names across6groups; each Windows runner has23 invocations/23distinct names, repeated across two OS runners."
+  ],
+  "independent_review": [
+    {
+      "path": ".artifacts/2026-10-18-platform-0d15-final-audit/receipt.json",
+      "sha256": "71a9baabefec42221cb8600638f22bb1b2b3a6ff2fec59d03f52207fde3c8220",
+      "bytes": 2465
+    },
+    {
+      "path": ".artifacts/2026-10-18-platform-0d15-independent-memory-audit/review.json",
+      "sha256": "432fe3f642c08742c54ec734342b46e0b46c8c75105f6376f457c1a1cffc901d",
+      "bytes": 9985
+    }
+  ],
+  "newer_diagnostics": {
+    "state": "Separately adopted nineteen-file primary batch; current full integration14PASS, native validation and packaging separate. No hosted rerun/waiver claimed.",
+    "independent_controls": "Pinned Apple controls show positive timestamps on physical host; same-job diagnostic now added, with original required Kael gate intact.",
+    "dependency_policy": "Existing13 accepted IDs unchanged; no new ignore. Fresh published-parent review finds coordinated Zbus6 migration still unavailable across Linux parents.",
+    "published_parent_review": {
+      "path": ".artifacts/2026-10-18-zbus-published-parent-review/review.json",
+      "sha256": "1f5797ac120a4b95accd7a95fe7eba875be8fe9dc5e13621846297eb54c193e4",
+      "bytes": 22339
+    },
+    "primary_integration": {
+      "path": ".artifacts/2026-10-18-desktop-quality-final/integration.json",
+      "sha256": "8d13e03422794d278f4b2f82fec23d7c7a883c7e20b4f5eb984ab41757aba5a5",
+      "bytes": 7956
+    },
+    "current_native": {
+      "path": "docs/reviews/2026-10-18-native-desktop-quality-validation.json",
+      "sha256": "73e8d0fb16f3d11fd28787e0bdf8f29d3f6161ab599b02be48faa4d01bccbf38",
+      "bytes": 9409
+    }
+  },
+  "count_clarification": {
+    "path": ".artifacts/2026-10-18-platform-gpu-count-clarification/clarification.json",
+    "sha256": "3c3577f86ffd0d94d56952ccbc3ef89edca4810013405e6f403f6f08ee651ba1",
+    "bytes": 30695
+  }
+}

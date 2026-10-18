@@ -218,18 +218,99 @@ impl SecretStore for MemorySecretStore {
 mod keychain {
     use super::{Result, SecretBytes, SecretStore, validate_address, validate_secret};
     use anyhow::anyhow;
+    use core_foundation::{
+        base::{CFType, TCFType},
+        data::CFData,
+        dictionary::CFDictionary,
+        string::{CFString, CFStringRef},
+    };
+    use security_framework::base::Error as KeychainError;
+    use security_framework_sys::{
+        access_control::kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+        base::{errSecDuplicateItem, errSecSuccess},
+        item::{
+            kSecAttrAccount, kSecAttrService, kSecClass, kSecClassGenericPassword, kSecValueData,
+        },
+        keychain_item::{SecItemAdd, SecItemUpdate},
+    };
 
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 
+    unsafe extern "C" {
+        static kSecAttrAccessible: CFStringRef;
+    }
+
     /// A [`SecretStore`] backed by the macOS Keychain (generic password items).
     pub struct KeychainSecretStore;
+
+    fn protected_generic_password(service: &str, account: &str, secret: &[u8]) -> Result<()> {
+        let query = generic_password_query(service, account);
+        let attributes = vec![
+            (
+                static_string(unsafe { kSecAttrAccessible }),
+                static_string(unsafe { kSecAttrAccessibleWhenUnlockedThisDeviceOnly })
+                    .into_CFType(),
+            ),
+            (
+                static_string(unsafe { kSecValueData }),
+                CFData::from_buffer(secret).into_CFType(),
+            ),
+        ];
+        let mut creation = query.clone();
+        creation.append(&mut attributes.clone());
+        let creation = CFDictionary::from_CFType_pairs(&creation);
+        let status = unsafe { SecItemAdd(creation.as_concrete_TypeRef(), std::ptr::null_mut()) };
+        if status == errSecDuplicateItem {
+            let query = CFDictionary::from_CFType_pairs(&query);
+            let attributes = CFDictionary::from_CFType_pairs(&attributes);
+            keychain_result(unsafe {
+                SecItemUpdate(
+                    query.as_concrete_TypeRef(),
+                    attributes.as_concrete_TypeRef(),
+                )
+            })
+        } else {
+            keychain_result(status)
+        }
+    }
+
+    fn generic_password_query(service: &str, account: &str) -> Vec<(CFString, CFType)> {
+        vec![
+            (
+                static_string(unsafe { kSecClass }),
+                static_string(unsafe { kSecClassGenericPassword }).into_CFType(),
+            ),
+            (
+                static_string(unsafe { kSecAttrService }),
+                CFString::from(service).into_CFType(),
+            ),
+            (
+                static_string(unsafe { kSecAttrAccount }),
+                CFString::from(account).into_CFType(),
+            ),
+        ]
+    }
+
+    fn static_string(reference: CFStringRef) -> CFString {
+        unsafe { CFString::wrap_under_get_rule(reference) }
+    }
+
+    fn keychain_result(status: i32) -> Result<()> {
+        if status == errSecSuccess {
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "keychain write failed: {}",
+                KeychainError::from_code(status)
+            ))
+        }
+    }
 
     impl SecretStore for KeychainSecretStore {
         fn set_secret(&self, service: &str, account: &str, secret: &[u8]) -> Result<()> {
             validate_address(service, account)?;
             validate_secret(secret)?;
-            security_framework::passwords::set_generic_password(service, account, secret)
-                .map_err(|error| anyhow!("keychain write failed: {error}"))
+            protected_generic_password(service, account, secret)
         }
 
         fn get_secret(&self, service: &str, account: &str) -> Result<Option<SecretBytes>> {
@@ -623,5 +704,30 @@ mod tests {
         );
         store.delete_secret(service, account).unwrap();
         assert!(store.get_secret(service, account).unwrap().is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "touches the real login keychain; run manually with --ignored"]
+    fn keychain_write_migrates_an_existing_generic_password() {
+        let store = KeychainSecretStore;
+        let service = "com.kael.secrets.test";
+        let account = "accessibility-migration";
+        let _ = store.delete_secret(service, account);
+        security_framework::passwords::set_generic_password(service, account, b"legacy-secret")
+            .unwrap();
+
+        store
+            .set_secret(service, account, b"protected-secret")
+            .unwrap();
+        assert_eq!(
+            store
+                .get_secret(service, account)
+                .unwrap()
+                .as_ref()
+                .map(SecretBytes::expose_secret),
+            Some(&b"protected-secret"[..])
+        );
+        store.delete_secret(service, account).unwrap();
     }
 }

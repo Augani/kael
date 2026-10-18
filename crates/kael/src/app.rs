@@ -1,3 +1,6 @@
+use crate::asset_cache::{
+    AssetConsumerRequest, AssetInvalidationSubscribers, AssetReadySubscribers,
+};
 use std::{
     any::{TypeId, type_name},
     cell::{BorrowMutError, Ref, RefCell, RefMut},
@@ -34346,6 +34349,30 @@ impl LayoutStylingHandoffBuilder {
     }
 }
 
+// Own the initializing-key lifetime without borrowing App through caller code.
+// Only checked cache misses reserve these keys; legacy fetch remains uncapped.
+struct AssetInitializationReservation {
+    keys: Rc<RefCell<FxHashSet<(TypeId, u64)>>>,
+    key: (TypeId, u64),
+}
+
+impl Drop for AssetInitializationReservation {
+    fn drop(&mut self) {
+        self.keys.borrow_mut().remove(&self.key);
+    }
+}
+
+pub(crate) struct CachedAssetTask {
+    task: Box<dyn Any>,
+    ready_consumers: AssetReadySubscribers,
+    generation: Arc<()>,
+    last_used: u64,
+    completed_bytes: Option<u64>,
+    on_evict: fn(&dyn Any, &mut App),
+    // Keeping the observer here makes remove/clear cancel cache-owned work.
+    _observer: Task<()>,
+}
+
 /// Contains the state of the full application, and passed as a reference to a variety of callbacks.
 /// Other [Context] derefs to this type.
 /// You need a reference to an `App` to access the state of a [Entity].
@@ -34360,7 +34387,16 @@ pub struct App {
     pub(crate) background_executor: BackgroundExecutor,
     pub(crate) foreground_executor: ForegroundExecutor,
     started_at: Instant,
-    pub(crate) loading_assets: FxHashMap<(TypeId, u64), Box<dyn Any>>,
+    pub(crate) loading_assets: FxHashMap<(TypeId, u64), CachedAssetTask>,
+    asset_cache_tick: u64,
+    asset_cache_max_entries: usize,
+    asset_cache_max_bytes: u64,
+    asset_cache_max_pending: usize,
+    asset_initializations: Rc<RefCell<FxHashSet<(TypeId, u64)>>>,
+    asset_cache_waiters: FxHashSet<EntityId>,
+    asset_consumer_invalidations: AssetInvalidationSubscribers,
+    pub(crate) image_load_slots: Arc<async_lock::Semaphore>,
+    pub(crate) image_working_budget: Arc<crate::assets::ImageWorkingBudget>,
     asset_source: Arc<dyn AssetSource>,
     pub(crate) svg_renderer: SvgRenderer,
     http_client: Arc<dyn HttpClient>,
@@ -34379,6 +34415,7 @@ pub struct App {
         FxHashMap<TypeId, Vec<Rc<dyn Fn(&dyn Any, DispatchPhase, &mut Self)>>>,
     pending_effects: VecDeque<Effect>,
     pub(crate) pending_notifications: FxHashSet<EntityId>,
+    pending_frame_polling: FxHashSet<WindowId>,
     pub(crate) pending_global_notifications: FxHashSet<TypeId>,
     pub(crate) observers: SubscriberSet<EntityId, Handler>,
     // TypeId is the type of the event that the listener callback expects
@@ -34460,6 +34497,17 @@ impl App {
                 started_at: Instant::now(),
                 svg_renderer: SvgRenderer::new(asset_source.clone()),
                 loading_assets: Default::default(),
+                asset_cache_tick: 0,
+                asset_cache_max_entries: 256,
+                asset_cache_max_bytes: 64 * 1024 * 1024,
+                asset_cache_max_pending: 64,
+                asset_initializations: Rc::default(),
+                asset_cache_waiters: FxHashSet::default(),
+                asset_consumer_invalidations: SubscriberSet::new(),
+                image_load_slots: Arc::new(async_lock::Semaphore::new(
+                    crate::assets::IMAGE_LOAD_PIPELINES,
+                )),
+                image_working_budget: Arc::new(crate::assets::ImageWorkingBudget::default()),
                 asset_source,
                 http_client,
                 globals_by_type: FxHashMap::default(),
@@ -34476,6 +34524,7 @@ impl App {
                 global_action_listeners: FxHashMap::default(),
                 pending_effects: VecDeque::new(),
                 pending_notifications: FxHashSet::default(),
+                pending_frame_polling: FxHashSet::default(),
                 pending_global_notifications: FxHashSet::default(),
                 observers: SubscriberSet::new(),
                 tracked_entities: FxHashMap::default(),
@@ -37960,6 +38009,27 @@ impl App {
                 }
             }
         }
+
+        // Model notifications can arrive after the platform stopped its idle
+        // frame clock. Resume only affected windows after all observer effects
+        // have settled, including the test-support draw that prepares a scene
+        // without presenting it. Coalesce repeated notifications per window.
+        let mut pending = mem::take(&mut self.pending_frame_polling);
+        for id in pending.drain() {
+            match self.windows.get(id) {
+                Some(Some(window)) => window.update_frame_polling(),
+                Some(None) => {
+                    // A reentrant update still owns the window. Its outer
+                    // effect flush will run after the lease is returned.
+                    self.pending_frame_polling.insert(id);
+                }
+                None => {}
+            }
+        }
+        // Retain the bounded window-set allocation across update cycles.
+        if self.pending_frame_polling.is_empty() {
+            self.pending_frame_polling = pending;
+        }
     }
 
     /// Repeatedly called during `flush_effects` to release any entities whose
@@ -37973,6 +38043,7 @@ impl App {
             }
 
             for (entity_id, mut entity) in dropped {
+                self.asset_cache_waiters.remove(&entity_id);
                 self.observers.remove(&entity_id);
                 self.event_listeners.remove(&entity_id);
                 for release_callback in self.release_listeners.remove(&entity_id) {
@@ -38029,10 +38100,11 @@ impl App {
     }
 
     fn apply_refresh_effect(&mut self) {
-        for window in self.windows.values_mut() {
+        for (id, window) in self.windows.iter_mut() {
             if let Some(window) = window.as_mut() {
                 window.refreshing = true;
                 window.invalidator.set_dirty(true);
+                self.pending_frame_polling.insert(id);
             }
         }
     }
@@ -39098,38 +39170,444 @@ impl App {
         })
     }
 
-    /// Remove an asset from GPUI's cache
+    /// Remove an asset's cached task and invalidate its active drawing consumers.
+    /// Active results are invalidated even after ordinary LRU eviction removed
+    /// the cache entry. A later request reloads the asset.
     pub fn remove_asset<A: Asset>(&mut self, source: &A::Source) {
         let asset_id = (TypeId::of::<A>(), hash(source));
-        self.loading_assets.remove(&asset_id);
+        let retired = self.loading_assets.remove(&asset_id);
+        // Live consumers can outlast ordinary LRU retention. Invalidate them
+        // even when the cache entry is absent, with no historical key registry.
+        let consumers = self.asset_consumer_invalidations.clone();
+        consumers.retain(&asset_id, |consumer| {
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consumer(self))).is_err() {
+                log::error!("asset consumer invalidation panicked");
+            }
+            true
+        });
+        if let Some(entry) = retired {
+            self.release_cached_asset(entry);
+        }
+        self.resume_deferred_asset_requests();
+        if self.loading_assets.is_empty() {
+            self.loading_assets = FxHashMap::default();
+        }
+    }
+
+    /// Bound completed asset retention by entry count and reported output bytes.
+    /// Defaults to 256 entries and 64 MiB. Pending single-flight tasks are not
+    /// evicted by this policy; dropping their final shared owner cancels them.
+    /// A zero limit disables completed retention. Heap-backed custom assets
+    /// should implement [`Asset::cache_bytes`]. Active rendering consumers own
+    /// their ready outputs separately until their frame/view state retires.
+    /// This includes error results; [`Self::remove_asset`] explicitly invalidates
+    /// active consumers, even after their LRU entry has already been evicted.
+    pub fn set_completed_asset_cache_limits(&mut self, max_entries: usize, max_bytes: u64) {
+        self.asset_cache_max_entries = max_entries;
+        self.asset_cache_max_bytes = max_bytes;
+        self.trim_completed_assets();
+    }
+
+    /// Set the pending-work cap used by [`Self::fetch_asset_checked`] and window
+    /// asset helpers (default 64, normalized to 1..=4096). Existing shared loads
+    /// remain valid. Synchronous checked loader initializations also occupy
+    /// admission before they publish a task. Legacy [`Self::fetch_asset`] permits
+    /// explicit unbounded admission.
+    pub fn set_pending_asset_limit(&mut self, max_pending: usize) {
+        self.asset_cache_max_pending = max_pending.clamp(1, 4096);
+    }
+
+    /// Number of unfinished tasks owned by the app's shared asset cache.
+    pub fn pending_asset_count(&self) -> usize {
+        self.loading_assets
+            .values()
+            .filter(|entry| entry.completed_bytes.is_none())
+            .count()
+    }
+
+    /// Fetch an asset with pending admission checked before invoking its loader.
+    /// Published requests always share their task, including at the admission cap.
+    /// A full cache or an initializing same-key request returns an error; retry
+    /// after initialization or another load completes. Other owners' shared
+    /// handles remain valid if an entry is removed or evicted.
+    pub fn fetch_asset_checked<A: Asset>(
+        &mut self,
+        source: &A::Source,
+    ) -> Result<(Shared<Task<A::Output>>, bool)> {
+        let key = (TypeId::of::<A>(), hash(source));
+        self.fetch_asset_checked_with_key::<A>(source, key)
+    }
+
+    fn fetch_asset_checked_with_key<A: Asset>(
+        &mut self,
+        source: &A::Source,
+        key: (TypeId, u64),
+    ) -> Result<(Shared<Task<A::Output>>, bool)> {
+        if self.loading_assets.contains_key(&key) {
+            return Ok(self.fetch_asset_with_key::<A>(source, key));
+        }
+
+        let reservation = {
+            let mut keys = self.asset_initializations.borrow_mut();
+            anyhow::ensure!(
+                !keys.contains(&key),
+                "asset request is being initialized; retry after initialization completes"
+            );
+            anyhow::ensure!(
+                self.pending_asset_count().saturating_add(keys.len())
+                    < self.asset_cache_max_pending,
+                "asset cache pending-load limit reached; retry after a load completes"
+            );
+            keys.insert(key);
+            AssetInitializationReservation {
+                keys: self.asset_initializations.clone(),
+                key,
+            }
+        };
+
+        // Source::clone and Asset::load may reenter checked fetch synchronously.
+        // No registry or cache borrow crosses those callbacks, and unwinding
+        // must release admission before waking views that just deferred on it.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.fetch_asset_with_key::<A>(source, key)
+        }));
+        drop(reservation);
+        match result {
+            Ok(request) => Ok(request),
+            Err(panic) => {
+                self.resume_deferred_asset_requests();
+                std::panic::resume_unwind(panic)
+            }
+        }
+    }
+
+    pub(crate) fn observe_asset_consumer_invalidation(
+        &mut self,
+        key: (TypeId, u64),
+        callback: impl FnMut(&mut App) + 'static,
+    ) -> Subscription {
+        let (subscription, activate) = self
+            .asset_consumer_invalidations
+            .insert(key, Box::new(callback));
+        activate();
+        subscription
+    }
+
+    #[cfg(test)]
+    pub(crate) fn asset_consumer_subscription_stats(&self) -> (usize, usize, usize, usize) {
+        let (keys, callbacks) = self.asset_consumer_invalidations.stats();
+        let (ready_keys, ready_callbacks) = self
+            .loading_assets
+            .values()
+            .map(|entry| entry.ready_consumers.stats())
+            .fold((0, 0), |(keys, callbacks), (next_keys, next_callbacks)| {
+                (keys + next_keys, callbacks + next_callbacks)
+            });
+        (keys, callbacks, ready_keys, ready_callbacks)
+    }
+
+    pub(crate) fn fetch_asset_for_consumer<A: Asset>(
+        &mut self,
+        source: &A::Source,
+        key: (TypeId, u64),
+    ) -> Result<AssetConsumerRequest<A>> {
+        let (task, _) = self.fetch_asset_checked_with_key::<A>(source, key)?;
+        let entry = self.loading_assets.get(&key).expect("fetched asset entry");
+        Ok(AssetConsumerRequest {
+            task,
+            generation: entry.generation.clone(),
+            subscribers: entry.ready_consumers.clone(),
+        })
+    }
+
+    pub(crate) fn defer_asset_retry(&mut self, entity: EntityId) {
+        self.asset_cache_waiters.insert(entity);
+    }
+
+    /// Number of completed outputs retained by the app-wide asset cache.
+    pub fn completed_asset_count(&self) -> usize {
+        self.loading_assets
+            .values()
+            .filter(|entry| entry.completed_bytes.is_some())
+            .count()
+    }
+
+    /// Reported bytes of completed outputs retained by the app-wide asset cache.
+    pub fn completed_asset_bytes(&self) -> u64 {
+        self.loading_assets
+            .values()
+            .filter_map(|entry| entry.completed_bytes)
+            .fold(0, u64::saturating_add)
+    }
+
+    pub(crate) fn asset_image_decode_limit(&self) -> u64 {
+        if self.asset_cache_max_bytes == 0 {
+            crate::assets::MAX_DECODED_IMAGE_BYTES as u64
+        } else {
+            self.asset_cache_max_bytes
+                .min(crate::assets::MAX_DECODED_IMAGE_BYTES as u64)
+        }
+    }
+
+    pub(crate) fn resume_deferred_asset_requests(&mut self) {
+        for entity in std::mem::take(&mut self.asset_cache_waiters) {
+            self.notify(entity);
+        }
+    }
+
+    /// Release completed cached outputs without interrupting shared pending loads.
+    /// Active drawing consumers keep their ready results, including errors;
+    /// use [`Self::remove_asset`] to invalidate those results for a reload.
+    pub fn clear_completed_asset_cache(&mut self) {
+        let _ = self.clear_completed_asset_cache_checked();
+    }
+
+    /// Clear completed outputs while reporting and containing eviction-hook panics.
+    /// Every completed cache entry is removed even if another owner's hook panics.
+    /// Active drawing consumers keep their ready results, including errors;
+    /// use [`Self::remove_asset`] to invalidate those results for a reload.
+    pub fn clear_completed_asset_cache_checked(&mut self) -> Result<usize> {
+        let mut evicted = 0;
+        let mut hook_panicked = false;
+        let mut keys: Vec<_> = self
+            .loading_assets
+            .iter()
+            .filter_map(|(key, entry)| {
+                entry
+                    .completed_bytes
+                    .is_some()
+                    .then_some((*key, entry.generation.clone()))
+            })
+            .collect();
+        keys.sort_by_key(|(key, _)| *key);
+        for (key, generation) in keys {
+            if self.loading_assets.get(&key).is_some_and(|entry| {
+                entry.completed_bytes.is_some() && Arc::ptr_eq(&entry.generation, &generation)
+            }) && let Some(entry) = self.loading_assets.remove(&key)
+            {
+                hook_panicked |= self.release_cached_asset(entry);
+                evicted += 1;
+            }
+        }
+        self.loading_assets.shrink_to_fit();
+        anyhow::ensure!(!hook_panicked, "asset cache eviction hook panicked");
+        Ok(evicted)
+    }
+
+    /// Release cache ownership of unfinished asset loads. Work cancels when no
+    /// external shared owner remains; external callers can still await their
+    /// handles. Critical memory pressure invokes this after completed eviction.
+    pub fn clear_pending_asset_cache_checked(&mut self) -> Result<usize> {
+        let mut keys: Vec<_> = self
+            .loading_assets
+            .iter()
+            .filter_map(|(key, entry)| {
+                entry
+                    .completed_bytes
+                    .is_none()
+                    .then_some((*key, entry.generation.clone()))
+            })
+            .collect();
+        keys.sort_by_key(|(key, _)| *key);
+        let mut removed = 0;
+        let mut hook_panicked = false;
+        for (key, generation) in keys {
+            if self.loading_assets.get(&key).is_some_and(|entry| {
+                entry.completed_bytes.is_none() && Arc::ptr_eq(&entry.generation, &generation)
+            }) && let Some(entry) = self.loading_assets.remove(&key)
+            {
+                hook_panicked |= self.release_cached_asset(entry);
+                removed += 1;
+            }
+        }
+        self.loading_assets.shrink_to_fit();
+        self.resume_deferred_asset_requests();
+        anyhow::ensure!(!hook_panicked, "asset cache eviction hook panicked");
+        Ok(removed)
+    }
+
+    fn release_cached_asset(&mut self, entry: CachedAssetTask) -> bool {
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            (entry.on_evict)(entry.task.as_ref(), self);
+        }))
+        .is_err();
+        if panicked {
+            log::error!("asset cache eviction hook panicked");
+        }
+        panicked
+    }
+
+    fn trim_completed_assets(&mut self) {
+        let mut count = self.completed_asset_count();
+        let mut bytes: u128 = self
+            .loading_assets
+            .values()
+            .filter_map(|entry| entry.completed_bytes)
+            .map(u128::from)
+            .sum();
+        if count <= self.asset_cache_max_entries && bytes <= u128::from(self.asset_cache_max_bytes)
+        {
+            return;
+        }
+        let mut candidates: Vec<_> = self
+            .loading_assets
+            .iter()
+            .filter_map(|(key, entry)| {
+                entry
+                    .completed_bytes
+                    .map(|_| (*key, entry.last_used, entry.generation.clone()))
+            })
+            .collect();
+        candidates.sort_by_key(|(key, used, _)| (*used, *key));
+        for (key, _, generation) in candidates {
+            if count <= self.asset_cache_max_entries
+                && bytes <= u128::from(self.asset_cache_max_bytes)
+            {
+                break;
+            }
+            if self.loading_assets.get(&key).is_some_and(|entry| {
+                entry.completed_bytes.is_some() && Arc::ptr_eq(&entry.generation, &generation)
+            }) && let Some(entry) = self.loading_assets.remove(&key)
+            {
+                self.release_cached_asset(entry);
+                // Eviction hooks may release other outputs or change limits.
+                count = self.completed_asset_count();
+                bytes = self
+                    .loading_assets
+                    .values()
+                    .filter_map(|entry| entry.completed_bytes)
+                    .map(u128::from)
+                    .sum();
+            }
+        }
+    }
+
+    fn next_asset_cache_tick(&mut self) -> u64 {
+        if self.asset_cache_tick == u64::MAX {
+            let mut order: Vec<_> = self
+                .loading_assets
+                .iter()
+                .map(|(key, entry)| (*key, entry.last_used))
+                .collect();
+            order.sort_by_key(|(key, used)| (*used, *key));
+            for (rank, (key, _)) in order.into_iter().enumerate() {
+                self.loading_assets.get_mut(&key).unwrap().last_used = rank as u64;
+            }
+            self.asset_cache_tick = self.loading_assets.len() as u64;
+        }
+        self.asset_cache_tick += 1;
+        self.asset_cache_tick
     }
 
     /// Asynchronously load an asset, if the asset hasn't finished loading this will return None.
     ///
     /// Note that the multiple calls to this method will only result in one `Asset::load` call at a
-    /// time, and the results of this call will be cached
+    /// time. Completed results use the app's bounded LRU retention policy. This legacy
+    /// API admits pending loads without a cap; framework-owned requests use
+    /// [`Self::fetch_asset_checked`] to bound admission before invoking the loader.
     pub fn fetch_asset<A: Asset>(&mut self, source: &A::Source) -> (Shared<Task<A::Output>>, bool) {
-        let asset_id = (TypeId::of::<A>(), hash(source));
-        let mut is_first = false;
-        let task = self
-            .loading_assets
-            .remove(&asset_id)
-            .map(
-                |boxed_task| match boxed_task.downcast::<Shared<Task<A::Output>>>() {
-                    Ok(task) => *task,
-                    Err(_) => panic!("stored asset task type did not match {}", type_name::<A>()),
+        self.fetch_asset_with_key::<A>(source, (TypeId::of::<A>(), hash(source)))
+    }
+
+    fn fetch_asset_with_key<A: Asset>(
+        &mut self,
+        source: &A::Source,
+        asset_id: (TypeId, u64),
+    ) -> (Shared<Task<A::Output>>, bool) {
+        let tick = self.next_asset_cache_tick();
+        if let Some(entry) = self.loading_assets.get_mut(&asset_id) {
+            entry.last_used = tick;
+            let task = entry
+                .task
+                .downcast_ref::<Shared<Task<A::Output>>>()
+                .unwrap_or_else(|| {
+                    panic!("stored asset task type did not match {}", type_name::<A>())
+                })
+                .clone();
+            return (task, false);
+        }
+        let future = A::load(source.clone(), self);
+        let task = self.background_executor().spawn(future).shared();
+        let generation = Arc::new(());
+        let observer = self.spawn({
+            let task = task.clone();
+            let generation = generation.clone();
+            async move |cx| {
+                let ready = task.clone();
+                let output = task.await;
+                let _ = cx.update(|cx| {
+                    let consumers = cx
+                        .loading_assets
+                        .get(&asset_id)
+                        .filter(|entry| Arc::ptr_eq(&entry.generation, &generation))
+                        .map(|entry| entry.ready_consumers.clone());
+                    let Some(consumers) = consumers else {
+                        return;
+                    };
+                    // Publish active ownership before accounting or eviction.
+                    // Neither callback dispatch nor caller code holds a map borrow.
+                    for mut consumer in consumers.remove(&()) {
+                        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            consumer(&ready, &generation, cx);
+                        }))
+                        .is_err()
+                        {
+                            log::error!("asset ready consumer panicked");
+                        }
+                    }
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        A::cache_bytes(&output)
+                    })) {
+                        Ok(bytes) => {
+                            let current = if let Some(entry) = cx.loading_assets.get_mut(&asset_id)
+                                && Arc::ptr_eq(&entry.generation, &generation)
+                            {
+                                entry.completed_bytes = Some(bytes);
+                                true
+                            } else {
+                                false
+                            };
+                            if current {
+                                cx.trim_completed_assets();
+                            }
+                        }
+                        Err(_) => {
+                            log::error!(
+                                "asset cache byte-accounting hook panicked; output is not retained"
+                            );
+                            if cx
+                                .loading_assets
+                                .get(&asset_id)
+                                .is_some_and(|entry| Arc::ptr_eq(&entry.generation, &generation))
+                                && let Some(entry) = cx.loading_assets.remove(&asset_id)
+                            {
+                                cx.release_cached_asset(entry);
+                            }
+                        }
+                    }
+                    cx.resume_deferred_asset_requests();
+                });
+            }
+        });
+        self.loading_assets.insert(
+            asset_id,
+            CachedAssetTask {
+                task: Box::new(task.clone()),
+                ready_consumers: SubscriberSet::new(),
+                generation,
+                last_used: tick,
+                completed_bytes: None,
+                on_evict: |task, cx| {
+                    if let Some(task) = task.downcast_ref::<Shared<Task<A::Output>>>()
+                        && let Some(output) = task.peek()
+                    {
+                        A::on_cache_evict(output, cx);
+                    }
                 },
-            )
-            .unwrap_or_else(|| {
-                is_first = true;
-                let future = A::load(source.clone(), self);
-
-                self.background_executor().spawn(future).shared()
-            });
-
-        self.loading_assets.insert(asset_id, Box::new(task.clone()));
-
-        (task, is_first)
+                _observer: observer,
+            },
+        );
+        (task, true)
     }
 
     /// Obtain a new [`FocusHandle`], which allows you to track and manipulate the keyboard focus
@@ -39155,8 +39633,10 @@ impl App {
                     .push_back(Effect::Notify { emitter: entity_id });
             }
         } else {
-            for invalidator in window_invalidators.values() {
-                invalidator.invalidate_view(entity_id, self);
+            for (id, invalidator) in &window_invalidators {
+                if invalidator.invalidate_view(entity_id, self) {
+                    self.pending_frame_polling.insert(*id);
+                }
             }
         }
 

@@ -1,9 +1,10 @@
 use crate::{
-    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
-    AccessibilityValue, App, BorderStyle, Bounds, CursorStyle, DispatchPhase, Element, ElementId,
-    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, Interactivity, IntoElement,
-    KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, ScrollHandle, Window, fill, outline, point, px, size,
+    AccessibilityAction, AccessibilityActionPayload, AccessibilityAttributes, AccessibilityId,
+    AccessibilityRole, AccessibilityState, AccessibilityValue, App, BorderStyle, Bounds,
+    CursorStyle, DispatchPhase, Element, ElementId, FocusHandle, GlobalElementId, Hitbox,
+    HitboxBehavior, InspectorElementId, Interactivity, IntoElement, KeyDownEvent, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, Window,
+    fill, outline, point, px, size,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -16,6 +17,14 @@ struct ScrollBarDragState {
 #[derive(Debug, Default)]
 struct ScrollBarPersistentState {
     drag_state: Option<ScrollBarDragState>,
+    accessibility_binding: Option<ScrollBarAccessibilityBinding>,
+}
+
+#[derive(Debug)]
+struct ScrollBarAccessibilityBinding {
+    id: AccessibilityId,
+    handle: ScrollHandle,
+    vertical: bool,
 }
 
 impl ScrollBarPersistentState {
@@ -205,7 +214,7 @@ impl ScrollBar {
 
     /// Set the keyboard increment used for arrow-key scrolling.
     pub fn step(mut self, step: Pixels) -> Self {
-        if step > Pixels::ZERO {
+        if step.0.is_finite() && step > Pixels::ZERO {
             self.step = step;
         }
         self
@@ -218,6 +227,12 @@ impl ScrollBar {
     ) -> Self {
         self.custom_renderer = Some(Rc::new(renderer));
         self
+    }
+}
+
+impl crate::Styled for ScrollBar {
+    fn style(&mut self) -> &mut crate::StyleRefinement {
+        &mut self.interactivity.base_style
     }
 }
 
@@ -295,6 +310,24 @@ impl Element for ScrollBar {
                 (state.clone(), state)
             },
         );
+
+        let accessibility_id = {
+            let mut state = persistent_state.borrow_mut();
+            let same_binding = state.accessibility_binding.as_ref().is_some_and(|binding| {
+                binding.vertical == self.vertical && binding.handle.ptr_eq(&self.scroll_handle)
+            });
+            if !same_binding {
+                // A queued action or drag belongs to the old handle and axis.
+                // Never let reuse of the same element key retarget that input.
+                state.end_drag();
+                state.accessibility_binding = Some(ScrollBarAccessibilityBinding {
+                    id: AccessibilityId::new(),
+                    handle: self.scroll_handle.clone(),
+                    vertical: self.vertical,
+                });
+            }
+            state.accessibility_binding.as_ref().unwrap().id
+        };
 
         if prepaint.hitbox.is_hovered(window) {
             window.set_cursor_style(CursorStyle::PointingHand, &prepaint.hitbox);
@@ -457,7 +490,6 @@ impl Element for ScrollBar {
             }
         });
 
-        let accessibility_id = window.next_anonymous_accessibility_id();
         window.register_accessibility_node_at(
             AccessibilityAttributes::new(AccessibilityRole::ScrollBar)
                 .states(if render_state.focused {
@@ -475,11 +507,118 @@ impl Element for ScrollBar {
                     AccessibilityAction::Focus,
                     AccessibilityAction::Increment,
                     AccessibilityAction::Decrement,
+                    AccessibilityAction::SetValue,
                 ])
                 .to_node(accessibility_id),
             bounds,
         );
+        register_scroll_bar_accessibility_handlers(
+            accessibility_id,
+            self.scroll_handle.clone(),
+            self.vertical,
+            self.interactivity.tracked_focus_handle.clone().unwrap(),
+            window,
+            cx,
+        );
     }
+}
+
+fn register_scroll_bar_accessibility_handlers(
+    id: AccessibilityId,
+    scroll_handle: ScrollHandle,
+    vertical: bool,
+    focus_handle: FocusHandle,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    for action in [
+        AccessibilityAction::Focus,
+        AccessibilityAction::Increment,
+        AccessibilityAction::Decrement,
+        AccessibilityAction::SetValue,
+    ] {
+        let scroll_handle = scroll_handle.clone();
+        let focus_handle = focus_handle.clone();
+        let window_handle = window.window_handle();
+        let async_cx = cx.to_async();
+        let executor = cx.foreground_executor().clone();
+        window.on_frame_accessibility_action(id, action, move |request| {
+            let scroll_handle = scroll_handle.clone();
+            let focus_handle = focus_handle.clone();
+            let mut async_cx = async_cx.clone();
+            executor
+                .spawn(async move {
+                    _ = window_handle.update(&mut async_cx, |_, window, _| {
+                        let Some(request) =
+                            window.accessibility_tree().validate_action_request(request)
+                        else {
+                            return;
+                        };
+                        if request.action == AccessibilityAction::Focus {
+                            window.focus(&focus_handle);
+                            window.refresh();
+                            return;
+                        }
+                        // Step is a current capability; a redraw may have changed
+                        // it after this request was queued. Geometry and offsets
+                        // below come from the live handle, never a painted snapshot.
+                        let step = window
+                            .accessibility_tree()
+                            .get(id)
+                            .and_then(|node| match node.value.as_ref() {
+                                Some(AccessibilityValue::Range { step, .. }) => *step,
+                                _ => None,
+                            });
+                        if let Some(next) = native_scroll_bar_action_offset(
+                            &scroll_handle,
+                            vertical,
+                            request.action,
+                            request.payload.as_ref(),
+                            step,
+                        ) {
+                            set_scroll_handle_logical_offset(&scroll_handle, vertical, next);
+                            window.refresh();
+                        }
+                    });
+                })
+                .detach();
+        });
+    }
+}
+
+fn native_scroll_bar_action_offset(
+    handle: &ScrollHandle,
+    vertical: bool,
+    action: AccessibilityAction,
+    payload: Option<&AccessibilityActionPayload>,
+    step: Option<f64>,
+) -> Option<Pixels> {
+    let maximum = f64::from(logical_axis_size(handle.max_offset(), vertical).0);
+    if !maximum.is_finite() || maximum < 0.0 {
+        return None;
+    }
+    let current = f64::from(logical_scroll_offset(handle.offset(), vertical).0);
+    let next = match action {
+        AccessibilityAction::Increment | AccessibilityAction::Decrement => {
+            let step = step.filter(|step| step.is_finite() && *step > 0.0)?;
+            if !current.is_finite() {
+                return None;
+            }
+            if action == AccessibilityAction::Increment {
+                current + step
+            } else {
+                current - step
+            }
+        }
+        AccessibilityAction::SetValue => match payload {
+            Some(AccessibilityActionPayload::NumericValue(value)) if value.is_finite() => *value,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    // Clamp in f64 before converting so even a huge finite native value cannot
+    // overflow the f32 Pixels representation.
+    Some(px(next.clamp(0.0, maximum) as f32))
 }
 
 impl IntoElement for ScrollBar {
@@ -952,5 +1091,488 @@ mod tests {
         assert!(!summary.contains("712"));
         assert!(!summary.contains("0.25"));
         assert!(!summary.contains("0.28"));
+    }
+
+    struct NativeActionsView {
+        handle: ScrollHandle,
+        vertical: bool,
+        viewport: f32,
+        extent: f32,
+    }
+
+    impl Render for NativeActionsView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let mut bar = scroll_bar("native-action-bar", self.handle.clone());
+            if !self.vertical {
+                bar = bar.horizontal();
+            }
+            div()
+                .flex()
+                .flex_col()
+                .size_full()
+                .child(
+                    div()
+                        .id("native-action-content")
+                        .flex_shrink_0()
+                        .w(px(self.viewport))
+                        .h(px(self.viewport))
+                        .overflow_scroll()
+                        .track_scroll(&self.handle)
+                        .child(div().w(px(self.extent)).h(px(self.extent))),
+                )
+                .child(bar)
+        }
+    }
+
+    struct SiblingBarsView {
+        bars: Vec<(u64, ScrollHandle)>,
+        vertical: bool,
+    }
+
+    impl Render for SiblingBarsView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .flex()
+                .size_full()
+                .children(self.bars.iter().map(|(key, handle)| {
+                    let mut bar = scroll_bar(
+                        ElementId::NamedInteger("native-sibling-bar".into(), *key),
+                        handle.clone(),
+                    );
+                    if !self.vertical {
+                        bar = bar.horizontal();
+                    }
+                    div()
+                        .id(ElementId::NamedInteger("native-sibling-pair".into(), *key))
+                        .flex()
+                        .flex_col()
+                        .w(px(180.0))
+                        .h(px(340.0))
+                        .flex_shrink_0()
+                        .child(
+                            div()
+                                .id("sibling-content")
+                                .w(px(160.0))
+                                .h(px(160.0))
+                                .flex_shrink_0()
+                                .overflow_scroll()
+                                .track_scroll(handle)
+                                .child(div().w(px(480.0)).h(px(480.0))),
+                        )
+                        .child(bar)
+                }))
+        }
+    }
+
+    fn native_axis_offset(handle: &ScrollHandle, vertical: bool) -> Pixels {
+        if vertical {
+            handle.offset().y
+        } else {
+            handle.offset().x
+        }
+    }
+
+    fn native_nodes(window: &Window) -> Vec<crate::AccessibilityNode> {
+        let mut bars = window
+            .accessibility_tree()
+            .nodes
+            .values()
+            .filter(|node| node.role == AccessibilityRole::ScrollBar)
+            .cloned()
+            .collect::<Vec<_>>();
+        bars.sort_by(|a, b| a.bounds.unwrap().x.total_cmp(&b.bounds.unwrap().x));
+        bars
+    }
+
+    fn native_dispatch(
+        window: &mut crate::VisualTestContext,
+        id: crate::AccessibilityId,
+        action: AccessibilityAction,
+        payload: Option<crate::AccessibilityActionPayload>,
+    ) {
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(crate::AccessibilityActionRequest {
+                node_id: id,
+                action,
+                payload,
+            });
+        });
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+    }
+
+    #[crate::test]
+    fn scroll_bar_native_identity_survives_sibling_removal_and_reorder(cx: &mut TestAppContext) {
+        let first = ScrollHandle::new();
+        let second = ScrollHandle::new();
+        let third = ScrollHandle::new();
+        let (view, mut window) = cx.add_window_view(|_, _| SiblingBarsView {
+            bars: vec![(1, first.clone()), (2, second.clone())],
+            vertical: false,
+        });
+        let ids = window.update(|window, cx| {
+            window.draw(cx).clear();
+            native_nodes(window)
+                .iter()
+                .map(|n| n.id)
+                .collect::<Vec<_>>()
+        });
+        window.update(|window, cx| {
+            window.dispatch_accessibility_action_for_test(crate::AccessibilityActionRequest::new(
+                ids[0],
+                AccessibilityAction::Increment,
+            ));
+            view.update(cx, |view, cx| {
+                view.bars.remove(0);
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            let current = native_nodes(window);
+            assert_eq!(
+                current[0].id, ids[1],
+                "removing a preceding sibling must preserve the surviving keyed bar's identity"
+            );
+            assert!(window.accessibility_tree().get(ids[0]).is_none());
+            assert!(
+                !window.has_accessibility_action_handler(ids[0], AccessibilityAction::Increment)
+            );
+        });
+        window.run_until_parked();
+        assert_eq!(
+            first.offset().x,
+            px(0.0),
+            "queued retired action must not mutate a retained outgoing handle"
+        );
+        assert_eq!(
+            second.offset().x,
+            px(0.0),
+            "queued retired action must not retarget the surviving sibling"
+        );
+        window.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.bars.push((3, third.clone()));
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            let third_id = native_nodes(window)[1].id;
+            view.update(cx, |view, cx| {
+                view.bars.swap(0, 1);
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            let reordered = native_nodes(window);
+            assert_eq!(reordered[0].id, third_id);
+            assert_eq!(reordered[1].id, ids[1]);
+        });
+        native_dispatch(&mut window, ids[1], AccessibilityAction::Increment, None);
+        assert_eq!(second.offset().x, px(-40.0));
+        assert_eq!(third.offset().x, px(0.0));
+    }
+
+    #[crate::test]
+    fn scroll_bar_native_identity_rotates_on_same_key_handle_and_axis_replacement(
+        cx: &mut TestAppContext,
+    ) {
+        let first = ScrollHandle::new();
+        let old = ScrollHandle::new();
+        let replacement = ScrollHandle::new();
+        let (view, mut window) = cx.add_window_view(|_, _| SiblingBarsView {
+            bars: vec![(1, first.clone()), (2, old.clone())],
+            vertical: false,
+        });
+        let node = window.update(|window, cx| {
+            window.draw(cx).clear();
+            native_nodes(window)[1].clone()
+        });
+        let bounds = node.bounds.unwrap();
+        let drag_start = point(
+            px(bounds.x as f32 + 8.0),
+            px((bounds.y + bounds.height / 2.0) as f32),
+        );
+        window.simulate_mouse_down(drag_start, MouseButton::Left, Modifiers::default());
+        let replacement_id = window.update(|window, cx| {
+            window.dispatch_accessibility_action_for_test(crate::AccessibilityActionRequest::new(
+                node.id,
+                AccessibilityAction::Increment,
+            ));
+            view.update(cx, |view, cx| {
+                view.bars[1].1 = replacement.clone();
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            let current = native_nodes(window)[1].id;
+            assert_ne!(
+                current, node.id,
+                "a new handle at the same element key needs a new semantic identity"
+            );
+            assert!(window.accessibility_tree().get(node.id).is_none());
+            current
+        });
+        window.run_until_parked();
+        let drag_end = point(drag_start.x + px(100.0), drag_start.y);
+        window.simulate_mouse_move(drag_end, Some(MouseButton::Left), Modifiers::default());
+        window.simulate_mouse_up(drag_end, MouseButton::Left, Modifiers::default());
+        assert_eq!(old.offset(), Point::default());
+        assert_eq!(
+            replacement.offset(),
+            Point::default(),
+            "old queued action and old drag must not retarget replacement"
+        );
+        native_dispatch(
+            &mut window,
+            replacement_id,
+            AccessibilityAction::Increment,
+            None,
+        );
+        assert_eq!(replacement.offset().x, px(-40.0));
+        let vertical_id = window.update(|window, cx| {
+            window.dispatch_accessibility_action_for_test(crate::AccessibilityActionRequest::new(
+                replacement_id,
+                AccessibilityAction::Increment,
+            ));
+            view.update(cx, |view, cx| {
+                view.vertical = true;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            let current = native_nodes(window)[1].id;
+            assert_ne!(
+                current, replacement_id,
+                "same handle with a new axis retires the old axis action"
+            );
+            current
+        });
+        window.run_until_parked();
+        assert_eq!(replacement.offset(), point(px(-40.0), px(0.0)));
+        native_dispatch(
+            &mut window,
+            vertical_id,
+            AccessibilityAction::Increment,
+            None,
+        );
+        assert_eq!(replacement.offset(), point(px(-40.0), px(-40.0)));
+    }
+
+    #[crate::test]
+    fn scroll_bar_native_actions_use_live_range_and_finite_numeric_values_on_both_axes(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::{AccessibilityActionPayload, AccessibilityActionRequest};
+        for vertical in [false, true] {
+            let handle = ScrollHandle::new();
+            let (view, mut window) = cx.add_window_view(|_, _| NativeActionsView {
+                handle: handle.clone(),
+                vertical,
+                viewport: 160.0,
+                extent: 480.0,
+            });
+            let id = window.update(|window, cx| {
+                window.draw(cx).clear();
+                native_nodes(window)[0].id
+            });
+            native_dispatch(&mut window, id, AccessibilityAction::Focus, None);
+            window.update(|window, _| {
+                assert_eq!(window.accessibility_tree().focused_node_count(), 1);
+                assert_eq!(window.accessibility_tree().focused_node().unwrap(), id);
+                for action in [
+                    AccessibilityAction::Focus,
+                    AccessibilityAction::Increment,
+                    AccessibilityAction::Decrement,
+                    AccessibilityAction::SetValue,
+                ] {
+                    assert!(window.has_accessibility_action_handler(id, action));
+                }
+            });
+            handle.set_offset(if vertical {
+                point(px(-17.0), px(0.0))
+            } else {
+                point(px(0.0), px(-19.0))
+            });
+            window.update(|window, cx| {
+                window.draw(cx).clear();
+                for _ in 0..3 {
+                    window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                        id,
+                        AccessibilityAction::Increment,
+                    ));
+                }
+            });
+            window.run_until_parked();
+            assert_eq!(native_axis_offset(&handle, vertical), px(-120.0));
+            let orthogonal = if vertical {
+                handle.offset().x
+            } else {
+                handle.offset().y
+            };
+            assert_eq!(orthogonal, if vertical { px(-17.0) } else { px(-19.0) });
+            for (value, expected) in [(-100.0, 0.0), (64.0, 64.0), (1e300, 320.0)] {
+                native_dispatch(
+                    &mut window,
+                    id,
+                    AccessibilityAction::SetValue,
+                    Some(AccessibilityActionPayload::NumericValue(value)),
+                );
+                assert_eq!(native_axis_offset(&handle, vertical), px(-expected));
+                window.update(|window, _| {
+                    assert!(matches!(native_nodes(window)[0].value, Some(AccessibilityValue::Range { current, .. }) if current == f64::from(expected)));
+                });
+            }
+            native_dispatch(&mut window, id, AccessibilityAction::Increment, None);
+            assert_eq!(native_axis_offset(&handle, vertical), px(-320.0));
+            native_dispatch(&mut window, id, AccessibilityAction::Decrement, None);
+            assert_eq!(native_axis_offset(&handle, vertical), px(-280.0));
+            for payload in [
+                None,
+                Some(AccessibilityActionPayload::NumericValue(f64::NAN)),
+                Some(AccessibilityActionPayload::NumericValue(f64::INFINITY)),
+                Some(AccessibilityActionPayload::NumericValue(f64::NEG_INFINITY)),
+                Some(AccessibilityActionPayload::Value("40".into())),
+            ] {
+                native_dispatch(&mut window, id, AccessibilityAction::SetValue, payload);
+                assert_eq!(native_axis_offset(&handle, vertical), px(-280.0));
+            }
+            window.update(|window, cx| {
+                window.dispatch_accessibility_action_for_test(
+                    AccessibilityActionRequest::with_payload(
+                        id,
+                        AccessibilityAction::SetValue,
+                        AccessibilityActionPayload::NumericValue(1000.0),
+                    ),
+                );
+                view.update(cx, |view, cx| {
+                    view.viewport = 400.0;
+                    cx.notify();
+                });
+                window.draw(cx).clear();
+                assert_eq!(logical_axis_size(handle.max_offset(), vertical), px(80.0));
+            });
+            window.run_until_parked();
+            assert_eq!(
+                native_axis_offset(&handle, vertical),
+                px(-80.0),
+                "queued action must use current laid-out range, not the old320px range"
+            );
+            for extent in [0.0, 80.0, 400.0] {
+                window.update(|window, cx| {
+                    view.update(cx, |view, cx| {
+                        view.extent = extent;
+                        cx.notify();
+                    });
+                    window.draw(cx).clear();
+                });
+                native_dispatch(
+                    &mut window,
+                    id,
+                    AccessibilityAction::SetValue,
+                    Some(AccessibilityActionPayload::NumericValue(123.0)),
+                );
+                native_dispatch(&mut window, id, AccessibilityAction::Increment, None);
+                native_dispatch(&mut window, id, AccessibilityAction::Decrement, None);
+                assert_eq!(native_axis_offset(&handle, vertical), px(0.0));
+                window.update(|window, _| {
+                    assert!(
+                        native_nodes(window)[0]
+                            .value
+                            .as_ref()
+                            .unwrap()
+                            .is_finite_or_valid()
+                    )
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn scroll_bar_step_accepts_only_finite_positive_values() {
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -1.0] {
+            assert_eq!(
+                scroll_bar("step-check", ScrollHandle::new())
+                    .step(px(invalid))
+                    .step,
+                px(40.0)
+            );
+        }
+        assert_eq!(
+            scroll_bar("step-check", ScrollHandle::new())
+                .step(px(7.0))
+                .step,
+            px(7.0)
+        );
+    }
+
+    struct StyledBarsView {
+        handle: ScrollHandle,
+    }
+
+    impl Render for StyledBarsView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(scroll_bar("default-vertical", self.handle.clone()))
+                .child(scroll_bar("default-horizontal", self.handle.clone()).horizontal())
+                .child(
+                    div().w_full().h(px(24.0)).flex_shrink_0().child(
+                        scroll_bar("styled-horizontal", self.handle.clone())
+                            .horizontal()
+                            .w_full()
+                            .h(px(9.0)),
+                    ),
+                )
+                .child(
+                    div().w(px(30.0)).h(px(220.0)).flex_shrink_0().child(
+                        scroll_bar("styled-vertical", self.handle.clone())
+                            .w(px(8.0))
+                            .h_full(),
+                    ),
+                )
+        }
+    }
+
+    #[crate::test]
+    fn scroll_bar_styled_sizes_follow_parent_without_changing_primitive_defaults(
+        cx: &mut TestAppContext,
+    ) {
+        let (_view, mut window) = cx.add_window_view(|_, _| StyledBarsView {
+            handle: ScrollHandle::new(),
+        });
+        let mut original_ids = None;
+        for width in [340.0, 520.0, 280.0] {
+            window.simulate_resize(size(px(width), px(700.0)));
+            window.run_until_parked();
+            window.update(|window, cx| {
+                window.draw(cx).clear();
+                let mut bars = native_nodes(window);
+                bars.sort_by(|a, b| a.bounds.unwrap().y.total_cmp(&b.bounds.unwrap().y));
+                assert_eq!(bars.len(), 4);
+                let dimensions = bars
+                    .iter()
+                    .map(|bar| {
+                        let bounds = bar.bounds.unwrap();
+                        (bounds.width, bounds.height)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    dimensions,
+                    [
+                        (12.0, 160.0),
+                        (160.0, 12.0),
+                        (f64::from(width), 9.0),
+                        (8.0, 220.0)
+                    ],
+                    "actual layout must preserve defaults and resolve both-axis style overrides"
+                );
+                let ids = bars.iter().map(|bar| bar.id).collect::<Vec<_>>();
+                if let Some(original_ids) = &original_ids {
+                    assert_eq!(
+                        &ids, original_ids,
+                        "style-only resize keeps bound native IDs"
+                    );
+                } else {
+                    original_ids = Some(ids);
+                }
+            });
+        }
     }
 }

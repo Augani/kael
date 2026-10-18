@@ -1,0 +1,1470 @@
+{
+  "recorded_date": "2026-10-18",
+  "status": "ADOPTED_EXACT_OPT_IN_CATALOG_SOURCE_AFTER_NARROW_POST_ICON_CORRECTNESS_AND_COST_GATES",
+  "adopted": true,
+  "adoption": {
+    "receipt": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-catalog-exact-root-adoption-v1/result.json",
+      "sha256": "ec194fecabde38a9564302326aef58e0cd2bfae9d353a2f8a2ad1558c247f196",
+      "bytes": 4355
+    },
+    "status": "EXACT_TESTED_OPT_IN_IMMUTABLE_CATALOG_ADOPTED_BOTH_ROOTS_PENDING_PUBLICATION_COMMIT",
+    "three_source_paths_exact_tested_payload": true,
+    "source_fingerprint": "596b34b83cda75d8867f0b97e86f0db953e44d334fdc7b7f3fa1ae9156fa0db8",
+    "eligible_inputs_per_root": 3190,
+    "same_as_experimental_candidate_entries": true,
+    "both_saved_maps": {
+      "primary": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-catalog-exact-root-adoption-v1/primary-after.json",
+        "sha256": "65ca9bff1c588cc0eb8f73265c5f959ea081a3b8515dfd7bde4ca9f9ba47ae56",
+        "bytes": 701397
+      },
+      "managed": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-catalog-exact-root-adoption-v1/managed-after.json",
+        "sha256": "48d01c97e438637f0a3ed53499ef6d5a3fcd92ccc6b68bb6af5c7f156cfbe5f7",
+        "bytes": 701429
+      }
+    },
+    "no_new_compilation_or_native_proof_from_copy": true,
+    "publication_pending_at_preparation": true,
+    "commit_pending_at_preparation": true,
+    "adoption_commit_at_preparation": null,
+    "state_scope": "Exact adoption receipt snapshot before publication and commit; later documentation-only edits are separately recorded, with no new compiler/runtime/future-HEAD proof."
+  },
+  "scope": "Explicit opt-in immutable tree catalog for repeated full-data model projection. Ordinary release cfg(test)=false synthetic TestPlatform cost controls plus separate UI correctness; no canonical native/cross-framework ranking or global memory-policy closure.",
+  "public_API": "kael_ui::navigation::virtual_tree::VirtualTreeCatalog<T>::from_nodes(Vec<TreeNode<T>>, &BackgroundExecutor), model(&HashSet<T>), len(), is_empty()",
+  "source": {
+    "proposal": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-immutable-catalog-skip-test-v5/preparation.json",
+      "sha256": "1bd204c083aa43485cb57209e3fe2e70930b554fd234ae022dc615554b6b67eb",
+      "bytes": 12770
+    },
+    "baseline_primary_commit": "2622dbf77bd614482c0f1fe0a69966b9bca1c60d",
+    "baseline_managed_historical_head": "d766b5dc1c3f061944fbf6b0c24fc00cb49f8621",
+    "baseline_eligible_inputs_per_root": 3188,
+    "baseline_equal_byte_mode_fingerprint": "cf4e8b77c9e615484df1f52704e0f8cbfce4653fb932ead25bf46cd7a1d63650",
+    "routes": {
+      "old-legacy": "Baseline2622 owned source, existing legacy model builder",
+      "new-legacy": "Exact staged catalog candidate source1bd, unchanged legacy builder",
+      "catalog": "Same staged candidate source1bd, explicit retained catalog/model projection API"
+    },
+    "default_workloads_or_existing_legacy_API_changed": false,
+    "future_HEAD_acceptance_claim": false
+  },
+  "correctness": {
+    "actual": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-catalog-post-icon-correctness24-actual-v1/result.json",
+      "sha256": "1f46a41c511a9ab46ae514ca2e302fa39b518a4175e52d0f5df574e880e2ecdf",
+      "bytes": 4272859
+    },
+    "independent_actual_review": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-post-icon-catalog-correctness24-independent-general-actual-audit/review.json",
+      "sha256": "7f68a0dc01663648391c8e21f879ed279c5b1e48f9890715c62355c48294ba12",
+      "bytes": 55012
+    },
+    "commands": 24,
+    "baseline_UI_inventory": 575,
+    "candidate_and_three_mutant_UI_inventories": 581,
+    "fresh_copied_UI_test_binaries": 5,
+    "focused_new_cases": 6,
+    "full_UI": {
+      "passed": 581,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0,
+      "unfiltered": true,
+      "default_parallel": true,
+      "RUST_TEST_THREADS": null
+    },
+    "specific_compiled_runtime_mutants": 3,
+    "strict_UI_all_targets": "PASS",
+    "production_UI_and_joint_Core_UI_Wasm": "TYPECHECK_PASS_ONLY",
+    "format_all": "PASS",
+    "Core_dependency_scope": "Recorded debug Core cache hits and exact profiles/features; no new full Core suite in this24-command cohort."
+  },
+  "build": {
+    "actual": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-catalog-post-icon-cost-build-v1/result.json",
+      "sha256": "124f7753370b9637140f23e47818e7e5b2a3ed8d27b7cc6a94d1fb09f6594543",
+      "bytes": 39596618
+    },
+    "driver": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-catalog-post-icon-cost-bound-v3/run.py",
+      "sha256": "b27795bcfecc0d6870d2106a2eddf8e5ccfc7cc529a53484d57b879b6847267c",
+      "bytes": 34638
+    },
+    "config": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-catalog-post-icon-cost-root-ready-v1/config-reviewed.json",
+      "sha256": "d31009c292c73b4bf47e7db2d5700a584379701d4dd46fd75f329ce467bef816",
+      "bytes": 38108
+    },
+    "harness_descriptor": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-catalog-post-icon-cost-bound-v3/harness-descriptor.json",
+      "sha256": "adc427e72f16f4b8dac122574ceca2befde41885a848205e1dc5c4e92d877dba",
+      "bytes": 9928
+    },
+    "commands": 12,
+    "ordinary_release_copied_executables": 9,
+    "three_actual_normalized_common_graphs": "Equal437-node Core/UI closure and feature contract",
+    "registry_policy": "All three exact standalone locks equal; external registry tuples stay within frozen root-lock tuples",
+    "release_profile": {
+      "opt_level": "3",
+      "debuginfo": 1,
+      "debug_assertions": false,
+      "overflow_checks": false,
+      "test": false
+    },
+    "expected_Core_features": [
+      "backtrace",
+      "font-kit",
+      "icons",
+      "leak-detection",
+      "rand",
+      "test-support"
+    ],
+    "expected_UI_features": [],
+    "CPU_features": "No allocation-stats; direct System allocator",
+    "allocation_and_logical_features": "allocation-stats; counted System. Catalog route additionally uses catalog-route.",
+    "producer_scope": "All nine mains fresh=false, each copied and hashed before later builds. Later cached Core/UI links are matched to exact fresh producers from this same current-source build stage; no historical3182/3177 producer or hermetic/fresh-transitive claim.",
+    "compiler_receipt": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-catalog-cost-toolchain-v1/toolchain.json",
+      "sha256": "6ce3f11a55e715fac9a924ea9af1bf02dbadeb753b3357a7f8b79989a51301bb",
+      "bytes": 3980
+    },
+    "toolchain_scope": "Root byte-bound compiler identity/context reused from recorded toolchain; no new version-probe command is counted among these12 builds."
+  },
+  "execution": {
+    "run": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-catalog-post-icon-cost-measure-v1/run.json",
+      "sha256": "a214dc32d44fee17a8bb5583df81e307d8d814bfed216fb43ad33625be487373",
+      "bytes": 3228413
+    },
+    "measure_and_restore_result": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-catalog-post-icon-cost-measure-v1/result.json",
+      "sha256": "e42eb29e06326b71bb6e927e100a8f0ca187b044202ad26319b3544a68ca00a3",
+      "bytes": 3948127
+    },
+    "restoration": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-catalog-post-icon-cost-measure-v1/restoration.json",
+      "sha256": "6efb0035f0945dbfff862c55251320bcebe9ae442f46f922d849ab7b6f776ec0",
+      "bytes": 3166021
+    },
+    "quiet_ready": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-post-icon-catalog-quiet-ready-v1/quiet-ready.json",
+      "sha256": "46be4712b1b82e59a426436061aca9be08af7b65d66c6ece6aa8abcc29351d2f",
+      "bytes": 1771
+    },
+    "quiet_completion": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-post-icon-catalog-quiet-completed-v2/quiet-completion.json",
+      "sha256": "e9e034a029010ac6b44d0731451326d7b1a2c69395de274f7dec0876e6eb5928",
+      "bytes": 2047
+    },
+    "measurement_processes": 26,
+    "fixed_order": "3 logical oracles,20 CPU processes in two fixed five-pair contrasts,3 allocation processes; exact preserved gate order",
+    "total_build_and_measurement_groups": 38,
+    "all_groups_terminal_and_quiescent": true,
+    "all_outputs_preserved": true,
+    "retries": 0,
+    "outliers_removed": 0,
+    "pilot_runs": 0,
+    "restored_pre_adoption_maps_per_root": 3188,
+    "restoration_current_mtimes": true,
+    "quiet_scope": "Root-controlled local work and team tools held idle. OS services and unrelated apps were not stopped or causally attributed; fixed floors/noise gates remain mandatory."
+  },
+  "evaluation": {
+    "actual": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-catalog-post-icon-cost-evaluation-v2/evaluation.json",
+      "sha256": "46b013ad316b8fe2dab8f400e90f18c4026933649bd593cdf5326f7b6fc9b16e",
+      "bytes": 336153
+    },
+    "status": "PASS_FROZEN_NARROW_CATALOG_COST_GATES_ONLY",
+    "evaluator": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-catalog-post-icon-cost-bound-v3/evaluate.py",
+      "sha256": "366efd84edb1c135a134ca692556dfdd28a0200c18b20c74243b077981ab33bf",
+      "bytes": 19965
+    },
+    "frozen_gates": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-immutable-catalog-cost-formatted-v2/gates.json",
+      "sha256": "4a75bc27b0bd61123d6dcdd8ba138e36f867928441942980d7c4a4c0d04b00ab",
+      "bytes": 11080
+    },
+    "independent_actual_audit": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-post-icon-catalog-cost-independent-memory-actual-audit/review.json",
+      "sha256": "22d34956b7b1b0f960d1c3113d38e66afdd538ba18719b2619263fe766fe231b",
+      "bytes": 69787
+    },
+    "independent_recomputed_proof": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-post-icon-catalog-cost-independent-memory-actual-audit/recomputed-proof.json",
+      "sha256": "9a9801bc431280bc064e4258e0ef177a902594b223ae1bad88bf82d4983b854a",
+      "bytes": 332603
+    },
+    "numeric_checks_passed": 1628,
+    "numeric_checks_failed": 0,
+    "quality_checks_passed": 48,
+    "noise_findings": [],
+    "minimum_complete_bundle_ns": 20000000,
+    "maximum_MAD_over_median": 0.1,
+    "minimum_observed_complete_bundle_ns": 36992000,
+    "maximum_observed_MAD_over_median": 0.04245598260337195,
+    "no_threshold_workload_or_sample_change": true
+  },
+  "workload": {
+    "source_generations_retained": 2,
+    "shapes": [
+      {
+        "name": "wide",
+        "roots": 25,
+        "children": 4000,
+        "source_nodes": 100025,
+        "source_hashes": [
+          "fnv1a64:0fbc5b81edc32f9b",
+          "fnv1a64:1bfc4b56d6a0a5eb"
+        ],
+        "source_utf8_bytes": [
+          6100975,
+          6100975
+        ],
+        "rows": [
+          100025,
+          96025,
+          25
+        ],
+        "semantic_hashes": [
+          1133881819788423067,
+          17723356950550451803,
+          4947582741202451019
+        ],
+        "bundles": [
+          {
+            "name": "cold-wide",
+            "cycles": 4,
+            "operations": 4,
+            "segments": 4,
+            "checksum": 187700926886484353
+          },
+          {
+            "name": "warm-model-wide",
+            "cycles": 16,
+            "operations": 48,
+            "segments": 1,
+            "checksum": 17653424592569663189
+          },
+          {
+            "name": "warm-full-pipeline-wide",
+            "cycles": 4,
+            "operations": 12,
+            "segments": 12,
+            "checksum": 5508263114896108873
+          }
+        ],
+        "caps": {
+          "additional_single_source_live": 76884736,
+          "additional_two_source_live": 153769472,
+          "additional_cold_peak": 102687744,
+          "additional_cold_requested_per_iteration": 205113344
+        }
+      },
+      {
+        "name": "small",
+        "roots": 8,
+        "children": 16,
+        "source_nodes": 136,
+        "source_hashes": [
+          "fnv1a64:06ca554d41de9795",
+          "fnv1a64:fe2a31bdda31b8c5"
+        ],
+        "source_utf8_bytes": [
+          8120,
+          8120
+        ],
+        "rows": [
+          136,
+          120,
+          8
+        ],
+        "semantic_hashes": [
+          489297299829069717,
+          13961498287146279749,
+          6570507813195574741
+        ],
+        "bundles": [
+          {
+            "name": "cold-small",
+            "cycles": 256,
+            "operations": 256,
+            "segments": 256,
+            "checksum": 16235218904314746661
+          },
+          {
+            "name": "warm-model-small",
+            "cycles": 4096,
+            "operations": 12288,
+            "segments": 1,
+            "checksum": 16928505003936834341
+          },
+          {
+            "name": "warm-full-pipeline-small",
+            "cycles": 128,
+            "operations": 384,
+            "segments": 384,
+            "checksum": 9463232665822671141
+          }
+        ],
+        "caps": {
+          "additional_single_source_live": 169984,
+          "additional_two_source_live": 339968,
+          "additional_cold_peak": 401408,
+          "additional_cold_requested_per_iteration": 540672
+        }
+      }
+    ],
+    "logical_oracle_per_route": {
+      "full_tree_rows": 100025,
+      "oracles": 53,
+      "pipelines": 50,
+      "counted_spans": 418,
+      "checkpoints": 104,
+      "steady_generations": 32,
+      "focused_semantic_nodes": 1,
+      "mounted_rows_max": 28,
+      "offscreen_shared_checks_per_diagnostic": 2,
+      "all_labels_parents_and_IDs_checked": true,
+      "original_full_AX_action_witness_mask": 2047
+    },
+    "logical_run_cost_values_used": false
+  },
+  "CPU_complete_bundle_medians": [
+    {
+      "gate": "cpu:legacy:cold-wide:thread_ns",
+      "pass_": true,
+      "baseline": [
+        446457375,
+        413541125,
+        415455500,
+        416949666,
+        415509626
+      ],
+      "candidate": [
+        432649167,
+        423611833,
+        427538834,
+        419116625,
+        450297875
+      ],
+      "baseline_median": 415509626,
+      "candidate_median": 427538834,
+      "median_ratio": 1.0289504917510623,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "old-legacy": 0.003465719949409788,
+        "new-legacy": 0.011952909522132439
+      },
+      "median_percent_change": 2.8950491751062346
+    },
+    {
+      "gate": "cpu:legacy:cold-wide:process_ns",
+      "pass_": true,
+      "baseline": [
+        446458000,
+        413542000,
+        415457000,
+        416952000,
+        415509000
+      ],
+      "candidate": [
+        432649000,
+        423613000,
+        427540000,
+        419117000,
+        450299000
+      ],
+      "baseline_median": 415509000,
+      "candidate_median": 427540000,
+      "median_ratio": 1.0289548481501003,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "old-legacy": 0.0034728489635603562,
+        "new-legacy": 0.011949759086869065
+      },
+      "median_percent_change": 2.89548481501003
+    },
+    {
+      "gate": "cpu:legacy:warm-model-wide:thread_ns",
+      "pass_": true,
+      "baseline": [
+        487565750,
+        471311375,
+        554514917,
+        466865667,
+        509682833
+      ],
+      "candidate": [
+        480147333,
+        487747417,
+        466507084,
+        459877250,
+        545763000
+      ],
+      "baseline_median": 487565750,
+      "candidate_median": 480147333,
+      "median_ratio": 0.9847847864621335,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "old-legacy": 0.04245598260337195,
+        "new-legacy": 0.028408465615698836
+      },
+      "median_percent_change": -1.5215213537866479
+    },
+    {
+      "gate": "cpu:legacy:warm-model-wide:process_ns",
+      "pass_": true,
+      "baseline": [
+        487566000,
+        471311000,
+        554514000,
+        466866000,
+        509683000
+      ],
+      "candidate": [
+        480147000,
+        487750000,
+        466507000,
+        459878000,
+        545763000
+      ],
+      "baseline_median": 487566000,
+      "candidate_median": 480147000,
+      "median_ratio": 0.9847835985281993,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "old-legacy": 0.04245579060065714,
+        "new-legacy": 0.028407966726856568
+      },
+      "median_percent_change": -1.52164014718007
+    },
+    {
+      "gate": "cpu:legacy:warm-full-pipeline-wide:thread_ns",
+      "pass_": true,
+      "baseline": [
+        679093874,
+        668591999,
+        671389750,
+        682308585,
+        682903460
+      ],
+      "candidate": [
+        675355751,
+        690300001,
+        701946083,
+        697093832,
+        731042375
+      ],
+      "baseline_median": 679093874,
+      "candidate_median": 697093832,
+      "median_ratio": 1.0265058465245411,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "old-legacy": 0.005609807636108937,
+        "new-legacy": 0.009745934748135886
+      },
+      "median_percent_change": 2.6505846524541132
+    },
+    {
+      "gate": "cpu:legacy:warm-full-pipeline-wide:process_ns",
+      "pass_": true,
+      "baseline": [
+        679099000,
+        668597000,
+        671390000,
+        682311000,
+        682906000
+      ],
+      "candidate": [
+        675355000,
+        690307000,
+        701948000,
+        697097000,
+        731045000
+      ],
+      "baseline_median": 679099000,
+      "candidate_median": 697097000,
+      "median_ratio": 1.02650276322009,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "old-legacy": 0.005605957305194088,
+        "new-legacy": 0.009740394808756887
+      },
+      "median_percent_change": 2.650276322009004
+    },
+    {
+      "gate": "cpu:legacy:cold-small:thread_ns",
+      "pass_": true,
+      "baseline": [
+        338652046,
+        342144204,
+        339718039,
+        349799535,
+        343730503
+      ],
+      "candidate": [
+        337841951,
+        340263542,
+        351405666,
+        336538676,
+        353789709
+      ],
+      "baseline_median": 342144204,
+      "candidate_median": 340263542,
+      "median_ratio": 0.9945033059803053,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "old-legacy": 0.0070910597684711914,
+        "new-legacy": 0.010947002955726594
+      },
+      "median_percent_change": -0.5496694019694659
+    },
+    {
+      "gate": "cpu:legacy:cold-small:process_ns",
+      "pass_": true,
+      "baseline": [
+        338662000,
+        342145000,
+        339721000,
+        349806000,
+        343735000
+      ],
+      "candidate": [
+        337854000,
+        340276000,
+        351413000,
+        336544000,
+        353811000
+      ],
+      "baseline_median": 342145000,
+      "candidate_median": 340276000,
+      "median_ratio": 0.9945374037323357,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "old-legacy": 0.007084715544579053,
+        "new-legacy": 0.010967567504026143
+      },
+      "median_percent_change": -0.5462596267664321
+    },
+    {
+      "gate": "cpu:legacy:warm-model-small:thread_ns",
+      "pass_": true,
+      "baseline": [
+        104982750,
+        106474167,
+        102795833,
+        104573083,
+        103438167
+      ],
+      "candidate": [
+        108573334,
+        102695292,
+        103270167,
+        102727958,
+        103632292
+      ],
+      "baseline_median": 104573083,
+      "candidate_median": 103270167,
+      "median_ratio": 0.9875406178853884,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "old-legacy": 0.010852850154566065,
+        "new-legacy": 0.005250393368687009
+      },
+      "median_percent_change": -1.2459382114611617
+    },
+    {
+      "gate": "cpu:legacy:warm-model-small:process_ns",
+      "pass_": true,
+      "baseline": [
+        104982000,
+        106475000,
+        102796000,
+        104574000,
+        103438000
+      ],
+      "candidate": [
+        108574000,
+        102696000,
+        103269000,
+        102728000,
+        103633000
+      ],
+      "baseline_median": 104574000,
+      "candidate_median": 103269000,
+      "median_ratio": 0.9875207986688852,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "old-legacy": 0.010863120852219481,
+        "new-legacy": 0.005238745412466471
+      },
+      "median_percent_change": -1.2479201331114798
+    },
+    {
+      "gate": "cpu:legacy:warm-full-pipeline-small:thread_ns",
+      "pass_": true,
+      "baseline": [
+        356382169,
+        363518620,
+        361576376,
+        353361150,
+        357729299
+      ],
+      "candidate": [
+        352746869,
+        351275919,
+        353217779,
+        359373449,
+        364757622
+      ],
+      "baseline_median": 357729299,
+      "candidate_median": 353217779,
+      "median_ratio": 0.9873884526299312,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "old-legacy": 0.010754156874357669,
+        "new-legacy": 0.005497628136096739
+      },
+      "median_percent_change": -1.2611547370068754
+    },
+    {
+      "gate": "cpu:legacy:warm-full-pipeline-small:process_ns",
+      "pass_": true,
+      "baseline": [
+        356380000,
+        363536000,
+        361611000,
+        353379000,
+        357755000
+      ],
+      "candidate": [
+        352724000,
+        351306000,
+        353229000,
+        359377000,
+        364757000
+      ],
+      "baseline_median": 357755000,
+      "candidate_median": 353229000,
+      "median_ratio": 0.9873488840128021,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "old-legacy": 0.01077832594932286,
+        "new-legacy": 0.005444060368769268
+      },
+      "median_percent_change": -1.2651115987197925
+    },
+    {
+      "gate": "cpu:opt-in:cold-wide:thread_ns",
+      "pass_": true,
+      "baseline": [
+        429227708,
+        424706959,
+        447394083,
+        420889750,
+        419749709
+      ],
+      "candidate": [
+        456237168,
+        462939084,
+        431936333,
+        458782124,
+        436071040
+      ],
+      "baseline_median": 424706959,
+      "candidate_median": 456237168,
+      "median_ratio": 1.0742399160923568,
+      "maximum_ratio": 2.0,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "new-legacy": 0.010644395869199779,
+        "catalog": 0.014689544101325827
+      },
+      "median_percent_change": 7.423991609235681
+    },
+    {
+      "gate": "cpu:opt-in:cold-wide:process_ns",
+      "pass_": true,
+      "baseline": [
+        429228000,
+        424708000,
+        447396000,
+        420889000,
+        419752000
+      ],
+      "candidate": [
+        456237000,
+        462940000,
+        431937000,
+        458783000,
+        436071000
+      ],
+      "baseline_median": 424708000,
+      "candidate_median": 456237000,
+      "median_ratio": 1.074236887461503,
+      "maximum_ratio": 2.0,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "new-legacy": 0.010642606214151841,
+        "catalog": 0.014691925468561295
+      },
+      "median_percent_change": 7.423688746150292
+    },
+    {
+      "gate": "cpu:opt-in:warm-model-wide:thread_ns",
+      "pass_": true,
+      "baseline": [
+        496374125,
+        485253917,
+        550358291,
+        514270542,
+        477709917
+      ],
+      "candidate": [
+        145011625,
+        139120500,
+        146918292,
+        131227083,
+        143034375
+      ],
+      "baseline_median": 496374125,
+      "candidate_median": 143034375,
+      "median_ratio": 0.2881584026967562,
+      "maximum_ratio": 0.8,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "new-legacy": 0.0360542907026026,
+        "catalog": 0.02715373140197942
+      },
+      "median_percent_change": -71.18415973032438
+    },
+    {
+      "gate": "cpu:opt-in:warm-model-wide:process_ns",
+      "pass_": true,
+      "baseline": [
+        496373000,
+        485253000,
+        550358000,
+        514270000,
+        477710000
+      ],
+      "candidate": [
+        145012000,
+        139120000,
+        146919000,
+        131228000,
+        143034000
+      ],
+      "baseline_median": 496373000,
+      "candidate_median": 143034000,
+      "median_ratio": 0.28815830031045203,
+      "maximum_ratio": 0.8,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "new-legacy": 0.036055546937484514,
+        "catalog": 0.027161374218717227
+      },
+      "median_percent_change": -71.1841699689548
+    },
+    {
+      "gate": "cpu:opt-in:warm-full-pipeline-wide:thread_ns",
+      "pass_": true,
+      "baseline": [
+        691706709,
+        698944585,
+        711926998,
+        684721084,
+        693732457
+      ],
+      "candidate": [
+        575083292,
+        567597125,
+        548953999,
+        636741668,
+        583714126
+      ],
+      "baseline_median": 693732457,
+      "candidate_median": 575083292,
+      "median_ratio": 0.8289698517017778,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "new-legacy": 0.007513167284315198,
+        "catalog": 0.015007972097370549
+      },
+      "median_percent_change": -17.103014829822214
+    },
+    {
+      "gate": "cpu:opt-in:warm-full-pipeline-wide:process_ns",
+      "pass_": true,
+      "baseline": [
+        691709000,
+        698949000,
+        711930000,
+        684724000,
+        693731000
+      ],
+      "candidate": [
+        575084000,
+        567601000,
+        548957000,
+        636741000,
+        583716000
+      ],
+      "baseline_median": 693731000,
+      "candidate_median": 575084000,
+      "median_ratio": 0.828972613304004,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "new-legacy": 0.007521647439713664,
+        "catalog": 0.015009981150579742
+      },
+      "median_percent_change": -17.102738669599603
+    },
+    {
+      "gate": "cpu:opt-in:cold-small:thread_ns",
+      "pass_": true,
+      "baseline": [
+        339848616,
+        338326999,
+        342761746,
+        340362347,
+        345383913
+      ],
+      "candidate": [
+        357050293,
+        347135578,
+        342711221,
+        375009076,
+        343647839
+      ],
+      "baseline_median": 340362347,
+      "candidate_median": 347135578,
+      "median_ratio": 1.0199000596267482,
+      "maximum_ratio": 2.0,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "new-legacy": 0.005979944661740154,
+        "catalog": 0.01274532857015307
+      },
+      "median_percent_change": 1.9900059626748234
+    },
+    {
+      "gate": "cpu:opt-in:cold-small:process_ns",
+      "pass_": true,
+      "baseline": [
+        339886000,
+        338341000,
+        342775000,
+        340367000,
+        345394000
+      ],
+      "candidate": [
+        357059000,
+        347161000,
+        342729000,
+        375027000,
+        343668000
+      ],
+      "baseline_median": 340367000,
+      "candidate_median": 347161000,
+      "median_ratio": 1.0199608070112556,
+      "maximum_ratio": 2.0,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "new-legacy": 0.005952398440506865,
+        "catalog": 0.012766410973582863
+      },
+      "median_percent_change": 1.9960807011255577
+    },
+    {
+      "gate": "cpu:opt-in:warm-model-small:thread_ns",
+      "pass_": true,
+      "baseline": [
+        105482625,
+        103302666,
+        103933209,
+        102111042,
+        105756250
+      ],
+      "candidate": [
+        36992750,
+        37405125,
+        37638125,
+        37909875,
+        37615375
+      ],
+      "baseline_median": 103933209,
+      "candidate_median": 37615375,
+      "median_ratio": 0.3619187299412645,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "new-legacy": 0.014907804876880112,
+        "catalog": 0.005589469731459543
+      },
+      "median_percent_change": -63.80812700587355
+    },
+    {
+      "gate": "cpu:opt-in:warm-model-small:process_ns",
+      "pass_": true,
+      "baseline": [
+        105483000,
+        103303000,
+        103933000,
+        102111000,
+        105757000
+      ],
+      "candidate": [
+        36992000,
+        37405000,
+        37638000,
+        37911000,
+        37617000
+      ],
+      "baseline_median": 103933000,
+      "candidate_median": 37617000,
+      "median_ratio": 0.36193509280016933,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "new-legacy": 0.014913453859698075,
+        "catalog": 0.005635749793976128
+      },
+      "median_percent_change": -63.80649071998307
+    },
+    {
+      "gate": "cpu:opt-in:warm-full-pipeline-small:thread_ns",
+      "pass_": true,
+      "baseline": [
+        352363040,
+        371876512,
+        359922080,
+        358357244,
+        376574168
+      ],
+      "candidate": [
+        358390132,
+        374649559,
+        353311667,
+        382867327,
+        350790084
+      ],
+      "baseline_median": 359922080,
+      "candidate_median": 358390132,
+      "median_ratio": 0.9957436676293936,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "new-legacy": 0.02100187907338166,
+        "catalog": 0.021206074948514488
+      },
+      "median_percent_change": -0.4256332370606408
+    },
+    {
+      "gate": "cpu:opt-in:warm-full-pipeline-small:process_ns",
+      "pass_": true,
+      "baseline": [
+        352367000,
+        371871000,
+        359928000,
+        358364000,
+        376586000
+      ],
+      "candidate": [
+        358386000,
+        374666000,
+        353327000,
+        382853000,
+        350816000
+      ],
+      "baseline_median": 359928000,
+      "candidate_median": 358386000,
+      "median_ratio": 0.9957158098286324,
+      "maximum_ratio": 1.05,
+      "additive_ns": 100000,
+      "MAD_fraction": {
+        "new-legacy": 0.0210069791736125,
+        "catalog": 0.021122476882467506
+      },
+      "median_percent_change": -0.4284190171367608
+    }
+  ],
+  "allocation": {
+    "scope": "Requested System layout bytes/events; no RSS, allocator metadata or realloc internal-transient inference. CPU values from allocation-instrumented executables are not used for acceptance.",
+    "wide_warm_model": {
+      "gate": "catalog_requested_usefulness:warm-model-wide",
+      "pass_": true,
+      "baseline": 1565447216,
+      "candidate": 346106368,
+      "maximum_ratio": 0.75,
+      "requested_percent_change": -77.89089504503612
+    },
+    "legacy_requested_total_controls": [
+      {
+        "gate": "legacy_requested:cold-wide",
+        "pass_": true,
+        "baseline": 831751176,
+        "candidate": 831751240,
+        "extra_per_operation": 64,
+        "operations": 4,
+        "requested_delta_bytes": 64,
+        "delta_bytes_per_operation": 16.0,
+        "allowed_total_extra_bytes": 256
+      },
+      {
+        "gate": "legacy_requested:warm-model-wide",
+        "pass_": true,
+        "baseline": 1565446832,
+        "candidate": 1565447216,
+        "extra_per_operation": 64,
+        "operations": 48,
+        "requested_delta_bytes": 384,
+        "delta_bytes_per_operation": 8.0,
+        "allowed_total_extra_bytes": 3072
+      },
+      {
+        "gate": "legacy_requested:warm-full-pipeline-wide",
+        "pass_": true,
+        "baseline": 1165181120,
+        "candidate": 1165178680,
+        "extra_per_operation": 64,
+        "operations": 12,
+        "requested_delta_bytes": -2440,
+        "delta_bytes_per_operation": -203.33333333333334,
+        "allowed_total_extra_bytes": 768
+      },
+      {
+        "gate": "legacy_requested:cold-small",
+        "pass_": true,
+        "baseline": 1091651328,
+        "candidate": 1091655424,
+        "extra_per_operation": 64,
+        "operations": 256,
+        "requested_delta_bytes": 4096,
+        "delta_bytes_per_operation": 16.0,
+        "allowed_total_extra_bytes": 16384
+      },
+      {
+        "gate": "legacy_requested:warm-model-small",
+        "pass_": true,
+        "baseline": 635699200,
+        "candidate": 635797504,
+        "extra_per_operation": 64,
+        "operations": 12288,
+        "requested_delta_bytes": 98304,
+        "delta_bytes_per_operation": 8.0,
+        "allowed_total_extra_bytes": 786432
+      },
+      {
+        "gate": "legacy_requested:warm-full-pipeline-small",
+        "pass_": true,
+        "baseline": 597179848,
+        "candidate": 597183360,
+        "extra_per_operation": 64,
+        "operations": 384,
+        "requested_delta_bytes": 3512,
+        "delta_bytes_per_operation": 9.145833333333334,
+        "allowed_total_extra_bytes": 24576
+      }
+    ],
+    "legacy_per_operation_extra_cap_bytes": 64,
+    "all_six_legacy_totals_within_cap": true,
+    "cold_requested_total_controls": [
+      {
+        "gate": "catalog_cold_requested:cold-wide",
+        "pass_": true,
+        "baseline": 831751240,
+        "candidate": 898820756,
+        "iterations": 4,
+        "extra_per_iteration": 205113344
+      },
+      {
+        "gate": "catalog_cold_requested:cold-small",
+        "pass_": true,
+        "baseline": 1091655424,
+        "candidate": 1100507904,
+        "iterations": 256,
+        "extra_per_iteration": 540672
+      }
+    ],
+    "cold_requested_each_iteration_checks_passed": 260,
+    "source_catalog_retention": [
+      {
+        "shape": "wide",
+        "checkpoint": "source0",
+        "new_legacy_requested_live_delta_from_anchor": 28806648,
+        "catalog_requested_live_delta_from_anchor": 41300560,
+        "catalog_additional_requested_live_bytes": 12493912,
+        "predeclared_additional_cap_bytes": 76884736
+      },
+      {
+        "shape": "wide",
+        "checkpoint": "source01",
+        "new_legacy_requested_live_delta_from_anchor": 57613296,
+        "catalog_requested_live_delta_from_anchor": 82601120,
+        "catalog_additional_requested_live_bytes": 24987824,
+        "predeclared_additional_cap_bytes": 153769472
+      },
+      {
+        "shape": "small",
+        "checkpoint": "source0",
+        "new_legacy_requested_live_delta_from_anchor": 39024,
+        "catalog_requested_live_delta_from_anchor": 71240,
+        "catalog_additional_requested_live_bytes": 32216,
+        "predeclared_additional_cap_bytes": 169984
+      },
+      {
+        "shape": "small",
+        "checkpoint": "source01",
+        "new_legacy_requested_live_delta_from_anchor": 78048,
+        "catalog_requested_live_delta_from_anchor": 142480,
+        "catalog_additional_requested_live_bytes": 64432,
+        "predeclared_additional_cap_bytes": 339968
+      }
+    ],
+    "lifecycle_checkpoints": [
+      {
+        "shape": "wide",
+        "routes": {
+          "old-legacy": {
+            "requested_live_bytes_relative_to_anchor": {
+              "source0": 28806648,
+              "source01": 57613296,
+              "two_models_and_providers": 171009459,
+              "released_model_immediate": 170995022,
+              "released_model_after_drain": 139193416,
+              "source0_drop_immediate": 197010526,
+              "source0_drop_after_drain": 107321312,
+              "all_drop_immediate": 87520532,
+              "all_drop_after_drain": -103772
+            },
+            "ready_reclamation_signed_bytes": {
+              "released_model": -31801606,
+              "source0_drop": -89689214,
+              "all_drop": -87624304
+            },
+            "source_input_hashes": [
+              "fnv1a64:0fbc5b81edc32f9b",
+              "fnv1a64:1bfc4b56d6a0a5eb"
+            ],
+            "source_input_bytes": [
+              6100975,
+              6100975
+            ],
+            "source_node_counts": [
+              100025,
+              100025
+            ],
+            "watch_masks": [
+              0,
+              3,
+              15
+            ],
+            "ready_callbacks": {
+              "model_callbacks": 3,
+              "source0_callbacks": 3,
+              "final_callbacks": 3
+            }
+          },
+          "new-legacy": {
+            "requested_live_bytes_relative_to_anchor": {
+              "source0": 28806648,
+              "source01": 57613296,
+              "two_models_and_providers": 171009475,
+              "released_model_immediate": 170995038,
+              "released_model_after_drain": 139193424,
+              "source0_drop_immediate": 197010542,
+              "source0_drop_after_drain": 107321320,
+              "all_drop_immediate": 87520540,
+              "all_drop_after_drain": -103772
+            },
+            "ready_reclamation_signed_bytes": {
+              "released_model": -31801614,
+              "source0_drop": -89689222,
+              "all_drop": -87624312
+            },
+            "source_input_hashes": [
+              "fnv1a64:0fbc5b81edc32f9b",
+              "fnv1a64:1bfc4b56d6a0a5eb"
+            ],
+            "source_input_bytes": [
+              6100975,
+              6100975
+            ],
+            "source_node_counts": [
+              100025,
+              100025
+            ],
+            "watch_masks": [
+              0,
+              3,
+              15
+            ],
+            "ready_callbacks": {
+              "model_callbacks": 3,
+              "source0_callbacks": 3,
+              "final_callbacks": 3
+            }
+          },
+          "catalog": {
+            "requested_live_bytes_relative_to_anchor": {
+              "source0": 41300560,
+              "source01": 82601120,
+              "two_models_and_providers": 155444321,
+              "released_model_immediate": 155429884,
+              "released_model_after_drain": 143954759,
+              "source0_drop_immediate": 194504588,
+              "source0_drop_after_drain": 99488743,
+              "all_drop_immediate": 92491163,
+              "all_drop_after_drain": -103772
+            },
+            "ready_reclamation_signed_bytes": {
+              "released_model": -11475125,
+              "source0_drop": -95015845,
+              "all_drop": -92594935
+            },
+            "source_input_hashes": [
+              "fnv1a64:0fbc5b81edc32f9b",
+              "fnv1a64:1bfc4b56d6a0a5eb"
+            ],
+            "source_input_bytes": [
+              6100975,
+              6100975
+            ],
+            "source_node_counts": [
+              100025,
+              100025
+            ],
+            "watch_masks": [
+              0,
+              3,
+              15
+            ],
+            "ready_callbacks": {
+              "model_callbacks": 3,
+              "source0_callbacks": 4,
+              "final_callbacks": 4
+            }
+          }
+        }
+      },
+      {
+        "shape": "small",
+        "routes": {
+          "old-legacy": {
+            "requested_live_bytes_relative_to_anchor": {
+              "source0": 39024,
+              "source01": 78048,
+              "two_models_and_providers": 1509480,
+              "released_model_immediate": 1495047,
+              "released_model_after_drain": 1429858,
+              "source0_drop_immediate": 1545183,
+              "source0_drop_after_drain": 1430922,
+              "all_drop_immediate": 32390,
+              "all_drop_after_drain": -103772
+            },
+            "ready_reclamation_signed_bytes": {
+              "released_model": -65189,
+              "source0_drop": -114261,
+              "all_drop": -136162
+            },
+            "source_input_hashes": [
+              "fnv1a64:06ca554d41de9795",
+              "fnv1a64:fe2a31bdda31b8c5"
+            ],
+            "source_input_bytes": [
+              8120,
+              8120
+            ],
+            "source_node_counts": [
+              136,
+              136
+            ],
+            "watch_masks": [
+              0,
+              3,
+              15
+            ],
+            "ready_callbacks": {
+              "model_callbacks": 3,
+              "source0_callbacks": 3,
+              "final_callbacks": 3
+            }
+          },
+          "new-legacy": {
+            "requested_live_bytes_relative_to_anchor": {
+              "source0": 39024,
+              "source01": 78048,
+              "two_models_and_providers": 1509496,
+              "released_model_immediate": 1495063,
+              "released_model_after_drain": 1429866,
+              "source0_drop_immediate": 1545199,
+              "source0_drop_after_drain": 1430930,
+              "all_drop_immediate": 32398,
+              "all_drop_after_drain": -103772
+            },
+            "ready_reclamation_signed_bytes": {
+              "released_model": -65197,
+              "source0_drop": -114269,
+              "all_drop": -136170
+            },
+            "source_input_hashes": [
+              "fnv1a64:06ca554d41de9795",
+              "fnv1a64:fe2a31bdda31b8c5"
+            ],
+            "source_input_bytes": [
+              8120,
+              8120
+            ],
+            "source_node_counts": [
+              136,
+              136
+            ],
+            "watch_masks": [
+              0,
+              3,
+              15
+            ],
+            "ready_callbacks": {
+              "model_callbacks": 3,
+              "source0_callbacks": 3,
+              "final_callbacks": 3
+            }
+          },
+          "catalog": {
+            "requested_live_bytes_relative_to_anchor": {
+              "source0": 71240,
+              "source01": 142480,
+              "two_models_and_providers": 1510936,
+              "released_model_immediate": 1496503,
+              "released_model_after_drain": 1469594,
+              "source0_drop_immediate": 1565071,
+              "source0_drop_after_drain": 1424858,
+              "all_drop_immediate": 43734,
+              "all_drop_after_drain": -103772
+            },
+            "ready_reclamation_signed_bytes": {
+              "released_model": -26909,
+              "source0_drop": -140213,
+              "all_drop": -147506
+            },
+            "source_input_hashes": [
+              "fnv1a64:06ca554d41de9795",
+              "fnv1a64:fe2a31bdda31b8c5"
+            ],
+            "source_input_bytes": [
+              8120,
+              8120
+            ],
+            "source_node_counts": [
+              136,
+              136
+            ],
+            "watch_masks": [
+              0,
+              3,
+              15
+            ],
+            "ready_callbacks": {
+              "model_callbacks": 3,
+              "source0_callbacks": 4,
+              "final_callbacks": 4
+            }
+          }
+        }
+      }
+    ],
+    "signed_delta_qualification": "Relative-to-anchor and ready-drain changes are signed; negative common residuals reflect release of pre-existing warm allocations, not negative memory. Absolute counter values remain nonnegative and satisfy requested/released/live conservation.",
+    "peak_policy": "Every declared overlapping interval is checked separately; peaks are never added together.",
+    "watch_scope": "Two retained source backing arrays plus one designated last-child label from each; hold-before-release mask0, after first source release3, final15. Original11-address full AX/action witness is separately preserved. These watched-address proofs are not a whole-process all-free claim.",
+    "watched_reallocations": "Zero is asserted by the exact counted Rust process; field is not serialized, so no independent raw-field recomputation is claimed.",
+    "retained_source_policy": "The catalog intentionally retains full caller-owned source/index data. Finite per-shape source/cold caps passed; this is not a global default memory budget or active/error/model/scratch accounting closure."
+  },
+  "tradeoffs": {
+    "wide_warm_model_thread_CPU_percent_change": -71.18415973032438,
+    "wide_warm_model_requested_percent_change": -77.89089504503612,
+    "wide_cold_thread_CPU_percent_change": 7.423991609235681,
+    "small_cold_thread_CPU_percent_change": 1.9900059626748234,
+    "additional_wide_one_source_requested_live_bytes": 12493912,
+    "additional_wide_two_source_requested_live_bytes": 24987824,
+    "interpretation": "Benefit is repeated model projection from explicit retained immutable data. Cold cost and retained source/index overhead remain visible; no universal faster/lower-memory claim."
+  },
+  "history": {
+    "old_inconclusive_report": {
+      "path": "docs/reviews/2026-10-18-tree-immutable-catalog-experiment.json",
+      "sha256": "c5eb112240ddda4424da2312f906e7d3fc92fc89a28a994f0d728ad20c44af9c",
+      "bytes": 43939,
+      "status": "INCONCLUSIVE_FROZEN_CATALOG_COST_NO_ADOPTION",
+      "unchanged_in_recorded_restoration_and_adoption_maps": true,
+      "frozen_copy": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-icon-evidence-root-publication-v2/candidate/docs/reviews/2026-10-18-tree-immutable-catalog-experiment.json",
+        "sha256": "c5eb112240ddda4424da2312f906e7d3fc92fc89a28a994f0d728ad20c44af9c",
+        "bytes": 43939
+      },
+      "claim": "Separate earlier cohort remains INCONCLUSIVE; no old samples, gates or verdict are relabeled."
+    },
+    "initial_offline_evaluation": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-catalog-post-icon-cost-evaluation-v1/evaluation.json",
+      "sha256": "11cfd555182ccf985b0fdbbaf3f3d447a4e79c87d0404e3db294de45b2836b5b",
+      "bytes": 1056
+    },
+    "initial_failure": "KeyError: config before numeric evaluation; Root completionV1 omitted config/build_result. This was completion metadata, not a workload failure.",
+    "completion_V1": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-post-icon-catalog-quiet-completed-v1/quiet-completion.json",
+      "sha256": "2d531f5d99c9f5b41d4ab32e597bd81a08f4eea5d5ae9d6d75d21422b228868c",
+      "bytes": 1546
+    },
+    "completion_V2": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-post-icon-catalog-quiet-completed-v2/quiet-completion.json",
+      "sha256": "e9e034a029010ac6b44d0731451326d7b1a2c69395de274f7dec0876e6eb5928",
+      "bytes": 2047
+    },
+    "metadata_delta_review": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-post-icon-catalog-completion-v2-independent-memory-review/review.json",
+      "sha256": "8b9d66ce80e6e46d1102b48b2174cd227360eef9daa39575f2c5a3a412eb62ff",
+      "bytes": 4159
+    },
+    "correction_scope": "Only config/build_result copied exactly from the same frozen raw run; original quiet scope/times and all26 samples/evaluator/gates retained. Root ran only the unchanged offline evaluator again; no measurement repeated."
+  },
+  "limits": [
+    "Synthetic TestPlatform and deterministic logical data, not a real native font/window/GPU/AT/compositor/presentation test. Full logical accessibility data remains included; no Linux/macOS/Windows native accessibility acceptance follows.",
+    "This explicit opt-in API does not change canonical GPUI comparison inputs or validate a new framework ranking. No native CPU/RSS/power or general desktop responsiveness claim.",
+    "Source/storage/model/worker-ready reclamation observations have distinct overlapping lifetimes. No summation of peaks, process RSS inference or whole-process all-free/global R8 closure.",
+    "Exact Root adoption is a source-byte copy of three validated paths, not a new compiler/runtime/native event. Documentation publication/commit were pending when this draft was prepared; no future-HEAD acceptance is inferred."
+  ],
+  "source_documentation_header": {
+    "before_file": {
+      "path": "/Users/augustusotu/Projects/kael/crates/kael_ui/src/navigation/virtual_tree/catalog.rs",
+      "sha256": "d4bd38f6ce297a04e496b758e6608ebd09fcae0246e64e38695157eb0646742e",
+      "bytes": 14133
+    },
+    "candidate_file": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-catalog-root-publication-v1/candidate/crates/kael_ui/src/navigation/virtual_tree/catalog.rs",
+      "sha256": "f61e757bf38e456ad5d7158261057ec6e3b3cf0bdfe16fb4577f63d276389420",
+      "bytes": 14125
+    },
+    "old_first_line": "//! Source-only additive immutable-catalog prototype. Not compiled or adopted.",
+    "new_first_line": "//! Immutable tree catalogs with explicit source-generation ownership.",
+    "all_code_and_tests_after_first_line_byte_exact": true,
+    "line_count_unchanged": true,
+    "scope": "Documentation text only after exact adoption; no new runtime or performance claim."
+  }
+}

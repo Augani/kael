@@ -28,6 +28,7 @@ pub(crate) const WM_GPUI_NETWORK_CHANGE: u32 = WM_USER + 10;
 pub(crate) const WM_GPUI_MEDIA_KEY: u32 = WM_USER + 11;
 pub(crate) const WM_GPUI_CONTEXT_MENU_ACTION: u32 = WM_USER + 12;
 pub(crate) const WM_GPUI_NOTIFICATION_ACTION: u32 = WM_USER + 13;
+pub(crate) const WM_GPUI_ACCESSIBILITY_FOCUS: u32 = WM_USER + 14;
 pub(crate) const WM_WTSSESSION_CHANGE: u32 = 0x02B1;
 
 const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
@@ -59,8 +60,35 @@ impl WindowsWindowInner {
         lparam: LPARAM,
     ) -> LRESULT {
         let handled = match msg {
+            WM_GPUI_ACCESSIBILITY_FOCUS => {
+                if self.accessibility_provider.take_valid_host_focus_request() {
+                    // Only the owning thread calls SetFocus, after adapter,
+                    // semantic-tree and App/window borrows have been released.
+                    // Activate the requested host before assigning its keyboard
+                    // focus. SetFocus on an inactive thread alone does not make
+                    // its descendant the desktop's UIA focused element.
+                    // WM_SETFOCUS records actual host focus for UIA queries.
+                    unsafe {
+                        let _ = SetActiveWindow(handle);
+                        let _ = SetForegroundWindow(handle);
+                    }
+                    let result = unsafe { SetFocus(Some(handle)) };
+                    if unsafe { GetFocus() } != handle {
+                        log::warn!("native accessibility host focus was not acquired: {result:?}");
+                    }
+                }
+                Some(0)
+            }
             WM_ACTIVATE => self.handle_activate_msg(wparam),
+            WM_SETFOCUS => {
+                // UIA can restore keyboard focus without changing activation.
+                // Mirror WM_KILLFOCUS so native focused-element queries do not
+                // retain a stale unfocused host after an accessibility action.
+                self.accessibility_provider.update_focus(true);
+                None
+            }
             WM_KILLFOCUS => {
+                self.accessibility_provider.update_focus(false);
                 self.release_native_pointer_lock().log_err();
                 self.cancel_active_precision_pointers();
                 None
@@ -141,7 +169,9 @@ impl WindowsWindowInner {
             WM_GPUI_CURSOR_STYLE_CHANGED => self.handle_cursor_changed(lparam),
             WM_GPUI_FORCE_UPDATE_WINDOW => self.draw_window(handle, true),
             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
-            WM_GETOBJECT => handle_wm_getobject(handle, wparam, lparam, &self.uia_provider),
+            WM_GETOBJECT => self
+                .accessibility_provider
+                .handle_wm_getobject(wparam, lparam),
             _ => None,
         };
         if let Some(n) = handled {
@@ -1032,17 +1062,7 @@ impl WindowsWindowInner {
         }
         let this = self.clone();
 
-        // Fire UIA focus changed event when the window gains focus.
-        if activated {
-            let provider: windows::Win32::UI::Accessibility::IRawElementProviderSimple =
-                self.uia_provider.to_interface();
-            unsafe {
-                let _ = windows::Win32::UI::Accessibility::UiaRaiseAutomationEvent(
-                    &provider,
-                    windows::Win32::UI::Accessibility::UIA_AutomationFocusChangedEventId,
-                );
-            }
-        }
+        self.accessibility_provider.update_focus(activated);
 
         self.executor
             .spawn(async move {

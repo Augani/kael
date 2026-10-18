@@ -1,0 +1,680 @@
+{
+  "date": "2026-10-17",
+  "contract": "native-navigation-detail-v1",
+  "rows": 100000,
+  "kael_source_checkpoint": "ac7811f4b9625fe11c3538e8f778cf0aaea62bab",
+  "comparison_revision": "3467e647600290343885b500bd7464057e334d18",
+  "build_manifest": ".artifacts/2026-10-17-current-native-benchmark/build-source.json",
+  "build_manifest_sha256": "28cf7adf5f3f17ddc3103dae461aa80161f9cbbb94b4d3071f9f290a91143ecd",
+  "frozen_collector_sha256": "33ac20f340e8ea6ec8fd8a4981779e133fc31eba38e77546037a9e59b6220341",
+  "environment": ".artifacts/2026-10-17-current-native-benchmark/navigation-three-pairs/environment.json",
+  "environment_sha256": "567a5d3f490648aa2afbf83e0146d1fac69ec50c2a78d3cb383b66b52dd1ee84",
+  "runs_file": ".artifacts/2026-10-17-current-native-benchmark/navigation-three-pairs/runs.json",
+  "runs_file_sha256": "d516beb420c5a110a7ef9ee31cbec25b55132e4b1e4c4724ddb174502cb0232f",
+  "environment_summary": {
+    "platform": "macOS-27.2-arm64-arm-64bit-Mach-O",
+    "cpu": "Apple M2 Pro",
+    "cpu_count": 12,
+    "memory_bytes": 17179869184,
+    "load_average": [
+      7.18408203125,
+      7.7431640625,
+      7.71728515625
+    ],
+    "frame_timing_enabled": true,
+    "power_source": "AC Power; battery100%; no thermal/performance warning recorded"
+  },
+  "accepted_captures": 6,
+  "pairs": 3,
+  "all_original_workload_and_schema3_gates_pass": true,
+  "logical_viewport_width": 1100.0,
+  "logical_viewport_height": 760.0,
+  "scale_factor": 2.0,
+  "raw_captures": [
+    {
+      "engine": "kael",
+      "index": 0,
+      "raw": ".artifacts/2026-10-17-current-native-benchmark/navigation-three-pairs/00-kael.json",
+      "raw_sha256": "c52a6fce4009bf3028dbf7b3f014a62e4ac8e588c1f58add345ed3cef4c4ef62",
+      "binary_sha256": "8dad11c8e9c6c99c38eebe2e1a595c426867b22b7881d83f39c5d331b0d99082",
+      "phase_frames": [
+        {
+          "phase": "idle-before",
+          "renders": 2,
+          "draws": 2,
+          "submissions": 2
+        },
+        {
+          "phase": "active",
+          "renders": 659,
+          "draws": 659,
+          "submissions": 659
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 641,
+          "draws": 641,
+          "submissions": 641
+        }
+      ],
+      "native_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ]
+    },
+    {
+      "engine": "gpui-kit",
+      "index": 0,
+      "raw": ".artifacts/2026-10-17-current-native-benchmark/navigation-three-pairs/00-gpui-kit.json",
+      "raw_sha256": "276b31e96ff674acc1d0d9e56149fb951e130676578bf81032eb45ffeaa8d7c3",
+      "binary_sha256": "9684c6e30313d3a5ba5fbaea1c06789f647b0f1f1cc0b581ad39cdafb3cea2f5",
+      "phase_frames": [
+        {
+          "phase": "idle-before",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "active",
+          "renders": 662,
+          "draws": 662,
+          "submissions": 662
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 649,
+          "draws": 649,
+          "submissions": 649
+        }
+      ],
+      "native_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ]
+    },
+    {
+      "engine": "gpui-kit",
+      "index": 1,
+      "raw": ".artifacts/2026-10-17-current-native-benchmark/navigation-three-pairs/01-gpui-kit.json",
+      "raw_sha256": "ea42bc0628000f9bd68d30b441d426daca39d4012a4a1b714f7d643e5e22e1f8",
+      "binary_sha256": "9684c6e30313d3a5ba5fbaea1c06789f647b0f1f1cc0b581ad39cdafb3cea2f5",
+      "phase_frames": [
+        {
+          "phase": "idle-before",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "active",
+          "renders": 663,
+          "draws": 663,
+          "submissions": 663
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 649,
+          "draws": 649,
+          "submissions": 649
+        }
+      ],
+      "native_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ]
+    },
+    {
+      "engine": "kael",
+      "index": 1,
+      "raw": ".artifacts/2026-10-17-current-native-benchmark/navigation-three-pairs/01-kael.json",
+      "raw_sha256": "49f721d779ccd7e6b17ef1c6224dcf36a163c90d5a1d1f1383ce39fb8365d535",
+      "binary_sha256": "8dad11c8e9c6c99c38eebe2e1a595c426867b22b7881d83f39c5d331b0d99082",
+      "phase_frames": [
+        {
+          "phase": "idle-before",
+          "renders": 2,
+          "draws": 2,
+          "submissions": 2
+        },
+        {
+          "phase": "active",
+          "renders": 662,
+          "draws": 662,
+          "submissions": 662
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 644,
+          "draws": 644,
+          "submissions": 644
+        }
+      ],
+      "native_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ]
+    },
+    {
+      "engine": "kael",
+      "index": 2,
+      "raw": ".artifacts/2026-10-17-current-native-benchmark/navigation-three-pairs/02-kael.json",
+      "raw_sha256": "f6ed472ca111af0513a2070bb149a8dd741cb9a12039e8546264a11cd1057214",
+      "binary_sha256": "8dad11c8e9c6c99c38eebe2e1a595c426867b22b7881d83f39c5d331b0d99082",
+      "phase_frames": [
+        {
+          "phase": "idle-before",
+          "renders": 2,
+          "draws": 2,
+          "submissions": 2
+        },
+        {
+          "phase": "active",
+          "renders": 659,
+          "draws": 659,
+          "submissions": 659
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 643,
+          "draws": 643,
+          "submissions": 643
+        }
+      ],
+      "native_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ]
+    },
+    {
+      "engine": "gpui-kit",
+      "index": 2,
+      "raw": ".artifacts/2026-10-17-current-native-benchmark/navigation-three-pairs/02-gpui-kit.json",
+      "raw_sha256": "65e387284b43ddbf7239f122a8fbd7734f52e79ecec5b66c084986bd9624ff77",
+      "binary_sha256": "9684c6e30313d3a5ba5fbaea1c06789f647b0f1f1cc0b581ad39cdafb3cea2f5",
+      "phase_frames": [
+        {
+          "phase": "idle-before",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "active",
+          "renders": 663,
+          "draws": 663,
+          "submissions": 663
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 650,
+          "draws": 650,
+          "submissions": 650
+        }
+      ],
+      "native_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "kael": {
+      "repetitions": 3,
+      "median_stable_measured_peak_rss_bytes": 123895808,
+      "stable_measured_peak_rss_bytes_by_run": [
+        121339904,
+        123994112,
+        123895808
+      ],
+      "median_phase_metrics": {
+        "idle-before": {
+          "cpu_percent": 0.049763871079540306,
+          "rss_median_bytes": 111247360.0,
+          "footprint_max_bytes": 94274568,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 1.6242479487807764
+        },
+        "active": {
+          "cpu_percent": 25.736200174722526,
+          "rss_median_bytes": 115228672,
+          "footprint_max_bytes": 107660320,
+          "idle_wakeups_per_s": 0.09058871705115146,
+          "interrupt_wakeups_per_s": 109.79352506599557
+        },
+        "idle-after": {
+          "cpu_percent": 0.009723949738390891,
+          "rss_median_bytes": 115228672.0,
+          "footprint_max_bytes": 101811232,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 0.6611183958112786
+        },
+        "churn": {
+          "cpu_percent": 31.93204138722641,
+          "rss_median_bytes": 121765888,
+          "footprint_max_bytes": 116048928,
+          "idle_wakeups_per_s": 0.09263293187568758,
+          "interrupt_wakeups_per_s": 107.54683390767329
+        }
+      },
+      "median_draw_us": {
+        "0.5": 4714,
+        "0.95": 5388,
+        "0.99": 5684
+      }
+    },
+    "gpui-kit": {
+      "repetitions": 3,
+      "median_stable_measured_peak_rss_bytes": 115425280,
+      "stable_measured_peak_rss_bytes_by_run": [
+        116998144,
+        115425280,
+        114786304
+      ],
+      "median_phase_metrics": {
+        "idle-before": {
+          "cpu_percent": 0.9108199566316731,
+          "rss_median_bytes": 113590272.0,
+          "footprint_max_bytes": 79365104,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 121.20312829086461
+        },
+        "active": {
+          "cpu_percent": 25.488947074241793,
+          "rss_median_bytes": 111919104,
+          "footprint_max_bytes": 93619208,
+          "idle_wakeups_per_s": 0.2709717055525181,
+          "interrupt_wakeups_per_s": 176.13160860913678
+        },
+        "idle-after": {
+          "cpu_percent": 0.8121479944169482,
+          "rss_median_bytes": 112312320.0,
+          "footprint_max_bytes": 93635592,
+          "idle_wakeups_per_s": 0.4380256290416755,
+          "interrupt_wakeups_per_s": 120.89507361550244
+        },
+        "churn": {
+          "cpu_percent": 30.12073291292835,
+          "rss_median_bytes": 114925568.0,
+          "footprint_max_bytes": 96371720,
+          "idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups_per_s": 174.95835186271904
+        }
+      },
+      "median_draw_us": {
+        "0.5": 4428,
+        "0.95": 5186,
+        "0.99": 5453
+      }
+    }
+  },
+  "derivation": "Median of three captures per engine. Phase CPU and memory use collector stable samples [1:-1]; sampled peak RSS excludes startup/warmup/validation and takes the maximum stable sample over four measured phases per run. Draw durations are CPU-side wall-clock spans, not CPU thread time or display latency.",
+  "limitations": [
+    "One navigation contract, one physical Mac, frame instrumentation enabled; no overall framework ranking.",
+    "Owned compiler/test/native-window workloads were paused; other desktop activity was uncontrolled and load averages are retained.",
+    "Time-paced workloads have slightly different operation/frame counts; these are whole-phase CPU diagnostics, not normalized per-operation comparisons.",
+    "Startup timing is diagnostic because initial geometry is not paired.",
+    "No comparative GPU/compositor presentation or controlled watts/joules measurement.",
+    "Subsequent measured-Select/cache-parent/disabled-submenu commits 60141bf,8d3f530,9bae63b are absent from these frozen binaries."
+  ]
+}

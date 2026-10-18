@@ -84,6 +84,7 @@ mod native {
                 .child(
                     div()
                         .flex_1()
+                        .min_h_0()
                         .flex()
                         .gap(px(18.0))
                         .p(px(24.0))
@@ -135,6 +136,8 @@ mod native {
                         .child(
                             div()
                                 .flex_1()
+                                .min_w_0()
+                                .min_h_0()
                                 .flex()
                                 .flex_col()
                                 .gap(px(16.0))
@@ -163,32 +166,39 @@ mod native {
                                                 .bg(if index % 3 == 0 { secondary } else { accent })
                                         })),
                                 )
-                                .child(div().flex_1().grid().grid_cols(3).gap(px(12.0)).children(
-                                    (0..6).map(|index| {
-                                        let hue = (accent_hue + index as f32 * 0.095) % 1.0;
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .justify_between()
-                                            .p(px(13.0))
-                                            .rounded(px(14.0))
-                                            .border_1()
-                                            .border_color(hsla(hue, 0.56, 0.52, 0.36))
-                                            .bg(hsla(hue, 0.45, 0.19, 1.0))
-                                            .child(
-                                                div()
-                                                    .size(px(18.0))
-                                                    .rounded_full()
-                                                    .bg(hsla(hue, 0.82, 0.62, 1.0)),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(px(12.0))
-                                                    .text_color(rgb(0xd7def4))
-                                                    .child(format!("tile {:02}", index + 1)),
-                                            )
-                                    }),
-                                )),
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .grid()
+                                        .grid_cols(3)
+                                        .grid_rows(2)
+                                        .gap(px(12.0))
+                                        .children((0..6).map(|index| {
+                                            let hue = (accent_hue + index as f32 * 0.095) % 1.0;
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .justify_between()
+                                                .p(px(13.0))
+                                                .rounded(px(14.0))
+                                                .border_1()
+                                                .border_color(hsla(hue, 0.56, 0.52, 0.36))
+                                                .bg(hsla(hue, 0.45, 0.19, 1.0))
+                                                .child(
+                                                    div()
+                                                        .size(px(18.0))
+                                                        .rounded_full()
+                                                        .bg(hsla(hue, 0.82, 0.62, 1.0)),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(12.0))
+                                                        .text_color(rgb(0xd7def4))
+                                                        .child(format!("tile {:02}", index + 1)),
+                                                )
+                                        })),
+                                ),
                         ),
                 )
         }
@@ -395,9 +405,23 @@ mod native {
         let render_count = Arc::new(AtomicUsize::new(0));
         let outcome = Arc::new(AtomicU8::new(0));
         let app_outcome = outcome.clone();
+        let require_gpu_timing = std::env::var_os("KAEL_GPU_FRAME_TIMING_SMOKE").is_some();
         let application = Application::try_new().context("initialize native Kael platform")?;
 
         application.run(move |cx: &mut App| {
+            let quit_outcome = app_outcome.clone();
+            cx.on_app_quit(move |_| {
+                let outcome = quit_outcome.clone();
+                async move {
+                    // AppKit's terminate: exits directly rather than returning
+                    // from Application::run. Reject incomplete proofs there too,
+                    // after the normal window cleanup has run.
+                    if outcome.load(Ordering::Acquire) != 1 {
+                        std::process::exit(1);
+                    }
+                }
+            })
+            .detach();
             let window = match cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -432,8 +456,15 @@ mod native {
                 window.set_always_on_top(true);
                 window.show_window();
                 window.activate_window();
+                if require_gpu_timing {
+                    ensure!(
+                        window.set_gpu_frame_timing_enabled(true),
+                        "this backend does not support native GPU frame timing"
+                    );
+                }
                 window.refresh();
-            }) {
+                Ok::<(), anyhow::Error>(())
+            }).and_then(|result| result) {
                 eprintln!("NATIVE_RENDERER_SMOKE_FAIL: show real window: {error:#}");
                 app_outcome.store(2, Ordering::Release);
                 cx.quit();
@@ -461,7 +492,33 @@ mod native {
                     "NATIVE_RENDERER_SMOKE_STAGE: initial render_calls={}",
                     render_count.load(Ordering::Acquire)
                 );
+                let geometry = window.update(cx, |_, window, _| {
+                    println!("NATIVE_RENDERER_WINDOW_STATE: {:?}", window.runtime_snapshot());
+                    let viewport = window.viewport_size();
+                    ensure!(
+                        (f32::from(viewport.width) - WIDTH).abs() < 0.01
+                            && (f32::from(viewport.height) - HEIGHT).abs() < 0.01,
+                        "requested native client size {WIDTH}x{HEIGHT} differs from {viewport:?}"
+                    );
+                    println!("NATIVE_WINDOW_CONTENT_SIZE_OK: requested client size matches actual viewport");
+                    Ok::<(), anyhow::Error>(())
+                }).and_then(|result| result);
+                if let Err(error) = geometry {
+                    eprintln!("NATIVE_RENDERER_SMOKE_FAIL: initial client geometry: {error:#}");
+                    outcome.store(2, Ordering::Release);
+                    let _ = cx.update(|cx| cx.quit());
+                    return;
+                }
                 for revision in 1..REQUIRED_RENDER_REVISIONS {
+                    // Let the visible window stop its frame clock before a
+                    // worker-style model notification. No input, resize, or
+                    // explicit Window::refresh may supply this first wakeup.
+                    if revision == 1 {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(1250))
+                            .await;
+                    }
+                    let revision_started_at = Instant::now();
                     let revision_deadline = Instant::now() + SMOKE_TIMEOUT;
                     let prior_count = render_count.load(Ordering::Acquire);
                     if let Err(error) = window.update(cx, |view, window, cx| {
@@ -472,9 +529,13 @@ mod native {
                         // the display link for an occluded automation window.
                         // It also proves retained redraws survive viewport changes.
                         #[cfg(target_os = "macos")]
-                        window.resize(size(px(WIDTH + revision as f32), px(HEIGHT)));
+                        if revision > 1 {
+                            window.resize(size(px(WIDTH + revision as f32), px(HEIGHT)));
+                        }
                         #[cfg(not(target_os = "macos"))]
-                        window.refresh();
+                        if revision > 1 {
+                            window.refresh();
+                        }
                     }) {
                         eprintln!(
                             "NATIVE_RENDERER_SMOKE_FAIL: schedule revision {revision}: {error:#}"
@@ -487,8 +548,27 @@ mod native {
                         "NATIVE_RENDERER_SMOKE_STAGE: scheduled revision={revision} prior_render_calls={prior_count} current_render_calls={}",
                         render_count.load(Ordering::Acquire)
                     );
-                    while render_count.load(Ordering::Acquire) <= prior_count {
+                    loop {
+                        #[cfg(any(feature = "inspector", debug_assertions))]
+                        let submitted = window
+                            .update(cx, |_, window, _| {
+                                window.frame_submissions().last().is_some_and(|frame| {
+                                    frame.submitted_at >= revision_started_at
+                                })
+                            })
+                            .unwrap_or(false);
+                        #[cfg(not(any(feature = "inspector", debug_assertions)))]
+                        let submitted = {
+                            let _ = revision_started_at;
+                            true
+                        };
+                        if render_count.load(Ordering::Acquire) > prior_count && submitted {
+                            break;
+                        }
                         if Instant::now() >= revision_deadline {
+                            let _ = window.update(cx, |_, window, _| {
+                                eprintln!("NATIVE_RENDERER_WINDOW_STATE: {:?}", window.runtime_snapshot());
+                            });
                             eprintln!(
                                 "NATIVE_RENDERER_SMOKE_FAIL: timed out waiting for retained frame revision {revision}"
                             );
@@ -500,6 +580,10 @@ mod native {
                             .timer(Duration::from_millis(16))
                             .await;
                     }
+                    #[cfg(any(feature = "inspector", debug_assertions))]
+                    if revision == 1 {
+                        println!("NATIVE_IDLE_MODEL_FRAME_OK: model notification resumed CPU platform submission after 1250ms without input, resize or explicit refresh; compositor display checked separately");
+                    }
                 }
 
                 // Leave the final scene one compositor interval to present before
@@ -507,6 +591,52 @@ mod native {
                 cx.background_executor()
                     .timer(Duration::from_millis(50))
                     .await;
+                if require_gpu_timing {
+                    let deadline = Instant::now() + Duration::from_secs(2);
+                    let mut presented = 0;
+                    loop {
+                        let records = match window.update(cx, |_, window, _| window.take_gpu_frame_timings()) {
+                            Ok(records) => records,
+                            Err(error) => {
+                                eprintln!("NATIVE_RENDERER_SMOKE_FAIL: collect native timing: {error:#}");
+                                outcome.store(2, Ordering::Release);
+                                let _ = cx.update(|cx| cx.quit());
+                                return;
+                            }
+                        };
+                        for record in records {
+                            if let Some(displayed) = record.presented_time_seconds {
+                                if !displayed.is_finite()
+                                    || record.submitted_time_seconds <= 0.0
+                                    || record.gpu_start_time_seconds + 0.0001 < record.submitted_time_seconds
+                                    || record.gpu_end_time_seconds < record.gpu_start_time_seconds
+                                    || displayed + 0.0001 < record.gpu_end_time_seconds
+                                {
+                                    eprintln!("NATIVE_RENDERER_SMOKE_FAIL: inconsistent native timing: {record:?}");
+                                    outcome.store(2, Ordering::Release);
+                                    let _ = cx.update(|cx| cx.quit());
+                                    return;
+                                }
+                                presented += 1;
+                                println!("NATIVE_GPU_PRESENTATION_FRAME: {record:?}");
+                            }
+                        }
+                        if presented > 0 {
+                            println!("NATIVE_GPU_PRESENTATION_OK: completed_and_displayed_frames={presented} clock=monotonic_host_seconds");
+                            break;
+                        }
+                        if Instant::now() >= deadline {
+                            let _ = window.update(cx, |_, window, _| {
+                                eprintln!("NATIVE_RENDERER_WINDOW_STATE: {:?}", window.runtime_snapshot());
+                            });
+                            eprintln!("NATIVE_RENDERER_SMOKE_FAIL: no positive drawable presentation timestamp within two seconds");
+                            outcome.store(2, Ordering::Release);
+                            let _ = cx.update(|cx| cx.quit());
+                            return;
+                        }
+                        cx.background_executor().timer(Duration::from_millis(8)).await;
+                    }
+                }
                 let verification = window
                     .update(cx, |_, window, _| verify_frame(window, &output))
                     .context("access native renderer smoke window")

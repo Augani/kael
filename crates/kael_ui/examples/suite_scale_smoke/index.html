@@ -386,13 +386,16 @@
         const grid = document.querySelector(
           '[role="grid"][aria-label="Spreadsheet grid"]',
         );
+        // Logical cached cells share this tree with the viewport. Only nodes
+        // carrying actual layout geometry are evidence of a mounted control.
+        const cellSelector = '[role="cell"][data-kael-a11y-has-bounds="true"]';
         const rowNodes = [...(grid?.querySelectorAll('[role="row"]') ?? [])]
-          .filter((row) => row.querySelector('[role="cell"]'));
-        const cellNodes = [...(grid?.querySelectorAll('[role="cell"]') ?? [])];
+          .filter((row) => row.querySelector(cellSelector));
+        const cellNodes = [...(grid?.querySelectorAll(cellSelector) ?? [])];
         const mountedRows = rowNodes.length;
         const mountedColumns = rowNodes.reduce(
           (maximum, row) =>
-            Math.max(maximum, row.querySelectorAll('[role="cell"]').length),
+            Math.max(maximum, row.querySelectorAll(cellSelector).length),
           0,
         );
         const root = document.documentElement.dataset;
@@ -483,11 +486,20 @@
         if (root.kaelSuiteNoReload !== "passed") failures.push("same-document routing");
         if (root.kaelSuiteReopenHook !== "registered") failures.push("reopen hook");
         const semanticNodes = Number(primaryCanvas?.dataset.kaelAccessibilityNodes);
-        if (!Number.isFinite(semanticNodes) || semanticNodes <= 0 || semanticNodes > 768) {
+        const semanticLimit = Number(primaryCanvas?.dataset.kaelAccessibilityNodeLimit);
+        const mountedSemanticNodes = document.querySelectorAll(
+          '#kael-accessibility-layer [data-kael-a11y-has-bounds="true"]',
+        ).length;
+        if (
+          semanticLimit !== 4_096 ||
+          !Number.isInteger(semanticNodes) || semanticNodes <= 0 || semanticNodes > semanticLimit ||
+          mountedSemanticNodes <= 0 || mountedSemanticNodes > 768
+        ) {
           failures.push("bounded retained/semantic mounts");
         } else {
           root.kaelSuiteBoundedMounts = "passed";
           root.kaelSuiteSemanticNodes = String(semanticNodes);
+          root.kaelSuiteMountedSemanticNodes = String(mountedSemanticNodes);
         }
         if (failures.length) {
           throw new Error(`Suite-scale checks failed: ${failures.join(", ")}`);

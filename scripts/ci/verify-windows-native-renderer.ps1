@@ -62,6 +62,9 @@ try {
     if (-not $rendererLog.Contains("NATIVE_RENDERER_SMOKE_OK:")) {
         throw "native renderer did not publish its success marker"
     }
+    if (-not $rendererLog.Contains("NATIVE_IDLE_MODEL_FRAME_OK:")) {
+        throw "Native model notification did not resume idle platform submission"
+    }
     if (-not $rendererLog.Contains("text_probe_pixels=")) {
         throw "native renderer did not prove retained text/glyph-atlas output"
     }
@@ -69,6 +72,12 @@ try {
         (Get-Item $env:KAEL_NATIVE_RENDERER_SMOKE_PNG).Length -le 1024) {
         throw "native renderer did not produce a non-empty PNG"
     }
+
+    Invoke-LoggedCommand `
+        -LogPath (Join-Path $evidence "programmable-renderer.log") `
+        -Command "python" `
+        (Join-Path $workspace "scripts\ci\verify-programmable-renderer.py"), `
+        "--backend", "directx11", "--evidence", (Join-Path $evidence "programmable")
 
     if ($SkipGeneratedProject) {
         "GENERATED_NATIVE_RUNTIME_SKIPPED: explicitly disabled" |

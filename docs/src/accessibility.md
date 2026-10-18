@@ -65,7 +65,8 @@ div()
 
 ### Tab stops
 
-Controls with IDs are automatically tab-focusable. Custom tab order:
+Buttons, text inputs and other focusable controls participate in tab order.
+For a custom Div, assign a stable ID and use `tab_index` to make it a tab stop:
 
 ```rust
 div()
@@ -81,36 +82,38 @@ div()
 
 For custom modals, popovers, command palettes, and inspector panels, use the
 headless `FocusTrapController` so `Tab`, `Shift-Tab`, and `Escape` behave like
-users expect without tying the behavior to one visual component:
+users expect without tying the behavior to one visual component. Retain the
+root focus handle in the owning view: initialize `settings_focus` with
+`cx.focus_handle()` once in its constructor. When the surface changes from
+closed to open, check `trap.should_autofocus()` and call
+`window.focus(&self.settings_focus)` once if enabled. In Render, clone that
+retained handle:
 
 ```rust
 use kael_ui::prelude::{FocusTrapAction, FocusTrapController};
 
 let trap = FocusTrapController::modal();
-let root_focus = cx.focus_handle();
-
-if trap.should_autofocus() {
-    window.focus(&root_focus);
-}
+let root_focus = self.settings_focus.clone();
 
 div()
     .id("settings-dialog")
     .track_focus(&root_focus)
-    .tab_index(0)
     .on_key_down(move |event, window, cx| {
         match trap.action_for_keystroke(&event.keystroke) {
             Some(FocusTrapAction::FocusNext) => {
-                window.focus_next_in_group();
+                window.focus_next_within(&root_focus);
                 cx.stop_propagation();
                 window.prevent_default();
             }
             Some(FocusTrapAction::FocusPrevious) => {
-                window.focus_prev_in_group();
+                window.focus_prev_within(&root_focus);
                 cx.stop_propagation();
                 window.prevent_default();
             }
             Some(FocusTrapAction::Dismiss) => {
                 close_settings(window, cx);
+                cx.stop_propagation();
+                window.prevent_default();
             }
             Some(FocusTrapAction::FocusFirst) | None => {}
         }
@@ -121,6 +124,136 @@ div()
 
 Use `FocusTrapController::persistent()` for surfaces where Escape should not
 dismiss, or `.dismiss_on_escape(false)` / `.autofocus(false)` to tune a trap.
+
+Scoped traversal uses the most recently rendered focus ancestry and current tab
+stops, wraps within the root, and focuses the root when it has no eligible
+stops. A removed root or a window with focus disabled leaves focus unchanged.
+`action_for_keystroke` preserves Control, Alt, platform and function shortcuts;
+`action_for_key` maps only the key and Shift arguments supplied to it. Keep
+visibility, closing, focus restoration and background accessibility policy in
+the owning view. `Dialog` and `Sheet` install their own plain Tab/Shift-Tab
+handling, including nested and empty surfaces.
+
+For semantic elements with `track_focus`, the published frame derives
+`FOCUSED` from that handle's actual current focus, including cached nodes when a
+later view requests focus during rendering. Untracked logical accessibility
+states remain authored by their control.
+
+## Virtual controls and retained logical trees
+
+`AccessibilitySnapshot` represents a complete logical subtree independently of
+the elements mounted for drawing. Build and validate the snapshot when the model
+changes, then attach the same `Arc` with
+`Window::register_accessibility_snapshot`. A painted root uses the snapshot's
+explicit `AccessibilityId`; mounted nodes add current geometry and state to a
+small frame overlay. Labels, hierarchy and offscreen actions remain available
+without cloning the full model each frame. Platform adapters publish incremental
+AccessKit updates after activation.
+
+`VirtualTreeList` uses this path. Its container owns keyboard focus and identifies
+the active logical row through `active_descendant`, preserving accessible focus
+when independent scrolling unmounts that row. Stable model IDs keep semantic
+identities across insertions, replacement, disclosure and filtering. The current
+source catalog owns these identities; deleting a catalog item retires its ID
+without retaining an unbounded history. Custom catalog builders can call
+`VirtualTreeModel::set_accessibility_catalog_ids` before preparation to include
+collapsed cached entries. Offscreen focus, selection and
+scroll-to-visible actions resolve against the current model and reveal the row;
+removed or disabled targets are ignored.
+
+For large `Send + Sync` models, prepare both rows and semantic metadata on a
+worker before publishing the replacement:
+
+```rust
+let context = state.read(cx)
+    .accessibility_preparation_context("Project files", true);
+let executor = cx.background_executor().clone();
+let worker = executor.clone();
+let task = executor.spawn(async move {
+    let mut model = VirtualTreeModel::new(&nodes, &expanded)?;
+    model.prepare_accessibility(context, &worker)?;
+    Ok::<_, VirtualTreeModelError>(model)
+});
+```
+
+Adopting prepared metadata on the foreground thread shares its snapshot and ID
+maps. Outgoing prepared model and semantic storage are reclaimed on the worker.
+Preparation reuses unchanged immutable logical node records from the current
+preparation context after checking their complete label, state, actions, parent
+and ordered children. Collapsed descendants remain absent from the snapshot;
+only their IDs remain in the current catalog. Re-expansion may build their node
+records again. This shares record payloads across adjacent generations without
+retaining a history of old models or disclosure variants.
+
+Model indexing, topology validation and changed-snapshot delta scans remain
+linear. Initial shared preparation adds an allocation per record, while matching
+records avoid rebuilding owned labels and actions. This is not a process memory
+budget or a guarantee of lower initialization or frame latency. Existing
+`AccessibilitySnapshot::new` and `with_reclaim_executor` keep owned storage.
+Custom logical controls may opt into `AccessibilitySnapshot::sharing_builder`,
+which preserves borrowed getters and validates the complete graph on `finish`.
+Use `reuse_from` only after verifying all desired semantics. An unfinished or
+invalid builder retains accepted records, rejected owned input values and
+reserved map storage until `finish` or drop, then reclaims them in a batch on the
+supplied executor. Continuing to submit owned inputs after an error retains
+those values until that retirement. Successful `finish` transfers valid records
+to the new snapshot; record owners do not escape it.
+
+Keep the returned task and apply its result through the application's normal
+entity update. Small or non-`Send` models can use ordinary construction; their
+first render prepares semantics on the foreground thread, so this route is
+unsuitable for large initial models.
+
+When a logical tree or grid already represents the items, use
+`UniformList::without_accessibility_wrappers()` to avoid an extra physical
+list/item hierarchy. Visual text that duplicates an ancestor's semantic label
+can use `StyledText::accessibility_hidden(true)`.
+
+## Browser accessibility projection
+
+The browser DOM mirror retains at most 4,096 semantic nodes. It admits focused
+and physically mounted controls with their ancestors before sampling remaining
+logical descendants. This keeps visible cells and active descendants available
+when a grid has thousands of offscreen headers. Native adapters continue to use
+the retained complete logical snapshots.
+
+The canvas exposes `data-kael-accessibility-node-limit` and
+`data-kael-accessibility-truncated`; a truncated mirror does not imply complete
+DOM coverage of the application's logical model. Mirrored elements expose
+`data-kael-a11y-has-bounds` to distinguish mounted geometry from offscreen
+semantic records. These attributes support diagnostics; rendering remains
+limited to the viewport.
+
+## Native text selection
+
+Editable components can attach an immutable `AccessibilityTextDocument` and a
+`AccessibilityTextSelection` measured in directed UTF-8 byte endpoints. Prepare
+the document once per content revision; retain its Arc while only the caret or
+selection changes. Large documents can use `with_reclaim_executor` on their
+worker so the final outgoing text storage is reclaimed there too.
+
+```rust
+let document = AccessibilityTextDocument::with_reclaim_executor(text, &executor);
+let attributes = AccessibilityAttributes::new(AccessibilityRole::TextInput)
+    .text_document(document, AccessibilityTextSelection { anchor, focus })
+    .actions(vec![AccessibilityAction::Focus, AccessibilityAction::SetTextSelection]);
+```
+
+Native export supplies complete per-line text runs and the directed selection.
+A retained transparent container keeps caret updates constant in child IDs;
+unchanged text runs are not exported again. UTF-16 native ranges are converted
+through AccessKit, and Kael checks the run identity and selectable UTF-8 byte
+boundaries before producing `AccessibilityActionPayload::TextSelection`.
+Handlers should reject stale content revisions before applying its `anchor` and
+`focus` endpoints. The Editor performs this check, preserves reversed selection,
+and leaves its contents and undo history unchanged by selection requests.
+
+Kael's macOS adapter serves complete multiline values from the retained text
+runs when assistive technology requests them. Its
+[patch record](https://github.com/Augani/kael/blob/main/vendor/accesskit_macos/PATCHES.md)
+links upstream source, licenses and Apple's native API documentation. Native
+protocol regressions execute on macOS; Windows/Linux text-provider runtime
+coverage remains part of Platform Readiness.
 
 ## Assistive-technology actions
 
@@ -172,6 +305,13 @@ window.on_accessibility_action(
     },
 );
 ```
+
+Built-in scrollbars handle `Focus`, `Increment`, `Decrement`, and numeric
+`SetValue` requests. Their native range uses positive logical pixels from the
+start, with a maximum determined by the current viewport and content. This
+differs from `ScrollBarRenderState::percentage`, which is between zero and one.
+Numeric requests clamp to the live range and preserve the other scroll axis;
+nonfinite values and string payloads are rejected.
 
 For custom test harnesses or non-window integrations, route normalized requests
 through `AccessibilityActionRouter`:
@@ -242,12 +382,15 @@ window that renders accessible widgets (or custom elements with
 |----------|---------|--------|
 | macOS | [`accesskit_macos`] `SubclassingAdapter` over the window's `NSView` | Adapter-backed; serves a full `NSAccessibility` tree to VoiceOver |
 | Linux | [`accesskit_unix`] AT-SPI2 adapter (one per window, x11 and wayland) | Adapter-backed; exposes the tree on the AT-SPI2 D-Bus bus to Orca |
-| Windows | Hand-rolled UI Automation provider (`IRawElementProviderSimple`) | Native UIA, served via `WM_GETOBJECT` |
+| Windows | Named AccessKit Windows adapter with incremental consumer trees | Native UIA, served via `WM_GETOBJECT` |
 
-On macOS and Linux the tree is built once with AccessKit and the official
-adapters translate it to the platform protocol; Windows keeps its dedicated
-UIA provider. All three are driven from the same per-frame tree, so widget
-roles, labels, values, and focus stay consistent across platforms.
+All three native platforms use named Kael-maintained AccessKit adapters, with
+upstream provenance and licenses retained. Shared immutable snapshots and
+incremental updates preserve logical descendants and text runs across frames;
+the adapters translate these semantics to the native protocol. Kael uses direct
+path/version/package dependencies, so external consumers need no workspace
+patch overrides. Native runtime clients remain required to verify presentation
+and action routing on each platform.
 
 Notes:
 
@@ -265,8 +408,8 @@ Notes:
   UIA focus, invoke, toggle, expand/collapse, and range-value pattern calls
   into the same window route.
 
-[`accesskit_macos`]: https://crates.io/crates/accesskit_macos
-[`accesskit_unix`]: https://crates.io/crates/accesskit_unix
+[`accesskit_macos`]: https://github.com/Augani/kael/tree/main/vendor/accesskit_macos
+[`accesskit_unix`]: https://github.com/Augani/kael/tree/main/vendor/accesskit_unix
 
 ## Testing with a screen reader
 

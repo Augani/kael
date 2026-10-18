@@ -1,0 +1,683 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-17",
+  "scope": "Linux notification wire behavior fix on existing Zbus5; independent unshipped Zbus6 API feasibility. Private-bus execution on Mac is not native Linux desktop integration.",
+  "source": {
+    "baseline_commit": "91770ddb339447f921544b30842b4841b4203842",
+    "committed_fix": "c01cb865979e5a5fd0a499958be34f2cf9df443f",
+    "path": "crates/kael_notifications/src/platform/linux.rs",
+    "baseline_git_blob_sha256": "d3bcfd2d444092ed60e87f76f94ba461fd1a57c0a5c30b33817564752b790d46",
+    "fixed_git_blob_sha256": "12d3ff770a5a9188e32021498ba1d6bcd125521ba853be578f48919ee82c6122",
+    "artifact5_prefix_is_exact_committed_file": true,
+    "artifact5_only_suffix": "\n#[cfg(test)]\nmod protocol_tests;\n",
+    "root_Cargo_lock_sha256": "b1b84f981fcc7d4c0e7a60a0d08a4f5ea5f66fc5f0ed086fc40eeee6e1a70e64",
+    "notification_manifest_sha256": "b148cfa139fb1e070de6a480eab9a71a2f75045f5fc7357679f9bfb6714560cb",
+    "production_dependencies_changed": false,
+    "baseline_dependency_files_byte_equal_committed_fix": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "crates/kael_notifications/Cargo.toml"
+    ]
+  },
+  "specification": {
+    "basic_design": "https://specifications.freedesktop.org/notification/latest/basic-design.html",
+    "signal_protocol": "https://specifications.freedesktop.org/notification/latest/protocol.html",
+    "contract": "Body activation advertises literal default; ActionInvoked echoes an advertised wire key."
+  },
+  "behavior": [
+    "Body default maps to stable public DEFAULT_NOTIFICATION_ACTION_ID (__default).",
+    "Custom actions get private per-notification indexed keys; public IDs default, __closed and __default remain legal and roundtrip unchanged.",
+    "Only exact advertised keys for the matching notification ID invoke a callback; unknown, leading-zero and unrelated keys/IDs do not prematurely retire it.",
+    "First known action or matching NotificationClosed ends the listener; callback captures release on action, close and malformed/error paths."
+  ],
+  "checks": [
+    {
+      "kind": "actual_private_bus",
+      "implementation": "production Zbus 5.18 blocking backend, exact committed source",
+      "host": "macOS arm64, Linux backend deliberately selected",
+      "dependency_graph": "all 121 reachable registry tuples match committed root lock",
+      "tests_passed": 22,
+      "tests_failed": 0,
+      "tests_ignored": 0,
+      "included_existing_tests": 13,
+      "included_new_wire_tests": 6,
+      "included_production_unit_message_tests": 3,
+      "runtime_argv": [
+        "python3",
+        ".artifacts/2026-10-17-run-dbus-spike.py",
+        "--",
+        "/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target/debug/deps/kael_notifications-3ee7fe53b0101c58",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "runtime_log": ".artifacts/2026-10-17-zbus5-notifications/root-pinned-runtime.log",
+      "binary_path": ".artifacts/2026-10-17-zbus5-notifications/root-pinned-test-binary",
+      "binary_sha256": "8e27b80bb9d1b099c31564360ffdea44d160b852ee80cd7b2b4b2aca9b0d75c0"
+    },
+    {
+      "kind": "expected_failing_regression",
+      "implementation": "unmodified production Zbus5 source from91770dd, forced Linux backend on Mac",
+      "dependency_graph": "initial fresh standalone lock; exact differences listed separately",
+      "tests_failed": 1,
+      "tests_passed": 0,
+      "tests_ignored": 0,
+      "observed_actions": [
+        "__default",
+        "Open"
+      ],
+      "required_actions": [
+        "default",
+        "Open"
+      ],
+      "log": ".artifacts/2026-10-17-zbus5-notifications/wire-default-red.log",
+      "command": {
+        "argv": [
+          "python3",
+          ".artifacts/2026-10-17-run-dbus-spike.py",
+          "--",
+          "/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target/debug/deps/kael_notifications-5c2497e317dd3c92",
+          "platform::linux::protocol_tests::actual_zbus5_default_wire_key_is_standard",
+          "--exact",
+          "--nocapture"
+        ],
+        "exit_code": 101,
+        "binary": "/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target/debug/deps/kael_notifications-5c2497e317dd3c92"
+      }
+    },
+    {
+      "kind": "artifact_only_migration_feasibility",
+      "implementation": "Zbus6 async port with same fixed wire mapping",
+      "tests_passed": 19,
+      "tests_failed": 0,
+      "tests_ignored": 0,
+      "included_existing_tests": 13,
+      "included_wire_tests": 6,
+      "log": ".artifacts/2026-10-17-zbus6-notifications/mapped-runtime.log",
+      "binary_path": ".artifacts/2026-10-17-zbus6-notifications/mapped-test-binary",
+      "binary_sha256": "127274f021d79347369b9ae912ebe40f2df23918a0ac062dceb7871a859f9ce8",
+      "strict_clippy": "passed all targets -D warnings",
+      "linux_cross_check": "passed x86_64-unknown-linux-gnu all targets",
+      "strict_clippy_command": {
+        "path": ".artifacts/2026-10-17-zbus6-notifications",
+        "name": "mapped-clippy",
+        "argv": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "--manifest-path",
+          ".artifacts/2026-10-17-zbus6-notifications/Cargo.toml",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0
+      }
+    },
+    {
+      "kind": "historical_port_only_preserved",
+      "implementation": "Zbus6 API port before wire behavior change",
+      "tests_passed": 18,
+      "tests_ignored": 0,
+      "wire_tests": 5,
+      "strict_clippy": "passed all targets -D warnings",
+      "linux_cross_check": "passed all targets",
+      "evidence_path": ".artifacts/2026-10-17-zbus6-notifications/port-only-evidence.json",
+      "evidence_sha256": "d1301f701f0584414e27fd1302fc71860f24c3784a36e6215618cd3bb6f9d7a8",
+      "source_archive_path": ".artifacts/2026-10-17-zbus6-notifications/port-only-source.tar.gz",
+      "source_archive_sha256": "41ae2433ff66a199f0ed5d888e4ced5293620c85a3cb4e9209bbb69f0660e2a0",
+      "caveat": "Preserves old __default wire behavior and therefore is not default-action conformance proof.",
+      "static_check_commands": [
+        {
+          "name": "protocol-clippy",
+          "argv": [
+            "cargo",
+            "clippy",
+            "--locked",
+            "--manifest-path",
+            ".artifacts/2026-10-17-zbus6-notifications/Cargo.toml",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "exit_code": 0
+        },
+        {
+          "name": "protocol-linux-check",
+          "argv": [
+            "cargo",
+            "check",
+            "--locked",
+            "--manifest-path",
+            ".artifacts/2026-10-17-zbus6-notifications/Cargo.toml",
+            "--target",
+            "x86_64-unknown-linux-gnu",
+            "--all-targets"
+          ],
+          "exit_code": 0
+        }
+      ]
+    }
+  ],
+  "production_static_checks": [
+    {
+      "name": "production-linux-check",
+      "argv": [
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "kael_notifications",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--all-targets"
+      ],
+      "exit_code": 0
+    },
+    {
+      "name": "production-linux-clippy",
+      "argv": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "kael_notifications",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "final_artifact_static_checks": [
+    {
+      "artifact": "2026-10-17-zbus5-notifications",
+      "name": "root-pinned-clippy",
+      "argv": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        ".artifacts/2026-10-17-zbus5-notifications/Cargo.toml",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0
+    },
+    {
+      "artifact": "2026-10-17-zbus5-notifications",
+      "name": "root-pinned-linux-check",
+      "argv": [
+        "cargo",
+        "check",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        ".artifacts/2026-10-17-zbus5-notifications/Cargo.toml",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--all-targets"
+      ],
+      "exit_code": 0
+    },
+    {
+      "artifact": "2026-10-17-zbus6-notifications",
+      "name": "mapped-linux-check",
+      "argv": [
+        "cargo",
+        "check",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        ".artifacts/2026-10-17-zbus6-notifications/Cargo.toml",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--all-targets"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "root_pinned_registry_graph": {
+    "registry_packages": 121,
+    "every_name_version_source_checksum_tuple_matches_root": true,
+    "artifact_Cargo_lock_sha256": "66dd71a4ebedb5d71d19de9ce7c178e95de35c31f5c49692be636ca7c1447187",
+    "initial_fresh_resolved_lock_sha256": "31461502264ad95b598a288fa0b19ec1d927efc5868a794c23eb74dd954f05a5",
+    "initial_fresh_versions_differing_from_root": [
+      {
+        "name": "async-trait",
+        "artifact": "0.1.92",
+        "root": [
+          "0.1.89"
+        ]
+      },
+      {
+        "name": "bitflags",
+        "artifact": "2.13.2",
+        "root": [
+          "1.3.2",
+          "2.13.1"
+        ]
+      },
+      {
+        "name": "blocking",
+        "artifact": "1.7.0",
+        "root": [
+          "1.6.2"
+        ]
+      },
+      {
+        "name": "cfg-if",
+        "artifact": "1.0.5",
+        "root": [
+          "1.0.4"
+        ]
+      },
+      {
+        "name": "crossbeam-utils",
+        "artifact": "0.8.23",
+        "root": [
+          "0.8.21"
+        ]
+      },
+      {
+        "name": "equivalent",
+        "artifact": "1.0.3",
+        "root": [
+          "1.0.2"
+        ]
+      },
+      {
+        "name": "fastrand",
+        "artifact": "2.5.0",
+        "root": [
+          "2.4.1"
+        ]
+      },
+      {
+        "name": "futures",
+        "artifact": "0.3.34",
+        "root": [
+          "0.3.32"
+        ]
+      },
+      {
+        "name": "futures-channel",
+        "artifact": "0.3.34",
+        "root": [
+          "0.3.32"
+        ]
+      },
+      {
+        "name": "futures-core",
+        "artifact": "0.3.34",
+        "root": [
+          "0.3.32"
+        ]
+      },
+      {
+        "name": "futures-executor",
+        "artifact": "0.3.34",
+        "root": [
+          "0.3.32"
+        ]
+      },
+      {
+        "name": "futures-io",
+        "artifact": "0.3.34",
+        "root": [
+          "0.3.32"
+        ]
+      },
+      {
+        "name": "futures-macro",
+        "artifact": "0.3.34",
+        "root": [
+          "0.3.32"
+        ]
+      },
+      {
+        "name": "futures-sink",
+        "artifact": "0.3.34",
+        "root": [
+          "0.3.32"
+        ]
+      },
+      {
+        "name": "futures-task",
+        "artifact": "0.3.34",
+        "root": [
+          "0.3.32"
+        ]
+      },
+      {
+        "name": "futures-util",
+        "artifact": "0.3.34",
+        "root": [
+          "0.3.32"
+        ]
+      },
+      {
+        "name": "getrandom",
+        "artifact": "0.4.3",
+        "root": [
+          "0.2.17",
+          "0.3.4",
+          "0.4.2"
+        ]
+      },
+      {
+        "name": "indexmap",
+        "artifact": "2.14.2",
+        "root": [
+          "2.14.0"
+        ]
+      },
+      {
+        "name": "js-sys",
+        "artifact": "0.3.106",
+        "root": [
+          "0.3.99"
+        ]
+      },
+      {
+        "name": "libc",
+        "artifact": "0.2.191",
+        "root": [
+          "0.2.186"
+        ]
+      },
+      {
+        "name": "memchr",
+        "artifact": "2.8.3",
+        "root": [
+          "2.8.1"
+        ]
+      },
+      {
+        "name": "proc-macro2",
+        "artifact": "1.0.107",
+        "root": [
+          "1.0.106"
+        ]
+      },
+      {
+        "name": "quote",
+        "artifact": "1.0.47",
+        "root": [
+          "1.0.45"
+        ]
+      },
+      {
+        "name": "rustix",
+        "artifact": "1.1.5",
+        "root": [
+          "0.38.44",
+          "1.1.4"
+        ]
+      },
+      {
+        "name": "rustversion",
+        "artifact": "1.0.23",
+        "root": [
+          "1.0.22"
+        ]
+      },
+      {
+        "name": "serde",
+        "artifact": "1.0.229",
+        "root": [
+          "1.0.228"
+        ]
+      },
+      {
+        "name": "serde_core",
+        "artifact": "1.0.229",
+        "root": [
+          "1.0.228"
+        ]
+      },
+      {
+        "name": "serde_derive",
+        "artifact": "1.0.229",
+        "root": [
+          "1.0.228"
+        ]
+      },
+      {
+        "name": "serde_repr",
+        "artifact": "0.1.21",
+        "root": [
+          "0.1.20"
+        ]
+      },
+      {
+        "name": "smallvec",
+        "artifact": "1.16.3",
+        "root": [
+          "1.15.1"
+        ]
+      },
+      {
+        "name": "syn",
+        "artifact": "2.0.119",
+        "root": [
+          "1.0.109",
+          "2.0.117",
+          "3.0.3"
+        ]
+      },
+      {
+        "name": "syn",
+        "artifact": "3.0.9",
+        "root": [
+          "1.0.109",
+          "2.0.117",
+          "3.0.3"
+        ]
+      },
+      {
+        "name": "thiserror",
+        "artifact": "2.0.21",
+        "root": [
+          "1.0.69",
+          "2.0.18"
+        ]
+      },
+      {
+        "name": "thiserror-impl",
+        "artifact": "2.0.21",
+        "root": [
+          "1.0.69",
+          "2.0.18"
+        ]
+      },
+      {
+        "name": "toml_edit",
+        "artifact": "0.25.15+spec-1.1.0",
+        "root": [
+          "0.19.15",
+          "0.20.7",
+          "0.22.27",
+          "0.25.12+spec-1.1.0"
+        ]
+      },
+      {
+        "name": "toml_parser",
+        "artifact": "1.1.3+spec-1.1.0",
+        "root": [
+          "1.1.2+spec-1.1.0"
+        ]
+      },
+      {
+        "name": "unicode-ident",
+        "artifact": "1.0.27",
+        "root": [
+          "1.0.24"
+        ]
+      },
+      {
+        "name": "uuid",
+        "artifact": "1.28.0",
+        "root": [
+          "1.23.1"
+        ]
+      },
+      {
+        "name": "wasm-bindgen",
+        "artifact": "0.2.129",
+        "root": [
+          "0.2.122"
+        ]
+      },
+      {
+        "name": "wasm-bindgen-macro",
+        "artifact": "0.2.129",
+        "root": [
+          "0.2.122"
+        ]
+      },
+      {
+        "name": "wasm-bindgen-macro-support",
+        "artifact": "0.2.129",
+        "root": [
+          "0.2.122"
+        ]
+      },
+      {
+        "name": "wasm-bindgen-shared",
+        "artifact": "0.2.129",
+        "root": [
+          "0.2.122"
+        ]
+      },
+      {
+        "name": "winnow",
+        "artifact": "1.0.4",
+        "root": [
+          "0.5.40",
+          "0.7.15",
+          "1.0.3"
+        ]
+      }
+    ]
+  },
+  "artifact_configuration_differences": {
+    "both": [
+      "Standalone workspace manifests resolve Kael workspace metadata explicitly.",
+      "platform/mod.rs selects the existing Linux module on Mac and disables the native Mac module; no native Mac notification service is used.",
+      "Extra private fake-service test module appended after the exact production Linux source in artifact5.",
+      "Copied local.rs test mock uses an equivalent let-chain for standalone strict Clippy; production local.rs unchanged.",
+      "Private bus runner sets isolated session and system bus addresses, times out child at 120 seconds and always terminates its daemon."
+    ],
+    "zbus5": [
+      "Pins zbus5.18.0 with original async-io/blocking-api features.",
+      "Final lock seeded from root, pruned offline; subsequent builds/checks locked+offline.",
+      "Fake async server uses Zbus5 fallible builder API; actual client dispatch is unchanged blocking production code."
+    ],
+    "zbus6": [
+      "Pins unshipped zbus6.0.0 default-rt+proxy; service feature used only by fixture.",
+      "Uses async Connection/Proxy/SignalStream and built-in Variant instead of removed blocking APIs/zvariant aliases.",
+      "Sync public delivery uses zbus::block_on and retains original listener-thread topology.",
+      "Feasibility uses its own standalone dependency graph; it does not establish whole-workspace Zbus6 migration readiness."
+    ]
+  },
+  "protocol_cases": [
+    "Exact Unicode summary/body/subtitle and app-name/replaces-ID/icon/timeout tuple.",
+    "Named sound string, suppress-sound true, default empty sound hints.",
+    "Default plus localized custom action pairs and all three colliding public IDs.",
+    "Unrelated ID, close ID, member and unknown exact/leading-zero key filtering.",
+    "One known action dispatch, then callback capture release; matching closure without action also releases.",
+    "Service failure, Notify reply with String instead of uint32, and malformed ActionInvoked/NotificationClosed bodies reject explicitly."
+  ],
+  "source_archives": {
+    "production_zbus5": {
+      "path": ".artifacts/2026-10-17-zbus5-notifications/root-pinned-source.tar.gz",
+      "sha256": "411540e31c97893c61f9716b1af54409cfce3a278e5a884b8c7a9fc5ab709875",
+      "source_sha256": {
+        "Cargo.lock": "66dd71a4ebedb5d71d19de9ce7c178e95de35c31f5c49692be636ca7c1447187",
+        "Cargo.toml": "c688bd514d25aacff74a74ff250028baf67554bf9dcf78fa5ca91cadf3e524a9",
+        "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a",
+        "README.md": "9afac27884dae34654830edf5a437837461be8d4ddcc52efc57a16e193d372c4",
+        "src/action.rs": "143df1533619a872b6246f16c8f14a214d0a2af9a95c08bb688fae48b9f36810",
+        "src/error.rs": "d21fc9be2128c295533b910a16a7796be8af71bc17adf266b777d184f4f33853",
+        "src/lib.rs": "ee3037ca45cf2e49f1725ba5700ba4fac4f7197b52772a23a95887267e6ce533",
+        "src/local.rs": "f63e5122e35386c311793efecbc482ac556fa3290c6f70bfe1daada4d7e0b29d",
+        "src/platform/linux/protocol_tests.rs": "a3a503e8cb0a2c3f113b5f61bc38166132a359e7487b9b9a85fd76f63c477f8b",
+        "src/platform/linux.rs": "2f76f15b7093ee98fce5cb0a9387a8fc36d56877f661597333634fc539887214",
+        "src/platform/mac.rs": "a7bf680785b17e7dbad6d9067fa9e84017d02af4ebbd36d41c49466618a4409e",
+        "src/platform/mod.rs": "4dd0561dfdb3f1a46a9fd7cba759ce366d2684d0cbfcea91df3db75417aa616e",
+        "src/platform/web.rs": "34f467475e37bd68f65cc56515d570c6a2c20f8171a3c4bb7dd7d167034f8475",
+        "src/platform/windows.rs": "21460d7213c43c87d1be06d67503367bb4e91f210e77a28efffc1bf239012493",
+        "src/push.rs": "84232196cdddf25fc41a67e23f48f0857daff5b7fb0b406df1433e870f7f5572"
+      }
+    },
+    "artifact_zbus6": {
+      "path": ".artifacts/2026-10-17-zbus6-notifications/mapped-source.tar.gz",
+      "sha256": "573956c5f84dccc319c3bcfeec55dfed4826d0656ec9d0a48137ea086802d293",
+      "source_sha256": {
+        "Cargo.lock": "11a16f3aaa02f51155f160a90fc065c72ac4a44ec06684023ffa5ed028452140",
+        "Cargo.toml": "98d1ef786f70b59806e48e07ff73cab951f86e36efdfeccf5288c3511f0953b7",
+        "LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a",
+        "README.md": "9afac27884dae34654830edf5a437837461be8d4ddcc52efc57a16e193d372c4",
+        "src/action.rs": "143df1533619a872b6246f16c8f14a214d0a2af9a95c08bb688fae48b9f36810",
+        "src/error.rs": "d21fc9be2128c295533b910a16a7796be8af71bc17adf266b777d184f4f33853",
+        "src/lib.rs": "ee3037ca45cf2e49f1725ba5700ba4fac4f7197b52772a23a95887267e6ce533",
+        "src/local.rs": "f63e5122e35386c311793efecbc482ac556fa3290c6f70bfe1daada4d7e0b29d",
+        "src/platform/linux/protocol_tests.rs": "3a11582eadb93d776fca60d8c97b16289e27477f409377b7f555e722415e77f8",
+        "src/platform/linux.rs": "6dbca1998c3be9671ea4baddaa7b3ca79314d6df9e712eb236c4784ae19b74b8",
+        "src/platform/mac.rs": "a7bf680785b17e7dbad6d9067fa9e84017d02af4ebbd36d41c49466618a4409e",
+        "src/platform/mod.rs": "4dd0561dfdb3f1a46a9fd7cba759ce366d2684d0cbfcea91df3db75417aa616e",
+        "src/platform/web.rs": "34f467475e37bd68f65cc56515d570c6a2c20f8171a3c4bb7dd7d167034f8475",
+        "src/platform/windows.rs": "21460d7213c43c87d1be06d67503367bb4e91f210e77a28efffc1bf239012493",
+        "src/push.rs": "84232196cdddf25fc41a67e23f48f0857daff5b7fb0b406df1433e870f7f5572"
+      }
+    }
+  },
+  "evidence_sha256": {
+    ".artifacts/2026-10-17-zbus5-notifications/wire-default-red-build.log": "00ad17ebfca8db6c0c8cb059731c5ad64d68332e7586850d844acedc9c0cad90",
+    ".artifacts/2026-10-17-zbus5-notifications/wire-default-red.log": "f97a2d87c5bc7f4b3f011c5ca4fb03a782434f4daa5972c858c39d673ed4b178",
+    ".artifacts/2026-10-17-zbus5-notifications/mapped-runtime.log": "d251d083736acfc8f80ede569d54f6eef16ae36e80b8c116934bb24bd15eb73b",
+    ".artifacts/2026-10-17-zbus5-notifications/root-pinned-build.log": "98ff5cfc78de953b71de87a1c43293c3603726e69d37f39537dc2d07c2de9860",
+    ".artifacts/2026-10-17-zbus5-notifications/root-pinned-runtime.log": "6b6ddd182b3e2280afa4b80cbfad2da55885677711abe6d39a65edfbca5ebab6",
+    ".artifacts/2026-10-17-zbus5-notifications/root-pinned-clippy.log": "f396c74efced291beeb5f8a56ce8d90a57a006800feeab9f1abbf5227ff3daa7",
+    ".artifacts/2026-10-17-zbus5-notifications/root-pinned-linux-check.log": "72e0583f410e65c8f4b4e07eac94ea8ca066d80ef427a75c4670e546b0c62c83",
+    ".artifacts/2026-10-17-zbus5-notifications/production-linux-check.log": "f80a00cafe4a3a429cf3c102c7bc718b93561ece3ae61949270069924c8da476",
+    ".artifacts/2026-10-17-zbus5-notifications/production-linux-clippy.log": "2630cbca5d9afa80e4f7447d81b65de57ab785f63433321fb2160139887f9fbb",
+    ".artifacts/2026-10-17-zbus5-notifications/root-pinned-resolution.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    ".artifacts/2026-10-17-zbus6-notifications/mapped-build.log": "6bc952b27f309a9ff286f11373173057b953975a326f8e5927eca58c62bea8fe",
+    ".artifacts/2026-10-17-zbus6-notifications/mapped-runtime.log": "2a2773753c836622276290696e9074d7eaed151489e204f2a8fe5ff60e64dccb",
+    ".artifacts/2026-10-17-zbus6-notifications/mapped-clippy.log": "67e7b2166262381d12110f558a36880cb5c1207d374cccd440d7e4259c28e3ae",
+    ".artifacts/2026-10-17-zbus6-notifications/mapped-linux-check.log": "ea07dcc679cae2977b69b0d629d30922880dbc2ee8404671ece91885279e00d9",
+    ".artifacts/2026-10-17-zbus6-notifications/wire-default-red.log": "75371004f21200bbd03bb1e00533f0d7a8d814be2a07366148d9937bb8674a70",
+    ".artifacts/2026-10-17-zbus6-notifications/port-only-build-final.log": "2fe688d31b53d900a2956058dec5d2240f122722512a77c00ca9f7976817ee18",
+    ".artifacts/2026-10-17-zbus6-notifications/port-only-runtime-final.log": "8977182c7f828081cdd77f3e19a40ffb6600e3775d3b19b0d315844279c30fc1",
+    ".artifacts/2026-10-17-zbus6-notifications/protocol-clippy.log": "eccde2f90155ab449b508ee9cae6e798f5504b37a54220ac07f0bfb19458034f",
+    ".artifacts/2026-10-17-zbus6-notifications/protocol-linux-check.log": "a9bd5c10d2fc6b829d7098ec02de4a14a6bac060145ec2def7ae88f0a6a6cb1d",
+    ".artifacts/2026-10-17-zbus6-notifications-red.log": "a57f11cea7407cf6d13cc30db199ac003e35c259b37273dc77225a08f61fea60",
+    ".artifacts/2026-10-17-zbus6-notifications-check.log": "700a56021530196ac2459ea5f4fbd078e83af2479f43feb9c0f055a6a7de6ea5",
+    ".artifacts/2026-10-17-run-dbus-spike.py": "cf4bc5c873154bfa6eaee746e359f391685140d2456091fff75b88c75510ebc0",
+    ".artifacts/2026-10-17-dbus-formula.json": "86ff61fe53dd157782239052a668b4d64a17ca1f13aebebd51a4a0df2e9a25ee"
+  },
+  "environment": {
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: aarch64-apple-darwin\nrelease: 1.97.1\nLLVM version: 22.1.6\n",
+    "macOS": "ProductName:\t\tmacOS\nProductVersion:\t\t27.2\nBuildVersion:\t\t26B5112a\n",
+    "architecture": "arm64",
+    "cargo_target_dir": "/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target"
+  },
+  "limitations": [
+    "No native Linux desktop daemon, GUI notification, or OS activation integration was executed on Mac. Linux production code and test targets were cross-checked statically.",
+    "The 18/19/22 counts overlap; they must not be summed as independent tests.",
+    "Initial pre-fix Zbus5 wire RED used a fresh standalone graph; final actual Zbus5 GREEN uses exact root-pinned registry tuples.",
+    "Existing listener-panic isolation deliberately prints one caught panic while its test passes.",
+    "One thread per actionable notification is preserved; no new global concurrency bound or timing/power/memory efficiency claim.",
+    "Production remains on Zbus5.18; audit advisories, other D-Bus parents and whole-stack Zbus6 migration remain separate work. No audit ignore/allowlist changes.",
+    "This source-scoped proof does not represent a fresh39-package preflight or registry publication."
+  ]
+}

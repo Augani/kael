@@ -42,6 +42,8 @@ pub mod colors;
 /// Command registry for registering named commands invokable from menus,
 /// keybindings, and a command palette.
 pub mod command_registry;
+#[cfg(feature = "custom-shaders")]
+pub mod compute;
 /// Memoized values with automatic entity-dependency tracking.
 pub mod computed;
 mod crash_reporter;
@@ -53,6 +55,7 @@ mod executor;
 pub mod extension_host;
 pub mod extension_rpc;
 mod file_watcher;
+mod frame_timing;
 mod geometry;
 mod global;
 /// GPU memory budgeting and eviction.
@@ -89,6 +92,10 @@ pub mod portable_scene;
 pub mod prelude;
 mod print;
 pub mod process_model;
+#[cfg(feature = "custom-shaders")]
+mod render_graph;
+#[cfg(feature = "custom-shaders")]
+mod render_target;
 /// Runtime worker support.
 pub mod runtime;
 mod scene;
@@ -97,6 +104,8 @@ pub mod scene_graph;
 pub mod scroll_elasticity;
 pub mod security;
 mod session_store;
+#[cfg(feature = "custom-shaders")]
+pub mod shader;
 #[allow(dead_code)]
 mod shadow_cache;
 mod shared_string;
@@ -170,6 +179,8 @@ pub use command_registry::{
     CommandDescriptor, CommandIpcHandoff, CommandIpcHandoffBuilder, CommandIpcNextAction,
     CommandIpcRequest, CommandPalette, PaletteCommandId,
 };
+#[cfg(feature = "custom-shaders")]
+pub use compute::*;
 pub use computed::*;
 pub use crash_reporter::*;
 pub use ctor::ctor;
@@ -180,6 +191,7 @@ pub use executor::*;
 pub use extension_host::*;
 pub use extension_rpc::*;
 pub use file_watcher::*;
+pub use frame_timing::*;
 pub use game_input::*;
 pub use geometry::*;
 pub use gesture::*;
@@ -211,6 +223,9 @@ pub use kael_notifications::{
 pub use kael_office as office;
 #[cfg(feature = "pdf")]
 pub use kael_pdf as pdf;
+/// Resource declarations, compilation and lifetime planning for GPU graphs.
+#[cfg(feature = "custom-shaders")]
+pub use kael_render_graph as gpu_graph;
 #[cfg(feature = "share")]
 pub use kael_share::{
     PlatformShareSupport, ShareError, ShareFile, ShareFileType, ShareImage, ShareItem,
@@ -228,6 +243,12 @@ pub use panels::*;
 pub use path_builder::*;
 pub use pixel_snap::PixelSnapPolicy;
 pub use platform::*;
+#[cfg(feature = "custom-shaders")]
+pub use render_graph::*;
+#[cfg(feature = "custom-shaders")]
+pub use render_target::*;
+#[cfg(feature = "custom-shaders")]
+pub use shader::*;
 
 /// Build the retained GSK paintable used by Kael's native-Wayland composition proof.
 ///

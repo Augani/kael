@@ -1,16 +1,16 @@
 use crate::{
     Bounds, DevicePixels, Font, FontFallbacks, FontFeatures, FontId, FontMetrics, FontRun,
-    FontStyle, FontWeight, GlyphId, GlyphRasterMode, LineLayout, Pixels, PlatformTextSystem, Point,
-    RenderGlyphParams, Result, SUBPIXEL_VARIANTS_X, ShapedGlyph, ShapedRun, SharedString, Size,
-    point, px, size, swap_rgba_pa_to_bgra,
+    FontStyle, FontWeight, GlyphId, GlyphRasterMode, LineLayout, LineTextGeometry, Pixels,
+    PlatformTextSystem, Point, RenderGlyphParams, Result, SUBPIXEL_VARIANTS_X, ShapedGlyph,
+    ShapedRun, ShapedTextCluster, SharedString, Size, point, px, size, swap_rgba_pa_to_bgra,
 };
 use anyhow::anyhow;
 use collections::HashMap;
 use core_foundation::{
     attributed_string::CFMutableAttributedString,
-    base::{CFRange, TCFType},
+    base::{CFRange, TCFType, kCFAllocatorDefault},
     number::CFNumber,
-    string::CFString,
+    string::{CFString, CFStringCreateWithCharacters},
 };
 use core_graphics::base::CGFloat;
 use core_graphics::{
@@ -48,7 +48,8 @@ use pathfinder_geometry::{
     vector::{Vector2F, Vector2I},
 };
 use smallvec::SmallVec;
-use std::{borrow::Cow, char, convert::TryFrom, sync::Arc};
+use std::{borrow::Cow, char, collections::VecDeque, convert::TryFrom, ops::Range, sync::Arc};
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::open_type::apply_features_and_fallbacks;
 
@@ -69,6 +70,94 @@ const SYSTEM_DISPLAY_REPRESENTATIVE_SIZE: f64 = 24.0;
 /// so it matches what AppKit ships at body sizes (11-19pt).
 const SYSTEM_TEXT_REPRESENTATIVE_SIZE: f64 = 14.0;
 
+// Bound native font handles independently of the text/layout caches. CoreText
+// owns the fonts' internal allocations, so this is a handle count, not a byte cap.
+const SIZED_FONT_CACHE_CAPACITY: usize = 128;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct SizedFontKey {
+    font_id: FontId,
+    size_bits: u32,
+}
+
+struct SizedFontEntry<T> {
+    font: T,
+    recently_used: bool,
+}
+
+struct SizedFontCache<T = CTFont> {
+    fonts: HashMap<SizedFontKey, SizedFontEntry<T>>,
+    clock: VecDeque<SizedFontKey>,
+    #[cfg(test)]
+    disabled: bool,
+    #[cfg(test)]
+    creations: usize,
+}
+
+impl<T> Default for SizedFontCache<T> {
+    fn default() -> Self {
+        Self {
+            fonts: HashMap::default(),
+            clock: VecDeque::new(),
+            #[cfg(test)]
+            disabled: false,
+            #[cfg(test)]
+            creations: 0,
+        }
+    }
+}
+
+impl<T: Clone> SizedFontCache<T> {
+    fn font(&mut self, font_id: FontId, size: Pixels, create: impl FnOnce() -> T) -> T {
+        let size = f32::from(size);
+        let cacheable = size.is_finite() && size > 0.0;
+        #[cfg(test)]
+        let cacheable = cacheable && !self.disabled;
+        let key = SizedFontKey {
+            font_id,
+            size_bits: size.to_bits(),
+        };
+
+        if cacheable && let Some(entry) = self.fonts.get_mut(&key) {
+            entry.recently_used = true;
+            return entry.font.clone();
+        }
+
+        #[cfg(test)]
+        {
+            self.creations += 1;
+        }
+        let font = create();
+        if !cacheable {
+            return font;
+        }
+
+        if self.fonts.len() == SIZED_FONT_CACHE_CAPACITY {
+            // One queue slot per entry; a second chance takes at most two
+            // revolutions and never allocates or sorts an eviction worklist.
+            loop {
+                let oldest = self.clock.pop_front().expect("nonempty sized font cache");
+                let entry = self.fonts.get_mut(&oldest).expect("sized font clock key");
+                if std::mem::take(&mut entry.recently_used) {
+                    self.clock.push_back(oldest);
+                } else {
+                    self.fonts.remove(&oldest);
+                    break;
+                }
+            }
+        }
+        self.clock.push_back(key);
+        self.fonts.insert(
+            key,
+            SizedFontEntry {
+                font: font.clone(),
+                recently_used: false,
+            },
+        );
+        font
+    }
+}
+
 pub(crate) struct MacTextSystem(RwLock<MacTextSystemState>);
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -82,6 +171,7 @@ struct MacTextSystemState {
     memory_source: MemSource,
     system_source: SystemSource,
     fonts: Vec<FontKitFont>,
+    sized_fonts: SizedFontCache,
     font_selections: HashMap<Font, FontId>,
     font_ids_by_postscript_name: HashMap<String, FontId>,
     font_ids_by_font_key: HashMap<FontKey, SmallVec<[FontId; 4]>>,
@@ -99,6 +189,7 @@ impl MacTextSystem {
             memory_source: MemSource::empty(),
             system_source: SystemSource::new(),
             fonts: Vec::new(),
+            sized_fonts: SizedFontCache::default(),
             font_selections: HashMap::default(),
             font_ids_by_postscript_name: HashMap::default(),
             font_ids_by_font_key: HashMap::default(),
@@ -227,6 +318,22 @@ impl PlatformTextSystem for MacTextSystem {
 
     fn layout_line(&self, text: &str, font_size: Pixels, font_runs: &[FontRun]) -> LineLayout {
         self.0.write().layout_line(text, font_size, font_runs)
+    }
+
+    fn layout_line_geometry(
+        &self,
+        text: &str,
+        font_size: Pixels,
+        font_runs: &[FontRun],
+        byte_ranges: &[Range<usize>],
+    ) -> Option<LineTextGeometry> {
+        if !LineTextGeometry::requested_ranges_valid(text, byte_ranges) {
+            return None;
+        }
+        self.0
+            .write()
+            .layout_line_impl(text, font_size, font_runs, Some(byte_ranges))
+            .1
     }
 }
 
@@ -423,7 +530,7 @@ impl MacTextSystemState {
             .get(params.font_id.0)
             .ok_or_else(|| anyhow!("unknown macOS font id {}", params.font_id.0))?;
         let scale = Transform2F::from_scale(params.scale_factor);
-        Ok(font
+        let mut bounds: Bounds<DevicePixels> = font
             .raster_bounds(
                 params.glyph_id.0,
                 params.font_size.into(),
@@ -431,7 +538,25 @@ impl MacTextSystemState {
                 HintingOptions::None,
                 font_kit::canvas::RasterizationOptions::GrayscaleAa,
             )?
-            .into())
+            .into();
+        if bounds.size.width.0 > 0 && bounds.size.height.0 > 0 {
+            // The declared reservation must include the antialias fringe.
+            // Returning the unpadded font-kit rectangle and enlarging only
+            // the bitmap makes strict native atlases abort a fractional line.
+            bounds.size.width.0 = bounds
+                .size
+                .width
+                .0
+                .checked_add(i32::from(params.subpixel_variant.x > 0))
+                .ok_or_else(|| anyhow!("glyph width overflowed"))?;
+            bounds.size.height.0 = bounds
+                .size
+                .height
+                .0
+                .checked_add(i32::from(params.subpixel_variant.y > 0))
+                .ok_or_else(|| anyhow!("glyph height overflowed"))?;
+        }
+        Ok(bounds)
     }
 
     fn rasterize_glyph(
@@ -442,19 +567,8 @@ impl MacTextSystemState {
         if glyph_bounds.size.width.0 <= 0 || glyph_bounds.size.height.0 <= 0 {
             anyhow::bail!("glyph bounds are empty");
         } else {
-            // Add an extra pixel when the subpixel variant isn't zero to make room for anti-aliasing.
-            let width = glyph_bounds
-                .size
-                .width
-                .0
-                .checked_add(i32::from(params.subpixel_variant.x > 0))
-                .ok_or_else(|| anyhow!("glyph width overflowed"))?;
-            let height = glyph_bounds
-                .size
-                .height
-                .0
-                .checked_add(i32::from(params.subpixel_variant.y > 0))
-                .ok_or_else(|| anyhow!("glyph height overflowed"))?;
+            let width = glyph_bounds.size.width.0;
+            let height = glyph_bounds.size.height.0;
             anyhow::ensure!(
                 width <= crate::MAX_ATLAS_TEXTURE_DIMENSION as i32
                     && height <= crate::MAX_ATLAS_TEXTURE_DIMENSION as i32,
@@ -520,7 +634,10 @@ impl MacTextSystemState {
             // makes drawing text consistent with the font-kit's raster_bounds.
             cx.translate(
                 -glyph_bounds.origin.x.0 as CGFloat,
-                (glyph_bounds.origin.y.0 + glyph_bounds.size.height.0) as CGFloat,
+                // Keep the original font-kit baseline transform: the fringe
+                // enlarges storage, rather than shifting the painted glyph.
+                (glyph_bounds.origin.y.0 + glyph_bounds.size.height.0
+                    - i32::from(params.subpixel_variant.y > 0)) as CGFloat,
             );
             cx.scale(
                 params.scale_factor as CGFloat,
@@ -572,6 +689,16 @@ impl MacTextSystemState {
     }
 
     fn layout_line(&mut self, text: &str, font_size: Pixels, font_runs: &[FontRun]) -> LineLayout {
+        self.layout_line_impl(text, font_size, font_runs, None).0
+    }
+
+    fn layout_line_impl(
+        &mut self,
+        text: &str,
+        font_size: Pixels,
+        font_runs: &[FontRun],
+        geometry_ranges: Option<&[Range<usize>]>,
+    ) -> (LineLayout, Option<LineTextGeometry>) {
         const ZWNJ: char = '\u{200C}';
         const ZWNJ_STR: &str = "\u{200C}";
         const ZWNJ_SIZE_16: usize = ZWNJ.len_utf16();
@@ -648,10 +775,27 @@ impl MacTextSystemState {
                     log::error!("macOS text layout exceeds CoreText range limits");
                     break;
                 };
-                string.replace_str(
-                    &CFString::new(run_text),
-                    CFRange::init(utf16_start_native, 0),
-                );
+                // The UTF-8 CFString constructor consumes a leading BOM even
+                // when it is an interior source character at a run boundary.
+                // Keep that UTF-16 code unit: the converter and subsequent
+                // attributed-string insertion ranges still account for it.
+                let run_string = if run_text.starts_with('\u{feff}') {
+                    let utf16: SmallVec<[u16; 128]> = run_text.encode_utf16().collect();
+                    let Ok(len) = isize::try_from(utf16.len()) else {
+                        log::error!("macOS text run exceeds CoreText string limits");
+                        break;
+                    };
+                    unsafe {
+                        CFString::wrap_under_create_rule(CFStringCreateWithCharacters(
+                            kCFAllocatorDefault,
+                            utf16.as_ptr(),
+                            len,
+                        ))
+                    }
+                } else {
+                    CFString::new(run_text)
+                };
+                string.replace_str(&run_string, CFRange::init(utf16_start_native, 0));
                 if needs_zwnj {
                     let zwnjs_pos = string.char_len();
                     self.zwnjs_scratch_space.push((n_zwnjs, zwnjs_pos as usize));
@@ -677,17 +821,22 @@ impl MacTextSystemState {
                 max_ascent = max_ascent.max(font_metrics.ascent * font_scale);
                 max_descent = max_descent.max(-font_metrics.descent * font_scale);
 
+                // The effective ID already includes the optical substitution
+                // above and the loaded font's features/fallback descriptor.
+                // Reuse only that immutable font at this exact requested size;
+                // string content and explicit run/ligature boundaries stay intact.
+                let native_font = self.sized_fonts.font(run.font_id, font_size, || {
+                    font.native_font().clone_with_font_size(font_size.into())
+                });
                 unsafe {
-                    string.set_attribute(
-                        cf_range,
-                        kCTFontAttributeName,
-                        &font.native_font().clone_with_font_size(font_size.into()),
-                    );
+                    string.set_attribute(cf_range, kCTFontAttributeName, &native_font);
                 }
             }
         }
         // Retrieve the glyphs from the shaped line, converting UTF16 offsets to UTF8 offsets.
         let line = CTLine::new_with_attributed_string(string.as_concrete_TypeRef());
+        let geometry = geometry_ranges
+            .and_then(|ranges| core_text_geometry(&line, text, &self.zwnjs_scratch_space, ranges));
         let glyph_runs = line.glyph_runs();
         let mut runs = <Vec<ShapedRun>>::with_capacity(glyph_runs.len() as usize);
         let mut ix_converter = StringIndexConverter::new(text);
@@ -747,24 +896,146 @@ impl MacTextSystemState {
                     ix_converter = StringIndexConverter::new(text);
                 }
                 ix_converter.advance_to_utf16_ix(glyph_utf16_ix);
+                // Keep BOMs in the native string for exact character/range
+                // accounting, but preserve their existing non-painting behavior.
+                if text[ix_converter.utf8_ix..].starts_with('\u{feff}') {
+                    continue;
+                }
                 glyphs.push(ShapedGlyph {
                     id: GlyphId(glyph_id as u32),
-                    position: point(position.x as f32, position.y as f32).map(px),
+                    position: point(position.x as f32, -position.y as f32).map(px),
                     index: ix_converter.utf8_ix,
                     is_emoji: self.is_emoji(font_id),
                 });
             }
+            if glyphs.is_empty() {
+                runs.pop();
+            }
         }
         let typographic_bounds = line.get_typographic_bounds();
-        LineLayout {
-            runs,
-            font_size,
-            width: typographic_bounds.width.into(),
-            ascent: max_ascent.into(),
-            descent: max_descent.into(),
-            len: text.len(),
-        }
+        (
+            LineLayout {
+                runs,
+                font_size,
+                width: typographic_bounds.width.into(),
+                ascent: max_ascent.into(),
+                descent: max_descent.into(),
+                len: text.len(),
+            },
+            geometry,
+        )
     }
+}
+
+// core-text's wrapper exposes only the primary offset. Bidi boundaries need
+// the real secondary native offset as well; selecting glyph origins would
+// lose ligature caret information and the two affinities at a boundary.
+unsafe extern "C" {
+    fn CTLineGetOffsetForStringIndex(
+        line: core_text::line::CTLineRef,
+        index: isize,
+        secondary: *mut CGFloat,
+    ) -> CGFloat;
+    fn CTRunGetStatus(run: core_text::run::CTRunRef) -> u32;
+    fn CTRunGetStringRange(run: core_text::run::CTRunRef) -> CFRange;
+}
+
+fn core_text_geometry(
+    line: &CTLine,
+    text: &str,
+    separators: &[(usize, usize)],
+    requested: &[Range<usize>],
+) -> Option<LineTextGeometry> {
+    struct NativeRun {
+        start: usize,
+        end: usize,
+        left: f64,
+        right: f64,
+        rtl: bool,
+    }
+    let mut native_runs = Vec::new();
+    for run in line.glyph_runs().into_iter() {
+        let range = unsafe { CTRunGetStringRange(run.as_concrete_TypeRef()) };
+        let start = usize::try_from(range.location).ok()?;
+        let end = start.checked_add(usize::try_from(range.length).ok()?)?;
+        let positions = run.positions();
+        let left = positions
+            .iter()
+            .map(|position| position.x)
+            .reduce(f64::min)
+            .unwrap_or(0.0);
+        let right = left + run.get_typographic_bounds().width;
+        native_runs.push(NativeRun {
+            start,
+            end,
+            left,
+            right,
+            rtl: unsafe { CTRunGetStatus(run.as_concrete_TypeRef()) } & 1 != 0,
+        });
+    }
+    native_runs.sort_unstable_by_key(|run| run.start);
+    let adjusted = |offset: usize| {
+        offset + separators.partition_point(|&(index, position)| position - index <= offset)
+    };
+    let native_offset = |index: usize, run: &NativeRun| -> Option<Pixels> {
+        let mut secondary = 0.0;
+        let primary = unsafe {
+            CTLineGetOffsetForStringIndex(
+                line.as_concrete_TypeRef(),
+                index.try_into().ok()?,
+                &mut secondary,
+            )
+        };
+        let expected = if index == run.start {
+            if run.rtl { run.right } else { run.left }
+        } else if index == run.end {
+            if run.rtl { run.left } else { run.right }
+        } else {
+            primary.clamp(run.left, run.right)
+        };
+        Some(px(
+            if (primary - expected).abs() <= (secondary - expected).abs() {
+                primary as f32
+            } else {
+                secondary as f32
+            },
+        ))
+    };
+    let mut clusters = Vec::new();
+    let mut utf16 = 0;
+    for (byte, grapheme) in text.grapheme_indices(true) {
+        let end = byte + grapheme.len();
+        let native_start = adjusted(utf16);
+        utf16 += grapheme.encode_utf16().count();
+        if !requested
+            .iter()
+            .any(|range| range.start < end && byte < range.end)
+        {
+            continue;
+        }
+        let index = native_runs
+            .partition_point(|run| run.start <= native_start)
+            .saturating_sub(1);
+        let run = native_runs
+            .get(index)
+            .filter(|run| native_start < run.end)?;
+        let native_end = adjusted(utf16);
+        let end_index = native_runs
+            .partition_point(|run| run.start < native_end)
+            .saturating_sub(1);
+        let end_run = native_runs
+            .get(end_index)
+            .filter(|run| native_end <= run.end)?;
+        clusters.push(ShapedTextCluster {
+            bytes: byte..end,
+            leading: native_offset(native_start, run)?,
+            trailing: native_offset(native_end, end_run)?,
+            right_to_left: run.rtl,
+        });
+    }
+    let end_caret =
+        px(line.get_string_offset_for_string_index(adjusted(utf16).try_into().ok()?) as f32);
+    LineTextGeometry::new(text, clusters, end_caret)
 }
 
 fn system_ui_font_postscript_name(weight: FontWeight) -> &'static str {
@@ -957,7 +1228,392 @@ mod lenient_font_attributes {
 
 #[cfg(test)]
 mod tests {
-    use crate::{FontRun, GlyphId, MacTextSystem, PlatformTextSystem, font, px};
+    use super::{SIZED_FONT_CACHE_CAPACITY, SizedFontCache, SizedFontKey};
+    use crate::{
+        FontFallbacks, FontFeatures, FontId, FontRun, GlyphId, GlyphRasterMode, LineLayout,
+        MacTextSystem, PlatformTextSystem, RenderGlyphParams, font, point, px,
+    };
+    use core_foundation::base::TCFType;
+    use std::{hint::black_box, sync::Arc, time::Instant};
+    use unicode_segmentation::UnicodeSegmentation;
+
+    fn assert_same_shaping(actual: &LineLayout, expected: &LineLayout) {
+        assert_eq!(actual.font_size, expected.font_size);
+        assert_eq!(actual.width, expected.width);
+        assert_eq!(actual.ascent, expected.ascent);
+        assert_eq!(actual.descent, expected.descent);
+        assert_eq!(actual.len, expected.len);
+        assert_eq!(actual.runs.len(), expected.runs.len());
+        for (actual, expected) in actual.runs.iter().zip(&expected.runs) {
+            assert_eq!(actual.font_id, expected.font_id);
+            assert_eq!(actual.glyphs.len(), expected.glyphs.len());
+            for (actual, expected) in actual.glyphs.iter().zip(&expected.glyphs) {
+                assert_eq!(actual.id, expected.id);
+                assert_eq!(actual.position, expected.position);
+                assert_eq!(actual.index, expected.index);
+                assert_eq!(actual.is_emoji, expected.is_emoji);
+            }
+        }
+    }
+
+    #[test]
+    fn uncached_native_bom_split_run_reproducer() {
+        let fonts = MacTextSystem::new();
+        let font_id = fonts.font_id(&font("Helvetica")).unwrap();
+        let text = "\u{feff}a b";
+        let split = "\u{feff}a".len();
+        let native = core_foundation::string::CFString::new(&text[..split]);
+        eprintln!(
+            "NATIVE_BOM_RUN rust_utf16={} native_utf16={}",
+            text[..split].encode_utf16().count(),
+            native.char_len()
+        );
+        let mut state = fonts.0.write();
+        state.sized_fonts.disabled = true;
+        let line = state.layout_line(
+            text,
+            px(13.0),
+            &[
+                FontRun {
+                    font_id,
+                    len: split,
+                },
+                FontRun {
+                    font_id,
+                    len: text.len() - split,
+                },
+            ],
+        );
+        assert_eq!(line.len, text.len());
+        for text in [
+            "\u{feff}a b",
+            "a\u{feff}b",
+            "\u{feff}a\u{feff}b",
+            "a\0b",
+            "\u{feff}\0café 日本語 👩🏽‍💻 café",
+        ] {
+            for split in text.char_indices().map(|(index, _)| index).skip(1) {
+                let runs = [
+                    FontRun {
+                        font_id,
+                        len: split,
+                    },
+                    FontRun {
+                        font_id,
+                        len: text.len() - split,
+                    },
+                ];
+                for disabled in [true, false] {
+                    state.sized_fonts.disabled = disabled;
+                    let line = state.layout_line(text, px(13.0), &runs);
+                    assert_eq!(line.len, text.len());
+                    for run in &line.runs {
+                        for glyph in &run.glyphs {
+                            assert!(glyph.index < text.len() && text.is_char_boundary(glyph.index));
+                            if run.font_id == font_id {
+                                for ch in ['a', 'b', 'c', 'f'] {
+                                    if Some(glyph.id) == state.glyph_for_char(font_id, ch) {
+                                        assert!(
+                                            text[glyph.index..].starts_with(ch),
+                                            "incorrect source byte for {ch:?}: {text:?} split={split}"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sized_native_fonts_reuse_exact_handles_for_distinct_labels() {
+        let fonts = MacTextSystem::new();
+        let font_id = fonts.font_id(&font("Helvetica")).unwrap();
+        let mut state = fonts.0.write();
+        for index in 0..256 {
+            let text = format!("Reports {index} · 日本語 العربية 👩🏽‍💻 café");
+            state.layout_line(
+                &text,
+                px(14.0),
+                &[FontRun {
+                    font_id,
+                    len: text.len(),
+                }],
+            );
+        }
+        assert_eq!(state.sized_fonts.creations, 1);
+        assert_eq!(state.sized_fonts.fonts.len(), 1);
+        let native = state
+            .sized_fonts
+            .fonts
+            .values()
+            .next()
+            .unwrap()
+            .font
+            .clone();
+        let key = SizedFontKey {
+            font_id,
+            size_bits: 14.0f32.to_bits(),
+        };
+        let hit = state
+            .sized_fonts
+            .font(font_id, px(14.0), || panic!("cached native font"));
+        assert_eq!(native.as_concrete_TypeRef(), hit.as_concrete_TypeRef());
+        assert_eq!(state.sized_fonts.clock.front(), Some(&key));
+    }
+
+    #[test]
+    fn sized_native_font_cache_bounds_and_releases_owners() {
+        // The same generic owner path drops exactly one retained handle per
+        // eviction. An active caller's independent owner remains valid.
+        let mut cache = SizedFontCache::default();
+        let retained = cache.font(FontId(0), px(14.0), || Arc::new(()));
+        let weak = Arc::downgrade(&retained);
+        for id in 1..=SIZED_FONT_CACHE_CAPACITY * 4 {
+            cache.font(FontId(id), px(14.0), || Arc::new(()));
+            assert!(cache.fonts.len() <= SIZED_FONT_CACHE_CAPACITY);
+            assert_eq!(cache.clock.len(), cache.fonts.len());
+        }
+        assert_eq!(Arc::strong_count(&retained), 1);
+        drop(retained);
+        assert!(weak.upgrade().is_none());
+        let survivors: Vec<_> = cache
+            .fonts
+            .values()
+            .map(|entry| Arc::downgrade(&entry.font))
+            .collect();
+        drop(cache);
+        assert!(survivors.iter().all(|owner| owner.upgrade().is_none()));
+
+        let fonts = MacTextSystem::new();
+        let font_id = fonts.font_id(&font("Helvetica")).unwrap();
+        let base = fonts.0.read().fonts[font_id.0].native_font();
+        let mut cache = SizedFontCache::default();
+        let retained = cache.font(font_id, px(14.0), || base.clone_with_font_size(14.0));
+        let retained_pointer = retained.as_concrete_TypeRef();
+        for index in 0..SIZED_FONT_CACHE_CAPACITY {
+            let size = 30.0 + index as f32;
+            cache.font(font_id, px(size), || base.clone_with_font_size(size.into()));
+        }
+        assert!(!cache.fonts.contains_key(&SizedFontKey {
+            font_id,
+            size_bits: 14.0f32.to_bits()
+        }));
+        assert_eq!(retained.as_concrete_TypeRef(), retained_pointer);
+        assert_eq!(retained.pt_size(), 14.0);
+        assert_eq!(retained.postscript_name(), base.postscript_name());
+    }
+
+    #[test]
+    fn sized_native_font_cache_preserves_exact_keys_and_invalid_size_behavior() {
+        let mut cache = SizedFontCache::default();
+        assert_eq!(cache.font(FontId(1), px(14.0), || 1), 1);
+        assert_eq!(cache.font(FontId(1), px(14.0), || 9), 1);
+        assert_eq!(cache.font(FontId(2), px(14.0), || 2), 2);
+        let adjacent = f32::from_bits(14.0f32.to_bits() + 1);
+        assert_eq!(cache.font(FontId(1), px(adjacent), || 3), 3);
+        assert_eq!(cache.fonts.len(), 3);
+        for invalid in [0.0, -0.0, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            // The factory still receives the original caller's value; only
+            // retention is bypassed. Do not invoke CoreText with invalid sizes.
+            assert_eq!(cache.font(FontId(1), px(invalid), || 4), 4);
+            assert_eq!(cache.font(FontId(1), px(invalid), || 5), 5);
+            assert_eq!(cache.fonts.len(), 3);
+        }
+        assert_eq!(cache.clock.len(), 3);
+    }
+
+    #[test]
+    fn sized_native_fonts_preserve_unicode_shaping_and_geometry() {
+        let fonts = MacTextSystem::new();
+        let mut featured = font("Helvetica");
+        featured.features = FontFeatures(Arc::new(vec![("liga".into(), 0)]));
+        let ids = [
+            fonts.font_id(&font("Helvetica")).unwrap(),
+            fonts.font_id(&featured).unwrap(),
+            fonts.font_id(&font(".SystemUIFont")).unwrap(),
+        ];
+        let mut state = fonts.0.write();
+        for font_id in ids {
+            let mut geometry_cases = 0;
+            for size in [13.0, 19.5, 20.0, 24.0] {
+                for text in [
+                    "Navigation — Reports 2026 · Inbox",
+                    "العربية עברית Latin 123 日本語 नमस्ते 👩🏽‍💻 café ffi",
+                    "עברית العربية فارسی · हिन्दी क्षि · office ffi",
+                    "\u{feff}café A\u{0308} 日本語 🏳️‍🌈 👨‍👩‍👧‍👦",
+                ] {
+                    // Adjacent same-font runs intentionally break ligatures;
+                    // cache reuse must preserve their existing ZWNJ contract.
+                    let split = text.find(' ').unwrap();
+                    let runs = [
+                        FontRun {
+                            font_id,
+                            len: split,
+                        },
+                        FontRun {
+                            font_id,
+                            len: text.len() - split,
+                        },
+                    ];
+                    state.sized_fonts.disabled = true;
+                    let (expected, expected_geometry) =
+                        state.layout_line_impl(text, px(size), &runs, Some(&[0..text.len()]));
+                    geometry_cases += usize::from(expected_geometry.is_some());
+                    state.sized_fonts.disabled = false;
+                    for _ in 0..2 {
+                        let (actual, actual_geometry) =
+                            state.layout_line_impl(text, px(size), &runs, Some(&[0..text.len()]));
+                        assert_same_shaping(&actual, &expected);
+                        // Preserve an unavailable native geometry result too;
+                        // some mixed-script/font combinations have ambiguous
+                        // native cluster edges rejected by the existing adapter.
+                        assert_eq!(
+                            actual_geometry
+                                .as_ref()
+                                .map(|geometry| (&geometry.clusters, geometry.end_caret)),
+                            expected_geometry
+                                .as_ref()
+                                .map(|geometry| (&geometry.clusters, geometry.end_caret)),
+                            "font={font_id:?} size={size} text={text:?}",
+                        );
+                    }
+                }
+            }
+            assert!(
+                geometry_cases > 0,
+                "native geometry was never exercised for {font_id:?}"
+            );
+            println!(
+                "NATIVE_SIZED_FONT_PARITY font={font_id:?} shaping_cases=16 geometry_cases={geometry_cases}"
+            );
+        }
+    }
+
+    #[test]
+    fn sized_native_fonts_separate_features_fallbacks_and_optical_variants() {
+        let fonts = MacTextSystem::new();
+        let normal = fonts.font_id(&font("Helvetica")).unwrap();
+        let mut featured = font("Helvetica");
+        featured.features = FontFeatures(Arc::new(vec![("liga".into(), 0)]));
+        let featured = fonts.font_id(&featured).unwrap();
+        let mut fallback = font("Helvetica");
+        fallback.fallbacks = Some(FontFallbacks::from_fonts(vec!["Times".into()]));
+        let fallback = fonts.font_id(&fallback).unwrap();
+        assert_ne!(normal, featured);
+        assert_ne!(normal, fallback);
+        let system = fonts.font_id(&font(".SystemUIFont")).unwrap();
+        let mut state = fonts.0.write();
+        for font_id in [normal, featured, fallback, system] {
+            for size in [14.0, 19.5, 20.0, 24.0] {
+                let text = "Reports 日本語 ffi";
+                state.layout_line(
+                    text,
+                    px(size),
+                    &[FontRun {
+                        font_id,
+                        len: text.len(),
+                    }],
+                );
+                let effective = if size >= super::SYSTEM_FONT_DISPLAY_OPTICAL_THRESHOLD {
+                    state
+                        .system_display_variants
+                        .get(&font_id)
+                        .copied()
+                        .unwrap_or(font_id)
+                } else {
+                    font_id
+                };
+                assert!(state.sized_fonts.fonts.contains_key(&SizedFontKey {
+                    font_id: effective,
+                    size_bits: size.to_bits()
+                }));
+            }
+        }
+        assert_eq!(state.sized_fonts.fonts.len(), 16);
+        assert_eq!(state.sized_fonts.creations, 16);
+    }
+
+    /// Reproduce with `cargo test -p kael --lib --no-default-features --features
+    /// test-support,font-kit native_sized_font_shaping_diagnostic -- --ignored
+    /// --nocapture --test-threads=1`. This measures native shaping of new labels,
+    /// bypassing line/layout caches; it is not a framework benchmark.
+    #[test]
+    #[ignore = "explicit native shaping timing diagnostic"]
+    fn native_sized_font_shaping_diagnostic() {
+        let fonts = MacTextSystem::new();
+        let font_id = fonts.font_id(&font(".SystemUIFont")).unwrap();
+        let labels: Vec<_> = (0..512)
+            .map(|index| match index % 4 {
+                0 => format!("Reports {index} — Inbox · unread"),
+                1 => format!("日本語 {index} 👩🏽‍💻 café"),
+                2 => format!("العربية {index} עברית dashboard"),
+                _ => format!("नमस्ते {index} क्षि · office ffi"),
+            })
+            .collect();
+        let mut state = fonts.0.write();
+        // Warm system font lookup and every fallback script for both modes.
+        for disabled in [true, false] {
+            state.sized_fonts.disabled = disabled;
+            for label in labels.iter().take(4) {
+                state.layout_line(
+                    label,
+                    px(14.0),
+                    &[FontRun {
+                        font_id,
+                        len: label.len(),
+                    }],
+                );
+            }
+        }
+        let mut expected = None;
+        for round in 0..6 {
+            for disabled in if round % 2 == 0 {
+                [true, false]
+            } else {
+                [false, true]
+            } {
+                state.sized_fonts.disabled = disabled;
+                let creations = state.sized_fonts.creations;
+                let started = Instant::now();
+                let mut signature = 0u64;
+                for label in &labels {
+                    let layout = state.layout_line(
+                        black_box(label),
+                        px(14.0),
+                        &[FontRun {
+                            font_id,
+                            len: label.len(),
+                        }],
+                    );
+                    signature =
+                        signature.wrapping_add(u64::from(f32::from(layout.width).to_bits()));
+                    for run in &layout.runs {
+                        for glyph in &run.glyphs {
+                            signature = signature.wrapping_add(
+                                u64::from(glyph.id.0)
+                                    + glyph.index as u64
+                                    + u64::from(f32::from(glyph.position.x).to_bits()),
+                            );
+                        }
+                    }
+                    black_box(layout);
+                }
+                let elapsed = started.elapsed();
+                let native_creations = state.sized_fonts.creations - creations;
+                assert_eq!(native_creations, if disabled { labels.len() } else { 0 });
+                assert_eq!(*expected.get_or_insert(signature), signature);
+                println!(
+                    "NATIVE_SHAPING_DIAGNOSTIC round={round} cached={} labels={} native_creations={native_creations} elapsed_ns={} checksum={signature}",
+                    !disabled,
+                    labels.len(),
+                    elapsed.as_nanos()
+                );
+            }
+        }
+    }
 
     #[test]
     fn glyph_coverage_is_display_independent() {
@@ -1076,5 +1732,244 @@ mod tests {
         let layout = fonts.layout_line(text, px(16.), font_runs);
         assert_eq!(layout.len, 0);
         assert!(layout.runs.is_empty());
+    }
+
+    #[test]
+    fn native_cluster_geometry_preserves_bidi_carets_unicode_and_requested_spans() {
+        let fonts = MacTextSystem::new();
+        let font_id = fonts.font_id(&font("Helvetica")).unwrap();
+        let text = "Latin 日本語 👩🏽‍💻 café العربية नमस्ते ffi End";
+        let runs = [FontRun {
+            font_id,
+            len: text.len(),
+        }];
+        let geometry = fonts
+            .layout_line_geometry(text, px(16.0), &runs, &[0..text.len()])
+            .unwrap();
+        assert_eq!(geometry.clusters.len(), text.graphemes(true).count());
+        let japanese = text.find('日').unwrap();
+        let cluster = geometry.cluster_for_byte(japanese).unwrap();
+        assert!(cluster.trailing > cluster.leading);
+        let arabic = text.find('ا').unwrap();
+        let rtl = geometry.cluster_for_byte(arabic).unwrap();
+        assert!(rtl.right_to_left);
+        assert!(rtl.leading > rtl.trailing);
+        let supplementary = text.find('👩').unwrap();
+        assert_eq!(
+            &text[geometry
+                .cluster_for_byte(supplementary)
+                .unwrap()
+                .bytes
+                .clone()],
+            "👩🏽‍💻"
+        );
+        assert!(geometry.cluster_for_byte(supplementary + 1).is_some());
+        let restricted = fonts
+            .layout_line_geometry(
+                text,
+                px(16.0),
+                &runs,
+                &[japanese..japanese + '日'.len_utf8()],
+            )
+            .unwrap();
+        assert_eq!(restricted.clusters.len(), 1);
+        assert_eq!(restricted.clusters[0], *cluster);
+        assert_eq!(restricted.end_caret, geometry.end_caret);
+
+        // Font-run separators inserted by the paint path must not shift native
+        // character identities or omit supplementary UTF-16 positions.
+        let split = "日本語".len() + "Latin ".len();
+        let separated = fonts
+            .layout_line_geometry(
+                text,
+                px(16.0),
+                &[
+                    FontRun {
+                        font_id,
+                        len: split,
+                    },
+                    FontRun {
+                        font_id,
+                        len: text.len() - split,
+                    },
+                ],
+                &[0..text.len()],
+            )
+            .unwrap();
+        assert_eq!(separated.clusters.len(), text.graphemes(true).count());
+        assert_eq!(separated.cluster_for_byte(arabic).unwrap().bytes, rtl.bytes);
+    }
+
+    #[test]
+    fn declared_fractional_glyph_bounds_match_actual_bitmap_extents() {
+        let fonts = MacTextSystem::new();
+        let font_id = fonts.font_id(&font("Helvetica")).unwrap();
+        let glyph_id = fonts.glyph_for_char(font_id, 'g').unwrap();
+        for scale_factor in [1.0, 2.0] {
+            let params = RenderGlyphParams {
+                font_id,
+                glyph_id,
+                font_size: px(14.0),
+                subpixel_variant: point(0, 0),
+                scale_factor,
+                is_emoji: false,
+                raster_mode: GlyphRasterMode::Grayscale,
+            };
+            let original = fonts.glyph_raster_bounds(&params).unwrap();
+            for subpixel_variant in [point(0, 0), point(1, 0), point(0, 1), point(1, 1)] {
+                let params = RenderGlyphParams {
+                    subpixel_variant,
+                    ..params.clone()
+                };
+                let bounds = fonts.glyph_raster_bounds(&params).unwrap();
+                assert_eq!(bounds.origin, original.origin);
+                assert_eq!(
+                    bounds.size.width.0,
+                    original.size.width.0 + i32::from(subpixel_variant.x > 0)
+                );
+                assert_eq!(
+                    bounds.size.height.0,
+                    original.size.height.0 + i32::from(subpixel_variant.y > 0)
+                );
+                let (size, bytes) = fonts.rasterize_glyph(&params, bounds).unwrap();
+                assert_eq!(
+                    size, bounds.size,
+                    "strict pre-raster native atlas reservation"
+                );
+                assert_eq!(bytes.len(), size.width.0 as usize * size.height.0 as usize);
+                assert!(
+                    bytes.iter().any(|byte| *byte > 0),
+                    "actual native glyph coverage"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod native_font_arrival_regressions {
+    use super::MacTextSystem;
+    use crate::{
+        FontRun, LineFragment, PlatformTextSystem, TextRun, TextSystem, WindowTextSystem, black,
+        font, px,
+    };
+    use std::{borrow::Cow, sync::Arc};
+
+    const FAMILY: &str = "Kael Font Arrival 40d692fc";
+    const POSTSCRIPT: &str = "KaelFontArrival40d692fc-Regular";
+    const FONT_BYTES: &[u8] =
+        include_bytes!("../../../tests/fixtures/font-arrival/KaelFontArrival-Regular.ttf");
+
+    #[test]
+    fn registered_unique_face_replaces_shared_miss_without_invalidating_live_fonts() {
+        let native = Arc::new(MacTextSystem::new());
+        let shared = Arc::new(TextSystem::new(native.clone()));
+        let requested = font(FAMILY);
+
+        // A real native miss is required. A machine already containing this
+        // fixture family must fail here rather than weaken the arrival test.
+        assert!(
+            native.font_id(&requested).is_err(),
+            "unique fixture family was already resolvable before registration"
+        );
+        let fallback_id = shared.resolve_font(&requested);
+        let requested_before_add = shared.resolve_font(&requested);
+        assert_eq!(requested_before_add, fallback_id);
+
+        let stable = font("Helvetica");
+        let stable_id = shared.resolve_font(&stable);
+        assert_eq!(native.font_id(&stable).unwrap(), stable_id);
+        let stable_postscript = {
+            let state = native.0.read();
+            state.fonts[stable_id.0].postscript_name().unwrap()
+        };
+        let window_text = WindowTextSystem::new(shared.clone());
+        let label = "mWav";
+        let stable_runs = [TextRun {
+            len: label.len(),
+            font: stable.clone(),
+            color: black(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }];
+        let held_layout = window_text.layout_line(label, px(16.), &stable_runs, None);
+        let old_width = held_layout.width;
+        let old_len = held_layout.len;
+        assert!(old_width.0.is_finite() && old_width > px(0.));
+        assert_eq!(old_len, label.len());
+        let mut held_wrapper = shared.line_wrapper(stable.clone(), px(16.));
+        assert_eq!(held_wrapper.font_id, stable_id);
+        assert_eq!(
+            held_wrapper
+                .wrap_line(&[LineFragment::text(label)], px(10000.))
+                .count(),
+            0
+        );
+
+        // This is the actual public shared registration route into the native
+        // CGFont/CoreText-backed memory source, not a test setter or OS install.
+        shared.add_fonts(vec![Cow::Borrowed(FONT_BYTES)]).unwrap();
+        let arrived_id = native.font_id(&requested).unwrap();
+        let arrived_postscript = {
+            let state = native.0.read();
+            state.fonts[arrived_id.0].postscript_name().unwrap()
+        };
+        assert_eq!(arrived_postscript, POSTSCRIPT);
+        assert_ne!(arrived_id, fallback_id);
+        let metrics = native.font_metrics(arrived_id);
+        assert!(metrics.units_per_em > 0);
+        let glyph = native.glyph_for_char(arrived_id, 'm').unwrap();
+        let advance = native.advance(arrived_id, glyph).unwrap();
+        assert!(advance.width.is_finite() && advance.width > 0.);
+        let native_layout = native.layout_line(
+            label,
+            px(16.),
+            &[FontRun {
+                font_id: arrived_id,
+                len: label.len(),
+            }],
+        );
+        assert_eq!(native_layout.len, label.len());
+        assert!(native_layout.width.0.is_finite() && native_layout.width > px(0.));
+        assert!(
+            native_layout
+                .runs
+                .iter()
+                .any(|run| { run.font_id == arrived_id && !run.glyphs.is_empty() })
+        );
+
+        // Registration must leave old IDs, their actual native faces, a live
+        // caller-owned line, its cache hit, and an active wrapper valid.
+        assert_eq!(shared.resolve_font(&stable), stable_id);
+        assert_eq!(native.font_id(&stable).unwrap(), stable_id);
+        let stable_postscript_after = {
+            let state = native.0.read();
+            state.fonts[stable_id.0].postscript_name().unwrap()
+        };
+        assert_eq!(stable_postscript_after, stable_postscript);
+        let again = window_text.layout_line(label, px(16.), &stable_runs, None);
+        assert!(Arc::ptr_eq(&held_layout, &again));
+        assert_eq!(held_layout.width, old_width);
+        assert_eq!(held_layout.len, old_len);
+        assert_eq!(held_wrapper.font_id, stable_id);
+        assert_eq!(
+            held_wrapper
+                .wrap_line(&[LineFragment::text(label)], px(10000.))
+                .count(),
+            0
+        );
+
+        let shared_after_add = shared.resolve_font(&requested);
+        eprintln!(
+            "DIRECT_CORETEXT_FONT_ARRIVAL family={FAMILY:?} postscript={arrived_postscript:?} fallback={fallback_id:?} native_arrived={arrived_id:?} shared_after_add={shared_after_add:?} stable={stable_id:?} native_glyph_runs={}",
+            native_layout.runs.len()
+        );
+        assert_eq!(
+            shared_after_add, arrived_id,
+            "shared lookup retained fallback after actual native fixture registration"
+        );
+        assert_eq!(shared.get_font_for_id(arrived_id), Some(requested));
+        drop(held_wrapper);
     }
 }

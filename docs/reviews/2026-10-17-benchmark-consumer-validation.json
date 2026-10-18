@@ -1,0 +1,233 @@
+{
+  "schema_version": 1,
+  "scope": "Primary matched desktop benchmark dependency-lock repair and actual compile checks; no release executable runtime or new performance result.",
+  "source_commit": "738ef102d1ee371798519f3e551fb2259b553c34",
+  "change": "Only active benchmark Cargo.lock updated for the existing Secret Service5.2 dependency requirement. Common pinned package versions/source/checksums retained; rejected cached offline downgrades remain preserved. Historical vendored upstream lock remains unchanged.",
+  "lock_sha256": "a18f2bd62423c2df25dfbad222bb9fd9a55835bedd613d2fc534e8e187b1a609",
+  "candidate_audit": {
+    "path": ".artifacts/2026-10-17-benchmark-ss-lock/final-audit.json",
+    "bytes": 12714,
+    "sha256": "392220890b04a9e1b6736709d515496987cd704f8849d17c85708437fd97327f"
+  },
+  "primary_compiler_proof": {
+    "path": ".artifacts/2026-10-17-benchmark-ss-lock/primary-checks/proof.json",
+    "bytes": 8072,
+    "sha256": "877d88010e9a3b42cf2ad7a8297c56059e6fde6764df2ee1d54adcf28595dbd2"
+  },
+  "validation": {
+    "profiles": 4,
+    "engines": [
+      "kael-engine",
+      "gpui-kit-engine"
+    ],
+    "frame_timing": [
+      "disabled",
+      "enabled"
+    ],
+    "bins_each": 5,
+    "actual_compiler_targets": 20,
+    "all_passed": true,
+    "source_manifest_shader_native_and_benchmark_hashes_unchanged": 1042,
+    "root_and_benchmark_locks_unchanged": true
+  },
+  "scope_limits": [
+    "cargo check --locked --bins validates executable targets but does not create release measurement binaries.",
+    "Root protocol proof uses different pinned AES from benchmark lock; no benchmark Linux credential runtime proof is inferred.",
+    "Existing upstream block0.1.6 future-incompatibility notice remains distinct from strict source warnings."
+  ],
+  "evidence": {
+    "scope": "Fresh actual primary benchmark consumer cargo-check validation; no release build, executable runtime or performance result",
+    "commit": "738ef102d1ee371798519f3e551fb2259b553c34",
+    "previous_full_package_source_commit": "738695fb20db8113b2868a7e3b9fcaeddc66ad70",
+    "committed_changes_from_package_source": [
+      "benchmarks/desktop-comparison/Cargo.lock"
+    ],
+    "benchmark_lock_sha256": "a18f2bd62423c2df25dfbad222bb9fd9a55835bedd613d2fc534e8e187b1a609",
+    "root_lock_sha256": "06bfb8138a0e6f519d3104697364cc3761c37ee91623e8c20fbb78f6d43cf10e",
+    "proposal_audit_sha256": "392220890b04a9e1b6736709d515496987cd704f8849d17c85708437fd97327f",
+    "manifest": "/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/Cargo.toml",
+    "target_directory": "/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target",
+    "results": {
+      "profiles_passed": 4,
+      "binaries_per_profile": 5,
+      "binary_artifacts_validated": 20,
+      "source_files_snapshotted": 1042,
+      "source_before_after_identical": true,
+      "both_locks_before_after_identical": true,
+      "all_commands_locked": true
+    },
+    "checks": [
+      {
+        "profile": "kael-timing",
+        "features": "kael-engine,frame-timing",
+        "command": [
+          "cargo",
+          "check",
+          "--locked",
+          "--manifest-path",
+          "/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/Cargo.toml",
+          "--bins",
+          "--no-default-features",
+          "--features",
+          "kael-engine,frame-timing",
+          "--message-format=json-render-diagnostics"
+        ],
+        "started_utc": "2026-10-17T21:59:15.406782+00:00",
+        "finished_utc": "2026-10-17T21:59:41.237329+00:00",
+        "exit_code": 0,
+        "binary_targets": [
+          "component_comparison",
+          "data_comparison",
+          "kael-desktop-comparison",
+          "tree_comparison",
+          "workspace_comparison"
+        ],
+        "log_sha256": "500cda7583d5bee5172a66f76c1e76c71bb08a62475a50762f51ca749a147463",
+        "events_sha256": "25cd7690370c9421c44cac6e7c2eb010228e973462f7634ff219fa3933e87953"
+      },
+      {
+        "profile": "gpui-timing",
+        "features": "gpui-kit-engine,frame-timing",
+        "command": [
+          "cargo",
+          "check",
+          "--locked",
+          "--manifest-path",
+          "/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/Cargo.toml",
+          "--bins",
+          "--no-default-features",
+          "--features",
+          "gpui-kit-engine,frame-timing",
+          "--message-format=json-render-diagnostics"
+        ],
+        "started_utc": "2026-10-17T21:59:41.459278+00:00",
+        "finished_utc": "2026-10-17T21:59:52.888562+00:00",
+        "exit_code": 0,
+        "binary_targets": [
+          "component_comparison",
+          "data_comparison",
+          "kael-desktop-comparison",
+          "tree_comparison",
+          "workspace_comparison"
+        ],
+        "log_sha256": "462a9e0fc861bbc26db964031fb9112e3d52bfe54bbd70764617e309abac6389",
+        "events_sha256": "49a3060c5b2400554b00fb6d7244ebe4420ed45a170415d6ede0f3ab115e5b7b"
+      },
+      {
+        "profile": "kael-no-timing",
+        "features": "kael-engine",
+        "command": [
+          "cargo",
+          "check",
+          "--locked",
+          "--manifest-path",
+          "/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/Cargo.toml",
+          "--bins",
+          "--no-default-features",
+          "--features",
+          "kael-engine",
+          "--message-format=json-render-diagnostics"
+        ],
+        "started_utc": "2026-10-17T21:59:53.000431+00:00",
+        "finished_utc": "2026-10-17T22:00:03.283719+00:00",
+        "exit_code": 0,
+        "binary_targets": [
+          "component_comparison",
+          "data_comparison",
+          "kael-desktop-comparison",
+          "tree_comparison",
+          "workspace_comparison"
+        ],
+        "log_sha256": "49f41f030cdbb4f2600fa9b128f5c59d32bf758236e4f96f4e25bf4c07e7cce1",
+        "events_sha256": "59c1b5b695a3b9d1d38320fb7d2fc2cfe7983efad10e1b69ef17d885b1d9555d"
+      },
+      {
+        "profile": "gpui-no-timing",
+        "features": "gpui-kit-engine",
+        "command": [
+          "cargo",
+          "check",
+          "--locked",
+          "--manifest-path",
+          "/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/Cargo.toml",
+          "--bins",
+          "--no-default-features",
+          "--features",
+          "gpui-kit-engine",
+          "--message-format=json-render-diagnostics"
+        ],
+        "started_utc": "2026-10-17T22:00:03.409817+00:00",
+        "finished_utc": "2026-10-17T22:00:04.927771+00:00",
+        "exit_code": 0,
+        "binary_targets": [
+          "component_comparison",
+          "data_comparison",
+          "kael-desktop-comparison",
+          "tree_comparison",
+          "workspace_comparison"
+        ],
+        "log_sha256": "94679372f261df8aabe7d6b75526ff19f293d9705953e9be3d7fef1db671e64f",
+        "events_sha256": "1e3825185a8a12fb4069ead63cf65e98000dcf7b0f72f7ee29e4ae9fed1de859"
+      }
+    ],
+    "compiler_warning_events": {
+      "kael-timing": [],
+      "gpui-timing": [],
+      "kael-no-timing": [],
+      "gpui-no-timing": []
+    },
+    "artifact_cache_freshness": {
+      "kael-timing": {
+        "kael-desktop-comparison": false,
+        "component_comparison": false,
+        "data_comparison": false,
+        "tree_comparison": false,
+        "workspace_comparison": false
+      },
+      "gpui-timing": {
+        "kael-desktop-comparison": false,
+        "component_comparison": false,
+        "data_comparison": false,
+        "tree_comparison": false,
+        "workspace_comparison": false
+      },
+      "kael-no-timing": {
+        "kael-desktop-comparison": false,
+        "data_comparison": false,
+        "component_comparison": false,
+        "tree_comparison": false,
+        "workspace_comparison": false
+      },
+      "gpui-no-timing": {
+        "kael-desktop-comparison": false,
+        "component_comparison": false,
+        "data_comparison": false,
+        "tree_comparison": false,
+        "workspace_comparison": false
+      }
+    },
+    "limitations": [
+      "Native Mac dev-profile metadata compilation only; does not claim fresh optimized release executables, native workload or benchmark latency.",
+      "Cargo may reuse valid existing artifacts; target JSON fresh flags are recorded, and each of the5binary targets is positively present per profile.",
+      "All tracked Rust/manifests/shaders/native source/headers and benchmark files are hashed before and after; full source maps retained separately.",
+      "Root package source738695f and adopted lock commit738ef102 differ only by benchmarkCargo.lock; prior39package archive proof remains source-scoped separately.",
+      "Existing upstream block0.1.6 future-incompatibility notice remains in logs; it is not a new source warning or ignored failure.",
+      "Frozen e219 hosted comparison, old binaries/captures, primary files, root Git/index and publishing were not modified by this check.",
+      "Benchmark Linux SS5.2 graph includes independently pinned crypto versions and is not covered by this Mac-only compile proof."
+    ],
+    "artifact_sha256": {
+      "source-before.json": "aa851c8cbea1ae9a50ea28192ce67bd89d1eb56867a9ad10e04b09b0ebd78c24",
+      "kael-no-timing.jsonl": "59c1b5b695a3b9d1d38320fb7d2fc2cfe7983efad10e1b69ef17d885b1d9555d",
+      "source-after.json": "aa851c8cbea1ae9a50ea28192ce67bd89d1eb56867a9ad10e04b09b0ebd78c24",
+      "checks.json": "4e3d89002c8374fd05ee88d40c72464eeb0b565902003658d9ddb644fb37594a",
+      "run-checks.py": "27cbb5368ee8fa5d0c7d9a6f2399aac255ac6e32ab88f84608a6f61f71e84b7e",
+      "kael-timing.log": "500cda7583d5bee5172a66f76c1e76c71bb08a62475a50762f51ca749a147463",
+      "gpui-timing.jsonl": "49a3060c5b2400554b00fb6d7244ebe4420ed45a170415d6ede0f3ab115e5b7b",
+      "kael-no-timing.log": "49f41f030cdbb4f2600fa9b128f5c59d32bf758236e4f96f4e25bf4c07e7cce1",
+      "gpui-timing.log": "462a9e0fc861bbc26db964031fb9112e3d52bfe54bbd70764617e309abac6389",
+      "gpui-no-timing.jsonl": "1e3825185a8a12fb4069ead63cf65e98000dcf7b0f72f7ee29e4ae9fed1de859",
+      "kael-timing.jsonl": "25cd7690370c9421c44cac6e7c2eb010228e973462f7634ff219fa3933e87953",
+      "gpui-no-timing.log": "94679372f261df8aabe7d6b75526ff19f293d9705953e9be3d7fef1db671e64f"
+    }
+  }
+}

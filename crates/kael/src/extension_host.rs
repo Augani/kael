@@ -804,8 +804,11 @@ fn copy_dir_all_bounded(
 mod tests {
     use super::*;
     use crate::plugin::{ContributedCommand, PluginManifestBuilder};
-    use crate::process_model::{ProcessClass, SupervisorEvent};
+    use crate::process_model::ProcessClass;
+    #[cfg(any(unix, windows))]
+    use crate::process_model::SupervisorEvent;
     use crate::security::{Capability, PermissionBroker};
+    #[cfg(any(unix, windows))]
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -980,6 +983,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(unix, windows))]
     fn test_crash_isolation_via_supervisor() {
         let tmp = std::env::temp_dir().join(format!("kael-test-crash-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);

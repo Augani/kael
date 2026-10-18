@@ -12,8 +12,22 @@ use std::ffi::c_void;
 
 pub struct DisplayLink {
     display_link: Option<sys::DisplayLink>,
+    display_id: CGDirectDisplayID,
     frame_requests: dispatch_source_t,
     running: bool,
+}
+
+fn resume_retained_slot<T>(
+    retained: &mut Option<T>,
+    create: impl FnOnce() -> Result<T>,
+    resume: impl FnOnce(&mut T) -> Result<()>,
+) -> Result<()> {
+    if retained.is_none() {
+        *retained = Some(create()?);
+    }
+    // Keep a successfully constructed link even if starting/retargeting fails.
+    // Subsequent refreshes retry it without constructing another native object.
+    resume(retained.as_mut().expect("retained display link exists"))
 }
 
 impl DisplayLink {
@@ -73,10 +87,44 @@ impl DisplayLink {
 
             Ok(Self {
                 display_link: Some(display_link),
+                display_id,
                 frame_requests,
                 running: false,
             })
         }
+    }
+
+    /// Keep one native link for this window, including while it is idle. The
+    /// callback context is borrowed; neither this slot nor CoreVideo owns the
+    /// window. Only final window teardown runs the native-release workaround.
+    pub(crate) fn resume_retained(
+        retained: &mut Option<Self>,
+        display_id: CGDirectDisplayID,
+        data: *mut c_void,
+        callback: unsafe extern "C" fn(*mut c_void),
+    ) -> Result<()> {
+        resume_retained_slot(
+            retained,
+            || Self::new(display_id, data, callback),
+            |link| {
+                if link.display_id != display_id {
+                    // Pause before changing the native display. Failure retains
+                    // the same object for a later refresh to retry.
+                    link.stop()?;
+                    let native = link
+                        .display_link
+                        .as_mut()
+                        .ok_or_else(|| anyhow::anyhow!("display link is unavailable"))?;
+                    unsafe { native.set_display(display_id)? };
+                    link.display_id = display_id;
+                }
+                link.start()
+            },
+        )
+    }
+
+    pub(crate) fn is_running(&self) -> bool {
+        self.running
     }
 
     pub fn start(&mut self) -> Result<()> {
@@ -145,6 +193,180 @@ impl Drop for DisplayLink {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{cell::Cell, sync::Arc};
+
+    #[derive(Default)]
+    struct FakeLink {
+        starts: usize,
+        running: bool,
+    }
+
+    #[test]
+    fn retained_display_link_idle_wakes_reuse_one_construction_and_release_factory_captures() {
+        let constructions = Cell::new(0);
+        let owner = Arc::new(());
+        let weak_owner = Arc::downgrade(&owner);
+        let mut retained = None;
+        for _ in 0..1_024 {
+            // A factory may capture its caller. The reuse helper must drop even
+            // an unused factory immediately rather than retaining the window.
+            let factory_owner = owner.clone();
+            resume_retained_slot(
+                &mut retained,
+                || {
+                    let _owner = factory_owner;
+                    constructions.set(constructions.get() + 1);
+                    Ok(FakeLink::default())
+                },
+                |link| {
+                    link.starts += 1;
+                    link.running = true;
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert_eq!(Arc::strong_count(&owner), 1);
+            let link = retained.as_mut().unwrap();
+            assert!(link.running);
+            link.running = false;
+        }
+        assert_eq!(constructions.get(), 1);
+        assert_eq!(retained.unwrap().starts, 1_024);
+        drop(owner);
+        assert!(weak_owner.upgrade().is_none());
+    }
+
+    #[test]
+    fn retained_display_link_start_failure_retries_the_existing_object() {
+        let mut retained = None;
+        assert!(
+            resume_retained_slot(
+                &mut retained,
+                || Ok(FakeLink::default()),
+                |link| {
+                    link.starts += 1;
+                    anyhow::bail!("transient native start failure")
+                },
+            )
+            .is_err()
+        );
+        assert!(!retained.as_ref().unwrap().running);
+        resume_retained_slot(
+            &mut retained,
+            || panic!("a start failure must not recreate the link"),
+            |link| {
+                link.starts += 1;
+                link.running = true;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(retained.unwrap().starts, 2);
+    }
+
+    #[test]
+    fn retained_display_link_construction_failure_leaves_a_retryable_empty_slot() {
+        let mut retained: Option<FakeLink> = None;
+        assert!(
+            resume_retained_slot(
+                &mut retained,
+                || anyhow::bail!("display unavailable"),
+                |_| panic!("cannot start a failed construction"),
+            )
+            .is_err()
+        );
+        assert!(retained.is_none());
+        resume_retained_slot(&mut retained, || Ok(FakeLink::default()), |_| Ok(())).unwrap();
+        assert!(retained.is_some());
+    }
+
+    #[test]
+    #[ignore = "explicit runtime probe: requires an awake native macOS display"]
+    fn native_retained_display_link_probe() {
+        use core_graphics::display::{CGGetActiveDisplayList, CGMainDisplayID};
+        use foreign_types::ForeignType;
+
+        unsafe extern "C" fn noop(_: *mut c_void) {}
+
+        let display_id = unsafe { CGMainDisplayID() };
+        assert_ne!(display_id, 0, "runtime probe requires a real main display");
+        let mut retained = None;
+        DisplayLink::resume_retained(&mut retained, display_id, std::ptr::null_mut(), noop)
+            .expect("runtime probe must construct and start a native display link");
+        let identity = retained
+            .as_ref()
+            .unwrap()
+            .display_link
+            .as_ref()
+            .unwrap()
+            .as_ptr();
+        eprintln!("NATIVE_DISPLAY_LINK_PROBE_BEGIN: display={display_id} native={identity:p}");
+        const CYCLES: usize = 128;
+        for _ in 0..CYCLES {
+            let link = retained.as_mut().unwrap();
+            assert!(link.is_running());
+            link.stop().expect("native display link must stop");
+            assert!(!link.is_running());
+            link.stop().expect("repeated pause must be idempotent");
+            DisplayLink::resume_retained(&mut retained, display_id, std::ptr::null_mut(), noop)
+                .expect("native display link must resume");
+            assert!(retained.as_ref().unwrap().is_running());
+            assert_eq!(
+                retained
+                    .as_ref()
+                    .unwrap()
+                    .display_link
+                    .as_ref()
+                    .unwrap()
+                    .as_ptr(),
+                identity,
+                "an idle wake constructed a different native object"
+            );
+        }
+
+        let mut displays = [0; 32];
+        let mut count = 0;
+        assert_eq!(
+            unsafe {
+                CGGetActiveDisplayList(displays.len() as u32, displays.as_mut_ptr(), &mut count)
+            },
+            0,
+            "runtime probe must enumerate active displays"
+        );
+        assert!(count > 0 && count as usize <= displays.len());
+        let mut retargets = 0;
+        for other in displays[..count as usize]
+            .iter()
+            .copied()
+            .filter(|other| *other != display_id)
+            .chain(std::iter::once(display_id))
+        {
+            DisplayLink::resume_retained(&mut retained, other, std::ptr::null_mut(), noop)
+                .expect("native display retarget must succeed");
+            assert!(retained.as_ref().unwrap().is_running());
+            assert_eq!(
+                retained
+                    .as_ref()
+                    .unwrap()
+                    .display_link
+                    .as_ref()
+                    .unwrap()
+                    .as_ptr(),
+                identity
+            );
+            retargets += usize::from(other != display_id);
+        }
+        retained.as_mut().unwrap().stop().unwrap();
+        assert!(!retained.as_ref().unwrap().is_running());
+        eprintln!(
+            "NATIVE_DISPLAY_LINK_PROBE_OK: cycles={CYCLES} native={identity:p} constructions=1 stopped={CYCLES} resumed={CYCLES} other_display_retargets={retargets} final_stopped=true"
+        );
     }
 }
 
@@ -307,6 +529,16 @@ mod sys {
     }
 
     impl DisplayLinkRef {
+        pub unsafe fn set_display(&mut self, display_id: CGDirectDisplayID) -> Result<()> {
+            let code = unsafe { CVDisplayLinkSetCurrentCGDisplay(self, display_id) };
+            anyhow::ensure!(
+                code == 0,
+                "could not assign display to display link, code: {}",
+                code
+            );
+            Ok(())
+        }
+
         /// Apple docs: [CVDisplayLinkStart](https://developer.apple.com/documentation/corevideo/1457193-cvdisplaylinkstart?language=objc)
         pub unsafe fn start(&mut self) -> Result<()> {
             unsafe {

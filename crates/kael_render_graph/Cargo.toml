@@ -14,7 +14,7 @@ authors.workspace = true
 repository.workspace = true
 license.workspace = true
 readme = "README.md"
-exclude = ["examples/"]
+exclude = ["examples/", "benches/"]
 
 [package.metadata.docs.rs]
 default-target = "x86_64-unknown-linux-gnu"
@@ -24,6 +24,10 @@ rustdoc-args = ["--cfg", "docsrs"]
 [lib]
 name = "kael_render_graph"
 path = "src/lib.rs"
+
+[[bench]]
+name = "transient_allocation"
+harness = false
 
 [dependencies.anyhow]
 workspace = true

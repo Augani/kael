@@ -1,0 +1,510 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-18",
+  "status": "REJECTED_EXPERIMENT_NOT_ADOPTED",
+  "summary": "The V3 idle text-wrapper experiment passed 98 of 100 frozen gates. Only over-capacity size-churn thread/process CPU ratios failed, at approximately 3.877 times baseline. The candidate was not adopted.",
+  "decision": {
+    "adopted": false,
+    "passed_gates": 98,
+    "total_gates": 100,
+    "failed_gates": [
+      {
+        "gate": "candidate median <= frozen ratio+whole-bundle slack",
+        "pass": false,
+        "name": "over-capacity-size-churn",
+        "clock": "thread_cpu_ns",
+        "ratio": 3.877136344634613,
+        "limit_ns": 163960500.0
+      },
+      {
+        "gate": "candidate median <= frozen ratio+whole-bundle slack",
+        "pass": false,
+        "name": "over-capacity-size-churn",
+        "clock": "process_cpu_ns",
+        "ratio": 3.8771039045050104,
+        "limit_ns": 163962000.0
+      }
+    ],
+    "retries_or_outlier_removal": false,
+    "numeric_thresholds_relaxed": false,
+    "improved_warm_or_allocation_results_override_rejection": false
+  },
+  "scope": {
+    "route": "Actual public wrapper acquisition, wrapping, output comparison and return through TestAppContext/App-owned deterministic NoopTextSystem.",
+    "cfg_test": false,
+    "KAEL_HEADLESS": "1",
+    "variant_A": "Production preimage from the saved common graph.",
+    "variant_B": "The four-file V3 bounded idle-wrapper candidate on that same saved graph.",
+    "not_measured": [
+      "Native font shaping or rasterization",
+      "Application frame latency or throughput",
+      "RSS or total application memory",
+      "Power or energy",
+      "A global text-system or renderer byte budget"
+    ]
+  },
+  "candidate": {
+    "private_policy": {
+      "max_idle_wrappers": 64,
+      "max_idle_keys": 64,
+      "inline_boxes_per_key": 4,
+      "max_idle_non_ascii_capacity": 4096,
+      "generation": "checked Option<u64>; None never becomes Some; fresh active wrappers still usable",
+      "active_widths_modified": false
+    },
+    "implementation": [
+      "At most 64 idle wrappers/keys, with up to four inline boxes per key and admitted non-ASCII backing capacity at most 4096.",
+      "O(1) LRU links and full-miss Box/backing transfer; storage clearing and retired resource destruction occur outside the pool mutex.",
+      "Exact owner identity and original value-generation leases reject swapped or retired returns; checked generation exhaustion permanently disables reuse for that pool epoch.",
+      "Private FontIdWithSize equality compares FontId and exact size bits, matching its existing hash. Global Pixels behavior is unchanged; NaN payload and signed-zero controls do not shape nonfinite text.",
+      "Pressure invalidates idle generations; active wrappers retain their widths until return. Active handle count and all text-system memory are outside this idle-cache policy."
+    ],
+    "preimage_files": [
+      {
+        "path": "crates/kael/src/gpu.rs",
+        "sha256": "cb1c4342da063e73be1eda575a54d30ed389af3396f7711b386c3547bc62b9ed",
+        "bytes": 28582
+      },
+      {
+        "path": "crates/kael/src/text_system.rs",
+        "sha256": "fb5c11574e785a64611976d579a537cf781793778b0dbac9fecd240ce21ee11b",
+        "bytes": 40725
+      },
+      {
+        "path": "crates/kael/src/text_system/line_layout.rs",
+        "sha256": "2b4127de6dc53496ae1c05c48a0b15dbae37cd2ea072bba233d110b0881d2323",
+        "bytes": 39391
+      },
+      {
+        "path": "crates/kael/src/text_system/line_wrapper.rs",
+        "sha256": "8813f7556cbe2e70c8118fc4a002abc2a8d0b654e6c8a4fbf51bf0602be301b8",
+        "bytes": 24737
+      }
+    ],
+    "candidate_files_including_regression_tests": [
+      {
+        "path": "crates/kael/src/gpu.rs",
+        "sha256": "ce1e3ee7ac7506963437cc62bdf026cbd2d40ec3c2c27a8ebda677d3e6fb078d",
+        "bytes": 28804
+      },
+      {
+        "path": "crates/kael/src/text_system.rs",
+        "sha256": "142c6bdd3d808fd1146458c8a6cb36dccb5987e7a5ddea7f58e3b219d74e95a1",
+        "bytes": 71505
+      },
+      {
+        "path": "crates/kael/src/text_system/line_layout.rs",
+        "sha256": "aceab8c7645875a07cfd3c2f02a8730339786bba25371e32dcd3e7bac104e52a",
+        "bytes": 39402
+      },
+      {
+        "path": "crates/kael/src/text_system/line_wrapper.rs",
+        "sha256": "126a00feaf9c3cb1f7746c1ddd804fb7e3b5a388110aa5bfe412a69533840f0b",
+        "bytes": 25813
+      }
+    ]
+  },
+  "correctness": {
+    "focused_v3_cases_passed": 15,
+    "full_core_passed": 2266,
+    "full_core_inventory": 2268,
+    "same_existing_opt_in_ignored": [
+      "platform::mac::display_link::tests::native_retained_display_link_probe",
+      "platform::mac::text_system::tests::native_sized_font_shaping_diagnostic"
+    ],
+    "focused_cases_overlap_full_core": true,
+    "full_core_unfiltered_default_parallel": true,
+    "RUST_TEST_THREADS": null,
+    "fresh_compiler_owned_test_artifact": true,
+    "copied_binary_sha256": "3f748ff74ece95ed460fe892f6104c63592c2195cc2089c4969f127a3340bd9c",
+    "unchanged_baseline_policy_red_cases_reused": 2,
+    "new_baseline_invocation_claimed": false,
+    "correctness_acceptance_is_not_cost_acceptance": true
+  },
+  "cost_execution": {
+    "fixed_processes": 14,
+    "partition": {
+      "output_oracle_processes": 2,
+      "cpu_processes": 10,
+      "allocation_processes": 2
+    },
+    "cpu_pairs": 5,
+    "pair_order": [
+      "AB",
+      "BA",
+      "AB",
+      "BA",
+      "AB"
+    ],
+    "all_processes_terminal_exit_zero": true,
+    "fresh_compiler_owned_release_mains": 4,
+    "release_profile": {
+      "opt_level": "3",
+      "debuginfo": 1,
+      "debug_assertions": false,
+      "overflow_checks": false,
+      "test": false
+    },
+    "exact_core_features": [
+      "backtrace",
+      "font-kit",
+      "leak-detection",
+      "rand",
+      "test-support"
+    ],
+    "same_core_profile_features_and_standalone_registry_pins": true,
+    "allocation_instrumentation": "Separate allocation-stats binaries use System allocator requested-layout counters. CPU binaries omit that instrumentation.",
+    "input": {
+      "ASCII": "General desktop settings, status and progress labels",
+      "Unicode": "\u65e5\u672c\u8a9e caf\u00e9 \u0395\u03bb\u03bb\u03b7\u03bd\u03b9\u03ba\u03ac \ud83d\ude42",
+      "ordinary_key_working_set": 8,
+      "churn_keys": 512,
+      "oversized_unicode_unique_chars": 4097,
+      "input_ownership": "Preallocate identical sources/runs/fragments and resolve one FontId before warm clocks; no global interner or model reduction."
+    },
+    "cpu_group_inputs": [
+      {
+        "name": "warm-sequential",
+        "acquisitions": 2000000,
+        "max_thread_and_process_median_ratio": 1.1
+      },
+      {
+        "name": "warm-eight-keys",
+        "acquisitions": 2000000,
+        "max_thread_and_process_median_ratio": 1.1
+      },
+      {
+        "name": "warm-two-held-same-key",
+        "rounds": 1000000,
+        "acquisitions": 2000000,
+        "max_thread_and_process_median_ratio": 1.1
+      },
+      {
+        "name": "warm-four-held-same-key",
+        "rounds": 500000,
+        "acquisitions": 2000000,
+        "max_thread_and_process_median_ratio": 1.1
+      },
+      {
+        "name": "cold-boxing-and-first-return",
+        "independent_prepared_text_systems": 32,
+        "keys_per_system": 512,
+        "acquisitions": 16384,
+        "max_thread_and_process_median_ratio": 1.25,
+        "qualification": "Box allocation occurs earlier than old Vec retention; include both construction and return, report pool/system setup separately."
+      },
+      {
+        "name": "over-capacity-size-churn",
+        "rounds": 256,
+        "keys": 512,
+        "acquisitions": 131072,
+        "max_thread_and_process_median_ratio": 2.0,
+        "qualification": "Explicit bounded-history recomputation tradeoff ceiling; passing this is not no-regression or universal throughput equivalence."
+      }
+    ],
+    "minimum_each_bundle_cpu_ns": 20000000,
+    "max_MAD_over_median": 0.1,
+    "whole_bundle_additive_slack_ns": 100000,
+    "per_acquisition_slack_ns": 0,
+    "all_minimum_duration_and_noise_gates_passed_in_v3": true,
+    "cpu_medians": [
+      {
+        "workload": "warm-sequential",
+        "clocks": {
+          "thread_cpu_ns": {
+            "baseline_median_ns": 1183257959,
+            "candidate_median_ns": 1060098250,
+            "candidate_over_baseline": 0.89591474279701,
+            "baseline_mad_ns": 2500459,
+            "candidate_mad_ns": 196000,
+            "admission_limit_ns_including_bundle_slack": 1301683754.9
+          },
+          "process_cpu_ns": {
+            "baseline_median_ns": 1183259000,
+            "candidate_median_ns": 1060099000,
+            "candidate_over_baseline": 0.8959145884375272,
+            "baseline_mad_ns": 2501000,
+            "candidate_mad_ns": 196000,
+            "admission_limit_ns_including_bundle_slack": 1301684900.0
+          }
+        }
+      },
+      {
+        "workload": "warm-eight-keys",
+        "clocks": {
+          "thread_cpu_ns": {
+            "baseline_median_ns": 1195963917,
+            "candidate_median_ns": 1066001542,
+            "candidate_over_baseline": 0.8913325283876437,
+            "baseline_mad_ns": 599166,
+            "candidate_mad_ns": 911000,
+            "admission_limit_ns_including_bundle_slack": 1315660308.7
+          },
+          "process_cpu_ns": {
+            "baseline_median_ns": 1195964000,
+            "candidate_median_ns": 1066001000,
+            "candidate_over_baseline": 0.8913320133381941,
+            "baseline_mad_ns": 600000,
+            "candidate_mad_ns": 911000,
+            "admission_limit_ns_including_bundle_slack": 1315660400.0
+          }
+        }
+      },
+      {
+        "workload": "warm-two-held-same-key",
+        "clocks": {
+          "thread_cpu_ns": {
+            "baseline_median_ns": 1339183875,
+            "candidate_median_ns": 1062800125,
+            "candidate_over_baseline": 0.7936177733621531,
+            "baseline_mad_ns": 403916,
+            "candidate_mad_ns": 1860042,
+            "admission_limit_ns_including_bundle_slack": 1473202262.5
+          },
+          "process_cpu_ns": {
+            "baseline_median_ns": 1339185000,
+            "candidate_median_ns": 1062802000,
+            "candidate_over_baseline": 0.7936185067783764,
+            "baseline_mad_ns": 405000,
+            "candidate_mad_ns": 1859000,
+            "admission_limit_ns_including_bundle_slack": 1473203500.0
+          }
+        }
+      },
+      {
+        "workload": "warm-four-held-same-key",
+        "clocks": {
+          "thread_cpu_ns": {
+            "baseline_median_ns": 1301931083,
+            "candidate_median_ns": 1036094000,
+            "candidate_over_baseline": 0.795813245054846,
+            "baseline_mad_ns": 3361667,
+            "candidate_mad_ns": 1836542,
+            "admission_limit_ns_including_bundle_slack": 1432224191.3000002
+          },
+          "process_cpu_ns": {
+            "baseline_median_ns": 1301932000,
+            "candidate_median_ns": 1036094000,
+            "candidate_over_baseline": 0.7958126845334472,
+            "baseline_mad_ns": 3359000,
+            "candidate_mad_ns": 1835000,
+            "admission_limit_ns_including_bundle_slack": 1432225200.0
+          }
+        }
+      },
+      {
+        "workload": "cold-boxing-and-first-return",
+        "clocks": {
+          "thread_cpu_ns": {
+            "baseline_median_ns": 46374958,
+            "candidate_median_ns": 40375750,
+            "candidate_over_baseline": 0.8706369070997326,
+            "baseline_mad_ns": 553500,
+            "candidate_mad_ns": 849875,
+            "admission_limit_ns_including_bundle_slack": 58068697.5
+          },
+          "process_cpu_ns": {
+            "baseline_median_ns": 46376000,
+            "candidate_median_ns": 40376000,
+            "candidate_over_baseline": 0.8706227358978782,
+            "baseline_mad_ns": 553000,
+            "candidate_mad_ns": 852000,
+            "admission_limit_ns_including_bundle_slack": 58070000.0
+          }
+        }
+      },
+      {
+        "workload": "over-capacity-size-churn",
+        "clocks": {
+          "thread_cpu_ns": {
+            "baseline_median_ns": 81930250,
+            "candidate_median_ns": 317654750,
+            "candidate_over_baseline": 3.877136344634613,
+            "baseline_mad_ns": 132833,
+            "candidate_mad_ns": 9691708,
+            "admission_limit_ns_including_bundle_slack": 163960500.0
+          },
+          "process_cpu_ns": {
+            "baseline_median_ns": 81931000,
+            "candidate_median_ns": 317655000,
+            "candidate_over_baseline": 3.8771039045050104,
+            "baseline_mad_ns": 132000,
+            "candidate_mad_ns": 9692000,
+            "admission_limit_ns_including_bundle_slack": 163962000.0
+          }
+        }
+      }
+    ]
+  },
+  "allocation_and_lifecycle": {
+    "stage": "retained-after512-sizes, after dropping active handles; identical App/font/source/report owners remain outside the measured wrapper-domain delta.",
+    "retained_requested_layout_bytes": {
+      "baseline": 676872,
+      "candidate": 94344
+    },
+    "oversized_non_ascii_return_requested_layout_delta_bytes": {
+      "A": 74996,
+      "B": 0
+    },
+    "pressure_retirement_requested_layout_delta_bytes": {
+      "A": 6372,
+      "B": 0
+    },
+    "all_allocation_and_lifecycle_gates_passed": true,
+    "matched_no_wrapper_controls": 12,
+    "all_12_owner_teardown_normalized_residual_bytes": 0,
+    "unrelated_common_residuals_reported_by_controls": true,
+    "unit_caveat": "Requested Rust allocation layouts and retained deltas are not allocator resident capacity or RSS. This is not an application memory-saving measurement."
+  },
+  "quiet_and_restoration": {
+    "root_attested_other_owned_workloads_idle": true,
+    "all_owned_groups_quiescent": true,
+    "all_owned_paths_validated_before_any_restore_write": true,
+    "both_saved_3163_input_maps_restored_exact_bytes_modes_current_mtimes": true,
+    "saved_common_graph_fingerprint": "08b6c22b058e57e9b6d9dbfe3a922bd830af8137c0276c121d41232cb3eb6e18",
+    "root_lock_sha256": "df15e57c90e981bdfd8329be16f6840a68d1980d57a91b1f2c98d6104053d059",
+    "standalone_lock_sha256": "6fa346e0fafb58b97a6473749345f8cf9d36b0765b1cf8b9968df7c5ae430967",
+    "verification_scope": "Executed restoration receipts and independent artifact audit; no later current-checkout capture is asserted by this record."
+  },
+  "preserved_prior_experiment": {
+    "candidate": "Original V1 bounded idle-wrapper implementation, separately preserved.",
+    "decision": "REJECTED; not reclassified by V3.",
+    "passed_gates": 96,
+    "total_gates": 100,
+    "failed_gates": [
+      {
+        "gate": "all CPU bundles >= frozen minimum",
+        "pass": false,
+        "name": "over-capacity-size-churn",
+        "clock": "thread_cpu_ns",
+        "variant": "A"
+      },
+      {
+        "gate": "candidate median <= frozen ratio+whole-bundle slack",
+        "pass": false,
+        "name": "over-capacity-size-churn",
+        "clock": "thread_cpu_ns",
+        "ratio": 3.8331335950472294,
+        "limit_ns": 22834750.0
+      },
+      {
+        "gate": "all CPU bundles >= frozen minimum",
+        "pass": false,
+        "name": "over-capacity-size-churn",
+        "clock": "process_cpu_ns",
+        "variant": "A"
+      },
+      {
+        "gate": "candidate median <= frozen ratio+whole-bundle slack",
+        "pass": false,
+        "name": "over-capacity-size-churn",
+        "clock": "process_cpu_ns",
+        "ratio": 3.833040112596763,
+        "limit_ns": 22836000.0
+      }
+    ],
+    "churn_rounds": 32,
+    "churn_acquisitions": 16384,
+    "baseline_thread_cpu_churn_median_ns": 11367375,
+    "duration_revision": "After the V1 baseline churn bundle failed the predeclared 20 ms minimum, a new prospective cohort increased churn from 32 to 256 rounds (131072 acquisitions). The ratio, duration floor, noise, slack and other workload thresholds were not loosened. The production candidate also changed; these are separate cohorts, not an isolated cross-cohort performance comparison.",
+    "v3_input_chosen_after_v1_measurement": true
+  },
+  "interpretation": [
+    "Headless warm CPU median candidate/baseline ratios were approximately 0.794 to 0.896; the cold construction/first-return ratio was approximately 0.871. Those directions apply only to this NoopTextSystem harness.",
+    "The bounded retained requested-layout delta fell from 676872 to 94344 bytes in the specified allocation stage, while churn CPU exceeded the unchanged acceptance ceiling.",
+    "All 14 programs exiting zero establishes complete raw capture, not a passing experiment. The frozen evaluator and independent audit both reject the two churn ratios.",
+    "No implementation was adopted and no general desktop, native-font, RSS, power or total-memory improvement is claimed."
+  ],
+  "evidence": {
+    "actual_v3_result": {
+      "path": ".artifacts/2026-10-18-idle-wrapper-v3-cost-measure/result.json",
+      "sha256": "52f30db9947ba3baaea6ca8a1a2fd9d286a8de537fcd235405ef6a524419a6d4",
+      "bytes": 1574507
+    },
+    "independent_v3_cost_audit": {
+      "path": ".artifacts/2026-10-18-idle-wrapper-v3-cost-independent-renderer-audit/review.json",
+      "sha256": "8ef20a2562b1e690990481fd1a840cf703870013367459fb739a38dea007ee71",
+      "bytes": 34361
+    },
+    "actual_build": {
+      "path": ".artifacts/2026-10-18-idle-wrapper-v3-cost-build/result.json",
+      "sha256": "610b83d48becc11234c1775a89372003f36f465bc18001b1b172b38d699dbb50",
+      "bytes": 3165414
+    },
+    "actual_raw_run": {
+      "path": ".artifacts/2026-10-18-idle-wrapper-v3-cost-measure/runtime/raw-run.json",
+      "sha256": "963550fc9829d195315e11cfab156d00209129836179ba238385c96bc84dffb4",
+      "bytes": 30543
+    },
+    "original_evaluation": {
+      "path": ".artifacts/2026-10-18-idle-wrapper-v3-cost-measure/runtime/evaluation.json",
+      "sha256": "616d23974ba353258d6799f5db2941775daa2bba21c8e9543bc121201575e205",
+      "bytes": 71555
+    },
+    "actual_correctness": {
+      "path": ".artifacts/2026-10-18-idle-wrapper-v3-candidate-validation/result.json",
+      "sha256": "b78445b77ef69fbece308c60f2f2628a971aa4cba6a72f5c39c824ac82bafa0a",
+      "bytes": 1986141
+    },
+    "independent_correctness_audit": {
+      "path": ".artifacts/2026-10-18-idle-wrapper-v3-actual-independent-renderer-audit/review.json",
+      "sha256": "86fe5a87cf71c8723ed1bfc354f0f483abb0d4e3b9ab908f98cecb9a3b5a5d18",
+      "bytes": 23448
+    },
+    "v3_source": {
+      "path": ".artifacts/2026-10-18-idle-text-wrapper-budget-candidate-v3/preparation.json",
+      "sha256": "3b43ddd60b425cf8b1e9c56ec4f84b6241bdc0ef543ba03af45fbaac2d4f5b44",
+      "bytes": 7410
+    },
+    "independent_source_peer": {
+      "path": ".artifacts/2026-10-18-idle-wrapper-v3-independent-renderer-source-review/review.json",
+      "sha256": "0788cec4cb0888c5d5fcc9c86ba94795722393b699ee08003897c0769c92a023",
+      "bytes": 7705
+    },
+    "frozen_numeric_gates": {
+      "path": ".artifacts/2026-10-18-idle-wrapper-cost-harness-v5/gates-v3.json",
+      "sha256": "8a93b40c486c64fd4d7dfff22b5b3ddae7febb8fbff725b8fccb8053b0515ef3",
+      "bytes": 5110
+    },
+    "quiet_ready": {
+      "path": ".artifacts/2026-10-18-idle-wrapper-v3-cost-root-ready/quiet.json",
+      "sha256": "e70bc8e011cb401111c12a92a66d6a671fdd8f64dcd0d205d91b53e9c85ec69a",
+      "bytes": 538
+    },
+    "quiet_completion": {
+      "path": ".artifacts/2026-10-18-idle-wrapper-v3-cost-root-ready/quiet-completion.json",
+      "sha256": "7f06cdddcec43d542ff6b9235a2463374b6d62c71a99964a6e2e29dd3fffd4da",
+      "bytes": 930
+    },
+    "preserved_v1_rejected_result": {
+      "path": ".artifacts/2026-10-18-idle-wrapper-cost-measure-v1/result.json",
+      "sha256": "9f7920fb4720d1e65f202c7bab69a4b1752edef300c9792b0ac4c2f899cc95dd",
+      "bytes": 1574530
+    },
+    "preserved_v1_evaluation": {
+      "path": ".artifacts/2026-10-18-idle-wrapper-cost-measure-v1/runtime/evaluation.json",
+      "sha256": "415993cf2e6cf75711b5a8b6e44da2fc60406762535947237a2b65f8214ba85c",
+      "bytes": 71943
+    },
+    "independent_v1_cost_audit": {
+      "path": ".artifacts/2026-10-18-idle-wrapper-cost-independent-renderer-audit/review.json",
+      "sha256": "ad5855acfd723c4a3914f77cf6a7a6439bdcae2d7ba40d5e030b3b5a3763c7f8",
+      "bytes": 33948
+    },
+    "prospective_duration_revision": {
+      "path": ".artifacts/2026-10-18-idle-wrapper-cost-harness-v4/preparation.json",
+      "sha256": "8f7fff6a50e8342401dfeeaecfd84d6de6aa31d4c79c3255da672313e249b4b8",
+      "bytes": 5770
+    },
+    "actual_harness_v5": {
+      "path": ".artifacts/2026-10-18-idle-wrapper-cost-harness-v5/preparation.json",
+      "sha256": "f08f3e883de97ea01107778df4c06315e06b23b51177a4c170c0f44bfb6eaa06",
+      "bytes": 5395
+    },
+    "actual_orchestration_v4": {
+      "path": ".artifacts/2026-10-18-idle-wrapper-cost-orchestration-v4/preparation.json",
+      "sha256": "cd8a425b7230a2ef7d12da412fd63f33fcfd15cf4be349091f90b212a7cf40ae",
+      "bytes": 4004
+    }
+  }
+}

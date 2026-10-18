@@ -334,6 +334,13 @@ impl FrameTimeline {
         result
     }
 
+    /// Borrow retained records in chronological order without allocating.
+    pub fn iter(&self) -> impl Iterator<Item = &FrameRecord> {
+        self.buffer[self.head..]
+            .iter()
+            .chain(self.buffer[..self.head].iter())
+    }
+
     /// Returns the number of recorded frames.
     pub fn len(&self) -> usize {
         self.len
@@ -1069,6 +1076,13 @@ mod tests {
         assert_eq!(history.len(), 2);
         assert_eq!(history[0].frame_number, 1);
         assert_eq!(history[1].frame_number, 2);
+        assert_eq!(
+            timeline
+                .iter()
+                .map(|frame| frame.frame_number)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
     }
 
     #[test]
@@ -1082,6 +1096,13 @@ mod tests {
         let history = timeline.history();
         assert_eq!(history[0].frame_number, 2);
         assert_eq!(history[2].frame_number, 4);
+        assert_eq!(
+            timeline
+                .iter()
+                .map(|frame| frame.frame_number)
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4]
+        );
     }
 
     #[test]

@@ -659,12 +659,19 @@ impl X11Client {
             })
             .map_err(|err| anyhow!("Failed to initialize power event source: {err:?}"))?;
 
-        let (xcb_connection, x_root_index) = XCBConnection::connect(None)?;
-        xcb_connection.prefetch_extension_information(xkb::X11_EXTENSION_NAME)?;
-        xcb_connection.prefetch_extension_information(randr::X11_EXTENSION_NAME)?;
-        xcb_connection.prefetch_extension_information(render::X11_EXTENSION_NAME)?;
-        xcb_connection.prefetch_extension_information(xinput::X11_EXTENSION_NAME)?;
-        xcb_connection.prefetch_extension_information(present::X11_EXTENSION_NAME)?;
+        let (xcb_connection, x_root_index) =
+            XCBConnection::connect(None).context("Failed to open the X11 display connection")?;
+        for extension in [
+            xkb::X11_EXTENSION_NAME,
+            randr::X11_EXTENSION_NAME,
+            render::X11_EXTENSION_NAME,
+            xinput::X11_EXTENSION_NAME,
+            present::X11_EXTENSION_NAME,
+        ] {
+            xcb_connection
+                .prefetch_extension_information(extension)
+                .with_context(|| format!("Failed to query X11 extension {extension}"))?;
+        }
 
         // XI 2.2 adds direct multi-touch. Older XI2 servers remain usable with
         // the established mouse/pen-compatible stream.

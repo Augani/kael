@@ -66,6 +66,25 @@ impl CacheManager {
     /// Creates a new two-tier cache from the given configuration.
     pub fn new(config: CacheConfig) -> Result<Self> {
         let memory = MemoryCache::new(config.memory_max_entries);
+        Self::from_memory(config, memory)
+    }
+
+    /// Creates a two-tier cache with a limit on retained serialized payload bytes.
+    ///
+    /// The memory tier also observes `config.memory_max_entries`. Values exceeding
+    /// `memory_max_bytes` remain on disk and are read without memory promotion.
+    /// A zero budget disables memory retention. Keys, metadata, temporary
+    /// serialization buffers, and deserialized values are outside this budget.
+    pub fn with_memory_byte_budget(config: CacheConfig, memory_max_bytes: u64) -> Result<Self> {
+        let memory = MemoryCache::with_byte_budget(
+            config.memory_max_entries,
+            memory_max_bytes,
+            |bytes: &Arc<[u8]>| u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        );
+        Self::from_memory(config, memory)
+    }
+
+    fn from_memory(config: CacheConfig, memory: MemoryCache<Arc<[u8]>>) -> Result<Self> {
         let disk = DiskCache::new(config.disk_root, config.disk_max_bytes)?;
         Ok(Self {
             memory,
@@ -77,7 +96,7 @@ impl CacheManager {
 
     /// Retrieves a value, checking memory first, then disk.
     ///
-    /// On a disk hit the value is promoted into the memory cache.
+    /// On a disk hit the value is promoted if it fits the memory tier's limits.
     pub fn get<V: DeserializeOwned>(&mut self, namespace: &str, key: &str) -> Result<Option<V>> {
         validate_cache_address(namespace, key)?;
         let mem_key = memory_key(namespace, key);
@@ -99,7 +118,7 @@ impl CacheManager {
         Ok(None)
     }
 
-    /// Stores a value in both the memory and disk caches.
+    /// Stores a value on disk, retaining it in memory if it fits the memory tier's limits.
     pub fn put<V: Serialize>(
         &mut self,
         namespace: &str,
@@ -112,6 +131,9 @@ impl CacheManager {
         let mem_key = memory_key(namespace, key);
 
         self.disk.put(namespace, key, bytes.as_ref())?;
+        // A replacement that exceeds the memory budget must not leave the old
+        // serialized value cached after the disk tier has accepted the new one.
+        self.memory.remove(&mem_key);
         self.memory.insert(mem_key, bytes, priority);
         Ok(())
     }
@@ -143,6 +165,18 @@ impl CacheManager {
             memory_entries: self.memory.len(),
             disk_bytes: self.disk.total_size(),
         }
+    }
+
+    /// Returns the configured memory payload-byte budget, if present.
+    pub fn memory_max_bytes(&self) -> Option<u64> {
+        self.memory.max_bytes()
+    }
+
+    /// Returns the serialized payload bytes currently retained in a byte-budgeted memory tier.
+    ///
+    /// Returns zero for caches constructed with [`Self::new`], which only track entries.
+    pub fn memory_used_bytes(&self) -> u64 {
+        self.memory.used_bytes()
     }
 }
 
@@ -401,5 +435,98 @@ mod tests {
 
         assert!(manager.invalidate("ns", "key").is_err());
         assert!(manager.memory.get(&memory_key("ns", "key")).is_some());
+    }
+
+    #[test]
+    fn memory_byte_budget_uses_serialized_size_and_disk_fallback() {
+        let tmp = TempDir::new().unwrap();
+        let mut manager = CacheManager::with_memory_byte_budget(test_config(&tmp), 8).unwrap();
+        manager
+            .put("ns", "a", &"one", CachePriority::Normal)
+            .unwrap();
+        manager
+            .put("ns", "b", &"two", CachePriority::Normal)
+            .unwrap();
+
+        assert_eq!(manager.memory_max_bytes(), Some(8));
+        assert_eq!(manager.memory_used_bytes(), 5); // JSON includes two quote bytes.
+        assert_eq!(manager.stats().memory_entries, 1);
+        assert_eq!(
+            manager.get::<String>("ns", "a").unwrap().as_deref(),
+            Some("one")
+        );
+        assert_eq!(manager.stats().disk_hits, 1);
+        assert_eq!(manager.memory_used_bytes(), 5);
+    }
+
+    #[test]
+    fn oversized_replacement_does_not_return_stale_memory_data() {
+        let tmp = TempDir::new().unwrap();
+        let mut manager = CacheManager::with_memory_byte_budget(test_config(&tmp), 4).unwrap();
+        manager.put("ns", "key", &1, CachePriority::Normal).unwrap();
+        manager
+            .put("ns", "key", &"oversized", CachePriority::High)
+            .unwrap();
+
+        assert_eq!(manager.memory_used_bytes(), 0);
+        assert_eq!(manager.stats().memory_entries, 0);
+        for _ in 0..2 {
+            assert_eq!(
+                manager.get::<String>("ns", "key").unwrap().as_deref(),
+                Some("oversized")
+            );
+            assert_eq!(manager.memory_used_bytes(), 0);
+            assert_eq!(manager.stats().memory_entries, 0);
+        }
+        assert_eq!(manager.stats().disk_hits, 2);
+    }
+
+    #[test]
+    fn zero_memory_byte_budget_keeps_values_on_disk() {
+        let tmp = TempDir::new().unwrap();
+        let mut manager = CacheManager::with_memory_byte_budget(test_config(&tmp), 0).unwrap();
+        manager
+            .put("ns", "key", &42, CachePriority::Normal)
+            .unwrap();
+        assert_eq!(manager.get::<i32>("ns", "key").unwrap(), Some(42));
+        assert_eq!(manager.stats().memory_entries, 0);
+        assert_eq!(manager.memory_used_bytes(), 0);
+        assert_eq!(manager.stats().memory_hits, 0);
+        assert_eq!(manager.stats().disk_hits, 1);
+    }
+
+    #[test]
+    fn memory_byte_accounting_updates_after_namespace_invalidation() {
+        let tmp = TempDir::new().unwrap();
+        let mut manager = CacheManager::with_memory_byte_budget(test_config(&tmp), 100).unwrap();
+        manager.put("one", "a", &42, CachePriority::Normal).unwrap();
+        manager.put("one", "b", &43, CachePriority::Normal).unwrap();
+        manager
+            .put("other", "c", &44, CachePriority::Normal)
+            .unwrap();
+        assert_eq!(manager.memory_used_bytes(), 6);
+        manager.invalidate("one", "a").unwrap();
+        assert_eq!(manager.memory_used_bytes(), 4);
+        manager.invalidate_namespace("one").unwrap();
+        assert_eq!(manager.memory_used_bytes(), 2);
+        assert_eq!(manager.get::<i32>("other", "c").unwrap(), Some(44));
+    }
+
+    #[test]
+    fn failed_disk_replacement_preserves_previous_memory_payload() {
+        let tmp = TempDir::new().unwrap();
+        let mut config = test_config(&tmp);
+        config.disk_max_bytes = 4;
+        let mut manager = CacheManager::with_memory_byte_budget(config, 4).unwrap();
+        manager
+            .put("ns", "key", &42, CachePriority::Normal)
+            .unwrap();
+        assert!(
+            manager
+                .put("ns", "key", &"too large", CachePriority::Normal)
+                .is_err()
+        );
+        assert_eq!(manager.get::<i32>("ns", "key").unwrap(), Some(42));
+        assert_eq!(manager.memory_used_bytes(), 2);
     }
 }

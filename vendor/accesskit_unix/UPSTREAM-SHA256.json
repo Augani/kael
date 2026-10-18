@@ -1,0 +1,32 @@
+{
+  "package": "accesskit_unix",
+  "version": "0.22.1",
+  "commit": "c88605b96d04431f9c3c792464a0f2f253480e94",
+  "files": {
+    ".cargo_vcs_info.json": "4f1ed69660019a050c71392dc51047dbf96bad01ae556444277dda796848d477",
+    "CHANGELOG.md": "b7373de77d575fbb722014525e6f31e8401da28b09f9a3180da9cfcf6e95cd4b",
+    "Cargo.toml": "2f1bb12679396e02bed65a1e51bba2375f639cdbceb3773b5226f7dc8f3b9818",
+    "Cargo.toml.orig": "33894a911fc1e09276f2dd0caa1e294ac6f4ed302128c6231cee039b615fc628",
+    "README.md": "843382343abfe5052b670db006fa0fde3f8bf577ef9be8d200392d9b7c0a13cd",
+    "src/adapter.rs": "ec4be14db24c8164d9fb367c99b132702a24f10172688d36f11457d4b95b91d6",
+    "src/atspi/bus.rs": "7f1439de8414df614cfd934ab1f38c6bdab543481768ec4b4b14cc196a6f1e55",
+    "src/atspi/interfaces/accessible.rs": "b60a1c989be3edf03e9661df8663cdd1b3930ac40db40058cafabb322ce38626",
+    "src/atspi/interfaces/action.rs": "7ffa334b1cace21aa567a074d0c1ba59dd2229449af02ffc329bfd4671940903",
+    "src/atspi/interfaces/application.rs": "530316441ee42b415605f6f50526ac776d8ab038aff24dfa02d4352dedcf2db0",
+    "src/atspi/interfaces/cache.rs": "30c19dde323e4e9c03c6d204b0185b70ce953ae1f6bfe47ad5f78ca0b85156d2",
+    "src/atspi/interfaces/component.rs": "bb95115fe289aa2b92b6fce76a7a60df9a93a06a32281192aa4fdd6e75373fc3",
+    "src/atspi/interfaces/hyperlink.rs": "9a53b1d164208963ed047326f12ab380700807a3338b8c76f4edd8a492cd35d8",
+    "src/atspi/interfaces/mod.rs": "8c3351b0bc27e42dcb5436cb919530b6e14a67d9c5914665accdda3e2479b122",
+    "src/atspi/interfaces/selection.rs": "980d556b2620de481146580744d80f3bde0631b148d1330aed268a0a5a6b7905",
+    "src/atspi/interfaces/text.rs": "3e36eb6bdd8dcdb7d9831474aec4d0cc86ba281d65addbbb52e72aa165b64ed9",
+    "src/atspi/interfaces/value.rs": "829dfa73ab581da1be9210c1a6a0361bbb8563fb8d49c7057557cc1ddefafbab",
+    "src/atspi/mod.rs": "2ea8e56ae5d3fde6a380582890597d49a0390a86dfddcb275df5281ad46cd90e",
+    "src/atspi/object_address.rs": "71f293f5de1c46e5e2a2503053baa3c1fe7c62c13cc7c957dbf2843dfa531e79",
+    "src/atspi/object_id.rs": "0a0d87d35d858ebcc3dad9695556385aee61509009db3de236840b65bc940c0e",
+    "src/context.rs": "8a5c0881ea79e46ec0acc0864a526b87f2012284d1a7f3edade1b4ea21a7d0d0",
+    "src/executor.rs": "38e4a47fc2afd555d91d8e74156165d7da632c381e488a1c7693ed140ff278fa",
+    "src/lib.rs": "4416ce59366d321c3dbd29a1054c3ad6c426168c97f7b237ff3e818de6c3168c",
+    "src/util.rs": "2a043a60ea1d76c5603d65d5a9844586f00d1d310902032214a10c70b80750c5"
+  },
+  "registry_archive_sha256": "03e156ed3802e35eefe894ef2671bc6c889303d8a7e110b5e1b48f504b91362f"
+}

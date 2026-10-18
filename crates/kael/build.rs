@@ -206,14 +206,21 @@ fn check_wgsl_shaders() {
 
     let shader_source = std::fs::read_to_string(&shader_path).unwrap();
 
-    match naga::front::wgsl::parse_str(&shader_source) {
-        Ok(_) => {
-            // All clear
-        }
-        Err(e) => {
-            eprintln!("WGSL shader compilation failed:\n{}", e);
+    let module = match naga::front::wgsl::parse_str(&shader_source) {
+        Ok(module) => module,
+        Err(error) => {
+            eprintln!("{}", error.emit_to_string(&shader_source));
             process::exit(1);
         }
+    };
+    // Blade assigns bindings at pipeline creation. Validate all other semantics
+    // against the base shader capabilities before a consumer launches the app.
+    let flags = naga::valid::ValidationFlags::all() - naga::valid::ValidationFlags::BINDINGS;
+    if let Err(error) =
+        naga::valid::Validator::new(flags, naga::valid::Capabilities::empty()).validate(&module)
+    {
+        eprintln!("{}", error.emit_to_string(&shader_source));
+        process::exit(1);
     }
 }
 #[cfg(target_os = "macos")]

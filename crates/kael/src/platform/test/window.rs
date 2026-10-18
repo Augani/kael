@@ -378,6 +378,21 @@ impl TestAtlas {
 }
 
 impl PlatformAtlas for TestAtlas {
+    fn get_or_insert_with_size<'a>(
+        &self,
+        key: &AtlasKey,
+        size: Size<crate::DevicePixels>,
+        build: &mut dyn FnMut() -> anyhow::Result<
+            Option<(Size<crate::DevicePixels>, std::borrow::Cow<'a, [u8]>)>,
+        >,
+    ) -> anyhow::Result<Option<AtlasTile>> {
+        crate::atlas_payload_len(size, key.texture_kind())?;
+        self.get_or_insert_with(key, build)
+    }
+
+    // This headless test backend owns no raster storage or GPU resources.
+    fn set_hard_admission_limits(&self, _: crate::AtlasAdmissionLimits) {}
+
     fn get_or_insert_with<'a>(
         &self,
         key: &crate::AtlasKey,
@@ -429,14 +444,71 @@ impl PlatformAtlas for TestAtlas {
 #[cfg(test)]
 mod tests {
     use crate::{
-        Context, Empty, IntoElement, Render, RequestFrameOptions, TestAppContext, VisualContext,
-        Window, WindowInteractionCommand, canvas_with_prepaint,
+        Context, Empty, IntoElement, Render, RequestFrameOptions, Styled, TestAppContext,
+        VisualContext, Window, WindowInteractionCommand, canvas_with_prepaint, fill, rgb,
     };
     use raw_window_handle::{HandleError, HasDisplayHandle, HasWindowHandle};
     use std::{cell::Cell, rc::Rc};
 
     struct AnimationFrameRequester {
         requested: Rc<Cell<bool>>,
+    }
+
+    struct AsyncModelView {
+        paints: Rc<Cell<usize>>,
+        revision: u32,
+    }
+
+    impl Render for AsyncModelView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let paints = self.paints.clone();
+            let revision = self.revision;
+            canvas_with_prepaint(
+                |_, _, _| (),
+                move |bounds, _, window, _| {
+                    paints.set(paints.get() + 1);
+                    window.paint_quad(fill(bounds, rgb(0x00ff00 + revision)));
+                },
+            )
+            .size_full()
+        }
+    }
+
+    #[kael::test]
+    fn model_notifications_restart_idle_frame_polling(cx: &mut TestAppContext) {
+        let paints = Rc::new(Cell::new(0));
+        let (view, mut window) = cx.add_window_view(|_, _| AsyncModelView {
+            paints: paints.clone(),
+            revision: 0,
+        });
+        let test_window = window.test_window(window.window_handle());
+        test_window.run_request_frame(RequestFrameOptions::default());
+        assert!(!test_window.0.lock().frame_polling_active);
+        for revision in 1..=32 {
+            let before_paints = paints.get();
+            let before_scene =
+                window.update(|window, _| window.rendered_scene().structural_checksum());
+            // Worker completion updates a model without a window input event.
+            // Coalesced notifications must paint again after every idle pause.
+            window.update(|_, cx| {
+                view.update(cx, |view, cx| {
+                    view.revision = revision;
+                    cx.notify();
+                    cx.notify();
+                });
+            });
+            assert!(test_window.0.lock().frame_polling_active);
+            test_window.run_request_frame(RequestFrameOptions::default());
+            assert!(!test_window.0.lock().frame_polling_active);
+            assert_eq!(paints.get(), before_paints + 1);
+            assert_ne!(
+                window.update(|window, _| window.rendered_scene().structural_checksum()),
+                before_scene,
+                "an idle model notification did not paint its new content"
+            );
+            test_window.run_request_frame(RequestFrameOptions::default());
+            assert_eq!(paints.get(), before_paints + 1, "idle must stay quiet");
+        }
     }
 
     impl Render for AnimationFrameRequester {
@@ -461,6 +533,7 @@ mod tests {
         let handle = cx.window_handle();
         let test_window = cx.test_window(handle);
 
+        test_window.run_request_frame(RequestFrameOptions::default());
         assert!(!test_window.0.lock().frame_polling_active);
 
         cx.update(|window, _| {

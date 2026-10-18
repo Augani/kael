@@ -2,7 +2,8 @@
 #![deny(missing_docs)]
 
 use std::{
-    collections::VecDeque,
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap, VecDeque},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -39,7 +40,7 @@ impl CacheKey {
 }
 
 /// The kind of a graph resource.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResourceKind {
     /// A 2D render target / sampled texture.
     Texture,
@@ -83,6 +84,26 @@ impl ResourceDesc {
         Self {
             name: name.into(),
             kind: ResourceKind::Texture,
+            imported: true,
+            allocation_class: 0,
+        }
+    }
+
+    /// A transient storage buffer; include its byte length in the alias class.
+    pub fn transient_buffer(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind: ResourceKind::Buffer,
+            imported: false,
+            allocation_class: 0,
+        }
+    }
+
+    /// An externally owned storage buffer supplied at graph execution.
+    pub fn imported_buffer(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind: ResourceKind::Buffer,
             imported: true,
             allocation_class: 0,
         }
@@ -633,6 +654,10 @@ impl CompiledGraph {
     /// Assign transient resources to reusable memory slots using a greedy
     /// lifetime-interval coloring: transients whose lifetimes do not overlap
     /// share a slot. Imported resources are never assigned a slot.
+    ///
+    /// Planning takes O(R log R) time and O(R) temporary storage for R used
+    /// transient resources. Slot assignment is deterministic and always reuses
+    /// the lowest available compatible slot.
     pub fn assign_transient_memory(&self) -> TransientAllocation {
         let mut items: Vec<ResourceLifetime> = self
             .lifetimes
@@ -650,29 +675,78 @@ impl CompiledGraph {
         items.sort_by_key(|lifetime| (lifetime.first_pass_order, lifetime.last_pass_order));
 
         let mut slot_of = vec![None; self.lifetimes.len()];
-        let mut slots: Vec<((ResourceKind, u64), usize)> = Vec::new();
-
-        for lifetime in items {
+        // Most UI graphs need only a handful of slots. A bounded linear scan
+        // avoids hash/heap overhead there, then hands larger graphs to heaps.
+        const SMALL_SLOT_LIMIT: usize = 32;
+        let mut small_slots: Vec<((ResourceKind, u64), usize)> = Vec::new();
+        let mut items = items.into_iter();
+        for lifetime in items.by_ref() {
             let class = self.resource_classes[lifetime.resource.0 as usize];
-            let free_slot = slots.iter().position(|&(slot_class, last)| {
+            let slot = match small_slots.iter().position(|&(slot_class, last)| {
                 slot_class == class && last < lifetime.first_pass_order
-            });
-            let slot = match free_slot {
+            }) {
                 Some(slot) => {
-                    slots[slot].1 = lifetime.last_pass_order;
+                    small_slots[slot].1 = lifetime.last_pass_order;
                     slot
                 }
                 None => {
-                    slots.push((class, lifetime.last_pass_order));
-                    slots.len() - 1
+                    small_slots.push((class, lifetime.last_pass_order));
+                    small_slots.len() - 1
                 }
             };
+            slot_of[lifetime.resource.0 as usize] = Some(slot);
+            if small_slots.len() > SMALL_SLOT_LIMIT {
+                break;
+            }
+        }
+
+        #[derive(Default)]
+        struct ClassSlots {
+            // Release slots in last-use order, then choose the lowest free ID.
+            active: BinaryHeap<Reverse<(usize, usize)>>,
+            free: BinaryHeap<Reverse<usize>>,
+        }
+        let mut classes: HashMap<(ResourceKind, u64), ClassSlots> = HashMap::new();
+        let mut slot_count = small_slots.len();
+        if slot_count <= SMALL_SLOT_LIMIT {
+            return TransientAllocation {
+                slot_of,
+                slot_count,
+            };
+        }
+        for (slot, (class, last)) in small_slots.into_iter().enumerate() {
+            classes
+                .entry(class)
+                .or_default()
+                .active
+                .push(Reverse((last, slot)));
+        }
+
+        for lifetime in items {
+            let class = self.resource_classes[lifetime.resource.0 as usize];
+            let slots = classes.entry(class).or_default();
+            while let Some(&Reverse((last, slot))) = slots.active.peek() {
+                if last >= lifetime.first_pass_order {
+                    break;
+                }
+                slots.active.pop();
+                slots.free.push(Reverse(slot));
+            }
+            let slot = match slots.free.pop() {
+                Some(Reverse(slot)) => slot,
+                None => {
+                    let slot = slot_count;
+                    slot_count += 1;
+                    slot
+                }
+            };
+            slots.active.push(Reverse((lifetime.last_pass_order, slot)));
             slot_of[lifetime.resource.0 as usize] = Some(slot);
         }
 
         TransientAllocation {
             slot_of,
-            slot_count: slots.len(),
+            slot_count,
         }
     }
 }
@@ -698,6 +772,109 @@ fn fnv_mix(mut hash: CacheKey, value: u128) -> CacheKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Deliberately simple oracle: first-fit scans are independent of the heap
+    // planner and make exact assignment compatibility easy to check.
+    fn first_fit_oracle(compiled: &CompiledGraph) -> TransientAllocation {
+        let mut items: Vec<_> = compiled
+            .lifetimes
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| compiled.transient[*index])
+            .filter_map(|(_, lifetime)| *lifetime)
+            .collect();
+        items.sort_by_key(|lifetime| (lifetime.first_pass_order, lifetime.last_pass_order));
+        let mut slot_of = vec![None; compiled.lifetimes.len()];
+        let mut slots: Vec<((ResourceKind, u64), usize)> = Vec::new();
+        for lifetime in items {
+            let class = compiled.resource_classes[lifetime.resource.0 as usize];
+            let slot = slots
+                .iter()
+                .position(|&(candidate, last)| {
+                    candidate == class && last < lifetime.first_pass_order
+                })
+                .unwrap_or_else(|| {
+                    slots.push((class, 0));
+                    slots.len() - 1
+                });
+            slots[slot].1 = lifetime.last_pass_order;
+            slot_of[lifetime.resource.0 as usize] = Some(slot);
+        }
+        TransientAllocation {
+            slot_of,
+            slot_count: slots.len(),
+        }
+    }
+
+    #[test]
+    fn transient_planner_matches_first_fit_across_mixed_intervals() {
+        for seed in 1_u64..=64 {
+            let mut state = seed;
+            let mut random = || {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                state >> 32
+            };
+            let mut compiled = CompiledGraph {
+                graph_id: 0,
+                graph_revision: 0,
+                order: Vec::new(),
+                cache_keys: Vec::new(),
+                lifetimes: Vec::new(),
+                transient: Vec::new(),
+                resource_classes: Vec::new(),
+                barriers: Vec::new(),
+            };
+            for index in 0..512 {
+                let first = random() as usize % 64;
+                let last = first + random() as usize % 32;
+                let unused = random() % 11 == 0;
+                compiled
+                    .lifetimes
+                    .push((!unused).then_some(ResourceLifetime {
+                        resource: ResourceId(index),
+                        first_pass_order: first,
+                        last_pass_order: last,
+                    }));
+                compiled.transient.push(random() % 7 != 0);
+                let kind = if random() % 2 == 0 {
+                    ResourceKind::Texture
+                } else {
+                    ResourceKind::Buffer
+                };
+                compiled.resource_classes.push((kind, random() % 8));
+            }
+            let planned = compiled.assign_transient_memory();
+            assert_eq!(planned, first_fit_oracle(&compiled), "seed {seed}");
+            assert_eq!(
+                planned,
+                compiled.assign_transient_memory(),
+                "determinism, seed {seed}"
+            );
+        }
+    }
+
+    #[test]
+    fn transient_planner_handles_maximum_simultaneously_live_resources() {
+        let mut graph = RenderGraph::new();
+        let mut producer = PassDesc::new("produce");
+        let mut consumer = PassDesc::new("consume");
+        for _ in 0..MAX_GRAPH_RESOURCES {
+            let resource = graph.add_resource(ResourceDesc::transient_texture("scratch"));
+            producer.writes.push(resource);
+            consumer.reads.push(resource);
+        }
+        graph.add_pass(producer);
+        graph.add_pass(consumer);
+        let allocation = graph.compile().unwrap().assign_transient_memory();
+        assert_eq!(allocation.slot_count, MAX_GRAPH_RESOURCES);
+        assert!(
+            allocation
+                .slot_of
+                .iter()
+                .enumerate()
+                .all(|(resource, slot)| *slot == Some(resource))
+        );
+    }
 
     struct Chain {
         graph: RenderGraph,

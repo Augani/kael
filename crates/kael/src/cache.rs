@@ -12,9 +12,12 @@ pub(crate) type TrackedEntityGenerations = SmallVec<[(EntityId, u64); 8]>;
 pub(crate) struct SubtreeCacheState {
     pub(crate) prepaint_range: Range<PrepaintStateIndex>,
     pub(crate) paint_range: Range<PaintIndex>,
+    last_painted_epoch: Option<u64>,
     pub(crate) cache_key: SubtreeCacheKey,
     pub(crate) accessed_entities: FxHashSet<EntityId>,
     pub(crate) accessibility_nodes: Vec<crate::AccessibilityNode>,
+    // Normalized semantic parent; absent only before the first fresh paint.
+    pub(crate) accessibility_parent: Option<crate::AccessibilityId>,
     pub(crate) surface: Option<CachedSurface>,
     tracked_entity_generations: TrackedEntityGenerations,
 }
@@ -58,19 +61,36 @@ impl SubtreeCacheState {
             cache_key,
             prepaint_range,
             paint_range: PaintIndex::default()..PaintIndex::default(),
+            last_painted_epoch: None,
             accessibility_nodes: Vec::new(),
+            accessibility_parent: None,
             surface: None,
         }
     }
 
-    pub(crate) fn is_reusable(&self, cache_key: &SubtreeCacheKey, cx: &App) -> bool {
-        self.cache_key == *cache_key
+    pub(crate) fn is_reusable(
+        &self,
+        cache_key: &SubtreeCacheKey,
+        cx: &App,
+        paint_epoch: u64,
+    ) -> bool {
+        // These ranges address the immediately preceding frame, not retained
+        // history. Ancestor replay does not remap a nested cache's own ranges.
+        // A skipped paint (and epoch wrap) therefore requires fresh output.
+        self.last_painted_epoch
+            .and_then(|epoch| epoch.checked_add(1))
+            == Some(paint_epoch)
+            && self.cache_key == *cache_key
             && self
                 .tracked_entity_generations
                 .iter()
                 .all(|(entity_id, generation)| {
                     cx.entity_generation(*entity_id) == Some(*generation)
                 })
+    }
+
+    pub(crate) fn record_paint(&mut self, paint_epoch: u64) {
+        self.last_painted_epoch = Some(paint_epoch);
     }
 
     pub(crate) fn prepare_surface(
@@ -97,11 +117,19 @@ impl SubtreeCacheState {
             return;
         }
 
-        let byte_len =
-            device_bounds.size.width.0 as usize * device_bounds.size.height.0 as usize * 4;
+        let Ok(byte_len) =
+            crate::atlas_payload_len(device_bounds.size, crate::AtlasTextureKind::Polychrome)
+        else {
+            self.surface = None;
+            return;
+        };
         let mut build = || Ok(Some((device_bounds.size, Cow::Owned(vec![0; byte_len]))));
         let surface = sprite_atlas
-            .get_or_insert_with(&AtlasKey::from(params.clone()), &mut build)
+            .get_or_insert_with_size(
+                &AtlasKey::from(params.clone()),
+                device_bounds.size,
+                &mut build,
+            )
             .ok()
             .flatten()
             .map(|tile| CachedSurface {

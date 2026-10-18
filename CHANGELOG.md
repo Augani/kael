@@ -9,6 +9,140 @@ stabilised — minor version bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Added optional typed GPU render targets, reflected WGSL fragment/compute
+  programs and a render graph with checked bindings, device ownership,
+  resource budgets, transient aliasing and revision-based pass reuse. Public
+  examples display GPU results directly through the UI.
+- Added persistent docking layouts with nested splits, tab rearrangement,
+  floating pane groups and restore validation, plus structured property
+  inspectors with typed edits and bounded undo/redo history.
+- Added reusable lazy asynchronous filesystem models and a document/data
+  workbench with rich Markdown preview and a bounded remote spreadsheet source.
+- Added matched native navigation, Unicode editor, 100,000-row data, virtual-tree
+  and persistent-docking comparison contracts
+  against a pinned GPUI Kit release, raw process/frame evidence collection and
+  separate builds with framework frame instrumentation disabled.
+- Added opt-in Metal GPU completion and drawable-presentation timestamps with
+  bounded retention and no periodic UI work.
+- Added native accessibility protocol/client checks for AppKit, Windows UI
+  Automation and Linux AT-SPI. Licensed platform adapters ship as named Kael
+  packages with retained upstream sources, patches and licenses.
+- Added optional native shaped-text geometry for bidi caret edges and Unicode
+  clusters, plus a real Unicode editor fixture for native text protocol checks.
+- Added editor read-only and disabled modes with checked native selection,
+  reveal, editing and clipboard action routing.
+- Added viewport-mounted `VirtualTreeList`, reusable immutable `VirtualTreeModel`,
+  and persistent `VirtualTreeState` for large project/file explorers, with one
+  keyboard focus handle, controlled selection/expansion, mounted accessibility
+  actions, and a 100,000-file example.
+- Added optional payload-byte budgets for `MemoryCache` and the two-tier
+  `CacheManager`, with checked admission and memory usage queries.
+- Added maintained transient-allocation and GPU-budget bookkeeping benchmarks
+  to the cross-platform performance workflow.
+
+### Changed
+
+- Reserve accessibility snapshot construction storage from the input node count,
+  avoiding repeated movement of large native node records while indexing a tree.
+- Require actual native viewport and display-scale equality at every measured
+  phase boundary in the Kael/GPUI Kit comparison collector, plus draw/submission
+  activity during active and churn phases rather than accepting startup frames.
+- Use Ropey's indexed UTF-16 conversions for editor input ranges instead of
+  scanning the document prefix, retaining forward adjustment inside surrogate pairs.
+- Cache filtered AT-SPI child indices per queried parent and invalidate them on
+  tree or host-focus changes, avoiding repeated sibling scans in large trees.
+- Bound the shared shaped-text cache to 4,096 entries and 8 MiB of charged
+  allocations, use second-chance eviction and clear it under memory pressure.
+- Keep editor line mapping proportional to visible lines and collapsed folds;
+  prepare large document syntax and accessibility metadata on cancellable workers.
+- Bound decoded images, pending loads, completed default asset retention and
+  atlas admissions before expensive raster work; defer atlas retirement until
+  native submissions are safe to reuse.
+- Use retained logical accessibility snapshots for virtual controls and wake
+  idle Windows/Linux windows through their native foreground dispatch paths.
+- Made transient allocation planning O(R log R) while preserving deterministic
+  compatible slot reuse, and indexed GPU resource bookkeeping to avoid quadratic
+  registration and pressure eviction.
+- Bounded media frame-cache metadata by entry count as well as bytes, added
+  immediate budget updates, and replaced full-map LRU scans with indexed slots.
+- Reduced tree flattening/filtering copies, made parent lookup linear, and added
+  shared tree model input for redraws.
+
+### Fixed
+
+- Reassert the requested macOS client size after native titlebar/layer setup,
+  correcting a one-point initial viewport-height drift on macOS 27.
+- Export explicit unselected state for native tabs and tree items so Windows UI
+  Automation exposes their SelectionItem pattern before the first selection.
+- Forward native host focus changes to the Linux accessibility adapters on X11,
+  Wayland and GTK4, keeping logical control focus distinct from host activation.
+- Wait for a fresh tree validation paint and its original reveal target before
+  checking benchmark oracles, with a bounded deadline outside measured phases.
+- Verify release archives in fresh staging so repeated preflights cannot compile
+  against a stale local-registry core package with the same unreleased version.
+- Report the actual first line/grapheme fragment in AppKit candidate-rectangle
+  queries, including zero-width insertion points and logical bidi source order.
+- Update the locked Rustls dependency to its patched 0.23.45 release and replace
+  the yanked ChaCha20 0.10.1 dependency with 0.10.2.
+- Exercise the native UIA SelectionItem pattern for stateful tree selection and
+  disambiguate libatspi's Text interface methods in the Linux editor client.
+- Release painted accessibility callbacks after their rows leave the viewport,
+  preventing complete outgoing virtual-tree models from accumulating while
+  logical offscreen accessibility actions continue to use the current model.
+- Establish macOS activation policy before startup callbacks show their first
+  window, and activate the Windows host for accepted native accessibility focus.
+- Register Unix accessibility root/cache interfaces before desktop publication,
+  yield during large registration batches and refresh client capability caches
+  when text runs add or remove native text interfaces.
+
+- Resume idle native frame polling when application models notify or refresh,
+  including updates that arrive without pointer or keyboard input.
+- Include fractional CoreText antialias padding in declared glyph bounds before
+  atlas admission, preserving complete text under checked raster budgets.
+- Use AppKit's `NSNotFound` sentinel for omitted composition ranges and the
+  correct pointer ABI for native candidate-rectangle queries.
+- Prevent atlas texture/tile identity reuse from accepting foreign-device or
+  retired scene sprites after allocator slot or internal generation reuse.
+- Prioritize mounted cells, focus and their ancestors in the bounded browser
+  accessibility mirror so large logical headers cannot hide visible controls.
+- Include line-clamp limits in wrapped-text cache keys, preserving the correct
+  wrapping result when the same text is drawn with different limits.
+- Stop caret timers in blurred, deactivated and retained hidden editors, and
+  keep a steady caret when reduced motion is requested.
+- Preserve Unicode grapheme selections and atomic IME/selection history;
+  expose complete prepared document text and checked native selection actions.
+- Reject native actions on disabled or hidden controls and reject deferred
+  text selections whose prepared document identity has changed.
+- Keep partial native edits and clipboard operations tied to one immutable
+  document origin and one undoable transaction; revalidate actions before
+  deferred listener dispatch.
+- Apply native glyph vertical offsets when painting combining marks while
+  keeping line decorations on the text baseline.
+- Preserve the AT-SPI cache signal's protocol argument envelope and distinguish
+  logical offscreen accessibility from physically visible node bounds.
+- Require loaded remote-cell baselines for undoable edits, preserve captured
+  query identities for asynchronous writes, and keep grid wheel axes independent.
+- Replace the browser backdrop tint fallback with bounded separable GPU blur,
+  including premultiplied tint, rounded masks and context-loss recovery.
+- Allocate Metal path/MSAA and subtree scratch targets on first use, and reject
+  oversized offscreen captures before allocating GPU resources.
+- Corrected source-over destination alpha in Metal and DirectX ordinary and
+  path-sprite rendering pipelines.
+- Corrected backdrop blur parameter bindings on Metal, premultiplied color and
+  tint composition, framebuffer sampling coordinates, and capture-edge filtering
+  in the Metal, DirectX, and Blade shaders.
+- Validate Blade WGSL semantics during builds and on other native hosts in the
+  primitive-layout regression, beyond syntax parsing.
+- Wake idle macOS windows for accessibility action batches so buttons activate
+  without waiting for unrelated pointer input.
+- Reject checked GPU reservations larger than the whole budget before eviction.
+- Enforce decoded-image LRU capacity when asynchronous loads complete, preserve
+  currently requested images during pruning, and contain recency rollover.
+- Corrected tree search highlight ranges when Unicode lowercasing expands
+  characters, and removed repeated prefix counting during substring matching.
+
 ## [0.4.1] - 2026-08-25
 
 ### Added

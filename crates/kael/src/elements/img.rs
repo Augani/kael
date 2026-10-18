@@ -5,8 +5,9 @@ use crate::{
     RenderImage, Resource, SMOOTH_SVG_SCALE_FACTOR, SharedString, SharedUri, StyleRefinement,
     Styled, SvgSize, Task, Window,
     assets::{
-        MAX_IMAGE_SOURCE_BYTES, checked_image_frame_len, collect_animation_frames,
-        decode_static_image, image_decode_limits, validate_image_source_bytes,
+        MAX_DECODED_IMAGE_BYTES, MAX_IMAGE_SOURCE_BYTES, checked_image_frame_len,
+        collect_animation_frames_with_budget, decode_static_image_with_admission,
+        image_decode_limits, validate_image_source_bytes,
     },
     px, swap_rgba_pa_to_bgra,
     util::is_uri,
@@ -853,12 +854,49 @@ impl Asset for ImageDecoder {
     type Source = Arc<Image>;
     type Output = Result<Arc<RenderImage>, ImageCacheError>;
 
+    fn cache_bytes(output: &Self::Output) -> u64 {
+        output.as_ref().map_or(0, |image| image.decoded_bytes())
+    }
+
+    fn on_cache_evict(output: &Self::Output, cx: &mut App) {
+        if let Ok(image) = output {
+            cx.drop_image(image.clone(), None);
+        }
+    }
+
     fn load(
         source: Self::Source,
         cx: &mut App,
     ) -> impl Future<Output = Self::Output> + Send + 'static {
         let renderer = cx.svg_renderer();
-        async move { source.to_image_data(renderer).map_err(Into::into) }
+        let max_bytes = cx.asset_image_decode_limit();
+        let slots = cx.image_load_slots.clone();
+        let working_budget = cx.image_working_budget.clone();
+        async move {
+            let _permit = slots.acquire().await;
+            let static_format = match source.format() {
+                crate::ImageFormat::Png => Some(ImageFormat::Png),
+                crate::ImageFormat::Jpeg => Some(ImageFormat::Jpeg),
+                crate::ImageFormat::Webp => Some(ImageFormat::WebP),
+                crate::ImageFormat::Bmp => Some(ImageFormat::Bmp),
+                crate::ImageFormat::Tiff => Some(ImageFormat::Tiff),
+                crate::ImageFormat::Gif | crate::ImageFormat::Svg => None,
+            };
+            if let Some(format) = static_format {
+                let frames = decode_static_image_with_admission(
+                    source.bytes(),
+                    format,
+                    max_bytes,
+                    &working_budget,
+                )
+                .await?;
+                Ok(Arc::new(RenderImage::new(frames)))
+            } else {
+                source
+                    .to_image_data_with_budget(renderer, max_bytes)
+                    .map_err(Into::into)
+            }
+        }
     }
 }
 
@@ -870,16 +908,41 @@ impl Asset for ImageAssetLoader {
     type Source = Resource;
     type Output = Result<Arc<RenderImage>, ImageCacheError>;
 
+    fn cache_bytes(output: &Self::Output) -> u64 {
+        output.as_ref().map_or(0, |image| image.decoded_bytes())
+    }
+
+    fn on_cache_evict(output: &Self::Output, cx: &mut App) {
+        if let Ok(image) = output {
+            cx.drop_image(image.clone(), None);
+        }
+    }
+
     fn load(
         source: Self::Source,
         cx: &mut App,
     ) -> impl Future<Output = Self::Output> + Send + 'static {
+        let max_bytes = cx.asset_image_decode_limit();
+        Self::load_with_decoded_budget(source, cx, max_bytes)
+    }
+}
+
+impl ImageAssetLoader {
+    pub(crate) fn load_with_decoded_budget(
+        source: Resource,
+        cx: &mut App,
+        max_bytes: u64,
+    ) -> impl Future<Output = Result<Arc<RenderImage>, ImageCacheError>> + Send + 'static {
+        let max_bytes = max_bytes.min(MAX_DECODED_IMAGE_BYTES as u64);
+        let slots = cx.image_load_slots.clone();
+        let working_budget = cx.image_working_budget.clone();
         let client = cx.http_client();
         // TODO: Can we make SVGs always rescale?
         // let scale_factor = cx.scale_factor();
         let svg_renderer = cx.svg_renderer();
         let asset_source = cx.asset_source().clone();
         async move {
+            let _permit = slots.acquire().await;
             let bytes = match source.clone() {
                 Resource::Path(path) => read_image_file(path.as_ref())?,
                 Resource::Uri(uri) => {
@@ -920,32 +983,70 @@ impl Asset for ImageAssetLoader {
                 let data = match format {
                     ImageFormat::Gif => {
                         let mut decoder = GifDecoder::new(Cursor::new(&bytes))?;
-                        decoder.set_limits(image_decode_limits())?;
+                        let mut limits = image_decode_limits();
+                        limits.max_alloc = Some(max_bytes);
+                        decoder.set_limits(limits)?;
                         let (width, height) = decoder.dimensions();
-                        checked_image_frame_len(width, height)?;
-                        collect_animation_frames(decoder.into_frames())?
+                        if checked_image_frame_len(width, height)? as u64 > max_bytes {
+                            return Err(anyhow::anyhow!(
+                                "declared decoded image dimensions exceed the cache byte budget"
+                            )
+                            .into());
+                        }
+                        collect_animation_frames_with_budget(decoder.into_frames(), max_bytes)?
                     }
                     ImageFormat::WebP => {
-                        let mut decoder = WebPDecoder::new(Cursor::new(&bytes))?;
-                        decoder.set_limits(image_decode_limits())?;
-                        let (width, height) = decoder.dimensions();
-                        checked_image_frame_len(width, height)?;
-
-                        if decoder.has_animation() {
-                            let _ = decoder.set_background_color(Rgba([0, 0, 0, 0]));
-                            collect_animation_frames(decoder.into_frames())?
+                        // Do not retain the opaque decoder across the working-budget wait.
+                        let animated_frames = {
+                            let mut decoder = WebPDecoder::new(Cursor::new(&bytes))?;
+                            let mut limits = image_decode_limits();
+                            limits.max_alloc = Some(max_bytes);
+                            decoder.set_limits(limits)?;
+                            let (width, height) = decoder.dimensions();
+                            if checked_image_frame_len(width, height)? as u64 > max_bytes {
+                                return Err(anyhow::anyhow!(
+                                    "declared decoded image dimensions exceed the cache byte budget"
+                                )
+                                .into());
+                            }
+                            if decoder.has_animation() {
+                                let _ = decoder.set_background_color(Rgba([0, 0, 0, 0]));
+                                Some(collect_animation_frames_with_budget(
+                                    decoder.into_frames(),
+                                    max_bytes,
+                                )?)
+                            } else {
+                                None
+                            }
+                        };
+                        if let Some(frames) = animated_frames {
+                            frames
                         } else {
-                            decode_static_image(&bytes, format)?
+                            decode_static_image_with_admission(
+                                &bytes,
+                                format,
+                                max_bytes,
+                                &working_budget,
+                            )
+                            .await?
                         }
                     }
-                    _ => decode_static_image(&bytes, format)?,
+                    _ => {
+                        decode_static_image_with_admission(
+                            &bytes,
+                            format,
+                            max_bytes,
+                            &working_budget,
+                        )
+                        .await?
+                    }
                 };
 
                 RenderImage::new(data)
             } else {
                 let pixmap =
                     // TODO: Can we make svgs always rescale?
-                    svg_renderer.render_pixmap(&bytes, SvgSize::ScaleFactor(SMOOTH_SVG_SCALE_FACTOR))?;
+                    svg_renderer.render_pixmap_with_budget(&bytes, SvgSize::ScaleFactor(SMOOTH_SVG_SCALE_FACTOR), max_bytes)?;
 
                 let mut buffer =
                     ImageBuffer::from_raw(pixmap.width(), pixmap.height(), pixmap.take())
@@ -1059,5 +1160,167 @@ impl From<usvg::Error> for ImageCacheError {
 impl From<image::ImageError> for ImageCacheError {
     fn from(value: image::ImageError) -> Self {
         Self::Image(Arc::new(value))
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod working_admission_tests {
+    use super::*;
+    use crate::{
+        ImageCacheLimits, LruImageCache, RetainAllImageCache, TestAppContext,
+        assets::ImageWorkingBudget,
+    };
+    use futures::{FutureExt, executor::block_on, future::BoxFuture, task::noop_waker_ref};
+    use std::{
+        pin::Pin,
+        task::{Context, Poll},
+    };
+
+    fn poll<F: Future + ?Sized>(future: Pin<&mut F>) -> Poll<F::Output> {
+        future.poll(&mut Context::from_waker(noop_waker_ref()))
+    }
+
+    struct TempPng(PathBuf);
+    impl Drop for TempPng {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    // Like the maintained PendingImageRequests/BurstImageRequests fixtures,
+    // cache requests must originate from an actually rendering mounted view.
+    struct MountedWorkingCacheRequests {
+        lru: Entity<LruImageCache>,
+        retained: Entity<RetainAllImageCache>,
+        source: Resource,
+        requested: bool,
+        read_retained: bool,
+        retained_image: Option<Arc<RenderImage>>,
+    }
+
+    impl crate::Render for MountedWorkingCacheRequests {
+        fn render(
+            &mut self,
+            window: &mut Window,
+            cx: &mut crate::Context<Self>,
+        ) -> impl IntoElement {
+            if !self.requested {
+                self.requested = true;
+                assert!(
+                    self.lru
+                        .update(cx, |cache, cx| cache.load(&self.source, window, cx))
+                        .is_none()
+                );
+                assert!(
+                    self.retained
+                        .update(cx, |cache, cx| cache.load(&self.source, window, cx))
+                        .is_none()
+                );
+            }
+            if self.read_retained {
+                self.retained_image = Some(
+                    self.retained
+                        .update(cx, |cache, cx| cache.load(&self.source, window, cx))
+                        .expect("retained cache did not publish the completed image")
+                        .unwrap(),
+                );
+            }
+            crate::div()
+        }
+    }
+
+    #[crate::test]
+    fn static_image_working_pool_is_shared_by_separate_caches_and_typed_images(
+        cx: &mut TestAppContext,
+    ) {
+        static NEXT_FILE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let pixels = image::RgbaImage::from_raw(1, 1, vec![17, 34, 51, 255]).unwrap();
+        let mut encoded = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(pixels)
+            .write_to(&mut encoded, ImageFormat::Png)
+            .unwrap();
+        let path = TempPng(std::env::temp_dir().join(format!(
+            "kael-image-working-{}-{}.png",
+            std::process::id(),
+            NEXT_FILE.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        )));
+        std::fs::write(&path.0, encoded.get_ref()).unwrap();
+        let source = Resource::Path(path.0.clone().into());
+        let budget = ImageWorkingBudget::for_test(8); // one native RGBA8 + conversion request
+        cx.update(|cx| cx.image_working_budget = budget.clone());
+        let held = block_on(budget.acquire(8)).unwrap();
+        let lru = cx.update(|cx| {
+            LruImageCache::with_limits(
+                ImageCacheLimits {
+                    max_images: 1,
+                    max_decoded_bytes: 4096,
+                    max_pending_loads: 1,
+                },
+                cx,
+            )
+        });
+        let retained = cx.update(RetainAllImageCache::new);
+        let (host, window) = cx.add_window_view(|_, _| MountedWorkingCacheRequests {
+            lru: lru.clone(),
+            retained: retained.clone(),
+            source: source.clone(),
+            requested: false,
+            read_retained: false,
+            retained_image: None,
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(
+                host.read(cx).requested,
+                "mounted cache requests did not render"
+            );
+        });
+        window.run_until_parked();
+        assert_eq!(budget.test_snapshot(), (8, 2));
+        let typed_source = Arc::new(Image::from_bytes(
+            crate::ImageFormat::Png,
+            encoded.into_inner(),
+        ));
+        let mut typed = window.update(
+            |_, cx| -> BoxFuture<'static, Result<Arc<RenderImage>, ImageCacheError>> {
+                ImageDecoder::load(typed_source.clone(), cx).boxed()
+            },
+        );
+        assert!(poll(typed.as_mut()).is_pending());
+        assert_eq!(budget.test_snapshot(), (8, 3));
+
+        // A cache cancellation must remove its queued work without consuming partial bytes.
+        window.update(|window, cx| lru.update(cx, |cache, cx| cache.clear(window, cx)));
+        window.run_until_parked();
+        assert_eq!(budget.test_snapshot(), (8, 2));
+        drop(held);
+        window.run_until_parked();
+        // The typed request may own its delivered lease before its next poll.
+        assert_eq!(budget.test_snapshot(), (8, 0));
+        let typed_image = match poll(typed.as_mut()) {
+            Poll::Ready(result) => result.unwrap(),
+            Poll::Pending => panic!("typed request did not receive released capacity"),
+        };
+        assert_eq!(typed_image.as_bytes(0), Some([51, 34, 17, 255].as_slice()));
+        assert_eq!(budget.test_snapshot(), (0, 0));
+        window.update(|window, cx| {
+            assert!(lru.read(cx).is_empty());
+            host.update(cx, |host, cx| {
+                host.read_retained = true;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            let cached = host
+                .read(cx)
+                .retained_image
+                .as_ref()
+                .expect("mounted retained cache hit did not render")
+                .clone();
+            assert_eq!(cached.as_bytes(0), typed_image.as_bytes(0));
+            // Existing synchronous public constructors stay usable without an App argument.
+            let direct = typed_source.to_image_data(cx.svg_renderer()).unwrap();
+            assert_eq!(direct.as_bytes(0), typed_image.as_bytes(0));
+        });
+        assert_eq!(budget.test_snapshot(), (0, 0));
     }
 }

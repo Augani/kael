@@ -1,0 +1,5967 @@
+{
+  "schema_version": 1,
+  "status": "audited_descriptive_projection",
+  "run": {
+    "id": 39096072548,
+    "url": "https://github.com/Augani/kael/actions/runs/39096072548",
+    "job_id": 117582676713,
+    "conclusion": "success",
+    "source_commit": "b411223c7d6e846c9f35a6f04a53d8bf4a73593a",
+    "source_url": "https://github.com/Augani/kael/tree/b411223c7d6e846c9f35a6f04a53d8bf4a73593a",
+    "gpui_kit_version": "0.7.3",
+    "gpui_kit_revision": "67265a36e260ffe03c5aaebdcd8d654dbf892eab",
+    "gpui_kit_source_url": "https://github.com/longbridge/gpui-kit/tree/67265a36e260ffe03c5aaebdcd8d654dbf892eab",
+    "all_captures_full_not_quick": true,
+    "current_head_claim": false
+  },
+  "validation": {
+    "all_original_workload_and_active_phase_gates_pass": true,
+    "unchanged_frozen_validator": true,
+    "captures": 100,
+    "contract_mode_groups": 10,
+    "repetitions_per_engine_per_group": 5,
+    "native_geometry_boundaries_checked": 800,
+    "cross_engine_pairs_checked": 50,
+    "paired_boundaries_checked": 400,
+    "all_actual_native_geometry": {
+      "viewport_width_px": 1100.0,
+      "viewport_height_px": 645.0,
+      "scale_factor": 1.0
+    },
+    "raw_log_result_and_phase_markers_match_all_reports": true,
+    "individual_and_aggregate_reports_match": true,
+    "phase_and_quantile_metrics_recomputed": true,
+    "mach_tick_cpu_conversions_checked": true,
+    "cumulative_process_cpu_monotonic": true,
+    "zero_only_counters_across_all_process_samples": {
+      "instructions": true,
+      "cycles": true,
+      "billed_energy_raw": true,
+      "serviced_energy_raw": true
+    },
+    "total_process_samples": 10830,
+    "total_stable_measured_samples": 9283,
+    "owned_active_and_churn_activation_requests_accepted": 200,
+    "reported_binary_hashes": 20,
+    "actual_uploaded_binary_hashes_match_all100captures": true,
+    "failures": [],
+    "original_current_collector_tests": 21,
+    "immutable_kael_source_files": 2947,
+    "all20_uploaded_executables_arm64_macho64_execute": true,
+    "full100_audit_first_attempt_pass": true
+  },
+  "actual_hosted_geometry": {
+    "viewport_width_px": 1100.0,
+    "viewport_height_px": 645.0,
+    "scale_factor": 1.0,
+    "nominal_request": [
+      1100,
+      760
+    ],
+    "request_clamped_equally": true
+  },
+  "environment": {
+    "schema_version": 3,
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "cpu": "Apple M1 (Virtual)",
+    "memory_bytes": 7516192768,
+    "cpu_count": 3,
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: aarch64-apple-darwin\nrelease: 1.97.1\nLLVM version: 22.1.6",
+    "power_source": "Now drawing from 'AC Power'",
+    "displays": {
+      "exit_code": 0,
+      "stdout": "{\n  \"SPDisplaysDataType\" : [\n\n  ]\n}",
+      "stderr": ""
+    },
+    "thermal_conditions": {
+      "exit_code": 0,
+      "stdout": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+      "stderr": ""
+    },
+    "comparison_revision": "67265a36e260ffe03c5aaebdcd8d654dbf892eab",
+    "counter_scope": "libproc RUSAGE_INFO_V4 per-process; energy fields are raw OS counters, not watts",
+    "cpu_timebase": {
+      "numer": 125,
+      "denom": 3,
+      "raw_units": "Mach absolute ticks",
+      "converted_units": "nanoseconds"
+    },
+    "adapter_source_sha256": "7e2d581bb3a4372c9f930318e93ee9e1d2840654b2698ba86f53cf086ddaf3e4",
+    "activation_source_sha256": "5698c302eb2a31b86f40b0107d430f62ff633a691ffaae7dd26f64894f39f49b",
+    "window_activation_scope": "request foreground for the owned child at active/churn begin; repaint activity remains mandatory",
+    "native_geometry_scope": "actual client viewport and scale at each phase begin/end; stable and equal across all captures required",
+    "timing_scope": "CPU draw and platform submission when enabled; common application callback timing always enabled; no GPU/compositor completion measurement"
+  },
+  "source_binding": {
+    "clean_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "checkout_source_fingerprint_sha256": "e629ea7f5fa76917ddd220a4b6580da7a54a30487e032f3727504ee33eb34894",
+    "source_file_count": 2947,
+    "all_file_hashes_checked_against_frozen_git_blobs": true,
+    "exact_eligible_frozen_source_file_set": true,
+    "shared_by_all_ten_environments": true,
+    "counter_source_sha256": "7e2d581bb3a4372c9f930318e93ee9e1d2840654b2698ba86f53cf086ddaf3e4",
+    "activation_source_sha256": "5698c302eb2a31b86f40b0107d430f62ff633a691ffaae7dd26f64894f39f49b",
+    "application_binary_bytes_preserved": true,
+    "application_binary_hash_verification": "Every capture collector digest is checked against the actual uploaded executable bytes; exactly20 distinct contract/mode/engine executables are independently rehashed.",
+    "counter_and_activation_binaries_independently_rehashed": true,
+    "kael_archive": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/frozen-source.tar",
+      "sha256": "39ee847e1236cd5572a37b699dceb13d3c9949da7ea1d2a292150f996205986d",
+      "bytes": 36730880
+    },
+    "gpui_package_archive": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/frozen-gpui-kit-67265a36-source.tar",
+      "sha256": "71540bcdc1cb40474c6aa38512319f71ac70ac8dbb88fd37e15e2254e5bc8840",
+      "bytes": 686080
+    },
+    "gpui_full_archive": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/frozen-gpui-kit-67265a36-full-repository-source.tar",
+      "sha256": "a68356d0cd98719b088df6de727722325449bd5920a75e3b296747c2a149fef8",
+      "bytes": 29429760
+    },
+    "collector": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/measure.py",
+      "sha256": "3e454f4706ad8b0132d7f24dfe88c1cd6d5f91c72d3ffd787f9e6b85073cd91b",
+      "bytes": 25020
+    },
+    "workload_validator": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/workload_validation.py",
+      "sha256": "c731abdb551a6a48187bf4bd6d8e79f44abe6a1e483e02b4d2b4ceb8ad5232b6",
+      "bytes": 6990
+    },
+    "negative_test_source": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/test_measure.py",
+      "sha256": "4789e6fe38a2d33b6de839b170f0694412ad2e5b664071d9cce2caf799ef53e1",
+      "bytes": 21500
+    },
+    "benchmark_manifest": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/frozen-benchmark-Cargo.toml",
+      "sha256": "dd664e720bbeb511cae375444c36a66f0d3d7eb49509d875285b32c188c525cd",
+      "bytes": 1056
+    },
+    "benchmark_lock": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/frozen-benchmark-Cargo.lock",
+      "sha256": "503e8debd602c5f932b90649f524b5c9b18b34dbae67fd4bc40a85e35e6937f0",
+      "bytes": 251692
+    },
+    "workflow": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/frozen-performance.yml",
+      "sha256": "05bfb1db6f6ab7ed9a8270adf0cdbf6566204abfa6784a4b5481dc387c54045a",
+      "bytes": 15747
+    }
+  },
+  "raw_artifact": {
+    "github_artifact_metadata": {
+      "id": 12126422491,
+      "node_id": "MDg6QXJ0aWZhY3QxMjEyNjQyMjQ5MQ==",
+      "name": "native-kael-gpui-kit-comparison",
+      "size_in_bytes": 123301856,
+      "url": "https://api.github.com/repos/Augani/kael/actions/artifacts/12126422491",
+      "archive_download_url": "https://api.github.com/repos/Augani/kael/actions/artifacts/12126422491/zip",
+      "expired": false,
+      "digest": "sha256:5bfb9119121b412942c62c0b17b6dfad86469a0ba353334404ebaa1b5eb71b19",
+      "created_at": "2026-10-18T05:43:16Z",
+      "updated_at": "2026-10-18T05:43:16Z",
+      "expires_at": "2027-01-16T04:08:43Z",
+      "workflow_run": {
+        "id": 39096072548,
+        "repository_id": 1239697079,
+        "head_repository_id": 1239697079,
+        "head_branch": "codex/desktop-framework-quality",
+        "head_sha": "b411223c7d6e846c9f35a6f04a53d8bf4a73593a"
+      }
+    },
+    "metadata_snapshot": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/artifact-download-metadata.json",
+      "sha256": "0b48667c57a690227ea4db85fd20bef9cf632ef7a10ef856a3061c6b03b9526c"
+    },
+    "independently_downloaded_archive": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/native-kael-gpui-kit-comparison.zip",
+      "sha256": "5bfb9119121b412942c62c0b17b6dfad86469a0ba353334404ebaa1b5eb71b19"
+    },
+    "archive_digest_matches_github_metadata": true,
+    "extracted_file_count": 278,
+    "all_extracted_files_byte_identical_to_archive": true,
+    "complete_raw_file_digest_map": "See pinned evidence.summary:downloaded_artifact.all_raw_files_sha256"
+  },
+  "evidence": {
+    "review.json": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/review.json",
+      "sha256": "b9f303c05d10c6ca416c6bbdcc288768ffda1836e0c23a5df2254dd458701ff0",
+      "bytes": 24177
+    },
+    "summary.json": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/summary.json",
+      "sha256": "43be56d4821158fbd1f8646edc8b949647b7e5b6d4c41eb9078d7bb54fda034b",
+      "bytes": 510730
+    },
+    "audit.py": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/audit.py",
+      "sha256": "f5cc8e9e86be250b18cacb1bb29f21524fd6e1294cfe602f4877c28c72e8c472",
+      "bytes": 29637
+    },
+    "audit-invocation.json": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/audit-invocation.json",
+      "sha256": "01c9f46bfffeee59ba56ede0334a6a3b0e907c4fe139fb04103a9ff94444fab3",
+      "bytes": 680
+    },
+    "audit.log": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/audit.log",
+      "sha256": "c6bd5806442bb2246b37b560f47cd544bb45dc4dd202870dfd4f6699b487d0d0",
+      "bytes": 10111
+    },
+    "additional-validation-v2.json": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/additional-validation-v2.json",
+      "sha256": "246e001286fc5e66c245daa0aa84d1ca5ca0c54660b242253a2b4205624b7b26",
+      "bytes": 176003
+    },
+    "additional-validation-v2.py": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/additional-validation-v2.py",
+      "sha256": "4abc8b12e73dbde80a080551324c846d99fa504c21801f5defef94d94044e2c8",
+      "bytes": 8958
+    },
+    "additional-validation-v2-invocation.json": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/additional-validation-v2-invocation.json",
+      "sha256": "4763e6a06877f483a19c43c58ad6b7227064edd59c0ce3f95d23abac6311d97c",
+      "bytes": 288
+    },
+    "counter-quality.json": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/counter-quality.json",
+      "sha256": "0ce0cb844bf2aad73533b1a978e10b82a00be84be767a0ebefde1bac1bc075d2",
+      "bytes": 21885
+    },
+    "derived-tables.json": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/derived-tables.json",
+      "sha256": "d1af2b2919482acfc2d4484fdcdac4ecaeef73953e4a7cd2419a39b134dbe609",
+      "bytes": 102244
+    },
+    "matched-job-final.json": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/matched-job-final.json",
+      "sha256": "fe1819a13e328bc488247fce4813503f6625a81a3468b10cb40108f2680d1d51",
+      "bytes": 5361
+    },
+    "matched-job-full.log": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/matched-job-full.log",
+      "sha256": "9033247a3d4df5f8681f2c83e8ad1de4416834be16345c884bf531f6d7c09f5d",
+      "bytes": 328901
+    },
+    "current-collector-transcript-provenance.json": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/current-collector-transcript-provenance.json",
+      "sha256": "b1a274f836ef3e49c008789689e246767ba70fdfc4f0d82f972bff068b0585e9",
+      "bytes": 906
+    },
+    "frozen-collector-tests.log": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/frozen-collector-tests.log",
+      "sha256": "6bc4f09fc0baa0ecdacdc4349a1f4879751a18bcdf350b4854ae6a95e57d242e",
+      "bytes": 265
+    },
+    "additional-validation-invocation.json": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/additional-validation-invocation.json",
+      "sha256": "1ac991e6807a2a0e0b33d690c1419c96ebbd1921b254d7b4081bb4a3322338b6",
+      "bytes": 288
+    },
+    "additional-validation.log": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/additional-validation.log",
+      "sha256": "358e205b7bc693b4a343db863f5c7c2f856f0656f774bf63f59ac89779d4ee5b",
+      "bytes": 312
+    }
+  },
+  "original_gate_source_peer": {
+    "path": ".artifacts/2026-10-18-benchmark-b411-root-source-review/review.json",
+    "sha256": "af415189998d1d09f4aa7233789ffc031e97d99e0f85ea6044b00650488317b5",
+    "bytes": 4355
+  },
+  "definitions": {
+    "resource_medians": "Median of five per-capture phase CPU rates and stable sampled peak RSS; CPU100% means one core. Stable samples remain original [1:-1] per phase; startup/oracle validation excluded. RSS is not lifetime peak, heap size or GPU residency.",
+    "cpu_timing": "Optional timing build only: each original discrete per-run p99, then median of five p99 values; CPU wall-clock draw/submission spans, excluding GPU/compositor completion. No pooled/interpolated quantile.",
+    "modes": "Separate instrumentation-disabled resource and instrumentation-enabled timing runs; actual operation counts differ, so not a causal instrumentation-overhead experiment.",
+    "operation_counts": "Actual recorded totals per capture, with every individual type retained; navigation/detail has no operation counter, so none is invented.",
+    "rounding": "Machine record retains audited full precision; human CPU/RSS tables round to2decimals and timing tointeger microseconds."
+  },
+  "counter_quality": {
+    "captures": 100,
+    "samples": 10830,
+    "stable_samples": 9283,
+    "decreases": 0,
+    "all_zero_fields": [
+      "instructions",
+      "cycles",
+      "billed_energy_raw",
+      "serviced_energy_raw"
+    ],
+    "power_claim": false
+  },
+  "binary_refs": {
+    "gpui-kit": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/gpui-kit",
+      "sha256": "049bad2fbb201b3930889ee36ee56f11809d6c32bb35309ab8ffe524d091f003",
+      "bytes": 13747776
+    },
+    "gpui-kit-data": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/gpui-kit-data",
+      "sha256": "a101cf6eb698b264c729f10c8c6a262d1b1151d6cc9ae1dff25385c34b8a5867",
+      "bytes": 14168608
+    },
+    "gpui-kit-data-without-frame-timing": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/gpui-kit-data-without-frame-timing",
+      "sha256": "8e5455e4443664e9a392763dc1b5f115803e1086602b4e85fa22451b1e696a63",
+      "bytes": 14053360
+    },
+    "gpui-kit-editor": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/gpui-kit-editor",
+      "sha256": "de37898b7c283556a43e6d9a7d90a8aca21a578bd4b9b665cc87338ff16e2507",
+      "bytes": 16921184
+    },
+    "gpui-kit-editor-without-frame-timing": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/gpui-kit-editor-without-frame-timing",
+      "sha256": "d17e9907c71b7ee1d6ccc747bbe9f8db677fdfdfb0ee7873ff288feff9c18854",
+      "bytes": 16806320
+    },
+    "gpui-kit-tree": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/gpui-kit-tree",
+      "sha256": "5d3f65d0b3f85435a5ddbec2ca72c39bbf4380cd67e8f619a8cd0ee426ecb8c3",
+      "bytes": 14013328
+    },
+    "gpui-kit-tree-without-frame-timing": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/gpui-kit-tree-without-frame-timing",
+      "sha256": "9982fbafdcafb4c51dc2d6cfa6b48ffc2d390612f3a1b143f17c2895a82bc73d",
+      "bytes": 13897856
+    },
+    "gpui-kit-without-frame-timing": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/gpui-kit-without-frame-timing",
+      "sha256": "37605ccf8ec9406a559ff29436a79ba0adb719354942524ae8302782bf8b6937",
+      "bytes": 13632208
+    },
+    "gpui-kit-workspace": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/gpui-kit-workspace",
+      "sha256": "c233f18ff2cd0ba8731ae53174b175e0d1188a3a74b70ba8ea168eb60b9d9ee6",
+      "bytes": 14732080
+    },
+    "gpui-kit-workspace-without-frame-timing": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/gpui-kit-workspace-without-frame-timing",
+      "sha256": "9ef12ef46f0fde95677854516c878cbbdac86db94170e7adfdfcb30b48bb252e",
+      "bytes": 14600256
+    },
+    "kael": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/kael",
+      "sha256": "c445636d1f4e77842131743e2b1f76475adb42af3c6a8c039004611f576c9101",
+      "bytes": 11847424
+    },
+    "kael-data": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/kael-data",
+      "sha256": "b084156a273d58b6ae5f38a6ecb15543ff927d6d10c1cbbae20b9334235e8f7d",
+      "bytes": 14117088
+    },
+    "kael-data-without-frame-timing": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/kael-data-without-frame-timing",
+      "sha256": "0f84d02b901b002128f289460b63a0658e4949fa81ad9a1d03ffa0b5054f9c19",
+      "bytes": 14062800
+    },
+    "kael-editor": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/kael-editor",
+      "sha256": "77549c5d9fe10fa04001bb0b6fb2cf16ba4a5df5ffb39ce619c52f4953e09ac7",
+      "bytes": 13024000
+    },
+    "kael-editor-without-frame-timing": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/kael-editor-without-frame-timing",
+      "sha256": "e69b40b50122417d1a83bc2c6de61bde526912ef92618958ddaa58b46eb7f7e9",
+      "bytes": 12968656
+    },
+    "kael-tree": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/kael-tree",
+      "sha256": "4e89fd668a33da9f9ce70443da47b93936fba887b5e2c1272548c7bedc5a0cfd",
+      "bytes": 12624864
+    },
+    "kael-tree-without-frame-timing": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/kael-tree-without-frame-timing",
+      "sha256": "79e833911cd71a997b1369eb72cd80b3e7e83772b11a528afe400187622e79ef",
+      "bytes": 12586512
+    },
+    "kael-without-frame-timing": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/kael-without-frame-timing",
+      "sha256": "432c870204ce95eb9c088da4e861657e03848b78f0b353031cd7f38e1b9ed525",
+      "bytes": 11809088
+    },
+    "kael-workspace": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/kael-workspace",
+      "sha256": "0783757db94babb40bf566b92fe0aff422641e032777c09675c62b1805ee7bec",
+      "bytes": 12845280
+    },
+    "kael-workspace-without-frame-timing": {
+      "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/binaries/kael-workspace-without-frame-timing",
+      "sha256": "a1c6540adb8f51c5e1caedc8ff1d7c0f92d0b079e51c90dac4d30914d1e4bd76",
+      "bytes": 12808736
+    }
+  },
+  "workload_reporting_order": [
+    "native-navigation-detail-v1",
+    "native-data-table-v1",
+    "native-virtual-tree-v1",
+    "native-dock-workspace-v1",
+    "native-editor-document-v1"
+  ],
+  "groups": [
+    {
+      "group": "navigation-detail-without-frame-timing",
+      "contract": "native-navigation-detail-v1",
+      "frame_timing_enabled": false,
+      "report_role": "general desktop workload",
+      "environment": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/navigation-detail-without-frame-timing/environment.json",
+        "sha256": "0dd5b4618ee923ae9de3e7931ae4cc829b5b9e19c6e8b68f3739756fb6c6c099"
+      },
+      "runs": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/navigation-detail-without-frame-timing/runs.json",
+        "sha256": "489fb5460d4c796c2e3021f28cb293088b84fe975ddb4ada36338c1c8abde999"
+      },
+      "actual_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "engines": [
+        {
+          "engine": "kael",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "432c870204ce95eb9c088da4e861657e03848b78f0b353031cd7f38e1b9ed525",
+            "cpu_percent_by_phase": {
+              "idle-before": 1.2211499811994841,
+              "active": 9.951260079077699,
+              "idle-after": 0.00898326064425759,
+              "churn": 7.167714943233426
+            },
+            "stable_sampled_peak_rss_bytes": 96419840,
+            "stable_sampled_peak_rss_range_bytes": [
+              96092160,
+              96567296
+            ],
+            "draw_cpu_us_p99": null,
+            "submission_cpu_us_p99": null
+          },
+          "operation_summary": null,
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": null,
+              "renders": 349,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 226,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 112,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": null,
+              "renders": 349,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 233,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 106,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": null,
+              "renders": 316,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 199,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 107,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": null,
+              "renders": 307,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 189,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 109,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": null,
+              "renders": 310,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 192,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 109,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": null,
+            "differences": null,
+            "input_scope": null,
+            "timing_scope": "root render callback; intervals include pacing, not GPU duration",
+            "oracle_scope": null,
+            "model_replacement_scope": null
+          }
+        },
+        {
+          "engine": "gpui-kit",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "37605ccf8ec9406a559ff29436a79ba0adb719354942524ae8302782bf8b6937",
+            "cpu_percent_by_phase": {
+              "idle-before": 1.652197702660457,
+              "active": 12.640100510450198,
+              "idle-after": 0.8982875759090727,
+              "churn": 9.662658205637289
+            },
+            "stable_sampled_peak_rss_bytes": 83083264,
+            "stable_sampled_peak_rss_range_bytes": [
+              83034112,
+              83181568
+            ],
+            "draw_cpu_us_p99": null,
+            "submission_cpu_us_p99": null
+          },
+          "operation_summary": null,
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": null,
+              "renders": 377,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 261,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 110,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": null,
+              "renders": 382,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 262,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 114,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": null,
+              "renders": 347,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 228,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 113,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": null,
+              "renders": 361,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 244,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 111,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": null,
+              "renders": 364,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 241,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 117,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": null,
+            "differences": null,
+            "input_scope": null,
+            "timing_scope": "root render callback; intervals include pacing, not GPU duration",
+            "oracle_scope": null,
+            "model_replacement_scope": null
+          }
+        }
+      ]
+    },
+    {
+      "group": "native-navigation-detail",
+      "contract": "native-navigation-detail-v1",
+      "frame_timing_enabled": true,
+      "report_role": "general desktop workload",
+      "environment": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/native-navigation-detail/environment.json",
+        "sha256": "de9db74de9d256887a3c14e92a92f4d31e41af887046daf14648c4513910125f"
+      },
+      "runs": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/native-navigation-detail/runs.json",
+        "sha256": "08cc9b9b08d946da8c6d6103b4095ae225e97605e93a49e2310fd9aae4cdc6f9"
+      },
+      "actual_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "engines": [
+        {
+          "engine": "kael",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "c445636d1f4e77842131743e2b1f76475adb42af3c6a8c039004611f576c9101",
+            "cpu_percent_by_phase": {
+              "idle-before": 1.0798882145948774,
+              "active": 11.808040623271907,
+              "idle-after": 0.010238616555929602,
+              "churn": 7.85418160096133
+            },
+            "stable_sampled_peak_rss_bytes": 96550912,
+            "stable_sampled_peak_rss_range_bytes": [
+              96174080,
+              96829440
+            ],
+            "draw_cpu_us_p99": 9070,
+            "submission_cpu_us_p99": 713
+          },
+          "operation_summary": null,
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": null,
+              "renders": 332,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 216,
+                  "draws": 216,
+                  "submissions": 216
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 106,
+                  "draws": 106,
+                  "submissions": 106
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": null,
+              "renders": 321,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 208,
+                  "draws": 208,
+                  "submissions": 208
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 104,
+                  "draws": 104,
+                  "submissions": 104
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": null,
+              "renders": 339,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 218,
+                  "draws": 218,
+                  "submissions": 218
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 112,
+                  "draws": 112,
+                  "submissions": 112
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": null,
+              "renders": 319,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 196,
+                  "draws": 196,
+                  "submissions": 196
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 113,
+                  "draws": 113,
+                  "submissions": 113
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": null,
+              "renders": 323,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 198,
+                  "draws": 198,
+                  "submissions": 198
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 116,
+                  "draws": 116,
+                  "submissions": 116
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": null,
+            "differences": null,
+            "input_scope": null,
+            "timing_scope": "root render callback; intervals include pacing, not GPU duration",
+            "oracle_scope": null,
+            "model_replacement_scope": null
+          }
+        },
+        {
+          "engine": "gpui-kit",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "049bad2fbb201b3930889ee36ee56f11809d6c32bb35309ab8ffe524d091f003",
+            "cpu_percent_by_phase": {
+              "idle-before": 1.5744382966339003,
+              "active": 13.642242693356256,
+              "idle-after": 0.93976191118818,
+              "churn": 9.503013139491715
+            },
+            "stable_sampled_peak_rss_bytes": 88096768,
+            "stable_sampled_peak_rss_range_bytes": [
+              87949312,
+              88604672
+            ],
+            "draw_cpu_us_p99": 12783,
+            "submission_cpu_us_p99": 692
+          },
+          "operation_summary": null,
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": null,
+              "renders": 368,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 251,
+                  "draws": 251,
+                  "submissions": 251
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 111,
+                  "draws": 111,
+                  "submissions": 111
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": null,
+              "renders": 380,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 258,
+                  "draws": 258,
+                  "submissions": 258
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 116,
+                  "draws": 116,
+                  "submissions": 116
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": null,
+              "renders": 380,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 260,
+                  "draws": 260,
+                  "submissions": 260
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 114,
+                  "draws": 114,
+                  "submissions": 114
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": null,
+              "renders": 353,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 234,
+                  "draws": 234,
+                  "submissions": 234
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 113,
+                  "draws": 113,
+                  "submissions": 113
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": null,
+              "renders": 235,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 113,
+                  "draws": 113,
+                  "submissions": 113
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 116,
+                  "draws": 116,
+                  "submissions": 116
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": null,
+            "differences": null,
+            "input_scope": null,
+            "timing_scope": "root render callback; intervals include pacing, not GPU duration",
+            "oracle_scope": null,
+            "model_replacement_scope": null
+          }
+        }
+      ]
+    },
+    {
+      "group": "data-table-without-frame-timing",
+      "contract": "native-data-table-v1",
+      "frame_timing_enabled": false,
+      "report_role": "general desktop workload",
+      "environment": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/data-table-without-frame-timing/environment.json",
+        "sha256": "bf4bca3893de31974dc876847bcba091fb2d49e6fa50ecdf92401a0166180d60"
+      },
+      "runs": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/data-table-without-frame-timing/runs.json",
+        "sha256": "c8b7c687df35e3a35263016a8049ffbd169d472782b359a8e4fc806d8e80ff38"
+      },
+      "actual_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "engines": [
+        {
+          "engine": "kael",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "0f84d02b901b002128f289460b63a0658e4949fa81ad9a1d03ffa0b5054f9c19",
+            "cpu_percent_by_phase": {
+              "idle-before": 1.067443518518877,
+              "active": 26.478258680992216,
+              "idle-after": 0.0061261449762243,
+              "churn": 20.660192285179097
+            },
+            "stable_sampled_peak_rss_bytes": 213925888,
+            "stable_sampled_peak_rss_range_bytes": [
+              213073920,
+              214204416
+            ],
+            "draw_cpu_us_p99": null,
+            "submission_cpu_us_p99": null
+          },
+          "operation_summary": {
+            "selection_reveal": {
+              "median": 63,
+              "range": [
+                57,
+                64
+              ]
+            },
+            "vertical_scroll": {
+              "median": 63,
+              "range": [
+                57,
+                64
+              ]
+            },
+            "horizontal_scroll": {
+              "median": 62,
+              "range": [
+                56,
+                64
+              ]
+            },
+            "query_reverse": {
+              "median": 62,
+              "range": [
+                56,
+                64
+              ]
+            },
+            "home": {
+              "median": 62,
+              "range": [
+                56,
+                64
+              ]
+            },
+            "end_selection": {
+              "median": 62,
+              "range": [
+                55,
+                63
+              ]
+            },
+            "replace_model": {
+              "median": 4,
+              "range": [
+                4,
+                4
+              ]
+            }
+          },
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": {
+                "selection_reveal": 64,
+                "vertical_scroll": 64,
+                "horizontal_scroll": 64,
+                "query_reverse": 64,
+                "home": 64,
+                "end_selection": 63,
+                "replace_model": 4
+              },
+              "renders": 623,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 396,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 217,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": {
+                "selection_reveal": 57,
+                "vertical_scroll": 57,
+                "horizontal_scroll": 56,
+                "query_reverse": 56,
+                "home": 56,
+                "end_selection": 55,
+                "replace_model": 4
+              },
+              "renders": 566,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 342,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 214,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": {
+                "selection_reveal": 63,
+                "vertical_scroll": 63,
+                "horizontal_scroll": 62,
+                "query_reverse": 62,
+                "home": 62,
+                "end_selection": 62,
+                "replace_model": 4
+              },
+              "renders": 603,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 373,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 221,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": {
+                "selection_reveal": 64,
+                "vertical_scroll": 64,
+                "horizontal_scroll": 63,
+                "query_reverse": 63,
+                "home": 63,
+                "end_selection": 63,
+                "replace_model": 4
+              },
+              "renders": 614,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 378,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 226,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": {
+                "selection_reveal": 61,
+                "vertical_scroll": 60,
+                "horizontal_scroll": 60,
+                "query_reverse": 59,
+                "home": 59,
+                "end_selection": 59,
+                "replace_model": 4
+              },
+              "renders": 596,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 366,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 220,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": "VirtualSheetGrid",
+            "differences": [
+              "Kael bounded local tile cache16x512cells; GPUI Kit delegate reads immutable dataset directly",
+              "Both header wrappers32px and body rows28px; GPUI Kit native leaf header cells28px",
+              "Kael grid provides native editing; GPUI Kit table delegates editing to apps, so editing excluded",
+              "Navigation targets both horizontal extremes; controls retain their native reveal/clamp semantics"
+            ],
+            "input_scope": null,
+            "timing_scope": "shipped native virtual data controls; public selection/navigation/model invalidation APIs; paced separate frames",
+            "oracle_scope": "every ordered fixture cell plus current query, selection, and eight actual control values; validation frames excluded",
+            "model_replacement_scope": "alternate two prebuilt immutable datasets; application snapshot replacement, not allocation stress"
+          }
+        },
+        {
+          "engine": "gpui-kit",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "8e5455e4443664e9a392763dc1b5f115803e1086602b4e85fa22451b1e696a63",
+            "cpu_percent_by_phase": {
+              "idle-before": 1.6142705970879068,
+              "active": 19.310817362783496,
+              "idle-after": 1.416930020198072,
+              "churn": 15.9811486986235
+            },
+            "stable_sampled_peak_rss_bytes": 142770176,
+            "stable_sampled_peak_rss_range_bytes": [
+              142721024,
+              143130624
+            ],
+            "draw_cpu_us_p99": null,
+            "submission_cpu_us_p99": null
+          },
+          "operation_summary": {
+            "selection_reveal": {
+              "median": 62,
+              "range": [
+                60,
+                68
+              ]
+            },
+            "vertical_scroll": {
+              "median": 61,
+              "range": [
+                60,
+                67
+              ]
+            },
+            "horizontal_scroll": {
+              "median": 61,
+              "range": [
+                60,
+                66
+              ]
+            },
+            "query_reverse": {
+              "median": 60,
+              "range": [
+                60,
+                66
+              ]
+            },
+            "home": {
+              "median": 60,
+              "range": [
+                59,
+                66
+              ]
+            },
+            "end_selection": {
+              "median": 60,
+              "range": [
+                59,
+                66
+              ]
+            },
+            "replace_model": {
+              "median": 4,
+              "range": [
+                4,
+                5
+              ]
+            }
+          },
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": {
+                "selection_reveal": 68,
+                "vertical_scroll": 67,
+                "horizontal_scroll": 66,
+                "query_reverse": 66,
+                "home": 66,
+                "end_selection": 66,
+                "replace_model": 5
+              },
+              "renders": 412,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 280,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 4,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 123,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": {
+                "selection_reveal": 62,
+                "vertical_scroll": 61,
+                "horizontal_scroll": 61,
+                "query_reverse": 60,
+                "home": 60,
+                "end_selection": 60,
+                "replace_model": 5
+              },
+              "renders": 373,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 241,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 4,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 123,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": {
+                "selection_reveal": 60,
+                "vertical_scroll": 60,
+                "horizontal_scroll": 60,
+                "query_reverse": 60,
+                "home": 59,
+                "end_selection": 59,
+                "replace_model": 4
+              },
+              "renders": 369,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 244,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 5,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 115,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": {
+                "selection_reveal": 61,
+                "vertical_scroll": 60,
+                "horizontal_scroll": 60,
+                "query_reverse": 60,
+                "home": 60,
+                "end_selection": 60,
+                "replace_model": 4
+              },
+              "renders": 368,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 246,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 3,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 114,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": {
+                "selection_reveal": 66,
+                "vertical_scroll": 66,
+                "horizontal_scroll": 66,
+                "query_reverse": 65,
+                "home": 65,
+                "end_selection": 64,
+                "replace_model": 4
+              },
+              "renders": 401,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 279,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 4,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 113,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": "DataTable",
+            "differences": [
+              "Kael bounded local tile cache16x512cells; GPUI Kit delegate reads immutable dataset directly",
+              "Both header wrappers32px and body rows28px; GPUI Kit native leaf header cells28px",
+              "Kael grid provides native editing; GPUI Kit table delegates editing to apps, so editing excluded",
+              "Navigation targets both horizontal extremes; controls retain their native reveal/clamp semantics"
+            ],
+            "input_scope": null,
+            "timing_scope": "shipped native virtual data controls; public selection/navigation/model invalidation APIs; paced separate frames",
+            "oracle_scope": "every ordered fixture cell plus current query, selection, and eight actual control values; validation frames excluded",
+            "model_replacement_scope": "alternate two prebuilt immutable datasets; application snapshot replacement, not allocation stress"
+          }
+        }
+      ]
+    },
+    {
+      "group": "native-data-table",
+      "contract": "native-data-table-v1",
+      "frame_timing_enabled": true,
+      "report_role": "general desktop workload",
+      "environment": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/native-data-table/environment.json",
+        "sha256": "8ee2eb4f4bd4effad0ea375d82c790237195b22e27124f7a67d4c147609f8cb5"
+      },
+      "runs": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/native-data-table/runs.json",
+        "sha256": "37c15779b6773f0a3a3d6fbadbedae61bdb429647f20383d2ebc72968a8d4c26"
+      },
+      "actual_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "engines": [
+        {
+          "engine": "kael",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "b084156a273d58b6ae5f38a6ecb15543ff927d6d10c1cbbae20b9334235e8f7d",
+            "cpu_percent_by_phase": {
+              "idle-before": 0.9150203427475404,
+              "active": 27.880490710466702,
+              "idle-after": 0.011002057512710214,
+              "churn": 20.184749085764427
+            },
+            "stable_sampled_peak_rss_bytes": 215384064,
+            "stable_sampled_peak_rss_range_bytes": [
+              213630976,
+              216842240
+            ],
+            "draw_cpu_us_p99": 17025,
+            "submission_cpu_us_p99": 744
+          },
+          "operation_summary": {
+            "selection_reveal": {
+              "median": 59,
+              "range": [
+                55,
+                67
+              ]
+            },
+            "vertical_scroll": {
+              "median": 59,
+              "range": [
+                55,
+                67
+              ]
+            },
+            "horizontal_scroll": {
+              "median": 59,
+              "range": [
+                55,
+                67
+              ]
+            },
+            "query_reverse": {
+              "median": 58,
+              "range": [
+                55,
+                66
+              ]
+            },
+            "home": {
+              "median": 58,
+              "range": [
+                55,
+                66
+              ]
+            },
+            "end_selection": {
+              "median": 57,
+              "range": [
+                53,
+                65
+              ]
+            },
+            "replace_model": {
+              "median": 4,
+              "range": [
+                4,
+                4
+              ]
+            }
+          },
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": {
+                "selection_reveal": 58,
+                "vertical_scroll": 58,
+                "horizontal_scroll": 57,
+                "query_reverse": 56,
+                "home": 56,
+                "end_selection": 56,
+                "replace_model": 4
+              },
+              "renders": 576,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 340,
+                  "draws": 340,
+                  "submissions": 340
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 226,
+                  "draws": 226,
+                  "submissions": 226
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": {
+                "selection_reveal": 59,
+                "vertical_scroll": 59,
+                "horizontal_scroll": 59,
+                "query_reverse": 58,
+                "home": 58,
+                "end_selection": 57,
+                "replace_model": 4
+              },
+              "renders": 576,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 348,
+                  "draws": 348,
+                  "submissions": 348
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 217,
+                  "draws": 217,
+                  "submissions": 217
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": {
+                "selection_reveal": 55,
+                "vertical_scroll": 55,
+                "horizontal_scroll": 55,
+                "query_reverse": 55,
+                "home": 55,
+                "end_selection": 53,
+                "replace_model": 4
+              },
+              "renders": 569,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 343,
+                  "draws": 343,
+                  "submissions": 343
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 216,
+                  "draws": 216,
+                  "submissions": 216
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": {
+                "selection_reveal": 67,
+                "vertical_scroll": 67,
+                "horizontal_scroll": 67,
+                "query_reverse": 66,
+                "home": 66,
+                "end_selection": 65,
+                "replace_model": 4
+              },
+              "renders": 614,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 389,
+                  "draws": 389,
+                  "submissions": 389
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 216,
+                  "draws": 216,
+                  "submissions": 216
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": {
+                "selection_reveal": 64,
+                "vertical_scroll": 64,
+                "horizontal_scroll": 64,
+                "query_reverse": 64,
+                "home": 64,
+                "end_selection": 62,
+                "replace_model": 4
+              },
+              "renders": 618,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 385,
+                  "draws": 385,
+                  "submissions": 385
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 222,
+                  "draws": 222,
+                  "submissions": 222
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": "VirtualSheetGrid",
+            "differences": [
+              "Kael bounded local tile cache16x512cells; GPUI Kit delegate reads immutable dataset directly",
+              "Both header wrappers32px and body rows28px; GPUI Kit native leaf header cells28px",
+              "Kael grid provides native editing; GPUI Kit table delegates editing to apps, so editing excluded",
+              "Navigation targets both horizontal extremes; controls retain their native reveal/clamp semantics"
+            ],
+            "input_scope": null,
+            "timing_scope": "shipped native virtual data controls; public selection/navigation/model invalidation APIs; paced separate frames",
+            "oracle_scope": "every ordered fixture cell plus current query, selection, and eight actual control values; validation frames excluded",
+            "model_replacement_scope": "alternate two prebuilt immutable datasets; application snapshot replacement, not allocation stress"
+          }
+        },
+        {
+          "engine": "gpui-kit",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "a101cf6eb698b264c729f10c8c6a262d1b1151d6cc9ae1dff25385c34b8a5867",
+            "cpu_percent_by_phase": {
+              "idle-before": 1.4795330702539016,
+              "active": 19.5042904348935,
+              "idle-after": 1.4395698753315607,
+              "churn": 13.813586686670687
+            },
+            "stable_sampled_peak_rss_bytes": 148209664,
+            "stable_sampled_peak_rss_range_bytes": [
+              148062208,
+              148570112
+            ],
+            "draw_cpu_us_p99": 21149,
+            "submission_cpu_us_p99": 789
+          },
+          "operation_summary": {
+            "selection_reveal": {
+              "median": 61,
+              "range": [
+                40,
+                62
+              ]
+            },
+            "vertical_scroll": {
+              "median": 60,
+              "range": [
+                40,
+                62
+              ]
+            },
+            "horizontal_scroll": {
+              "median": 60,
+              "range": [
+                40,
+                62
+              ]
+            },
+            "query_reverse": {
+              "median": 60,
+              "range": [
+                40,
+                62
+              ]
+            },
+            "home": {
+              "median": 60,
+              "range": [
+                39,
+                62
+              ]
+            },
+            "end_selection": {
+              "median": 59,
+              "range": [
+                38,
+                62
+              ]
+            },
+            "replace_model": {
+              "median": 4,
+              "range": [
+                4,
+                4
+              ]
+            }
+          },
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": {
+                "selection_reveal": 40,
+                "vertical_scroll": 40,
+                "horizontal_scroll": 40,
+                "query_reverse": 40,
+                "home": 39,
+                "end_selection": 38,
+                "replace_model": 4
+              },
+              "renders": 247,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 119,
+                  "draws": 119,
+                  "submissions": 119
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 4,
+                  "draws": 4,
+                  "submissions": 4
+                },
+                {
+                  "phase": "churn",
+                  "renders": 119,
+                  "draws": 119,
+                  "submissions": 119
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": {
+                "selection_reveal": 62,
+                "vertical_scroll": 62,
+                "horizontal_scroll": 62,
+                "query_reverse": 62,
+                "home": 62,
+                "end_selection": 62,
+                "replace_model": 4
+              },
+              "renders": 380,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 253,
+                  "draws": 253,
+                  "submissions": 253
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "churn",
+                  "renders": 120,
+                  "draws": 120,
+                  "submissions": 120
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": {
+                "selection_reveal": 58,
+                "vertical_scroll": 58,
+                "horizontal_scroll": 58,
+                "query_reverse": 58,
+                "home": 57,
+                "end_selection": 56,
+                "replace_model": 4
+              },
+              "renders": 353,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 226,
+                  "draws": 226,
+                  "submissions": 226
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 3,
+                  "draws": 3,
+                  "submissions": 3
+                },
+                {
+                  "phase": "churn",
+                  "renders": 119,
+                  "draws": 119,
+                  "submissions": 119
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": {
+                "selection_reveal": 61,
+                "vertical_scroll": 61,
+                "horizontal_scroll": 61,
+                "query_reverse": 61,
+                "home": 61,
+                "end_selection": 61,
+                "replace_model": 4
+              },
+              "renders": 375,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 248,
+                  "draws": 248,
+                  "submissions": 248
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "churn",
+                  "renders": 120,
+                  "draws": 120,
+                  "submissions": 120
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": {
+                "selection_reveal": 61,
+                "vertical_scroll": 60,
+                "horizontal_scroll": 60,
+                "query_reverse": 60,
+                "home": 60,
+                "end_selection": 59,
+                "replace_model": 4
+              },
+              "renders": 370,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 241,
+                  "draws": 241,
+                  "submissions": 241
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 4,
+                  "draws": 4,
+                  "submissions": 4
+                },
+                {
+                  "phase": "churn",
+                  "renders": 120,
+                  "draws": 120,
+                  "submissions": 120
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": "DataTable",
+            "differences": [
+              "Kael bounded local tile cache16x512cells; GPUI Kit delegate reads immutable dataset directly",
+              "Both header wrappers32px and body rows28px; GPUI Kit native leaf header cells28px",
+              "Kael grid provides native editing; GPUI Kit table delegates editing to apps, so editing excluded",
+              "Navigation targets both horizontal extremes; controls retain their native reveal/clamp semantics"
+            ],
+            "input_scope": null,
+            "timing_scope": "shipped native virtual data controls; public selection/navigation/model invalidation APIs; paced separate frames",
+            "oracle_scope": "every ordered fixture cell plus current query, selection, and eight actual control values; validation frames excluded",
+            "model_replacement_scope": "alternate two prebuilt immutable datasets; application snapshot replacement, not allocation stress"
+          }
+        }
+      ]
+    },
+    {
+      "group": "native-virtual-tree-without-frame-timing",
+      "contract": "native-virtual-tree-v1",
+      "frame_timing_enabled": false,
+      "report_role": "general desktop workload",
+      "environment": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/native-virtual-tree-without-frame-timing/environment.json",
+        "sha256": "ed966f3ec98aecbe1745563e2944c6876a6ded09a6a29253852de2dd9cb79a6b"
+      },
+      "runs": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/native-virtual-tree-without-frame-timing/runs.json",
+        "sha256": "b3c9df5d91b9adde75f3813cb6194bf9e6a4caf09d8c8c0f84bcb352ee50ae60"
+      },
+      "actual_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "engines": [
+        {
+          "engine": "kael",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "79e833911cd71a997b1369eb72cd80b3e7e83772b11a528afe400187622e79ef",
+            "cpu_percent_by_phase": {
+              "idle-before": 1.1647467593531013,
+              "active": 48.326113374864235,
+              "idle-after": 0.008186786528942835,
+              "churn": 27.249378188186437
+            },
+            "stable_sampled_peak_rss_bytes": 965001216,
+            "stable_sampled_peak_rss_range_bytes": [
+              771899392,
+              1019592704
+            ],
+            "draw_cpu_us_p99": null,
+            "submission_cpu_us_p99": null
+          },
+          "operation_summary": {
+            "selection_reveal": {
+              "median": 43,
+              "range": [
+                40,
+                48
+              ]
+            },
+            "vertical_scroll": {
+              "median": 43,
+              "range": [
+                40,
+                48
+              ]
+            },
+            "collapse_root": {
+              "median": 43,
+              "range": [
+                40,
+                47
+              ]
+            },
+            "expand_root": {
+              "median": 43,
+              "range": [
+                38,
+                47
+              ]
+            },
+            "home": {
+              "median": 42,
+              "range": [
+                38,
+                46
+              ]
+            },
+            "end_selection": {
+              "median": 41,
+              "range": [
+                38,
+                46
+              ]
+            },
+            "replace_model": {
+              "median": 3,
+              "range": [
+                3,
+                4
+              ]
+            }
+          },
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": {
+                "selection_reveal": 41,
+                "vertical_scroll": 40,
+                "collapse_root": 40,
+                "expand_root": 40,
+                "home": 40,
+                "end_selection": 40,
+                "replace_model": 3
+              },
+              "renders": 244,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 155,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 79,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": {
+                "selection_reveal": 43,
+                "vertical_scroll": 43,
+                "collapse_root": 43,
+                "expand_root": 43,
+                "home": 42,
+                "end_selection": 41,
+                "replace_model": 3
+              },
+              "renders": 241,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 148,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 83,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": {
+                "selection_reveal": 44,
+                "vertical_scroll": 44,
+                "collapse_root": 44,
+                "expand_root": 44,
+                "home": 44,
+                "end_selection": 43,
+                "replace_model": 3
+              },
+              "renders": 260,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 165,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 85,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": {
+                "selection_reveal": 40,
+                "vertical_scroll": 40,
+                "collapse_root": 40,
+                "expand_root": 38,
+                "home": 38,
+                "end_selection": 38,
+                "replace_model": 3
+              },
+              "renders": 230,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 134,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 85,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": {
+                "selection_reveal": 48,
+                "vertical_scroll": 48,
+                "collapse_root": 47,
+                "expand_root": 47,
+                "home": 46,
+                "end_selection": 46,
+                "replace_model": 4
+              },
+              "renders": 266,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 166,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 89,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": "VirtualTreeList",
+            "differences": [
+              "Kael expansion is a controlled flattened immutable model rebuild; GPUI Kit expansion is its public routed SelectLeft/SelectRight action",
+              "Kael prepares complete logical accessibility metadata; pinned GPUI Kit Tree exposes mounted rows only",
+              "Kael has a disclosure button per row; GPUI Kit ListItem renders an application disclosure glyph inside its native Tree row",
+              "Native selection, scrolling, layout, and repaint remain each shipped control's implementation"
+            ],
+            "input_scope": "paced public component programmatic APIs; no physical pointer, keyboard, AT or IME claim",
+            "timing_scope": "native shipped virtual tree; public selection/reveal and expansion/model preparation; each update gets a separate paced frame",
+            "oracle_scope": "every visible control ID, Unicode label and depth; stable selection, collapsed shape and physically mounted reveal target; validation frames excluded",
+            "model_replacement_scope": "alternate two retained immutable label fixtures; rebuild shipped native tree model wrappers/indices in timed application update"
+          }
+        },
+        {
+          "engine": "gpui-kit",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "9982fbafdcafb4c51dc2d6cfa6b48ffc2d390612f3a1b143f17c2895a82bc73d",
+            "cpu_percent_by_phase": {
+              "idle-before": 1.7748285742629533,
+              "active": 14.029846292154538,
+              "idle-after": 1.096967217019464,
+              "churn": 9.659434053588937
+            },
+            "stable_sampled_peak_rss_bytes": 686063616,
+            "stable_sampled_peak_rss_range_bytes": [
+              675954688,
+              692961280
+            ],
+            "draw_cpu_us_p99": null,
+            "submission_cpu_us_p99": null
+          },
+          "operation_summary": {
+            "selection_reveal": {
+              "median": 55,
+              "range": [
+                55,
+                57
+              ]
+            },
+            "vertical_scroll": {
+              "median": 55,
+              "range": [
+                55,
+                56
+              ]
+            },
+            "collapse_root": {
+              "median": 55,
+              "range": [
+                55,
+                56
+              ]
+            },
+            "expand_root": {
+              "median": 55,
+              "range": [
+                54,
+                56
+              ]
+            },
+            "home": {
+              "median": 54,
+              "range": [
+                54,
+                55
+              ]
+            },
+            "end_selection": {
+              "median": 54,
+              "range": [
+                53,
+                55
+              ]
+            },
+            "replace_model": {
+              "median": 4,
+              "range": [
+                4,
+                4
+              ]
+            }
+          },
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": {
+                "selection_reveal": 57,
+                "vertical_scroll": 56,
+                "collapse_root": 56,
+                "expand_root": 56,
+                "home": 55,
+                "end_selection": 55,
+                "replace_model": 4
+              },
+              "renders": 343,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 226,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 3,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 109,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": {
+                "selection_reveal": 55,
+                "vertical_scroll": 55,
+                "collapse_root": 55,
+                "expand_root": 54,
+                "home": 54,
+                "end_selection": 54,
+                "replace_model": 4
+              },
+              "renders": 336,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 220,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 109,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": {
+                "selection_reveal": 55,
+                "vertical_scroll": 55,
+                "collapse_root": 55,
+                "expand_root": 54,
+                "home": 54,
+                "end_selection": 54,
+                "replace_model": 4
+              },
+              "renders": 334,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 219,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 108,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": {
+                "selection_reveal": 55,
+                "vertical_scroll": 55,
+                "collapse_root": 55,
+                "expand_root": 55,
+                "home": 54,
+                "end_selection": 53,
+                "replace_model": 4
+              },
+              "renders": 335,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 216,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 112,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": {
+                "selection_reveal": 56,
+                "vertical_scroll": 55,
+                "collapse_root": 55,
+                "expand_root": 55,
+                "home": 55,
+                "end_selection": 54,
+                "replace_model": 4
+              },
+              "renders": 338,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 217,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 3,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 113,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": "Tree",
+            "differences": [
+              "Kael expansion is a controlled flattened immutable model rebuild; GPUI Kit expansion is its public routed SelectLeft/SelectRight action",
+              "Kael prepares complete logical accessibility metadata; pinned GPUI Kit Tree exposes mounted rows only",
+              "Kael has a disclosure button per row; GPUI Kit ListItem renders an application disclosure glyph inside its native Tree row",
+              "Native selection, scrolling, layout, and repaint remain each shipped control's implementation"
+            ],
+            "input_scope": "paced public component programmatic APIs; no physical pointer, keyboard, AT or IME claim",
+            "timing_scope": "native shipped virtual tree; public selection/reveal and expansion/model preparation; each update gets a separate paced frame",
+            "oracle_scope": "every visible control ID, Unicode label and depth; stable selection, collapsed shape and physically mounted reveal target; validation frames excluded",
+            "model_replacement_scope": "alternate two retained immutable label fixtures; rebuild shipped native tree model wrappers/indices in timed application update"
+          }
+        }
+      ]
+    },
+    {
+      "group": "native-virtual-tree",
+      "contract": "native-virtual-tree-v1",
+      "frame_timing_enabled": true,
+      "report_role": "general desktop workload",
+      "environment": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/native-virtual-tree/environment.json",
+        "sha256": "55ed1624a70874fdb3b63bf9d2ae8d4cd0e280b20d50028ae0680d54c6af5f65"
+      },
+      "runs": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/native-virtual-tree/runs.json",
+        "sha256": "df58fdebfe8d90b74bd3dc7f090d4b853719598460d0af8ef2f1a7f38a4580d3"
+      },
+      "actual_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "engines": [
+        {
+          "engine": "kael",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "4e89fd668a33da9f9ce70443da47b93936fba887b5e2c1272548c7bedc5a0cfd",
+            "cpu_percent_by_phase": {
+              "idle-before": 0.9264560008411634,
+              "active": 41.97399806445302,
+              "idle-after": 0.0054898365684302374,
+              "churn": 25.829921878737906
+            },
+            "stable_sampled_peak_rss_bytes": 991821824,
+            "stable_sampled_peak_rss_range_bytes": [
+              981008384,
+              1017135104
+            ],
+            "draw_cpu_us_p99": 8006,
+            "submission_cpu_us_p99": 596
+          },
+          "operation_summary": {
+            "selection_reveal": {
+              "median": 44,
+              "range": [
+                43,
+                51
+              ]
+            },
+            "vertical_scroll": {
+              "median": 43,
+              "range": [
+                42,
+                50
+              ]
+            },
+            "collapse_root": {
+              "median": 43,
+              "range": [
+                42,
+                50
+              ]
+            },
+            "expand_root": {
+              "median": 43,
+              "range": [
+                42,
+                49
+              ]
+            },
+            "home": {
+              "median": 43,
+              "range": [
+                41,
+                49
+              ]
+            },
+            "end_selection": {
+              "median": 43,
+              "range": [
+                41,
+                49
+              ]
+            },
+            "replace_model": {
+              "median": 4,
+              "range": [
+                3,
+                4
+              ]
+            }
+          },
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": {
+                "selection_reveal": 44,
+                "vertical_scroll": 43,
+                "collapse_root": 43,
+                "expand_root": 43,
+                "home": 43,
+                "end_selection": 43,
+                "replace_model": 4
+              },
+              "renders": 254,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 155,
+                  "draws": 155,
+                  "submissions": 155
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "churn",
+                  "renders": 89,
+                  "draws": 89,
+                  "submissions": 89
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": {
+                "selection_reveal": 51,
+                "vertical_scroll": 50,
+                "collapse_root": 50,
+                "expand_root": 49,
+                "home": 49,
+                "end_selection": 49,
+                "replace_model": 4
+              },
+              "renders": 288,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 190,
+                  "draws": 190,
+                  "submissions": 190
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "churn",
+                  "renders": 88,
+                  "draws": 88,
+                  "submissions": 88
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": {
+                "selection_reveal": 47,
+                "vertical_scroll": 47,
+                "collapse_root": 46,
+                "expand_root": 46,
+                "home": 46,
+                "end_selection": 45,
+                "replace_model": 3
+              },
+              "renders": 270,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 172,
+                  "draws": 172,
+                  "submissions": 172
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "churn",
+                  "renders": 88,
+                  "draws": 88,
+                  "submissions": 88
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": {
+                "selection_reveal": 44,
+                "vertical_scroll": 43,
+                "collapse_root": 43,
+                "expand_root": 43,
+                "home": 43,
+                "end_selection": 43,
+                "replace_model": 4
+              },
+              "renders": 260,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 160,
+                  "draws": 160,
+                  "submissions": 160
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "churn",
+                  "renders": 89,
+                  "draws": 89,
+                  "submissions": 89
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": {
+                "selection_reveal": 43,
+                "vertical_scroll": 42,
+                "collapse_root": 42,
+                "expand_root": 42,
+                "home": 41,
+                "end_selection": 41,
+                "replace_model": 3
+              },
+              "renders": 244,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 151,
+                  "draws": 151,
+                  "submissions": 151
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "churn",
+                  "renders": 83,
+                  "draws": 83,
+                  "submissions": 83
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": "VirtualTreeList",
+            "differences": [
+              "Kael expansion is a controlled flattened immutable model rebuild; GPUI Kit expansion is its public routed SelectLeft/SelectRight action",
+              "Kael prepares complete logical accessibility metadata; pinned GPUI Kit Tree exposes mounted rows only",
+              "Kael has a disclosure button per row; GPUI Kit ListItem renders an application disclosure glyph inside its native Tree row",
+              "Native selection, scrolling, layout, and repaint remain each shipped control's implementation"
+            ],
+            "input_scope": "paced public component programmatic APIs; no physical pointer, keyboard, AT or IME claim",
+            "timing_scope": "native shipped virtual tree; public selection/reveal and expansion/model preparation; each update gets a separate paced frame",
+            "oracle_scope": "every visible control ID, Unicode label and depth; stable selection, collapsed shape and physically mounted reveal target; validation frames excluded",
+            "model_replacement_scope": "alternate two retained immutable label fixtures; rebuild shipped native tree model wrappers/indices in timed application update"
+          }
+        },
+        {
+          "engine": "gpui-kit",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "5d3f65d0b3f85435a5ddbec2ca72c39bbf4380cd67e8f619a8cd0ee426ecb8c3",
+            "cpu_percent_by_phase": {
+              "idle-before": 1.466768489619946,
+              "active": 14.927617656461424,
+              "idle-after": 0.8723773562541004,
+              "churn": 10.15680971368647
+            },
+            "stable_sampled_peak_rss_bytes": 688046080,
+            "stable_sampled_peak_rss_range_bytes": [
+              683950080,
+              699138048
+            ],
+            "draw_cpu_us_p99": 8388,
+            "submission_cpu_us_p99": 466
+          },
+          "operation_summary": {
+            "selection_reveal": {
+              "median": 56,
+              "range": [
+                37,
+                56
+              ]
+            },
+            "vertical_scroll": {
+              "median": 54,
+              "range": [
+                37,
+                56
+              ]
+            },
+            "collapse_root": {
+              "median": 54,
+              "range": [
+                37,
+                56
+              ]
+            },
+            "expand_root": {
+              "median": 54,
+              "range": [
+                36,
+                55
+              ]
+            },
+            "home": {
+              "median": 54,
+              "range": [
+                36,
+                54
+              ]
+            },
+            "end_selection": {
+              "median": 54,
+              "range": [
+                36,
+                54
+              ]
+            },
+            "replace_model": {
+              "median": 4,
+              "range": [
+                4,
+                4
+              ]
+            }
+          },
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": {
+                "selection_reveal": 56,
+                "vertical_scroll": 56,
+                "collapse_root": 56,
+                "expand_root": 55,
+                "home": 54,
+                "end_selection": 54,
+                "replace_model": 4
+              },
+              "renders": 338,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 225,
+                  "draws": 225,
+                  "submissions": 225
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "churn",
+                  "renders": 106,
+                  "draws": 106,
+                  "submissions": 106
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": {
+                "selection_reveal": 52,
+                "vertical_scroll": 51,
+                "collapse_root": 51,
+                "expand_root": 51,
+                "home": 50,
+                "end_selection": 50,
+                "replace_model": 4
+              },
+              "renders": 315,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 198,
+                  "draws": 198,
+                  "submissions": 198
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 3,
+                  "draws": 3,
+                  "submissions": 3
+                },
+                {
+                  "phase": "churn",
+                  "renders": 108,
+                  "draws": 108,
+                  "submissions": 108
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": {
+                "selection_reveal": 37,
+                "vertical_scroll": 37,
+                "collapse_root": 37,
+                "expand_root": 36,
+                "home": 36,
+                "end_selection": 36,
+                "replace_model": 4
+              },
+              "renders": 227,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 105,
+                  "draws": 105,
+                  "submissions": 105
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 3,
+                  "draws": 3,
+                  "submissions": 3
+                },
+                {
+                  "phase": "churn",
+                  "renders": 114,
+                  "draws": 114,
+                  "submissions": 114
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": {
+                "selection_reveal": 56,
+                "vertical_scroll": 54,
+                "collapse_root": 54,
+                "expand_root": 54,
+                "home": 54,
+                "end_selection": 54,
+                "replace_model": 4
+              },
+              "renders": 336,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 218,
+                  "draws": 218,
+                  "submissions": 218
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 3,
+                  "draws": 3,
+                  "submissions": 3
+                },
+                {
+                  "phase": "churn",
+                  "renders": 109,
+                  "draws": 109,
+                  "submissions": 109
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": {
+                "selection_reveal": 56,
+                "vertical_scroll": 55,
+                "collapse_root": 55,
+                "expand_root": 55,
+                "home": 54,
+                "end_selection": 54,
+                "replace_model": 4
+              },
+              "renders": 337,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 220,
+                  "draws": 220,
+                  "submissions": 220
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 3,
+                  "draws": 3,
+                  "submissions": 3
+                },
+                {
+                  "phase": "churn",
+                  "renders": 109,
+                  "draws": 109,
+                  "submissions": 109
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": "Tree",
+            "differences": [
+              "Kael expansion is a controlled flattened immutable model rebuild; GPUI Kit expansion is its public routed SelectLeft/SelectRight action",
+              "Kael prepares complete logical accessibility metadata; pinned GPUI Kit Tree exposes mounted rows only",
+              "Kael has a disclosure button per row; GPUI Kit ListItem renders an application disclosure glyph inside its native Tree row",
+              "Native selection, scrolling, layout, and repaint remain each shipped control's implementation"
+            ],
+            "input_scope": "paced public component programmatic APIs; no physical pointer, keyboard, AT or IME claim",
+            "timing_scope": "native shipped virtual tree; public selection/reveal and expansion/model preparation; each update gets a separate paced frame",
+            "oracle_scope": "every visible control ID, Unicode label and depth; stable selection, collapsed shape and physically mounted reveal target; validation frames excluded",
+            "model_replacement_scope": "alternate two retained immutable label fixtures; rebuild shipped native tree model wrappers/indices in timed application update"
+          }
+        }
+      ]
+    },
+    {
+      "group": "native-dock-workspace-without-frame-timing",
+      "contract": "native-dock-workspace-v1",
+      "frame_timing_enabled": false,
+      "report_role": "general desktop workload",
+      "environment": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/native-dock-workspace-without-frame-timing/environment.json",
+        "sha256": "cd8e72a7b3ac086c2b01f20c9d2bf887e07245c175b825fb15f3690197ef8aa2"
+      },
+      "runs": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/native-dock-workspace-without-frame-timing/runs.json",
+        "sha256": "2153fb192ca1c81888dd87d1f5f50928bc83b7496a658719d84a435aa7c63b7d"
+      },
+      "actual_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "engines": [
+        {
+          "engine": "kael",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "a1c6540adb8f51c5e1caedc8ff1d7c0f92d0b079e51c90dac4d30914d1e4bd76",
+            "cpu_percent_by_phase": {
+              "idle-before": 0.9338499043465786,
+              "active": 17.079092786320057,
+              "idle-after": 0.007514472286695819,
+              "churn": 10.953208030631185
+            },
+            "stable_sampled_peak_rss_bytes": 84836352,
+            "stable_sampled_peak_rss_range_bytes": [
+              84557824,
+              85098496
+            ],
+            "draw_cpu_us_p99": null,
+            "submission_cpu_us_p99": null
+          },
+          "operation_summary": {
+            "select_tab": {
+              "median": 49,
+              "range": [
+                46,
+                51
+              ]
+            },
+            "move_tab": {
+              "median": 49,
+              "range": [
+                46,
+                51
+              ]
+            },
+            "split_pane": {
+              "median": 49,
+              "range": [
+                46,
+                51
+              ]
+            },
+            "merge_pane": {
+              "median": 49,
+              "range": [
+                45,
+                51
+              ]
+            },
+            "resize_split": {
+              "median": 49,
+              "range": [
+                45,
+                51
+              ]
+            },
+            "zoom_group": {
+              "median": 49,
+              "range": [
+                45,
+                51
+              ]
+            },
+            "unzoom_group": {
+              "median": 49,
+              "range": [
+                45,
+                51
+              ]
+            },
+            "serialize_restore": {
+              "median": 48,
+              "range": [
+                45,
+                50
+              ]
+            },
+            "replace_model": {
+              "median": 4,
+              "range": [
+                3,
+                4
+              ]
+            }
+          },
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": {
+                "select_tab": 51,
+                "move_tab": 51,
+                "split_pane": 51,
+                "merge_pane": 51,
+                "resize_split": 51,
+                "zoom_group": 51,
+                "unzoom_group": 51,
+                "serialize_restore": 50,
+                "replace_model": 3
+              },
+              "renders": 351,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 231,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 108,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": {
+                "select_tab": 49,
+                "move_tab": 49,
+                "split_pane": 49,
+                "merge_pane": 49,
+                "resize_split": 49,
+                "zoom_group": 49,
+                "unzoom_group": 49,
+                "serialize_restore": 48,
+                "replace_model": 4
+              },
+              "renders": 335,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 212,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 112,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": {
+                "select_tab": 47,
+                "move_tab": 46,
+                "split_pane": 46,
+                "merge_pane": 46,
+                "resize_split": 46,
+                "zoom_group": 46,
+                "unzoom_group": 46,
+                "serialize_restore": 46,
+                "replace_model": 4
+              },
+              "renders": 329,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 203,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 115,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": {
+                "select_tab": 46,
+                "move_tab": 46,
+                "split_pane": 46,
+                "merge_pane": 45,
+                "resize_split": 45,
+                "zoom_group": 45,
+                "unzoom_group": 45,
+                "serialize_restore": 45,
+                "replace_model": 4
+              },
+              "renders": 320,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 198,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 111,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": {
+                "select_tab": 50,
+                "move_tab": 49,
+                "split_pane": 49,
+                "merge_pane": 49,
+                "resize_split": 49,
+                "zoom_group": 49,
+                "unzoom_group": 49,
+                "serialize_restore": 49,
+                "replace_model": 4
+              },
+              "renders": 329,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 204,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 114,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": "DockWorkspace",
+            "differences": [
+              "Kael uses retained application pane closures; GPUI Kit persistence reconstructs registered Panel entities",
+              "Kael binary splits and GPUI Kit normalized n-ary splits are compared by ordered semantic layout with same-axis normalization",
+              "Kael tab strip minimum34px; pinned DockSkin native tab bar30px; retain native chrome and disclose content-height difference",
+              "Native split handle/minimum-size rules differ; common requested root ratio checked within0.005, persistence float tolerance0.01px",
+              "GPUI Kit does not serialize zoom state, so persistence is performed after unzoom; floating panes and edge docks excluded"
+            ],
+            "input_scope": "paced public component programmatic APIs; no physical pointer, keyboard, AT or IME claim",
+            "timing_scope": "native shipped persistent dock controllers; each public layout edit paced separately; JSON encode/decode/native restore included",
+            "oracle_scope": "actual native pane IDs/order/active groups/split orientations/zoom/resize plus rendered active Unicode body revision; complete native JSON roundtrip assertions outside timing",
+            "model_replacement_scope": "alternate two retained Unicode fixtures and restore current real native layout to invalidate pane models"
+          }
+        },
+        {
+          "engine": "gpui-kit",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "9ef12ef46f0fde95677854516c878cbbdac86db94170e7adfdfcb30b48bb252e",
+            "cpu_percent_by_phase": {
+              "idle-before": 1.8459472855987231,
+              "active": 16.255831336062613,
+              "idle-after": 0.8243422704640659,
+              "churn": 11.879290880390457
+            },
+            "stable_sampled_peak_rss_bytes": 84344832,
+            "stable_sampled_peak_rss_range_bytes": [
+              84164608,
+              84475904
+            ],
+            "draw_cpu_us_p99": null,
+            "submission_cpu_us_p99": null
+          },
+          "operation_summary": {
+            "select_tab": {
+              "median": 45,
+              "range": [
+                43,
+                47
+              ]
+            },
+            "move_tab": {
+              "median": 45,
+              "range": [
+                43,
+                47
+              ]
+            },
+            "split_pane": {
+              "median": 45,
+              "range": [
+                43,
+                47
+              ]
+            },
+            "merge_pane": {
+              "median": 45,
+              "range": [
+                43,
+                47
+              ]
+            },
+            "resize_split": {
+              "median": 45,
+              "range": [
+                42,
+                47
+              ]
+            },
+            "zoom_group": {
+              "median": 45,
+              "range": [
+                42,
+                47
+              ]
+            },
+            "unzoom_group": {
+              "median": 45,
+              "range": [
+                42,
+                46
+              ]
+            },
+            "serialize_restore": {
+              "median": 45,
+              "range": [
+                42,
+                46
+              ]
+            },
+            "replace_model": {
+              "median": 3,
+              "range": [
+                3,
+                4
+              ]
+            }
+          },
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": {
+                "select_tab": 43,
+                "move_tab": 43,
+                "split_pane": 43,
+                "merge_pane": 43,
+                "resize_split": 42,
+                "zoom_group": 42,
+                "unzoom_group": 42,
+                "serialize_restore": 42,
+                "replace_model": 3
+              },
+              "renders": 472,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 305,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 160,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": {
+                "select_tab": 45,
+                "move_tab": 45,
+                "split_pane": 45,
+                "merge_pane": 45,
+                "resize_split": 45,
+                "zoom_group": 45,
+                "unzoom_group": 45,
+                "serialize_restore": 45,
+                "replace_model": 4
+              },
+              "renders": 499,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 330,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 161,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": {
+                "select_tab": 45,
+                "move_tab": 45,
+                "split_pane": 45,
+                "merge_pane": 45,
+                "resize_split": 45,
+                "zoom_group": 45,
+                "unzoom_group": 45,
+                "serialize_restore": 45,
+                "replace_model": 4
+              },
+              "renders": 496,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 327,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 161,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": {
+                "select_tab": 47,
+                "move_tab": 47,
+                "split_pane": 47,
+                "merge_pane": 47,
+                "resize_split": 47,
+                "zoom_group": 47,
+                "unzoom_group": 46,
+                "serialize_restore": 46,
+                "replace_model": 3
+              },
+              "renders": 509,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 339,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 162,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": {
+                "select_tab": 46,
+                "move_tab": 45,
+                "split_pane": 45,
+                "merge_pane": 45,
+                "resize_split": 45,
+                "zoom_group": 45,
+                "unzoom_group": 45,
+                "serialize_restore": 45,
+                "replace_model": 3
+              },
+              "renders": 502,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 342,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 152,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": "DockArea+DockSkin",
+            "differences": [
+              "Kael uses retained application pane closures; GPUI Kit persistence reconstructs registered Panel entities",
+              "Kael binary splits and GPUI Kit normalized n-ary splits are compared by ordered semantic layout with same-axis normalization",
+              "Kael tab strip minimum34px; pinned DockSkin native tab bar30px; retain native chrome and disclose content-height difference",
+              "Native split handle/minimum-size rules differ; common requested root ratio checked within0.005, persistence float tolerance0.01px",
+              "GPUI Kit does not serialize zoom state, so persistence is performed after unzoom; floating panes and edge docks excluded"
+            ],
+            "input_scope": "paced public component programmatic APIs; no physical pointer, keyboard, AT or IME claim",
+            "timing_scope": "native shipped persistent dock controllers; each public layout edit paced separately; JSON encode/decode/native restore included",
+            "oracle_scope": "actual native pane IDs/order/active groups/split orientations/zoom/resize plus rendered active Unicode body revision; complete native JSON roundtrip assertions outside timing",
+            "model_replacement_scope": "alternate two retained Unicode fixtures and restore current real native layout to invalidate pane models"
+          }
+        }
+      ]
+    },
+    {
+      "group": "native-dock-workspace",
+      "contract": "native-dock-workspace-v1",
+      "frame_timing_enabled": true,
+      "report_role": "general desktop workload",
+      "environment": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/native-dock-workspace/environment.json",
+        "sha256": "6da9be037eabc6830a8241559b8df1a7f8dcf05f7d71d3e061fd419783401a37"
+      },
+      "runs": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/native-dock-workspace/runs.json",
+        "sha256": "2edc20291492a034a6a708c7b6c556be24e3b7b132141e06fd1b1b8e2507aa08"
+      },
+      "actual_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "engines": [
+        {
+          "engine": "kael",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "0783757db94babb40bf566b92fe0aff422641e032777c09675c62b1805ee7bec",
+            "cpu_percent_by_phase": {
+              "idle-before": 0.9612768333066725,
+              "active": 18.588836457800014,
+              "idle-after": 0.008162799554702211,
+              "churn": 11.531368210142787
+            },
+            "stable_sampled_peak_rss_bytes": 85377024,
+            "stable_sampled_peak_rss_range_bytes": [
+              85180416,
+              85655552
+            ],
+            "draw_cpu_us_p99": 19239,
+            "submission_cpu_us_p99": 588
+          },
+          "operation_summary": {
+            "select_tab": {
+              "median": 48,
+              "range": [
+                40,
+                48
+              ]
+            },
+            "move_tab": {
+              "median": 48,
+              "range": [
+                40,
+                48
+              ]
+            },
+            "split_pane": {
+              "median": 48,
+              "range": [
+                40,
+                48
+              ]
+            },
+            "merge_pane": {
+              "median": 47,
+              "range": [
+                40,
+                48
+              ]
+            },
+            "resize_split": {
+              "median": 47,
+              "range": [
+                40,
+                48
+              ]
+            },
+            "zoom_group": {
+              "median": 47,
+              "range": [
+                40,
+                48
+              ]
+            },
+            "unzoom_group": {
+              "median": 47,
+              "range": [
+                40,
+                47
+              ]
+            },
+            "serialize_restore": {
+              "median": 47,
+              "range": [
+                40,
+                47
+              ]
+            },
+            "replace_model": {
+              "median": 3,
+              "range": [
+                3,
+                4
+              ]
+            }
+          },
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": {
+                "select_tab": 48,
+                "move_tab": 48,
+                "split_pane": 48,
+                "merge_pane": 48,
+                "resize_split": 47,
+                "zoom_group": 47,
+                "unzoom_group": 47,
+                "serialize_restore": 47,
+                "replace_model": 3
+              },
+              "renders": 337,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 209,
+                  "draws": 209,
+                  "submissions": 209
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 117,
+                  "draws": 117,
+                  "submissions": 117
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": {
+                "select_tab": 40,
+                "move_tab": 40,
+                "split_pane": 40,
+                "merge_pane": 40,
+                "resize_split": 40,
+                "zoom_group": 40,
+                "unzoom_group": 40,
+                "serialize_restore": 40,
+                "replace_model": 3
+              },
+              "renders": 294,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 174,
+                  "draws": 174,
+                  "submissions": 174
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 110,
+                  "draws": 110,
+                  "submissions": 110
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": {
+                "select_tab": 48,
+                "move_tab": 48,
+                "split_pane": 48,
+                "merge_pane": 47,
+                "resize_split": 47,
+                "zoom_group": 47,
+                "unzoom_group": 47,
+                "serialize_restore": 47,
+                "replace_model": 3
+              },
+              "renders": 337,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 215,
+                  "draws": 215,
+                  "submissions": 215
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 111,
+                  "draws": 111,
+                  "submissions": 111
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": {
+                "select_tab": 45,
+                "move_tab": 45,
+                "split_pane": 45,
+                "merge_pane": 44,
+                "resize_split": 44,
+                "zoom_group": 44,
+                "unzoom_group": 44,
+                "serialize_restore": 44,
+                "replace_model": 4
+              },
+              "renders": 322,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 204,
+                  "draws": 204,
+                  "submissions": 204
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 108,
+                  "draws": 108,
+                  "submissions": 108
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": {
+                "select_tab": 48,
+                "move_tab": 48,
+                "split_pane": 48,
+                "merge_pane": 48,
+                "resize_split": 48,
+                "zoom_group": 48,
+                "unzoom_group": 47,
+                "serialize_restore": 47,
+                "replace_model": 3
+              },
+              "renders": 333,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 215,
+                  "draws": 215,
+                  "submissions": 215
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 107,
+                  "draws": 107,
+                  "submissions": 107
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": "DockWorkspace",
+            "differences": [
+              "Kael uses retained application pane closures; GPUI Kit persistence reconstructs registered Panel entities",
+              "Kael binary splits and GPUI Kit normalized n-ary splits are compared by ordered semantic layout with same-axis normalization",
+              "Kael tab strip minimum34px; pinned DockSkin native tab bar30px; retain native chrome and disclose content-height difference",
+              "Native split handle/minimum-size rules differ; common requested root ratio checked within0.005, persistence float tolerance0.01px",
+              "GPUI Kit does not serialize zoom state, so persistence is performed after unzoom; floating panes and edge docks excluded"
+            ],
+            "input_scope": "paced public component programmatic APIs; no physical pointer, keyboard, AT or IME claim",
+            "timing_scope": "native shipped persistent dock controllers; each public layout edit paced separately; JSON encode/decode/native restore included",
+            "oracle_scope": "actual native pane IDs/order/active groups/split orientations/zoom/resize plus rendered active Unicode body revision; complete native JSON roundtrip assertions outside timing",
+            "model_replacement_scope": "alternate two retained Unicode fixtures and restore current real native layout to invalidate pane models"
+          }
+        },
+        {
+          "engine": "gpui-kit",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "c233f18ff2cd0ba8731ae53174b175e0d1188a3a74b70ba8ea168eb60b9d9ee6",
+            "cpu_percent_by_phase": {
+              "idle-before": 1.5355595228761039,
+              "active": 17.79542866234405,
+              "idle-after": 0.9608157373567687,
+              "churn": 10.949830970482479
+            },
+            "stable_sampled_peak_rss_bytes": 90587136,
+            "stable_sampled_peak_rss_range_bytes": [
+              90210304,
+              90832896
+            ],
+            "draw_cpu_us_p99": 18367,
+            "submission_cpu_us_p99": 658
+          },
+          "operation_summary": {
+            "select_tab": {
+              "median": 46,
+              "range": [
+                44,
+                46
+              ]
+            },
+            "move_tab": {
+              "median": 46,
+              "range": [
+                44,
+                46
+              ]
+            },
+            "split_pane": {
+              "median": 45,
+              "range": [
+                44,
+                46
+              ]
+            },
+            "merge_pane": {
+              "median": 45,
+              "range": [
+                44,
+                46
+              ]
+            },
+            "resize_split": {
+              "median": 45,
+              "range": [
+                44,
+                46
+              ]
+            },
+            "zoom_group": {
+              "median": 45,
+              "range": [
+                44,
+                45
+              ]
+            },
+            "unzoom_group": {
+              "median": 45,
+              "range": [
+                44,
+                45
+              ]
+            },
+            "serialize_restore": {
+              "median": 45,
+              "range": [
+                43,
+                45
+              ]
+            },
+            "replace_model": {
+              "median": 3,
+              "range": [
+                3,
+                3
+              ]
+            }
+          },
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": {
+                "select_tab": 46,
+                "move_tab": 46,
+                "split_pane": 45,
+                "merge_pane": 45,
+                "resize_split": 45,
+                "zoom_group": 45,
+                "unzoom_group": 45,
+                "serialize_restore": 45,
+                "replace_model": 3
+              },
+              "renders": 501,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 341,
+                  "draws": 341,
+                  "submissions": 341
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 152,
+                  "draws": 152,
+                  "submissions": 152
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": {
+                "select_tab": 46,
+                "move_tab": 46,
+                "split_pane": 46,
+                "merge_pane": 46,
+                "resize_split": 46,
+                "zoom_group": 45,
+                "unzoom_group": 45,
+                "serialize_restore": 45,
+                "replace_model": 3
+              },
+              "renders": 499,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 333,
+                  "draws": 333,
+                  "submissions": 333
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 158,
+                  "draws": 158,
+                  "submissions": 158
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": {
+                "select_tab": 46,
+                "move_tab": 46,
+                "split_pane": 46,
+                "merge_pane": 46,
+                "resize_split": 45,
+                "zoom_group": 45,
+                "unzoom_group": 45,
+                "serialize_restore": 45,
+                "replace_model": 3
+              },
+              "renders": 496,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 336,
+                  "draws": 336,
+                  "submissions": 336
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 152,
+                  "draws": 152,
+                  "submissions": 152
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": {
+                "select_tab": 44,
+                "move_tab": 44,
+                "split_pane": 44,
+                "merge_pane": 44,
+                "resize_split": 44,
+                "zoom_group": 44,
+                "unzoom_group": 44,
+                "serialize_restore": 43,
+                "replace_model": 3
+              },
+              "renders": 484,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 319,
+                  "draws": 319,
+                  "submissions": 319
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 157,
+                  "draws": 157,
+                  "submissions": 157
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": {
+                "select_tab": 44,
+                "move_tab": 44,
+                "split_pane": 44,
+                "merge_pane": 44,
+                "resize_split": 44,
+                "zoom_group": 44,
+                "unzoom_group": 44,
+                "serialize_restore": 43,
+                "replace_model": 3
+              },
+              "renders": 484,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 320,
+                  "draws": 320,
+                  "submissions": 320
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "churn",
+                  "renders": 156,
+                  "draws": 156,
+                  "submissions": 156
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": "DockArea+DockSkin",
+            "differences": [
+              "Kael uses retained application pane closures; GPUI Kit persistence reconstructs registered Panel entities",
+              "Kael binary splits and GPUI Kit normalized n-ary splits are compared by ordered semantic layout with same-axis normalization",
+              "Kael tab strip minimum34px; pinned DockSkin native tab bar30px; retain native chrome and disclose content-height difference",
+              "Native split handle/minimum-size rules differ; common requested root ratio checked within0.005, persistence float tolerance0.01px",
+              "GPUI Kit does not serialize zoom state, so persistence is performed after unzoom; floating panes and edge docks excluded"
+            ],
+            "input_scope": "paced public component programmatic APIs; no physical pointer, keyboard, AT or IME claim",
+            "timing_scope": "native shipped persistent dock controllers; each public layout edit paced separately; JSON encode/decode/native restore included",
+            "oracle_scope": "actual native pane IDs/order/active groups/split orientations/zoom/resize plus rendered active Unicode body revision; complete native JSON roundtrip assertions outside timing",
+            "model_replacement_scope": "alternate two retained Unicode fixtures and restore current real native layout to invalidate pane models"
+          }
+        }
+      ]
+    },
+    {
+      "group": "editor-document-without-frame-timing",
+      "contract": "native-editor-document-v1",
+      "frame_timing_enabled": false,
+      "report_role": "supplemental historical editor",
+      "environment": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/editor-document-without-frame-timing/environment.json",
+        "sha256": "82b3702ff6299a99aaaececaaa4232082c4dd8718c83f35eee695d77c186fbc0"
+      },
+      "runs": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/editor-document-without-frame-timing/runs.json",
+        "sha256": "5a2cfadfc40b2942e9cf391d9ef2e493091244150cdcc06c7c734795db31085e"
+      },
+      "actual_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "engines": [
+        {
+          "engine": "kael",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "e69b40b50122417d1a83bc2c6de61bde526912ef92618958ddaa58b46eb7f7e9",
+            "cpu_percent_by_phase": {
+              "idle-before": 0.9608768552274489,
+              "active": 34.29081539215038,
+              "idle-after": 0.01784944905152746,
+              "churn": 21.24377441588536
+            },
+            "stable_sampled_peak_rss_bytes": 90341376,
+            "stable_sampled_peak_rss_range_bytes": [
+              87113728,
+              90570752
+            ],
+            "draw_cpu_us_p99": null,
+            "submission_cpu_us_p99": null
+          },
+          "operation_summary": {
+            "selection": {
+              "median": 67,
+              "range": [
+                59,
+                68
+              ]
+            },
+            "replace": {
+              "median": 67,
+              "range": [
+                59,
+                68
+              ]
+            },
+            "undo": {
+              "median": 67,
+              "range": [
+                59,
+                68
+              ]
+            },
+            "redo": {
+              "median": 67,
+              "range": [
+                58,
+                67
+              ]
+            },
+            "scroll_to_caret": {
+              "median": 66,
+              "range": [
+                58,
+                67
+              ]
+            },
+            "home": {
+              "median": 66,
+              "range": [
+                58,
+                66
+              ]
+            },
+            "replace_document": {
+              "median": 4,
+              "range": [
+                4,
+                4
+              ]
+            }
+          },
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": {
+                "selection": 67,
+                "replace": 67,
+                "undo": 67,
+                "redo": 67,
+                "scroll_to_caret": 67,
+                "home": 66,
+                "replace_document": 4
+              },
+              "renders": 448,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 284,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 152,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": {
+                "selection": 62,
+                "replace": 62,
+                "undo": 62,
+                "redo": 61,
+                "scroll_to_caret": 61,
+                "home": 60,
+                "replace_document": 4
+              },
+              "renders": 435,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 267,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 156,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": {
+                "selection": 59,
+                "replace": 59,
+                "undo": 59,
+                "redo": 58,
+                "scroll_to_caret": 58,
+                "home": 58,
+                "replace_document": 4
+              },
+              "renders": 420,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 253,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 156,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": {
+                "selection": 67,
+                "replace": 67,
+                "undo": 67,
+                "redo": 67,
+                "scroll_to_caret": 67,
+                "home": 66,
+                "replace_document": 4
+              },
+              "renders": 448,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 284,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 153,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": {
+                "selection": 68,
+                "replace": 68,
+                "undo": 68,
+                "redo": 67,
+                "scroll_to_caret": 66,
+                "home": 66,
+                "replace_document": 4
+              },
+              "renders": 453,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 284,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 158,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": null,
+            "differences": null,
+            "input_scope": null,
+            "timing_scope": "native rendered Editor; public interaction APIs and routed undo/redo; paced separate frames",
+            "oracle_scope": "same exact-byte document oracle on both engines; phase validation excluded from paced samples",
+            "model_replacement_scope": null
+          }
+        },
+        {
+          "engine": "gpui-kit",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "d17e9907c71b7ee1d6ccc747bbe9f8db677fdfdfb0ee7873ff288feff9c18854",
+            "cpu_percent_by_phase": {
+              "idle-before": 1.6166183651242039,
+              "active": 9.542735868128561,
+              "idle-after": 0.9822925012255678,
+              "churn": 12.171855566615518
+            },
+            "stable_sampled_peak_rss_bytes": 100007936,
+            "stable_sampled_peak_rss_range_bytes": [
+              99860480,
+              100319232
+            ],
+            "draw_cpu_us_p99": null,
+            "submission_cpu_us_p99": null
+          },
+          "operation_summary": {
+            "selection": {
+              "median": 60,
+              "range": [
+                57,
+                62
+              ]
+            },
+            "replace": {
+              "median": 60,
+              "range": [
+                57,
+                62
+              ]
+            },
+            "undo": {
+              "median": 60,
+              "range": [
+                57,
+                61
+              ]
+            },
+            "redo": {
+              "median": 60,
+              "range": [
+                56,
+                61
+              ]
+            },
+            "scroll_to_caret": {
+              "median": 59,
+              "range": [
+                56,
+                61
+              ]
+            },
+            "home": {
+              "median": 59,
+              "range": [
+                55,
+                61
+              ]
+            },
+            "replace_document": {
+              "median": 4,
+              "range": [
+                4,
+                4
+              ]
+            }
+          },
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": {
+                "selection": 60,
+                "replace": 60,
+                "undo": 60,
+                "redo": 60,
+                "scroll_to_caret": 60,
+                "home": 59,
+                "replace_document": 4
+              },
+              "renders": 368,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 252,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 109,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": {
+                "selection": 59,
+                "replace": 58,
+                "undo": 57,
+                "redo": 57,
+                "scroll_to_caret": 57,
+                "home": 57,
+                "replace_document": 4
+              },
+              "renders": 356,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 242,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 3,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 106,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": {
+                "selection": 61,
+                "replace": 61,
+                "undo": 60,
+                "redo": 60,
+                "scroll_to_caret": 59,
+                "home": 59,
+                "replace_document": 4
+              },
+              "renders": 371,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 256,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 3,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 107,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": {
+                "selection": 62,
+                "replace": 62,
+                "undo": 61,
+                "redo": 61,
+                "scroll_to_caret": 61,
+                "home": 61,
+                "replace_document": 4
+              },
+              "renders": 378,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 255,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 3,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 115,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": {
+                "selection": 57,
+                "replace": 57,
+                "undo": 57,
+                "redo": 56,
+                "scroll_to_caret": 56,
+                "home": 55,
+                "replace_document": 4
+              },
+              "renders": 349,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "active",
+                  "renders": 226,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 3,
+                  "draws": 0,
+                  "submissions": 0
+                },
+                {
+                  "phase": "churn",
+                  "renders": 115,
+                  "draws": 0,
+                  "submissions": 0
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": null,
+            "differences": null,
+            "input_scope": null,
+            "timing_scope": "native rendered Editor; public interaction APIs and routed undo/redo; paced separate frames",
+            "oracle_scope": "same exact-byte document oracle on both engines; phase validation excluded from paced samples",
+            "model_replacement_scope": null
+          }
+        }
+      ]
+    },
+    {
+      "group": "native-editor-document",
+      "contract": "native-editor-document-v1",
+      "frame_timing_enabled": true,
+      "report_role": "supplemental historical editor",
+      "environment": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/native-editor-document/environment.json",
+        "sha256": "a66d9414a481d71fb7c6381f27146676b16b78fce26e6ecb17e3c3aa4b3a3b25"
+      },
+      "runs": {
+        "path": ".artifacts/2026-10-18-benchmark-b411-independent-general-audit/raw/native-editor-document/runs.json",
+        "sha256": "22ec070dcc7fa44c35a73e29ba53c407a6f7fb8cbddbf5c77ac7df3761839569"
+      },
+      "actual_geometry": {
+        "viewport_width_px": 1100.0,
+        "viewport_height_px": 645.0,
+        "scale_factor": 1.0
+      },
+      "engines": [
+        {
+          "engine": "kael",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "77549c5d9fe10fa04001bb0b6fb2cf16ba4a5df5ffb39ce619c52f4953e09ac7",
+            "cpu_percent_by_phase": {
+              "idle-before": 0.9300896085569295,
+              "active": 32.44372608820404,
+              "idle-after": 0.025409570302247816,
+              "churn": 21.194034024409024
+            },
+            "stable_sampled_peak_rss_bytes": 88391680,
+            "stable_sampled_peak_rss_range_bytes": [
+              86835200,
+              91095040
+            ],
+            "draw_cpu_us_p99": 10024,
+            "submission_cpu_us_p99": 632
+          },
+          "operation_summary": {
+            "selection": {
+              "median": 64,
+              "range": [
+                56,
+                66
+              ]
+            },
+            "replace": {
+              "median": 63,
+              "range": [
+                55,
+                66
+              ]
+            },
+            "undo": {
+              "median": 63,
+              "range": [
+                55,
+                66
+              ]
+            },
+            "redo": {
+              "median": 63,
+              "range": [
+                54,
+                65
+              ]
+            },
+            "scroll_to_caret": {
+              "median": 62,
+              "range": [
+                54,
+                64
+              ]
+            },
+            "home": {
+              "median": 62,
+              "range": [
+                54,
+                64
+              ]
+            },
+            "replace_document": {
+              "median": 4,
+              "range": [
+                4,
+                4
+              ]
+            }
+          },
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": {
+                "selection": 64,
+                "replace": 64,
+                "undo": 63,
+                "redo": 63,
+                "scroll_to_caret": 62,
+                "home": 62,
+                "replace_document": 4
+              },
+              "renders": 442,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 272,
+                  "draws": 272,
+                  "submissions": 272
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "churn",
+                  "renders": 159,
+                  "draws": 159,
+                  "submissions": 159
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": {
+                "selection": 57,
+                "replace": 57,
+                "undo": 57,
+                "redo": 56,
+                "scroll_to_caret": 55,
+                "home": 55,
+                "replace_document": 4
+              },
+              "renders": 409,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 242,
+                  "draws": 242,
+                  "submissions": 242
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "churn",
+                  "renders": 155,
+                  "draws": 155,
+                  "submissions": 155
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": {
+                "selection": 56,
+                "replace": 55,
+                "undo": 55,
+                "redo": 54,
+                "scroll_to_caret": 54,
+                "home": 54,
+                "replace_document": 4
+              },
+              "renders": 397,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 236,
+                  "draws": 236,
+                  "submissions": 236
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "churn",
+                  "renders": 150,
+                  "draws": 150,
+                  "submissions": 150
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": {
+                "selection": 66,
+                "replace": 66,
+                "undo": 66,
+                "redo": 65,
+                "scroll_to_caret": 64,
+                "home": 64,
+                "replace_document": 4
+              },
+              "renders": 449,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 279,
+                  "draws": 279,
+                  "submissions": 279
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "churn",
+                  "renders": 159,
+                  "draws": 159,
+                  "submissions": 159
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": {
+                "selection": 64,
+                "replace": 63,
+                "undo": 63,
+                "redo": 63,
+                "scroll_to_caret": 62,
+                "home": 62,
+                "replace_document": 4
+              },
+              "renders": 433,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "active",
+                  "renders": 271,
+                  "draws": 271,
+                  "submissions": 271
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "churn",
+                  "renders": 151,
+                  "draws": 151,
+                  "submissions": 151
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": null,
+            "differences": null,
+            "input_scope": null,
+            "timing_scope": "native rendered Editor; public interaction APIs and routed undo/redo; paced separate frames",
+            "oracle_scope": "same exact-byte document oracle on both engines; phase validation excluded from paced samples",
+            "model_replacement_scope": null
+          }
+        },
+        {
+          "engine": "gpui-kit",
+          "medians": {
+            "capture_count": 5,
+            "binary_sha256_recorded_by_collector": "de37898b7c283556a43e6d9a7d90a8aca21a578bd4b9b665cc87338ff16e2507",
+            "cpu_percent_by_phase": {
+              "idle-before": 1.6237098349405061,
+              "active": 10.100727102802258,
+              "idle-after": 1.031488756200155,
+              "churn": 12.140798748185212
+            },
+            "stable_sampled_peak_rss_bytes": 105709568,
+            "stable_sampled_peak_rss_range_bytes": [
+              105644032,
+              106102784
+            ],
+            "draw_cpu_us_p99": 7150,
+            "submission_cpu_us_p99": 1138
+          },
+          "operation_summary": {
+            "selection": {
+              "median": 58,
+              "range": [
+                57,
+                61
+              ]
+            },
+            "replace": {
+              "median": 58,
+              "range": [
+                55,
+                61
+              ]
+            },
+            "undo": {
+              "median": 58,
+              "range": [
+                55,
+                61
+              ]
+            },
+            "redo": {
+              "median": 57,
+              "range": [
+                55,
+                60
+              ]
+            },
+            "scroll_to_caret": {
+              "median": 57,
+              "range": [
+                55,
+                60
+              ]
+            },
+            "home": {
+              "median": 56,
+              "range": [
+                55,
+                59
+              ]
+            },
+            "replace_document": {
+              "median": 4,
+              "range": [
+                4,
+                4
+              ]
+            }
+          },
+          "raw_capture_operations": [
+            {
+              "index": 0,
+              "operations": {
+                "selection": 61,
+                "replace": 61,
+                "undo": 61,
+                "redo": 60,
+                "scroll_to_caret": 60,
+                "home": 59,
+                "replace_document": 4
+              },
+              "renders": 372,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 256,
+                  "draws": 256,
+                  "submissions": 256
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "churn",
+                  "renders": 109,
+                  "draws": 109,
+                  "submissions": 109
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "operations": {
+                "selection": 57,
+                "replace": 55,
+                "undo": 55,
+                "redo": 55,
+                "scroll_to_caret": 55,
+                "home": 55,
+                "replace_document": 4
+              },
+              "renders": 343,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 224,
+                  "draws": 224,
+                  "submissions": 224
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 3,
+                  "draws": 3,
+                  "submissions": 3
+                },
+                {
+                  "phase": "churn",
+                  "renders": 111,
+                  "draws": 111,
+                  "submissions": 111
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "operations": {
+                "selection": 60,
+                "replace": 60,
+                "undo": 59,
+                "redo": 59,
+                "scroll_to_caret": 59,
+                "home": 59,
+                "replace_document": 4
+              },
+              "renders": 368,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 257,
+                  "draws": 257,
+                  "submissions": 257
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 3,
+                  "draws": 3,
+                  "submissions": 3
+                },
+                {
+                  "phase": "churn",
+                  "renders": 103,
+                  "draws": 103,
+                  "submissions": 103
+                }
+              ]
+            },
+            {
+              "index": 3,
+              "operations": {
+                "selection": 58,
+                "replace": 58,
+                "undo": 58,
+                "redo": 56,
+                "scroll_to_caret": 56,
+                "home": 56,
+                "replace_document": 4
+              },
+              "renders": 350,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 236,
+                  "draws": 236,
+                  "submissions": 236
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 2,
+                  "draws": 2,
+                  "submissions": 2
+                },
+                {
+                  "phase": "churn",
+                  "renders": 107,
+                  "draws": 107,
+                  "submissions": 107
+                }
+              ]
+            },
+            {
+              "index": 4,
+              "operations": {
+                "selection": 58,
+                "replace": 57,
+                "undo": 57,
+                "redo": 57,
+                "scroll_to_caret": 57,
+                "home": 56,
+                "replace_document": 4
+              },
+              "renders": 353,
+              "phase_frame_counts": [
+                {
+                  "phase": "idle-before",
+                  "renders": 1,
+                  "draws": 1,
+                  "submissions": 1
+                },
+                {
+                  "phase": "active",
+                  "renders": 235,
+                  "draws": 235,
+                  "submissions": 235
+                },
+                {
+                  "phase": "idle-after",
+                  "renders": 3,
+                  "draws": 3,
+                  "submissions": 3
+                },
+                {
+                  "phase": "churn",
+                  "renders": 110,
+                  "draws": 110,
+                  "submissions": 110
+                }
+              ]
+            }
+          ],
+          "disclosures": {
+            "component": null,
+            "differences": null,
+            "input_scope": null,
+            "timing_scope": "native rendered Editor; public interaction APIs and routed undo/redo; paced separate frames",
+            "oracle_scope": "same exact-byte document oracle on both engines; phase validation excluded from paced samples",
+            "model_replacement_scope": null
+          }
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "b411 is the frozen hosted Kael source; later image/Grid/package changes are excluded.",
+    "Four general desktop workloads lead; the editor workload remains supplemental historical coverage.",
+    "Operation counts are actual observed totals, not guaranteed equal between engines or captures. Navigation/detail does not record operation counters; render/frame counts are retained without inventing operation counts.",
+    "Timing builds and instrumentation-disabled builds remain separate fixed workloads, not a causal instrumentation-overhead experiment.",
+    "Different native headers, metadata scope, dock chrome, persistence and layout rules are disclosed; correctness/geometry acceptance does not prove feature or pixel parity.",
+    "CPU spans and sampled RSS are descriptive on this hosted virtual Mac. No overall winner, power efficiency, GPU/compositor time, physical-device/AT/IME input or visible presentation claim.",
+    "Frozen hosted source b411223c7d6e846c9f35a6f04a53d8bf4a73593a and released GPUI Kit0.7.3 revision67265a36. Any later Kael or competitor changes are excluded.",
+    "One shared hosted virtual macOS runner. Exact CPU/memory metadata is preserved below. Five alternating repetitions per engine are descriptive within each fixed contract/mode, not an overall framework ranking or controlled bare-metal power comparison.",
+    "Actual phase-boundary geometry is derived below from the raw reports; nominal1100x760 fixture metadata alone is not geometry proof.",
+    "The display inventory is empty. Accepted owned foreground requests and mandatory active/churn repaint gates were verified; this is not independent proof of foreground focus, native monitor presentation, GPU completion, compositor latency, or visible smoothness.",
+    "CPU draw/submission durations are CPU-side wall-clock spans recorded with optional instrumentation, not GPU time or end-to-end latency. Timing-enabled and timing-disabled builds are kept separate.",
+    "Stable sampled RSS excludes startup and oracle validation, and is process RSS rather than retained heap, allocator usage, GPU residency, or an exact high-water mark.",
+    "Startup timings lack matched initial geometry and are not summarized as comparative results.",
+    "Application executable bytes were uploaded and independently rehashed against every capture. This verifies binary identity, not visible compositor presentation or GPU time.",
+    "Unavailable/zero-only counters are reported explicitly from this run and are not converted to watts or used to rank energy efficiency.",
+    "The fixed phase schedule and original operation-coverage gates do not guarantee equal operation counts across captures or engines. Actual per-run counts and native component differences are retained; modes are not a controlled instrumentation-overhead experiment.",
+    "Native component contracts preserve documented differences such as data-header height, tree accessibility metadata scope and dock chrome. Passing the original oracle/geometry gates does not establish pixel-identical rendering or complete feature parity."
+  ],
+  "older_0d15_public_record_preserved": [
+    {
+      "path": "docs/reviews/2026-10-18-gpui073-hosted-comparison.md",
+      "sha256": "891477718cf87ed99eb2aa4b2abc8370ff8ff138d854861cb93c8d94bfaaa491",
+      "bytes": 4634
+    },
+    {
+      "path": "docs/reviews/2026-10-18-gpui073-hosted-comparison.json",
+      "sha256": "6e5a5eb2cf2d02c0c1b398e3cc22e06d272c4b18448b709ec8206589b778f8e3",
+      "bytes": 30718
+    }
+  ],
+  "supplemental_audit_authoring_failure": "First supplemental expectation used a single-line banner against the actual full rustc -Vv metadata. Failure remains preserved; V2 checks the exact complete pinned string and passes. No benchmark, source or original gate changed."
+}

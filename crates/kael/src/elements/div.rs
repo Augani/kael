@@ -2750,6 +2750,9 @@ impl Element for Div {
             *handle.last_origin.borrow_mut() = bounds.origin - window.element_offset();
         }
         let content_size = if request_layout.child_layout_ids.is_empty() {
+            if let Some(handle) = self.interactivity.tracked_scroll_handle.as_ref() {
+                handle.0.borrow_mut().child_bounds.clear();
+            }
             bounds.size
         } else if let Some(scroll_handle) = self.interactivity.tracked_scroll_handle.as_ref() {
             let mut state = scroll_handle.0.borrow_mut();
@@ -2773,10 +2776,6 @@ impl Element for Div {
             }
             (child_max - child_min).into()
         };
-
-        if let Some(scroll_handle) = self.interactivity.tracked_scroll_handle.as_ref() {
-            scroll_handle.scroll_to_active_item();
-        }
 
         let tracked_scroll_handle = self.interactivity.tracked_scroll_handle.clone();
         self.interactivity.prepaint(
@@ -2851,30 +2850,34 @@ impl Element for Div {
             .interactivity
             .accessibility_attributes
             .as_ref()
-            .filter(|_| global_id.is_none())
+            .filter(|attributes| global_id.is_none() && attributes.id.is_none())
             .map(|_| window.next_anonymous_accessibility_id());
-        let accessibility_id = self
-            .interactivity
-            .accessibility_attributes
-            .as_ref()
-            .map(|_| {
-                window.with_optional_element_state::<InteractiveElementState, _>(
-                    global_id,
-                    |element_state, _window| {
-                        let mut element_state =
-                            element_state.map(|state| state.unwrap_or_default());
-                        let id = element_state
-                            .as_mut()
-                            .and_then(|state| state.accessibility_id)
-                            .or(anonymous_accessibility_id)
-                            .unwrap_or_else(crate::AccessibilityId::new);
-                        if let Some(state) = element_state.as_mut() {
-                            state.accessibility_id = Some(id);
-                        }
-                        (id, element_state)
-                    },
-                )
-            });
+        let accessibility_id =
+            self.interactivity
+                .accessibility_attributes
+                .as_ref()
+                .map(|attributes| {
+                    window.with_optional_element_state::<InteractiveElementState, _>(
+                        global_id,
+                        |element_state, _window| {
+                            let mut element_state =
+                                element_state.map(|state| state.unwrap_or_default());
+                            let id = attributes
+                                .id
+                                .or_else(|| {
+                                    element_state
+                                        .as_mut()
+                                        .and_then(|state| state.accessibility_id)
+                                        .or(anonymous_accessibility_id)
+                                })
+                                .unwrap_or_else(crate::AccessibilityId::new);
+                            if let Some(state) = element_state.as_mut() {
+                                state.accessibility_id = Some(id);
+                            }
+                            (id, element_state)
+                        },
+                    )
+                });
 
         window.with_image_cache(image_cache, |window| {
             let accessibility_node =
@@ -2886,13 +2889,13 @@ impl Element for Div {
                             accessibility_id.expect("an accessible element must have an id"),
                         );
                         node.bounds = Some(crate::AccessibilityRect::from_bounds(bounds));
-                        if self
-                            .interactivity
-                            .tracked_focus_handle
-                            .as_ref()
-                            .is_some_and(|h| h.is_focused(window))
-                        {
-                            node.states |= crate::AccessibilityState::FOCUSED;
+                        if let Some(handle) = self.interactivity.tracked_focus_handle.as_ref() {
+                            // Focus can change after render authored the attributes
+                            // (for example, when a later sibling opens a modal).
+                            node.states.set(
+                                crate::AccessibilityState::FOCUSED,
+                                handle.is_focused(window),
+                            );
                         }
                         if self.interactivity.active.unwrap_or(false) {
                             node.states |= crate::AccessibilityState::PRESSED;
@@ -2905,6 +2908,11 @@ impl Element for Div {
                     .register_accessibility_handlers(node, bounds, window, cx);
             }
 
+            let accessibility_focus = self
+                .interactivity
+                .tracked_focus_handle
+                .as_ref()
+                .map(|handle| handle.id);
             self.interactivity.paint_with_auto_scrollbars(
                 global_id,
                 inspector_id,
@@ -2916,7 +2924,10 @@ impl Element for Div {
                 |_style, window, cx| {
                     let child_visibility = &prepaint.child_visibility;
                     if let Some(node) = accessibility_node.as_ref() {
-                        window.register_accessibility_node(node.clone());
+                        window.register_accessibility_node_with_focus(
+                            node.clone(),
+                            accessibility_focus,
+                        );
                         if node.role.is_container() {
                             window.with_accessibility_parent(node.id, |window| {
                                 paint_visible_children(
@@ -3058,18 +3069,29 @@ impl Interactivity {
             let window_handle = window.window_handle();
             let async_cx = cx.to_async();
             let executor = cx.foreground_executor().clone();
-            window.on_accessibility_action(node.id, crate::AccessibilityAction::Focus, move |_| {
-                let focus_handle = focus_handle.clone();
-                let mut async_cx = async_cx.clone();
-                executor
-                    .spawn(async move {
-                        _ = window_handle.update(&mut async_cx, |_, window, _| {
-                            window.focus(&focus_handle);
-                            window.refresh();
-                        });
-                    })
-                    .detach();
-            });
+            window.on_frame_accessibility_action(
+                node.id,
+                crate::AccessibilityAction::Focus,
+                move |request| {
+                    let focus_handle = focus_handle.clone();
+                    let mut async_cx = async_cx.clone();
+                    executor
+                        .spawn(async move {
+                            _ = window_handle.update(&mut async_cx, |_, window, _| {
+                                if window
+                                    .accessibility_tree()
+                                    .validate_action_request(request)
+                                    .is_none()
+                                {
+                                    return;
+                                }
+                                window.focus(&focus_handle);
+                                window.refresh();
+                            });
+                        })
+                        .detach();
+                },
+            );
         }
 
         for (action, listener) in &self.accessibility_action_listeners {
@@ -3082,12 +3104,17 @@ impl Interactivity {
             let window_handle = window.window_handle();
             let async_cx = cx.to_async();
             let executor = cx.foreground_executor().clone();
-            window.on_accessibility_action(node.id, action, move |request| {
+            window.on_frame_accessibility_action(node.id, action, move |request| {
                 let listener = listener.clone();
                 let mut async_cx = async_cx.clone();
                 executor
                     .spawn(async move {
                         _ = window_handle.update(&mut async_cx, |_, window, cx| {
+                            let Some(request) =
+                                window.accessibility_tree().validate_action_request(request)
+                            else {
+                                return;
+                            };
                             listener(&request, window, cx);
                             window.refresh();
                         });
@@ -3113,12 +3140,19 @@ impl Interactivity {
             let window_handle = window.window_handle();
             let async_cx = cx.to_async();
             let executor = cx.foreground_executor().clone();
-            window.on_accessibility_action(node.id, action, move |_| {
+            window.on_frame_accessibility_action(node.id, action, move |request| {
                 let listeners = listeners.clone();
                 let mut async_cx = async_cx.clone();
                 executor
                     .spawn(async move {
                         _ = window_handle.update(&mut async_cx, |_, window, cx| {
+                            if window
+                                .accessibility_tree()
+                                .validate_action_request(request)
+                                .is_none()
+                            {
+                                return;
+                            }
                             let event = ClickEvent::Keyboard(KeyboardClickEvent {
                                 button: KeyboardButton::Enter,
                                 bounds,
@@ -3357,16 +3391,6 @@ impl Interactivity {
         }
 
         if let Some(scroll_offset) = self.scroll_offset.as_ref() {
-            let mut scroll_to_bottom = false;
-            let mut tracked_scroll_handle = self
-                .tracked_scroll_handle
-                .as_ref()
-                .map(|handle| handle.0.borrow_mut());
-            if let Some(mut scroll_handle_state) = tracked_scroll_handle.as_deref_mut() {
-                scroll_handle_state.overflow = style.overflow;
-                scroll_to_bottom = mem::take(&mut scroll_handle_state.scroll_to_bottom);
-            }
-
             let padding = window.ui_definite_edges_in_pixels(style.padding, bounds.size);
             let padding_size = size(padding.left + padding.right, padding.top + padding.bottom);
             // The floating point values produced by Taffy and ours often vary
@@ -3379,6 +3403,28 @@ impl Interactivity {
             let scroll_max = (padded_content_size - bounds.size)
                 .map(round_to_two_decimals)
                 .max(&Default::default());
+            let scroll_to_bottom = if let Some(handle) = self.tracked_scroll_handle.as_ref() {
+                let mut state = handle.0.borrow_mut();
+                state.overflow = style.overflow;
+                state.max_offset = scroll_max;
+                state.bounds = bounds;
+                state.content_bounds = Bounds::from_corners(
+                    point(bounds.left() + padding.left, bounds.top() + padding.top),
+                    point(
+                        bounds.right() - padding.right,
+                        bounds.bottom() - padding.bottom,
+                    ),
+                );
+                let scroll_to_bottom = mem::take(&mut state.scroll_to_bottom);
+                drop(state);
+                // Child bounds and viewport metrics must belong to the same
+                // layout. In particular a newly mounted handle has no previous
+                // overflow/viewport against which it can resolve an item.
+                handle.scroll_to_active_item();
+                scroll_to_bottom
+            } else {
+                false
+            };
             // Clamp scroll offset in case scroll max is smaller now (e.g., if children
             // were removed or the bounds became larger).
             let mut scroll_offset = scroll_offset.borrow_mut();
@@ -3427,18 +3473,6 @@ impl Interactivity {
                         window.request_animation_frame();
                     }
                 }
-            }
-
-            if let Some(mut scroll_handle_state) = tracked_scroll_handle {
-                scroll_handle_state.max_offset = scroll_max;
-                scroll_handle_state.bounds = bounds;
-                scroll_handle_state.content_bounds = Bounds::from_corners(
-                    point(bounds.left() + padding.left, bounds.top() + padding.top),
-                    point(
-                        bounds.right() - padding.right,
-                        bounds.bottom() - padding.bottom,
-                    ),
-                );
             }
 
             display_offset
@@ -6365,6 +6399,11 @@ impl ScrollHandle {
         Self(Rc::default())
     }
 
+    /// Whether both handles refer to the same scrolling state.
+    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+
     /// Seconds since the last scroll event, or `f64::MAX` if never scrolled.
     pub fn seconds_since_last_scroll(&self) -> f64 {
         self.0.borrow().elastic.borrow().seconds_since_last_scroll()
@@ -6564,6 +6603,7 @@ mod test {
         ImplicitStyleAnimationState, ImplicitVisualStyle, TOOLTIP_SHOW_DELAY, TooltipFocusBehavior,
         TransitionConfig, auto_scrollbar_should_poll_for_fade,
     };
+    use crate::prelude::FluentBuilder as _;
     use crate::scroll_elasticity::{
         add_scroll_elasticity, advance_scroll_elasticity, apply_scroll_delta_axis,
     };
@@ -6579,10 +6619,113 @@ mod test {
     use std::{
         cell::{Cell, RefCell},
         rc::Rc,
-        time::{Duration, Instant},
+        time::Duration,
     };
+    use web_time::Instant;
 
     crate::actions!(context_menu_test, [PrimaryMenuAction, ShareViaLinkAction]);
+
+    struct DeferredNativeHost {
+        mode: Rc<Cell<u8>>,
+        calls: Rc<Cell<usize>>,
+        focus: FocusHandle,
+    }
+    impl Render for DeferredNativeHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+            let disabled = self.mode.get() == 1;
+            div().when(self.mode.get() != 2, |root| {
+                let attributes = || {
+                    AccessibilityAttributes::button("Deferred native control").states(if disabled {
+                        AccessibilityState::DISABLED
+                    } else {
+                        AccessibilityState::NONE
+                    })
+                };
+                root.child(
+                    div()
+                        .id("deferred-native-pointer")
+                        .accessibility(attributes())
+                        .track_focus(&self.focus)
+                        .on_click({
+                            let calls = self.calls.clone();
+                            move |_, _, _| calls.set(calls.get() + 1)
+                        }),
+                )
+                .child(
+                    div()
+                        .id("deferred-native-listener")
+                        .accessibility(attributes())
+                        .on_accessibility_action(crate::AccessibilityAction::Click, {
+                            let calls = self.calls.clone();
+                            move |_, _, _| calls.set(calls.get() + 1)
+                        }),
+                )
+            })
+        }
+    }
+
+    #[crate::test]
+    fn deferred_native_callbacks_recheck_disabled_and_removed_nodes(cx: &mut TestAppContext) {
+        let mode = Rc::new(Cell::new(0));
+        let calls = Rc::new(Cell::new(0));
+        let (host, window) = cx.add_window_view({
+            let mode = mode.clone();
+            let calls = calls.clone();
+            move |_, cx| DeferredNativeHost {
+                mode,
+                calls,
+                focus: cx.focus_handle(),
+            }
+        });
+        for mode_after_queue in [1, 2, 0] {
+            mode.set(0);
+            window.update(|window, cx| {
+                window.draw(cx).clear();
+                let focus = &host.read(cx).focus;
+                window.blur();
+                assert!(!focus.is_focused(window));
+                let nodes = window
+                    .accessibility_tree()
+                    .nodes
+                    .values()
+                    .filter(|node| node.label.as_deref() == Some("Deferred native control"))
+                    .map(|node| node.id)
+                    .collect::<Vec<_>>();
+                assert_eq!(nodes.len(), 2);
+                for id in &nodes {
+                    window.dispatch_accessibility_action_for_test(
+                        crate::AccessibilityActionRequest::new(
+                            *id,
+                            crate::AccessibilityAction::Click,
+                        ),
+                    );
+                }
+                // Only the pointer-backed control tracks focus.
+                for id in nodes {
+                    if window
+                        .has_accessibility_action_handler(id, crate::AccessibilityAction::Focus)
+                    {
+                        window.dispatch_accessibility_action_for_test(
+                            crate::AccessibilityActionRequest::new(
+                                id,
+                                crate::AccessibilityAction::Focus,
+                            ),
+                        );
+                    }
+                }
+                mode.set(mode_after_queue);
+                window.draw(cx).clear();
+            });
+            window.run_until_parked();
+            window.update(|window, cx| {
+                assert_eq!(calls.get(), if mode_after_queue == 0 { 2 } else { 0 });
+                assert_eq!(
+                    host.read(cx).focus.is_focused(window),
+                    mode_after_queue == 0
+                );
+            });
+        }
+    }
 
     struct CountingProbe {
         height: crate::Pixels,
@@ -6673,7 +6816,8 @@ mod test {
 
     #[test]
     fn scroll_elasticity_animates_back_to_zero() {
-        use std::time::{Duration, Instant};
+        use std::time::Duration;
+        use web_time::Instant;
 
         let mut overscroll = px(40.0);
         let mut last_advance = None;
@@ -6722,6 +6866,88 @@ mod test {
         let item = handle.bounds_for_item(0).expect("tracked child bounds");
         let content_bottom = handle.0.borrow().content_bounds.bottom();
         assert_eq!(item.bottom() + handle.offset().y, content_bottom);
+    }
+
+    #[kael::test]
+    fn scroll_to_item_uses_current_viewport_on_first_paint_and_resize(cx: &mut TestAppContext) {
+        struct RevealView {
+            scroll: ScrollHandle,
+            height: crate::Pixels,
+            child_count: usize,
+        }
+        impl Render for RevealView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div()
+                    .id("measured-item-reveal")
+                    .w(px(100.0))
+                    .h(self.height)
+                    .p(px(4.0))
+                    .overflow_scroll()
+                    .track_scroll(&self.scroll)
+                    .children((0..self.child_count).map(|_| div().w(px(160.0)).h(px(40.0))))
+            }
+        }
+        let scroll = ScrollHandle::new();
+        scroll.scroll_to_item(7);
+        let (view, window) = cx.add_window_view({
+            let scroll = scroll.clone();
+            move |_, _| RevealView {
+                scroll,
+                height: px(120.0),
+                child_count: 10,
+            }
+        });
+        let assert_visible = || {
+            let state = scroll.0.borrow();
+            let item = state.child_bounds[7];
+            let offset = *state.offset.borrow();
+            assert!(
+                offset.y < px(0.0),
+                "first-paint reveal must not be discarded"
+            );
+            assert!(item.top() + offset.y >= state.content_bounds.top());
+            assert!(item.bottom() + offset.y <= state.content_bounds.bottom());
+            // A wider-than-viewport item can only reveal one of its edges.
+            assert!(
+                item.right() + offset.x == state.content_bounds.right()
+                    || item.left() + offset.x == state.content_bounds.left()
+            );
+            assert!(state.active_item.is_none());
+        };
+        assert_visible();
+        window.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.height = px(80.0);
+                view.scroll.scroll_to_item(7);
+                cx.notify();
+            });
+            window.draw(cx).clear();
+        });
+        assert_visible();
+
+        window.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.child_count = 0;
+                view.scroll.scroll_to_item(7);
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            assert!(scroll.bounds_for_item(7).is_none());
+            assert_eq!(scroll.0.borrow().active_item.unwrap().index, 7);
+            view.update(cx, |view, cx| {
+                view.child_count = 10;
+                cx.notify();
+            });
+            window.draw(cx).clear();
+        });
+        assert_visible();
+
+        // The explicit bottom request retains precedence over item reveal.
+        scroll.scroll_to_item(0);
+        scroll.scroll_to_bottom();
+        window.update(|window, cx| window.draw(cx).clear());
+        let state = scroll.0.borrow();
+        assert_eq!(scroll.offset().y, -state.max_offset.height);
     }
 
     #[kael::test]

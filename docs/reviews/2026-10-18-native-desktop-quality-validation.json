@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-10-18T00:39:08.438937+00:00",
+  "status": "CURRENT_NINETEEN_FILE_SOURCE_PHYSICAL_METAL_CORRECTNESS_PASS",
+  "source_base": "0d15aff4288e8e98a54032e6ed149e080ea13104",
+  "source_changed_paths_sha256": {
+    "scripts/ci/verify-lottie-admission.py": "7b69478caaf9c61756e89383178177b4711c812b7e3945a1583c00a3542ec5dd",
+    "scripts/ci/verify-rasterlottie-fork.py": "657c36885044d2707bac484761cc8fa895ea446ecffb671a2af0c8fd609d52ef",
+    "vendor/rasterlottie/PATCHES.md": "dc3dce605a38a24865f317e9caa138b0ec3213dd68bc2830ed7caca09d0b3166",
+    "vendor/rasterlottie/zip9-compatibility.patch": "844d03d7a91480ae08b751f0e6251c6f213c7a1c43a45e6663c0a004efdb7239",
+    "vendor/rasterlottie/src/render/layer_effects.rs": "031d37e4469a4554b90650c875c49b0be1aba643823490ca811993009c89cf11",
+    "vendor/rasterlottie/tests/zip9_compatibility.rs": "6d4421331337adcc07c86737880960328d537f5ecf0be2fa03e3ee8204ac59cc",
+    "crates/kael/src/elements/scroll_bar.rs": "764bad5a079675ffd1722ea37d36fb7596cb8623ed0fb637836ad9be68cb58d3",
+    "crates/kael_ui/src/display/data_table.rs": "733ee85a89d58c03603349ad75a78885b67bd20ace5eb0465f64e448791251e3",
+    "crates/kael/src/asset_cache.rs": "819d8c4996fd87f21811d3fb4004cbd60f454c35997a7ba337056737d9b2eff8",
+    "crates/kael/src/app.rs": "72f465c345be60563ef1dbcd036cd0a7e2692ee3de09199f3a0127053a4db05f",
+    "crates/kael/src/window.rs": "fb2cc4f17f7bbbad58983b5ab1ceba77967a306dff3b7ab61f1272a7679fd8ce",
+    "crates/kael/src/lottie.rs": "185fa0fa7fce06b9c5c80f682d9261d1eb74c86c787c60f8dc70dd606d4a453a",
+    "crates/kael/src/subscription.rs": "cd0611e042a353dd02e4f133b2aa8a7d0ab481dfe0cce058cf26d9f45f0d8fcf",
+    "diagnostics/metal-presentation/probe.m": "e61912654259c3a3495181401a0290c20053aaa93bd2dd121bdfc29010413fba",
+    "diagnostics/metal-presentation/run-controls.py": "d3cb056ddb7c7fce722d0e9a378dca348590841a9b38bb272cd0b66045de3682",
+    "diagnostics/metal-presentation/test_run_controls.py": "d0b68b52381531c8c479b4c1415ceb42fab103d651273b94963133d0fe14e4f5",
+    ".github/workflows/platform-readiness.yml": "1f4872eae81b226ae68f5c28e64373796d3373cf00082c806e257ae35f0d8d04",
+    "diagnostics/metal-presentation/README.md": "d5eb11b169abaef7f26fe8ebbe6edabb06d4d1e989b634ad34bc7ad94b6369d6",
+    "crates/kael/examples/native_renderer_smoke.rs": "7782865f0b6b9c67c5e6e1af8995dc59e6f0f202c04b45fea7c05d6ba1df2bd3"
+  },
+  "source_guard": {
+    "files": 3013,
+    "unchanged_through_integration_and_native_run": true,
+    "snapshot": {
+      "path": ".artifacts/2026-10-18-desktop-quality-final/source-before.json",
+      "sha256": "5f8e936e64bd358c3a1226d5ed9162b695a8cfcd3de3c066d81475321ca7b232",
+      "bytes": 347070
+    }
+  },
+  "integration": {
+    "record": {
+      "path": ".artifacts/2026-10-18-desktop-quality-final/integration.json",
+      "sha256": "8d13e03422794d278f4b2f82fec23d7c7a883c7e20b4f5eb984ab41757aba5a5",
+      "bytes": 7956
+    },
+    "checks_passed": 14,
+    "core_passed": 2216,
+    "core_existing_opt_in_ignored": 2,
+    "ui_passed": 538,
+    "ui_ignored": 0
+  },
+  "native": {
+    "successful_gpu_invocations": 59,
+    "distinct_gpu_tests": 58,
+    "groups": 6,
+    "duplicated_case": "platform::mac::metal_atlas::tests::native_atlas_identity_rejects_foreign_atlas_and_late_release",
+    "gpu_failed": 0,
+    "gpu_ignored": 0,
+    "completed_and_displayed_frames": 58,
+    "window_geometry": "Requested720x460 logical matches client viewport; resize to723x460; scale2; PNG1446x920.",
+    "idle_model_wake": "1250ms idle model-triggered update passed.",
+    "smoke_attempts": 1,
+    "smoke_build_attempts": 1,
+    "gpu_helper_attempts": 1,
+    "markers": [
+      "NATIVE_WINDOW_CONTENT_SIZE_OK: requested client size matches actual viewport",
+      "NATIVE_IDLE_MODEL_FRAME_OK: model notification resumed CPU platform submission after 1250ms without input, resize or explicit refresh; compositor display checked separately",
+      "NATIVE_GPU_PRESENTATION_OK: completed_and_displayed_frames=58 clock=monotonic_host_seconds",
+      "NATIVE_RENDERER_SMOKE_GPU: backend=metal software=false device=\"Metal device (platform identity unavailable)\" driver=\"Metal\" info=\"Kael macOS Metal backend\"",
+      "NATIVE_RENDERER_SMOKE_FRAMES: revisions=4 render_calls=12",
+      "NATIVE_RENDERER_SMOKE_PNG: path=/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-native-desktop-quality/native-renderer.png dimensions=1446x920 scale=2 bytes=128438 colors=256 text_probe_pixels=6067 fnv1a64=d2ac4ef64bb6b198",
+      "NATIVE_RENDERER_SMOKE_OK: real window, retained frames, GPU identity, and device-pixel readback passed"
+    ],
+    "visual_inspection": "Root viewed the actual PNG: complete heading, progress panel, bar chart and all six tiles; no visible clipping or missing content.",
+    "device_scope": "Native Metal backend reports software=false; device name is platform identity unavailable. Do not substitute the independent control probe adapter name."
+  },
+  "recorder_correction": {
+    "first_receipt": {
+      "path": ".artifacts/2026-10-18-native-desktop-quality/result.json",
+      "sha256": "9973724b149ea2e4e7d2d2d580904e96ce9109fc0e0ae2d37eacba1de94136f6",
+      "bytes": 949
+    },
+    "first_script": {
+      "path": ".artifacts/2026-10-18-native-desktop-quality/run.py",
+      "sha256": "e9f40e10f5d16655a0cc13685c2263b23f2454e42c7cd7e4c6bd2bdbce592cc6",
+      "bytes": 5150
+    },
+    "qualification": "Original GPU helper exited0. Recorder expected seven groups instead of six and stopped before smoke. Preserved original FAIL; receipt-only continuation consumed the same GPU logs, then built and ran the smoke once. No GPU helper/test rerun.",
+    "continuation": {
+      "path": ".artifacts/2026-10-18-native-desktop-quality/continuation.json",
+      "sha256": "f751e75e668dd506b67c835b385ba13d10a22686d4b8f0a95d08e998e493f58b",
+      "bytes": 5366
+    },
+    "continuation_script": {
+      "path": ".artifacts/2026-10-18-native-desktop-quality/resume-after-gpu-receipt.py",
+      "sha256": "ac89bcf8363cfaa720e89a1651514dc118fb6899bbd8236c9fc8f76c9236989f",
+      "bytes": 6100
+    },
+    "independent_parser_review": {
+      "path": ".artifacts/2026-10-18-platform-gpu-count-clarification/parser-review.json",
+      "sha256": "4d522dc7d1697465fe44efd017899cd06673d4a7d48e01a5a3ae4d502e5e2e93",
+      "bytes": 1672
+    }
+  },
+  "evidence": [
+    {
+      "path": ".artifacts/2026-10-18-native-desktop-quality/gpu.log",
+      "sha256": "c07e418b3be8eeadba80bf13c6a902825346e5d478b10fdfc796c70a5fbcdbd1",
+      "bytes": 13225
+    },
+    {
+      "path": ".artifacts/2026-10-18-native-desktop-quality/smoke-build.log",
+      "sha256": "c6897863043eb307da06b9bcb0bd89569630c23838fb963fdcc9c5c41337b1da",
+      "bytes": 497358
+    },
+    {
+      "path": ".artifacts/2026-10-18-native-desktop-quality/smoke.log",
+      "sha256": "913bd3b7a9df271463d305eb609686a374204d75f09c2af3ff180f4f1f9fe881",
+      "bytes": 36797
+    },
+    {
+      "path": ".artifacts/2026-10-18-native-desktop-quality/native-gpu-tests",
+      "sha256": "b609c38f0d61598a9122458da5cb97b7c31f3199601dfc9f5dbf48920f78667a",
+      "bytes": 181063928
+    },
+    {
+      "path": ".artifacts/2026-10-18-native-desktop-quality/native_renderer_smoke",
+      "sha256": "68e072c8584a18b3baede8acc36441cc15e53d527e46f00a022ce0430d4c3af3",
+      "bytes": 59776456
+    },
+    {
+      "path": ".artifacts/2026-10-18-native-desktop-quality/native-renderer.png",
+      "sha256": "45c69fbf05fa7f1ef8e22eef68a86fad0c619f7abafb8821e45405918f8df979",
+      "bytes": 128438
+    },
+    {
+      "path": ".artifacts/2026-10-18-native-desktop-quality/programmable/atlas-identity-lifetimes.log",
+      "sha256": "8cfd68ff83ce718996e97bd2dd3c2b6cc76ba80d7ceb87c3e6c1d84433a41d3d",
+      "bytes": 998
+    },
+    {
+      "path": ".artifacts/2026-10-18-native-desktop-quality/programmable/atlas-tile-residency.log",
+      "sha256": "fc324ee07e1713bd5fedd32ad789161a199eb77159b239ae3a7fa8ed15131c97",
+      "bytes": 888
+    },
+    {
+      "path": ".artifacts/2026-10-18-native-desktop-quality/programmable/custom-shaders-and-compute.log",
+      "sha256": "d5b8245a7466d73685721e17519f03c75360502bd7d5cc6215abaf380aba70af",
+      "bytes": 1527
+    },
+    {
+      "path": ".artifacts/2026-10-18-native-desktop-quality/programmable/mixed-gpu-graph.log",
+      "sha256": "9760a81ec5ce7bc81e4a2ca79df62c4fc8377f094781ef7a4307af3e4a5c6fe2",
+      "bytes": 1285
+    },
+    {
+      "path": ".artifacts/2026-10-18-native-desktop-quality/programmable/offscreen-scenes.log",
+      "sha256": "607bba469aba37c6a41582193863013c1b8aa5b486a9bc94d2aa238ad4be1cdf",
+      "bytes": 5146
+    },
+    {
+      "path": ".artifacts/2026-10-18-native-desktop-quality/programmable/ordered-atlas-uploads.log",
+      "sha256": "75f744f3df9baa6509579517087fb6879e4715ed2f968567f1f29f29ab945ac9",
+      "bytes": 2324
+    }
+  ],
+  "limitations": [
+    "Physical Mac correctness only. Hosted macOS positive-presentation failure remains unresolved; no waiver or green CI claim.",
+    "No comparative timing, power, application RSS or framework ranking. GPU invocations overlap one named case.",
+    "The integration ran headlessly; this native run adds Metal/presentation correctness, not physical screen-reader or input-source IME acceptance.",
+    "Fresh immutable-source package validation and the full100-run benchmark cohort remain separate pending work."
+  ]
+}

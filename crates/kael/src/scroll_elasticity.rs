@@ -190,7 +190,8 @@ fn finite_pixels_or_zero(value: Pixels) -> Pixels {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
+    use web_time::Instant;
 
     #[test]
     fn invalid_scroll_values_fail_closed_without_panicking() {

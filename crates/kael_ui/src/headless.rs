@@ -13,9 +13,9 @@ use kael::Keystroke;
 pub enum FocusTrapAction {
     /// Move to the first focusable item in the trap.
     FocusFirst,
-    /// Move to the next focusable item in the current tab group.
+    /// Move to the next focusable item in the retained focus scope.
     FocusNext,
-    /// Move to the previous focusable item in the current tab group.
+    /// Move to the previous focusable item in the retained focus scope.
     FocusPrevious,
     /// Dismiss the trapped surface.
     Dismiss,
@@ -23,11 +23,13 @@ pub enum FocusTrapAction {
 
 /// Keyboard behavior for modal surfaces that should keep focus inside themselves.
 ///
-/// Render the trap root with a stable focus handle and tab index, put the
-/// trap's children in the same tab group, then call
+/// Track a retained focus handle on the trap root, then call
 /// [`FocusTrapController::action_for_keystroke`] from `on_key_down`. Apply
-/// `FocusNext` with `window.focus_next_in_group()`, `FocusPrevious` with
-/// `window.focus_prev_in_group()`, and `Dismiss` with your close handler.
+/// `FocusNext` with `window.focus_next_within(&root_focus)`, `FocusPrevious`
+/// with `window.focus_prev_within(&root_focus)`, and `Dismiss` with your close
+/// handler. Stop propagation and prevent default after handling a trap action.
+/// The controller maps keys; it does not install handlers or hide background
+/// controls from assistive technology.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FocusTrapController {
     dismiss_on_escape: bool,
@@ -49,7 +51,7 @@ impl FocusTrapController {
         }
     }
 
-    /// Create a trap that keeps Tab navigation inside the group but does not dismiss on Escape.
+    /// Create persistent focus-trap behavior that does not dismiss on Escape.
     pub fn persistent() -> Self {
         Self {
             dismiss_on_escape: false,
@@ -75,8 +77,13 @@ impl FocusTrapController {
     }
 
     /// Return the focus action for a platform keystroke, if this trap handles it.
+    /// Control, Alt, platform and function shortcuts remain unhandled.
     pub fn action_for_keystroke(&self, keystroke: &Keystroke) -> Option<FocusTrapAction> {
-        self.action_for_key(keystroke.key.as_ref(), keystroke.modifiers.shift)
+        let modifiers = keystroke.modifiers;
+        if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
+            return None;
+        }
+        self.action_for_key(keystroke.key.as_ref(), modifiers.shift)
     }
 
     /// Return the focus action for a key name and shift state.
@@ -1290,5 +1297,65 @@ mod tests {
         assert!(tree.is_expanded(3));
         assert!(tree.is_selected(3));
         assert_eq!(tree.selected(), Some(3));
+    }
+}
+
+#[cfg(test)]
+mod focus_trap_modifier_preservation {
+    use super::{FocusTrapAction, FocusTrapController};
+    use kael::{Keystroke, Modifiers};
+
+    #[::core::prelude::v1::test]
+    fn platform_keystrokes_preserve_modified_tab_and_escape() {
+        let trap = FocusTrapController::modal();
+        for shift in [false, true] {
+            let expected = if shift {
+                FocusTrapAction::FocusPrevious
+            } else {
+                FocusTrapAction::FocusNext
+            };
+            let tab = Keystroke {
+                key: "tab".into(),
+                modifiers: Modifiers {
+                    shift,
+                    ..Modifiers::default()
+                },
+                ..Keystroke::default()
+            };
+            assert_eq!(trap.action_for_keystroke(&tab), Some(expected));
+            // The simpler key+shift API deliberately has no other modifiers.
+            assert_eq!(trap.action_for_key("tab", shift), Some(expected));
+            assert_eq!(
+                trap.action_for_key("escape", shift),
+                Some(FocusTrapAction::Dismiss)
+            );
+            for modifier in 0..4 {
+                for key in ["tab", "escape"] {
+                    let keystroke = Keystroke {
+                        key: key.into(),
+                        modifiers: Modifiers {
+                            control: modifier == 0,
+                            alt: modifier == 1,
+                            platform: modifier == 2,
+                            function: modifier == 3,
+                            shift,
+                        },
+                        ..Keystroke::default()
+                    };
+                    assert_eq!(
+                        trap.action_for_keystroke(&keystroke),
+                        None,
+                        "modified platform keystroke must remain unhandled: {keystroke:?}"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            trap.action_for_keystroke(&Keystroke {
+                key: "escape".into(),
+                ..Keystroke::default()
+            }),
+            Some(FocusTrapAction::Dismiss)
+        );
     }
 }

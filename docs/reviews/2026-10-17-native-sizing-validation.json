@@ -1,0 +1,217 @@
+{
+  "date": "2026-10-17",
+  "scope": "One complete local native navigation pair after post-startup client resize; geometry, frame activity and original workload gates pass.",
+  "binary_source": "b11ed506a739e5241aa3e1d406bc94ef82fc86f2",
+  "comparison_revision": "3467e647600290343885b500bd7464057e334d18",
+  "limitations": [
+    "One capture per engine on a shared desktop; no overall performance, presentation-latency or controlled-power ranking.",
+    "Later shared cache, display-link and component fixes are absent from these frozen binaries. Build-source metadata overrides the collection checkout identity.",
+    "Initial startup timings have unpaired native geometry and remain diagnostic."
+  ],
+  "environment_sha256": "f785747a41b2d52020c6ec5a41d7cb0fef785550e942d8f43beebaec6baa4cce",
+  "raw_runs_sha256": "3984f7e9ea1055aa2ae98670017ed6d7d2e12876f51e98587456a4db78a1dbb8",
+  "runs": [
+    {
+      "engine": "kael",
+      "binary_sha256": "fdc370e506be79d39e2d7c16f93d9ed70dfb24bc19aa59517c8986da220cfdca",
+      "raw_report_sha256": "cc7b632f408b18379c08d0c3848126a4ae082eff6a4c696fa505779e2d1df132",
+      "native_window_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "phase_frame_counts": [
+        {
+          "phase": "idle-before",
+          "renders": 2,
+          "draws": 2,
+          "submissions": 2
+        },
+        {
+          "phase": "active",
+          "renders": 684,
+          "draws": 684,
+          "submissions": 684
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 663,
+          "draws": 663,
+          "submissions": 663
+        }
+      ],
+      "process_sample_count": 143,
+      "phase_window_activation": [
+        {
+          "phase": "active",
+          "activation_accepted": true
+        },
+        {
+          "phase": "churn",
+          "activation_accepted": true
+        }
+      ],
+      "workload_validation": "pass"
+    },
+    {
+      "engine": "gpui-kit",
+      "binary_sha256": "9684c6e30313d3a5ba5fbaea1c06789f647b0f1f1cc0b581ad39cdafb3cea2f5",
+      "raw_report_sha256": "afe17d8dedd93dd1343172a914166c59f082b749bae7562e8a9596e10af889c7",
+      "native_window_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "phase_frame_counts": [
+        {
+          "phase": "idle-before",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "active",
+          "renders": 677,
+          "draws": 677,
+          "submissions": 677
+        },
+        {
+          "phase": "idle-after",
+          "renders": 1,
+          "draws": 1,
+          "submissions": 1
+        },
+        {
+          "phase": "churn",
+          "renders": 649,
+          "draws": 649,
+          "submissions": 649
+        }
+      ],
+      "process_sample_count": 140,
+      "phase_window_activation": [
+        {
+          "phase": "active",
+          "activation_accepted": true
+        },
+        {
+          "phase": "churn",
+          "activation_accepted": true
+        }
+      ],
+      "workload_validation": "pass"
+    }
+  ]
+}

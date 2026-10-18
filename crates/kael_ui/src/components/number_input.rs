@@ -257,7 +257,12 @@ fn handle_number_accessibility_action(
                 let requested_value = match request.payload.as_ref() {
                     Some(AccessibilityActionPayload::NumericValue(value)) => Some(*value),
                     Some(AccessibilityActionPayload::Value(value)) => value.parse().ok(),
-                    None => None,
+                    Some(
+                        AccessibilityActionPayload::TextSelection { .. }
+                        | AccessibilityActionPayload::TextReveal { .. }
+                        | AccessibilityActionPayload::TextReplacement { .. },
+                    )
+                    | None => None,
                 };
                 if let Some(value) = requested_value {
                     state.set_value(value, cx);

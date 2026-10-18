@@ -1,3 +1,10 @@
+#[cfg(test)]
+mod atlas_tests;
+mod blur;
+#[cfg(test)]
+mod blur_tests;
+#[cfg(feature = "custom-shaders")]
+mod custom_shaders;
 use super::atlas::{WebAtlas, WebAtlasUpload};
 use crate::{
     AtlasTextureId, AtlasTextureKind, AtlasTile, Background, BackgroundTag, Bounds, ColorFilter,
@@ -111,6 +118,9 @@ pub(super) struct WebGlSceneRenderer {
     verification_pixels: Option<Vec<u8>>,
     recovery_reference: Option<Vec<u8>>,
     previous_scene: Option<Scene>,
+    blur: blur::WebBlurRenderer,
+    #[cfg(feature = "custom-shaders")]
+    custom: custom_shaders::WebCustomRenderer,
 }
 
 impl WebGlSceneRenderer {
@@ -153,6 +163,18 @@ impl WebGlSceneRenderer {
             .context("this browser does not provide WebGL2")?
             .dyn_into::<Gl>()
             .map_err(|_| anyhow!("#blade returned a non-WebGL2 rendering context"))?;
+        let max_texture_dimension = gl
+            .get_parameter(Gl::MAX_TEXTURE_SIZE)
+            .map_err(js_error)?
+            .as_f64()
+            .context("browser driver texture limit is unavailable")?;
+        anyhow::ensure!(
+            max_texture_dimension.is_finite()
+                && max_texture_dimension >= 1.0
+                && max_texture_dimension <= i32::MAX as f64,
+            "browser driver texture limit is invalid"
+        );
+        atlas.set_max_texture_dimension(max_texture_dimension as i32)?;
         let shape_program = link_program(&gl, QUAD_VERTEX_SHADER, SHAPE_FRAGMENT_SHADER)?;
         let solid_quad_program =
             link_program(&gl, SOLID_QUAD_VERTEX_SHADER, SOLID_QUAD_FRAGMENT_SHADER)?;
@@ -279,7 +301,12 @@ impl WebGlSceneRenderer {
         gl.pixel_storei(Gl::UNPACK_ALIGNMENT, 1);
         gl.viewport(0, 0, size.width.0, size.height.0);
 
+        #[cfg(feature = "custom-shaders")]
+        let custom = custom_shaders::WebCustomRenderer::new(&gl)?;
+        let blur = blur::WebBlurRenderer::new(&gl);
         Ok(Self {
+            #[cfg(feature = "custom-shaders")]
+            custom,
             canvas: canvas.clone(),
             gl,
             shape_program,
@@ -308,7 +335,66 @@ impl WebGlSceneRenderer {
             verification_pixels: None,
             recovery_reference,
             previous_scene: None,
+            blur,
         })
+    }
+
+    #[cfg(feature = "custom-shaders")]
+    pub(super) fn write_render_target(
+        &mut self,
+        target: &crate::RenderTarget,
+        pixels: &[u8],
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.custom.write_target(target, pixels)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(super) fn create_render_target(
+        &mut self,
+        descriptor: crate::RenderTargetDescriptor,
+    ) -> std::result::Result<crate::RenderTarget, crate::RenderTargetError> {
+        self.custom.create(descriptor)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(super) fn render_shader(
+        &mut self,
+        target: &crate::RenderTarget,
+        shader: &crate::ShaderHandle,
+        bindings: &crate::ShaderBindings,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.custom.render(target, shader, bindings)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(super) fn read_render_target(
+        &mut self,
+        target: &crate::RenderTarget,
+    ) -> std::result::Result<crate::RenderTargetReadback, crate::RenderTargetError> {
+        self.custom.read(target)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(super) fn validate_render_target(
+        &self,
+        target: &crate::RenderTarget,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.custom.validate(target)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(super) fn set_render_target_byte_budget(&mut self, bytes: u64) {
+        self.custom.set_budget(bytes);
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(super) fn shed_shader_memory(&mut self) {
+        self.custom.shed_memory();
+    }
+
+    pub(super) fn invalidate_context_resources(&mut self) {
+        self.blur.forget_context();
+        #[cfg(feature = "custom-shaders")]
+        self.custom.invalidate();
+    }
+
+    pub(super) fn shed_scene_scratch(&mut self) {
+        self.blur.clear_scratch();
+        self.previous_scene = None;
     }
 
     pub(super) fn frame_count(&self) -> u64 {
@@ -319,11 +405,33 @@ impl WebGlSceneRenderer {
         self.verification_pixels.take()
     }
 
+    pub(super) fn set_atlas_byte_budget(&self, bytes: Option<u64>) {
+        self.atlas.set_byte_budget(bytes);
+    }
+
+    pub(super) fn shed_atlas_memory(&mut self) {
+        self.atlas.shed_memory();
+        self.prune_atlas_textures();
+    }
+
+    fn prune_atlas_textures(&mut self) {
+        let atlas = &self.atlas;
+        let gl = &self.gl;
+        self.textures.retain(|id, cached| {
+            let retained = atlas.page_revision(*id).is_some();
+            if !retained {
+                gl.delete_texture(Some(&cached.texture));
+            }
+            retained
+        });
+    }
+
     pub(super) fn atlas(&self) -> Arc<WebAtlas> {
         self.atlas.clone()
     }
 
     pub(super) fn resize(&mut self, size: Size<DevicePixels>) {
+        self.shed_scene_scratch();
         self.gl.viewport(0, 0, size.width.0, size.height.0);
         // Assigning a canvas backing size clears its default framebuffer. The
         // next scheduled draw must present before capture can be truthful.
@@ -339,9 +447,11 @@ impl WebGlSceneRenderer {
         // context. The window's restoration listener recreates every GPU-owned
         // object and then schedules a forced frame.
         if self.gl.is_context_lost() {
+            self.invalidate_context_resources();
             return Ok(());
         }
 
+        self.atlas.mark_scene_used(scene);
         let atlas = &self.atlas;
         let gl = &self.gl;
         self.textures.retain(|id, cached| {
@@ -356,6 +466,20 @@ impl WebGlSceneRenderer {
             .previous_scene
             .as_ref()
             .map_or(FrameDamage::Full, |previous| scene.damage_since(previous));
+        // Backdrop samples depend on earlier scene pixels outside a primitive's
+        // own damage. A partial redraw would blur the retained, already-blurred
+        // framebuffer again and miss changed output beyond that damage region.
+        let damage = if !matches!(damage, FrameDamage::None)
+            && (!scene.blur_rects.is_empty()
+                || self
+                    .previous_scene
+                    .as_ref()
+                    .is_some_and(|previous| !previous.blur_rects.is_empty()))
+        {
+            FrameDamage::Full
+        } else {
+            damage
+        };
         if matches!(damage, FrameDamage::None) {
             self.canvas
                 .set_attribute("data-kael-frame-damage", "none")
@@ -377,6 +501,7 @@ impl WebGlSceneRenderer {
                 .set_attribute("data-kael-frame", "presented")
                 .map_err(js_error)?;
             self.has_presented_frame = true;
+            self.atlas.after_frame();
             return Ok(());
         }
 
@@ -408,17 +533,7 @@ impl WebGlSceneRenderer {
                         }
                     }
                     PrimitiveBatch::BlurRects(rects) => {
-                        self.begin_shape_batch(viewport);
-                        for rect in rects {
-                            self.draw_simple_shape(
-                                rect.bounds,
-                                rect.content_mask.bounds,
-                                rect.corner_radii,
-                                rect.tint,
-                                rect.rounded_clip_bounds,
-                                rect.rounded_clip_radii,
-                            );
-                        }
+                        self.blur.draw(rects, viewport, &self.quad_vao, scissor)?;
                     }
                     PrimitiveBatch::Quads(quads) => {
                         self.draw_quads(quads, viewport)?;
@@ -444,8 +559,21 @@ impl WebGlSceneRenderer {
                         sprites,
                     } => self.draw_polychrome_sprites(texture_id, sprites, viewport)?,
                     PrimitiveBatch::Surfaces(surfaces) => {
+                        #[cfg(feature = "custom-shaders")]
+                        for surface in surfaces {
+                            let crate::PaintSurfaceSource::RenderTarget { target, .. } =
+                                &surface.source;
+                            self.custom.draw(
+                                surface,
+                                target,
+                                crate::size(
+                                    DevicePixels(viewport[0] as i32),
+                                    DevicePixels(viewport[1] as i32),
+                                ),
+                            )?;
+                        }
+                        #[cfg(not(feature = "custom-shaders"))]
                         let _ = surfaces;
-                        // Browser video/external surfaces are not part of the first WebGL2 backend.
                     }
                 }
             }
@@ -484,6 +612,7 @@ impl WebGlSceneRenderer {
             .set_attribute("data-kael-frame-count", &self.frame_count.to_string())
             .map_err(js_error)?;
         self.has_presented_frame = true;
+        self.atlas.after_frame();
         Ok(())
     }
 
@@ -651,6 +780,7 @@ impl WebGlSceneRenderer {
     }
 
     pub(super) fn destroy(&mut self) {
+        self.blur.destroy();
         for (_, cached) in self.textures.drain() {
             self.gl.delete_texture(Some(&cached.texture));
         }
@@ -1005,6 +1135,7 @@ impl WebGlSceneRenderer {
     }
 
     fn texture(&mut self, tile: &AtlasTile) -> Result<(WebGlTexture, Size<DevicePixels>)> {
+        self.prune_atlas_textures();
         let id = tile.texture_id;
         let known_revision = self.textures.get(&id).map(|cached| cached.revision);
         let page_revision = self

@@ -1777,12 +1777,6 @@ pub fn default_capture_manager() -> CaptureManager {
     {
         use crate::platform::LinuxMicrophoneBackend;
         use crate::platform::PipeWireCaptureBackend;
-        use crate::platform::XdgDesktopPortalCaptureBackend;
-
-        manager.register_backend(
-            CaptureDeviceKind::Screen,
-            Arc::new(XdgDesktopPortalCaptureBackend::new()),
-        );
         manager.register_backend(
             CaptureDeviceKind::Camera,
             Arc::new(PipeWireCaptureBackend::new()),
@@ -1790,6 +1784,19 @@ pub fn default_capture_manager() -> CaptureManager {
         manager.register_backend(
             CaptureDeviceKind::Microphone,
             Arc::new(LinuxMicrophoneBackend::new()),
+        );
+    }
+
+    #[cfg(all(
+        any(target_os = "linux", target_os = "freebsd"),
+        feature = "linux-platform"
+    ))]
+    {
+        use crate::platform::XdgDesktopPortalCaptureBackend;
+
+        manager.register_backend(
+            CaptureDeviceKind::Screen,
+            Arc::new(XdgDesktopPortalCaptureBackend::new()),
         );
     }
 

@@ -132,6 +132,56 @@ impl TabStopMap {
         }
     }
 
+    /// Select before changing focus, so rejected stops never receive focus events.
+    pub fn next_matching(
+        &self,
+        focused_id: Option<&FocusId>,
+        accepts: impl Fn(FocusId) -> bool,
+    ) -> Option<FocusHandle> {
+        let focused = focused_id.and_then(|id| self.tab_node_for_focus_id(id));
+        let mut first = None;
+        for node in self.order.iter() {
+            if !node.tab_stop {
+                continue;
+            }
+            let handle = self.insertion_history[node.node_insertion_index].focus_handle()?;
+            if !accepts(handle.id) {
+                continue;
+            }
+            first.get_or_insert(node);
+            if focused.is_none_or(|focused| node > focused) {
+                return Some(handle.clone());
+            }
+        }
+        first.and_then(|node| self.focus_handle_for_order(node))
+    }
+
+    pub fn prev_matching(
+        &self,
+        focused_id: Option<&FocusId>,
+        accepts: impl Fn(FocusId) -> bool,
+    ) -> Option<FocusHandle> {
+        let focused = focused_id.and_then(|id| self.tab_node_for_focus_id(id));
+        let mut last = None;
+        let mut previous = None;
+        for node in self.order.iter() {
+            if !node.tab_stop {
+                continue;
+            }
+            let handle = self.insertion_history[node.node_insertion_index].focus_handle()?;
+            if !accepts(handle.id) {
+                continue;
+            }
+            last = Some(node);
+            if focused.is_some_and(|focused| node < focused) {
+                previous = Some(node);
+            }
+        }
+        previous
+            .or(last)
+            .and_then(|node| self.focus_handle_for_order(node))
+    }
+
     fn next_inner(&self, node: &TabStopNode) -> Option<&TabStopNode> {
         let mut cursor = self.order.cursor::<TabStopNode>(());
         cursor.seek(&node, Bias::Left);
@@ -745,5 +795,100 @@ mod tests {
             .tab_stop(3, 0)
             .tab_stop(4, 1)
             .assert();
+    }
+}
+
+#[cfg(test)]
+mod scoped_traversal_tests {
+    use super::*;
+    use crate::FocusMap;
+    use std::sync::Arc;
+
+    #[test]
+    fn matching_wraps_without_accepting_same_index_outside_stops() {
+        let focus = Arc::new(FocusMap::default());
+        let outside = FocusHandle::new(&focus).tab_stop(true);
+        let first = FocusHandle::new(&focus).tab_stop(true);
+        let last = FocusHandle::new(&focus).tab_stop(true);
+        let mut map = TabStopMap::default();
+        map.insert(&outside);
+        map.begin_group(0);
+        map.insert(&first);
+        map.insert(&last);
+        map.end_group();
+        let inside = |id| id == first.id || id == last.id;
+        assert_eq!(map.next_matching(None, inside), Some(first.clone()));
+        assert_eq!(map.prev_matching(None, inside), Some(last.clone()));
+        assert_eq!(
+            map.next_matching(Some(&first.id), inside),
+            Some(last.clone())
+        );
+        assert_eq!(
+            map.next_matching(Some(&last.id), inside),
+            Some(first.clone())
+        );
+        assert_eq!(
+            map.prev_matching(Some(&last.id), inside),
+            Some(first.clone())
+        );
+        assert_eq!(map.prev_matching(Some(&first.id), inside), Some(last));
+        assert_eq!(map.next(None), Some(outside));
+    }
+
+    #[test]
+    fn matching_uses_live_disabled_and_removed_stops() {
+        let focus = Arc::new(FocusMap::default());
+        let first = FocusHandle::new(&focus).tab_stop(true).tab_index(0);
+        let disabled = FocusHandle::new(&focus).tab_stop(false).tab_index(1);
+        let last = FocusHandle::new(&focus).tab_stop(true).tab_index(2);
+        let removed = FocusHandle::new(&focus).tab_stop(true).tab_index(1);
+        let mut map = TabStopMap::default();
+        for handle in [&first, &disabled, &last] {
+            map.insert(handle);
+        }
+        assert_eq!(
+            map.next_matching(Some(&first.id), |_| true),
+            Some(last.clone())
+        );
+        assert_eq!(
+            map.next_matching(Some(&disabled.id), |_| true),
+            Some(last.clone())
+        );
+        assert_eq!(
+            map.prev_matching(Some(&disabled.id), |_| true),
+            Some(first.clone())
+        );
+        assert_eq!(map.next_matching(Some(&removed.id), |_| true), Some(first));
+        assert_eq!(map.prev_matching(Some(&removed.id), |_| true), Some(last));
+    }
+
+    #[test]
+    fn matching_preserves_tab_order_and_handles_empty_or_single_scopes() {
+        let focus = Arc::new(FocusMap::default());
+        let first = FocusHandle::new(&focus).tab_stop(true).tab_index(-1);
+        let middle = FocusHandle::new(&focus).tab_stop(true).tab_index(0);
+        let last = FocusHandle::new(&focus).tab_stop(true).tab_index(5);
+        let mut map = TabStopMap::default();
+        for handle in [&last, &first, &middle] {
+            map.insert(handle);
+        }
+        assert_eq!(
+            map.next_matching(Some(&first.id), |_| true),
+            Some(middle.clone())
+        );
+        assert_eq!(
+            map.prev_matching(Some(&last.id), |_| true),
+            Some(middle.clone())
+        );
+        assert_eq!(
+            map.next_matching(Some(&middle.id), |id| id == middle.id),
+            Some(middle.clone())
+        );
+        assert_eq!(
+            map.prev_matching(Some(&middle.id), |id| id == middle.id),
+            Some(middle)
+        );
+        assert_eq!(map.next_matching(None, |_| false), None);
+        assert_eq!(map.prev_matching(None, |_| false), None);
     }
 }

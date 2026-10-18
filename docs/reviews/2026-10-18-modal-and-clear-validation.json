@@ -1,0 +1,236 @@
+{
+  "schema": 1,
+  "recorded_at_utc": "2026-10-18T02:55:41.191229+00:00",
+  "status": "EXACT_VALIDATED_SOURCES_PROMOTED",
+  "scope": "General desktop modal traversal, clear-button native semantics, final mounted focus and safe cached hide/show lifetime. Headless test-platform proof; not physical/native-provider acceptance.",
+  "candidate_preparation_sha256": "a04c93dcf657260f9af7a9d2982e1568e46d75b6ee927aeef7d91843b97ce2cc",
+  "actual_manifest_sha256": "e85fe3d5dd300066b91792cdd12e6edbb044cd324be1b4be8c42a42ac8de942b",
+  "actual_receipt_sha256": "105ae6c85c559f41f8ad27f14c086569142609a36a8e77fd1806aee7a33c9f73",
+  "primary_promotion_sha256": "fd3c57b64e6c6a120b59a5565c59c840f02365e206af2d67d80504b300548a3e",
+  "source_equivalence": {
+    "selected_compiled_inputs": 1015,
+    "primary_after_equals_actual_isolated_compiled_graph": true,
+    "original_managed_inputs_restored": true,
+    "locks_unchanged": true,
+    "primary_Cargo_rebuild_claim": false
+  },
+  "changes": [
+    "Add Window::focus_next_within/focus_prev_within over current rendered ancestry; choose one eligible target before changing focus, wrap in scope, focus empty rendered root, preserve removed/disabled-window no-op.",
+    "Dialog and Sheet handle plain Tab/Shift-Tab in the innermost modal; retained empty-surface semantic focus is correct. FocusTrapController preserves Control/Alt/platform/function shortcuts.",
+    "InputClearButton exposes named native Button/Click semantics; disabled/callback-free controls have no Click handler, repeated labels stay distinct, and existing 24px/pointer-down/input-focus behavior is preserved. It adds no keyboard handler or Tab stop.",
+    "Reconcile only tracked painted semantic focus with final Window focus, including cached replay. Raw FocusIds retain no handles/entities and unpainted bindings retire; untracked logical states remain authored.",
+    "Reject cached ranges not painted directly in the preceding completed draw; hidden/show rebuilds once, followed by normal cache reuse. Nested caches can conservatively rebuild after ancestor replay.",
+    "Store the private clear callback directly in Rc, removing the explicit nonzero-size Box-to-Rc conversion; no measured CPU/RSS claim."
+  ],
+  "actual_tests": {
+    "focused_exact_once": {
+      "core": 3,
+      "native_UI": 17,
+      "total": 20,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0,
+      "original19_test_bodies_unchanged": true,
+      "included_in_broad_suites_not_additional_unique_coverage": true
+    },
+    "core_full": {
+      "passed": 2236,
+      "failed": 0,
+      "ignored": 2,
+      "filtered": 0,
+      "default_parallel": true,
+      "features": [
+        "font-kit",
+        "test-support",
+        "lottie",
+        "icons"
+      ],
+      "defaults": false,
+      "existing_opt_in_ignored": [
+        "platform::mac::display_link::tests::native_retained_display_link_probe",
+        "platform::mac::text_system::tests::native_sized_font_shaping_diagnostic"
+      ]
+    },
+    "UI_full": {
+      "passed": 555,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0,
+      "default_parallel": true,
+      "defaults": true,
+      "additional_features": [
+        "kael/lottie",
+        "kael/test-support"
+      ]
+    },
+    "native_UI_inventory": 533,
+    "default_UI_inventory": 555,
+    "native_UI_excludes_exact22_existing_editor_cfg_tests": true,
+    "unique_broad_passes": 2791,
+    "Cargo_selected_copied_binaries": 3,
+    "all_three_selected_artifacts_fresh_false": true
+  },
+  "checks": [
+    {
+      "name": "core-strict-clippy",
+      "exit_code": 0,
+      "argv": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "kael",
+        "--all-targets",
+        "--no-default-features",
+        "--features",
+        "font-kit,test-support,lottie,icons",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "ui-strict-clippy",
+      "exit_code": 0,
+      "argv": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "kael_ui",
+        "--all-targets",
+        "--features",
+        "kael/lottie,kael/test-support",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "wasm-ui-lottie",
+      "exit_code": 0,
+      "argv": [
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "kael_ui",
+        "--lib",
+        "--target",
+        "wasm32-unknown-unknown",
+        "--no-default-features",
+        "--features",
+        "browser,kael/lottie"
+      ]
+    },
+    {
+      "name": "workspace-format",
+      "exit_code": 0,
+      "argv": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ]
+    }
+  ],
+  "reproduced_predecessor_failures": [
+    {
+      "stage": "Original mounted baseline on unchanged production",
+      "cases": 12,
+      "passed": 2,
+      "failed": 10,
+      "scope": "First native clear role/identity and modal focus assertions; later assertions after first failure were not executed.",
+      "receipt_sha256": "90b53c61ef6bbb7abe0d57df01e7b3b0f1e30a1b51555fea5a29ceceae058d56"
+    },
+    {
+      "stage": "Empty surfaces and modifier helper on first candidate",
+      "cases": 3,
+      "passed": 0,
+      "failed": 3,
+      "scope": "Initial empty Dialog/Sheet semantic focus and first Ctrl-Tab helper assertion; not all loop combinations observed on failing predecessor.",
+      "receipt_sha256": "f307cb7a3aa87958dcbc1a76856ef1abdd8803a2347230da5e4c344db565ea8a"
+    },
+    {
+      "stage": "Retained cached opener on paint-only focus correction",
+      "cases": 1,
+      "passed": 0,
+      "failed": 1,
+      "scope": "Real cache reuse verified before duplicate focused-node count2vs1.",
+      "receipt_sha256": "4693b6ad72046e5f51f8a4d0cb939172863f77f36551d4aaa7f87bb35be00a90"
+    },
+    {
+      "stage": "V4 retained hidden/show cache investigation",
+      "cases": 1,
+      "passed": 0,
+      "failed": 1,
+      "scope": "Early production cursor_styles range panic: end1 vs previous frame length0. Final focus assertions were not reached. Strict across-gap reuse draft remains preserved; final policy intentionally requires one fresh show render.",
+      "manifest_sha256": "1bad8964705975dc1059b10d2a2c1efde86c94aa340cdc0a157d67b670b2588e"
+    }
+  ],
+  "source_files": [
+    {
+      "path": "crates/kael/src/cache.rs",
+      "sha256": "41d5fd240a721d2ca64e731800adfdbc38fa4b15509dea3e1392f1a786ec8e50",
+      "bytes": 7213
+    },
+    {
+      "path": "crates/kael/src/elements/cached.rs",
+      "sha256": "48504b6b92aba23c7b13b0fee2deaf69d1e5a1e3facd8ae9f0f4bf3b39e23a0e",
+      "bytes": 17502
+    },
+    {
+      "path": "crates/kael/src/elements/div.rs",
+      "sha256": "ab88997a46eb97af44e432797ebce94805b49f67884de10d4b11ae5d122fcc45",
+      "bytes": 354901
+    },
+    {
+      "path": "crates/kael/src/tab_stop.rs",
+      "sha256": "1e2e83eaefb4c2a02a6972afcd81a2c3f3fc44faf11a2690fc698737b7bedcc1",
+      "bytes": 28542
+    },
+    {
+      "path": "crates/kael/src/view.rs",
+      "sha256": "8ba55f08a8b8c05ca467cdab2c75002ea2cd45dfa87d3b3a14fedf8b21c95442",
+      "bytes": 14304
+    },
+    {
+      "path": "crates/kael/src/window.rs",
+      "sha256": "c5ec1af10373fdceab487ed01b68b2b4e14d887d6949fe71c14bb369123003ea",
+      "bytes": 457352
+    },
+    {
+      "path": "crates/kael_ui/src/components/field.rs",
+      "sha256": "56f6b29955aa50a81d94eed59eecc947844212383793911e5c7dca9d4d8ea3d8",
+      "bytes": 20442
+    },
+    {
+      "path": "crates/kael_ui/src/headless.rs",
+      "sha256": "492366712fd28cd8a0979fc3105d58898fee84b5722e2b248d423b9f604f292f",
+      "bytes": 39381
+    },
+    {
+      "path": "crates/kael_ui/src/overlays/dialog.rs",
+      "sha256": "accaf0e16dc2aa0f1ec9a596d63617fb38f1f1d8efbad97de01808300caf2630",
+      "bytes": 73733
+    },
+    {
+      "path": "crates/kael_ui/src/overlays/sheet.rs",
+      "sha256": "554598b48e0f759f471b51610675ab3e6b40c94189e601abb8384d0db7db71d9",
+      "bytes": 40733
+    }
+  ],
+  "docs": {
+    "guide_files": 4,
+    "verification": "46 pages;546844 font bytes;no broken local links/duplicate ids",
+    "log_sha256": "0fb87ecae09e05f755df5b77bb290e1636d51926a57bb5e2361c5a19dddcce3f"
+  },
+  "boundaries": [
+    "No new physical GPU/native accessibility provider/browser runtime, application timing, RSS or power proof.",
+    "Focus map capacities can retain high-water allocation; no global memory ceiling or normalization of untracked logical focus.",
+    "The distinct policy regression proves one rebuild after a hidden paint gap, then cache reuse on modal mount; it does not pass the old strict-reuse eligibility draft.",
+    "Latest prior39-package archive proof binds4bb5a44; prior physical Metal proof bindsb279795 and the hundred-capture comparison binds0d15aff. They do not claim this later source.",
+    "Fresh platform execution remains separate; local GTK client and capture-terminal lifecycle fixes require real CI verification."
+  ]
+}

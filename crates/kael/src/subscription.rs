@@ -41,6 +41,20 @@ where
         })))
     }
 
+    /// Retained emitter-key slots and active callbacks, for ownership regressions.
+    #[cfg(test)]
+    pub(crate) fn stats(&self) -> (usize, usize) {
+        let state = self.0.borrow();
+        let callbacks = state
+            .subscribers
+            .values()
+            .filter_map(Option::as_ref)
+            .flat_map(|subscribers| subscribers.values())
+            .filter(|subscriber| subscriber.active.get())
+            .count();
+        (state.subscribers.len(), callbacks)
+    }
+
     /// Inserts a new [`Subscription`] for the given `emitter_key`. By default, subscriptions
     /// are inert, meaning that they won't be listed when calling `[SubscriberSet::remove]` or `[SubscriberSet::retain]`.
     /// This method returns a tuple of a [`Subscription`] and an `impl FnOnce`, and you can use the latter

@@ -162,18 +162,25 @@ impl<T: Future> Future for WithTimeout<T> {
 }
 
 #[cfg(any(test, feature = "test-support"))]
-/// Uses smol executor to run a given future no longer than the timeout specified.
+/// Wait for a future until a real native/browser timer expires.
 /// Note that this won't "rewind" on `cx.executor().advance_clock` call, truly waiting for the timeout to elapse.
 pub async fn smol_timeout<F, T>(timeout: Duration, f: F) -> Result<T, ()>
 where
     F: Future<Output = T>,
 {
     let timer = async {
+        #[cfg(not(target_arch = "wasm32"))]
         smol::Timer::after(timeout).await;
+        #[cfg(target_arch = "wasm32")]
+        crate::Timer::after(timeout).await;
         Err(())
     };
     let future = async move { Ok(f.await) };
-    smol::future::FutureExt::race(timer, future).await
+    futures::pin_mut!(timer, future);
+    match futures::future::select(future, timer).await {
+        futures::future::Either::Left((result, _))
+        | futures::future::Either::Right((result, _)) => result,
+    }
 }
 
 /// Increment the given atomic counter if it is not zero.

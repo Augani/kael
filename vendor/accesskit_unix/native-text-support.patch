@@ -1,0 +1,344 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -12,8 +12,8 @@
+ [package]
+ edition = "2024"
+ rust-version = "1.85"
+-name = "accesskit_unix"
+-version = "0.22.1"
++name = "kael_accesskit_unix"
++version = "0.4.1"
+ authors = ["The AccessKit contributors"]
+ build = false
+ autolib = false
+@@ -21,8 +21,9 @@
+ autoexamples = false
+ autotests = false
+ autobenches = false
+-description = "AccessKit UI accessibility infrastructure: Linux adapter"
++description = "Kael-maintained AccessKit Unix adapter with native EditableText support"
+ readme = "README.md"
++exclude = ["Cargo.toml.orig", ".cargo_vcs_info.json"]
+ keywords = [
+     "gui",
+     "ui",
+@@ -30,7 +31,7 @@
+ ]
+ categories = ["gui"]
+ license = "MIT OR Apache-2.0"
+-repository = "https://github.com/AccessKit/accesskit"
++repository = "https://github.com/Augani/kael"
+ resolver = "2"
+ 
+ [features]
+@@ -54,7 +55,9 @@
+ version = "0.24.1"
+ 
+ [dependencies.accesskit_atspi_common]
+-version = "0.19.1"
++path = "../accesskit_atspi_common"
++version = "0.4.1"
++package = "kael_accesskit_atspi_common"
+ 
+ [dependencies.async-channel]
+ version = "2.1.1"
+--- a/src/adapter.rs
++++ b/src/adapter.rs
+@@ -6,7 +6,8 @@
+ use accesskit::{ActionHandler, ActivationHandler, DeactivationHandler, Rect, TreeUpdate};
+ use accesskit_atspi_common::{
+     ActionHandlerNoMut, ActionHandlerWrapper, Adapter as AdapterImpl, AdapterCallback, CacheEvent,
+-    Event, NodeId, PlatformNode, WindowBounds, next_adapter_id,
++    Event, NodeId, PlatformNode, TextEditHandler, TextEditHandlerWrapper, WindowBounds,
++    next_adapter_id,
+ };
+ #[cfg(not(feature = "tokio"))]
+ use async_channel::Sender;
+@@ -130,12 +131,38 @@
+         action_handler: impl 'static + ActionHandler + Send,
+         deactivation_handler: impl 'static + DeactivationHandler + Send,
+     ) -> Self {
++        Self::with_wrapped_handler(
++            activation_handler,
++            Arc::new(ActionHandlerWrapper::new(action_handler)),
++            deactivation_handler,
++        )
++    }
++
++    /// Create an adapter supporting atomic immutable-origin text and clipboard
++    /// requests. Handlers run on the adapter worker and must queue UI work.
++    pub fn new_with_text_handler(
++        activation_handler: impl 'static + ActivationHandler + Send,
++        action_handler: impl 'static + ActionHandler + TextEditHandler + Send,
++        deactivation_handler: impl 'static + DeactivationHandler + Send,
++    ) -> Self {
++        Self::with_wrapped_handler(
++            activation_handler,
++            Arc::new(TextEditHandlerWrapper::new(action_handler)),
++            deactivation_handler,
++        )
++    }
++
++    fn with_wrapped_handler(
++        activation_handler: impl 'static + ActivationHandler + Send,
++        action_handler: Arc<dyn ActionHandlerNoMut + Send + Sync>,
++        deactivation_handler: impl 'static + DeactivationHandler + Send,
++    ) -> Self {
+         let id = next_adapter_id();
+         let messages = get_or_init_messages();
+         let state = Arc::new(Mutex::new(AdapterState::Inactive {
+             is_window_focused: false,
+             root_window_bounds: Default::default(),
+-            action_handler: Arc::new(ActionHandlerWrapper::new(action_handler)),
++            action_handler,
+         }));
+         let adapter = Self {
+             id,
+--- a/src/atspi/bus.rs
++++ b/src/atspi/bus.rs
+@@ -82,12 +82,6 @@
+             .at(path.clone(), ApplicationInterface(node.clone()))
+             .await?
+         {
+-            let desktop = self
+-                .socket_proxy
+-                .embed(&(self.unique_name().as_str(), ObjectId::Root.path().into()))
+-                .await?;
+-            let _ = self.desktop.set(desktop);
+-
+             self.conn
+                 .object_server()
+                 .at(
+@@ -111,6 +105,18 @@
+                     ),
+                 )
+                 .await?;
++
++            // Embed publishes the application to external clients, which may
++            // immediately request Accessible and Cache. Install both before
++            // publication rather than exposing a partially registered root.
++            let desktop = self
++                .socket_proxy
++                .embed(&(self.unique_name().as_str(), ObjectId::Root.path().into()))
++                .await?;
++            let _ = self.desktop.set(desktop);
++            if std::env::var_os("KAEL_ATSPI_TRACE").is_some() {
++                eprintln!("KAEL_ATSPI_ROOT_READY: service={}", self.unique_name());
++            }
+         }
+ 
+         Ok(())
+@@ -159,6 +165,10 @@
+             self.register_interface(&path, TextInterface::new(node.clone()))
+                 .await?;
+         }
++        if new_interfaces.contains(Interface::EditableText) {
++            self.register_interface(&path, EditableTextInterface::new(node.clone()))
++                .await?;
++        }
+         if new_interfaces.contains(Interface::Value) {
+             self.register_interface(&path, ValueInterface::new(node.clone()))
+                 .await?;
+@@ -210,6 +220,10 @@
+         }
+         if old_interfaces.contains(Interface::Text) {
+             self.unregister_interface::<TextInterface>(&path).await?;
++        }
++        if old_interfaces.contains(Interface::EditableText) {
++            self.unregister_interface::<EditableTextInterface>(&path)
++                .await?;
+         }
+         if old_interfaces.contains(Interface::Value) {
+             self.unregister_interface::<ValueInterface>(&path).await?;
+@@ -396,7 +410,10 @@
+         let Ok(item) = cache_item_for_node(self.unique_name().inner(), &node) else {
+             return Ok(());
+         };
+-        self.emit_cache_signal("AddAccessible", &item).await
++        // A D-Bus method body is a tuple of arguments. This signal has one
++        // struct argument; passing the struct directly flattens its fields and
++        // libatspi rejects the resulting signature.
++        self.emit_cache_signal("AddAccessible", &(item,)).await
+     }
+ 
+     pub(crate) async fn emit_cache_remove(&self, adapter_id: usize, node_id: NodeId) -> Result<()> {
+@@ -407,7 +424,8 @@
+                 node: node_id,
+             },
+         );
+-        self.emit_cache_signal("RemoveAccessible", &reference).await
++        self.emit_cache_signal("RemoveAccessible", &(reference,))
++            .await
+     }
+ 
+     async fn emit_cache_signal<B>(&self, signal_name: &str, body: &B) -> Result<()>
+@@ -473,3 +491,36 @@
+         Err(_) => Ok(default),
+     }
+ }
++
++#[cfg(test)]
++mod cache_signal_tests {
++    use atspi::{CacheItem, ObjectRefOwned};
++    use zbus::Message;
++
++    #[test]
++    fn cache_signals_preserve_the_protocol_struct_argument_envelope() {
++        // Exercise the serializer used by Connection::emit_signal, without
++        // requiring a running accessibility bus in portable package tests.
++        let add = Message::signal(
++            "/org/a11y/atspi/cache",
++            "org.a11y.atspi.Cache",
++            "AddAccessible",
++        )
++        .unwrap()
++        .build(&(CacheItem::default(),))
++        .unwrap();
++        assert_eq!(
++            add.body().signature().to_string(),
++            "((so)(so)(so)iiassusau)"
++        );
++        let remove = Message::signal(
++            "/org/a11y/atspi/cache",
++            "org.a11y.atspi.Cache",
++            "RemoveAccessible",
++        )
++        .unwrap()
++        .build(&(ObjectRefOwned::default(),))
++        .unwrap();
++        assert_eq!(remove.body().signature().to_string(), "(so)");
++    }
++}
+--- /dev/null
++++ b/src/atspi/interfaces/editable_text.rs
+@@ -0,0 +1,58 @@
++// Copyright 2026 Kael contributors.
++// Licensed under Apache-2.0 or MIT, matching the upstream adapter.
++
++use accesskit_atspi_common::PlatformNode;
++use zbus::{fdo, interface};
++
++pub(crate) struct EditableTextInterface {
++    node: PlatformNode,
++}
++
++impl EditableTextInterface {
++    pub fn new(node: PlatformNode) -> Self {
++        Self { node }
++    }
++    fn map_error(&self) -> impl '_ + FnOnce(accesskit_atspi_common::Error) -> fdo::Error {
++        |error| crate::util::map_error_from_node(&self.node, error)
++    }
++}
++
++#[interface(name = "org.a11y.atspi.EditableText")]
++impl EditableTextInterface {
++    fn set_text_contents(&self, new_contents: &str) -> fdo::Result<bool> {
++        self.node
++            .set_text_contents(new_contents)
++            .map_err(self.map_error())
++    }
++    fn insert_text(&self, position: i32, text: &str, length: i32) -> fdo::Result<bool> {
++        self.node
++            .insert_text(position, text, length)
++            .map_err(self.map_error())
++    }
++    fn delete_text(&self, start_pos: i32, end_pos: i32) -> fdo::Result<bool> {
++        self.node
++            .delete_text(start_pos, end_pos)
++            .map_err(self.map_error())
++    }
++    fn copy_text(&self, start_pos: i32, end_pos: i32) -> fdo::Result<()> {
++        if self
++            .node
++            .copy_text(start_pos, end_pos)
++            .map_err(self.map_error())?
++        {
++            Ok(())
++        } else {
++            Err(fdo::Error::NotSupported(
++                "native text copy was not accepted".into(),
++            ))
++        }
++    }
++    fn cut_text(&self, start_pos: i32, end_pos: i32) -> fdo::Result<bool> {
++        self.node
++            .cut_text(start_pos, end_pos)
++            .map_err(self.map_error())
++    }
++    fn paste_text(&self, position: i32) -> fdo::Result<bool> {
++        self.node.paste_text(position).map_err(self.map_error())
++    }
++}
+--- a/src/atspi/interfaces/mod.rs
++++ b/src/atspi/interfaces/mod.rs
+@@ -8,6 +8,7 @@
+ mod application;
+ mod cache;
+ mod component;
++mod editable_text;
+ mod hyperlink;
+ mod selection;
+ mod text;
+@@ -35,6 +36,7 @@
+ pub(crate) use application::*;
+ pub(crate) use cache::*;
+ pub(crate) use component::*;
++pub(crate) use editable_text::*;
+ pub(crate) use hyperlink::*;
+ pub(crate) use selection::*;
+ pub(crate) use text::*;
+--- a/src/context.rs
++++ b/src/context.rs
+@@ -193,6 +193,9 @@
+ 
+     let mut atspi_bus = None;
+     let mut adapters: Vec<AdapterEntry> = Vec::new();
++    let mut processed_messages = 0usize;
++    let trace = std::env::var_os("KAEL_ATSPI_TRACE").is_some();
++    let mut traced_registrations = 0usize;
+ 
+     loop {
+         select! {
+@@ -203,7 +206,21 @@
+             }
+             message = messages.next() => {
+                 if let Some(message) = message {
++                    if trace && matches!(&message, Message::RegisterInterfaces { .. }) {
++                        traced_registrations += 1;
++                        if traced_registrations % 4096 == 0 {
++                            eprintln!("KAEL_ATSPI_REGISTRATIONS: count={traced_registrations}");
++                        }
++                    }
+                     process_adapter_message(&atspi_bus, &mut adapters, message).await?;
++                    processed_messages += 1;
++                    if processed_messages == 64 {
++                        // Registering interfaces often completes synchronously.
++                        // A large logical tree must not monopolize this executor
++                        // while the independent D-Bus dispatch task has queries.
++                        futures_lite::future::yield_now().await;
++                        processed_messages = 0;
++                    }
+                 }
+             }
+         }
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -24,4 +24,5 @@
+ mod executor;
+ mod util;
+ 
++pub use accesskit_atspi_common::{TextEditHandler, TextEditOperation, TextEditRequest};
+ pub use adapter::Adapter;
+--- a/src/util.rs
++++ b/src/util.rs
+@@ -31,6 +31,9 @@
+         InternalError::TooManyChildren => FdoError::Failed("Too many children.".into()),
+         InternalError::IndexOutOfRange => FdoError::Failed("Index is too big.".into()),
+         InternalError::TooManyCharacters => FdoError::Failed("Too many characters.".into()),
++        InternalError::UnsupportedOperation => {
++            FdoError::NotSupported("Unsupported native text operation.".into())
++        }
+         InternalError::UnsupportedTextGranularity => {
+             FdoError::Failed("Unsupported text granularity.".into())
+         }

@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-02",
+  "source_commit": "0adb7363d6b38773059a53dc635e478a0ae79f39",
+  "workflow_run": "https://github.com/Augani/kael/actions/runs/37056457864",
+  "scope": "Synthetic CPU transient allocation planning and GPU budget bookkeeping; no driver allocation, native app, frame presentation, battery power, or GPUI Kit comparison. The separately uploaded framework benchmark uses headless scene workloads and is not included here.",
+  "environment_limitations": "Runner labels and result logs are retained; complete hardware metadata was not captured by these CPU benchmarks. These runs establish successful portable execution, not cross-hardware ranking.",
+  "results": [
+    {
+      "runner": "macos",
+      "measurements": [
+        {
+          "benchmark": "transient-allocation.log",
+          "scenario": "overlapping",
+          "resources": 30000,
+          "median_ms": 0.602,
+          "min_ms": 0.543
+        },
+        {
+          "benchmark": "transient-allocation.log",
+          "scenario": "sequential",
+          "resources": 30000,
+          "median_ms": 0.148,
+          "min_ms": 0.143
+        },
+        {
+          "benchmark": "transient-allocation.log",
+          "scenario": "mixed_classes",
+          "resources": 30000,
+          "median_ms": 0.674,
+          "min_ms": 0.645
+        },
+        {
+          "benchmark": "gpu-budget.log",
+          "scenario": "register",
+          "resources": 30000,
+          "median_ms": 4.166,
+          "min_ms": 4.005
+        },
+        {
+          "benchmark": "gpu-budget.log",
+          "scenario": "touch",
+          "resources": 30000,
+          "median_ms": 6.015,
+          "min_ms": 4.868
+        },
+        {
+          "benchmark": "gpu-budget.log",
+          "scenario": "evict",
+          "resources": 30000,
+          "median_ms": 2.81,
+          "min_ms": 1.941
+        }
+      ]
+    },
+    {
+      "runner": "windows",
+      "measurements": [
+        {
+          "benchmark": "transient-allocation.log",
+          "scenario": "overlapping",
+          "resources": 30000,
+          "median_ms": 1.394,
+          "min_ms": 1.225
+        },
+        {
+          "benchmark": "transient-allocation.log",
+          "scenario": "sequential",
+          "resources": 30000,
+          "median_ms": 0.673,
+          "min_ms": 0.586
+        },
+        {
+          "benchmark": "transient-allocation.log",
+          "scenario": "mixed_classes",
+          "resources": 30000,
+          "median_ms": 1.381,
+          "min_ms": 1.364
+        },
+        {
+          "benchmark": "gpu-budget.log",
+          "scenario": "register",
+          "resources": 30000,
+          "median_ms": 5.775,
+          "min_ms": 5.595
+        },
+        {
+          "benchmark": "gpu-budget.log",
+          "scenario": "touch",
+          "resources": 30000,
+          "median_ms": 4.342,
+          "min_ms": 4.068
+        },
+        {
+          "benchmark": "gpu-budget.log",
+          "scenario": "evict",
+          "resources": 30000,
+          "median_ms": 1.944,
+          "min_ms": 1.876
+        }
+      ]
+    },
+    {
+      "runner": "linux",
+      "measurements": [
+        {
+          "benchmark": "transient-allocation.log",
+          "scenario": "overlapping",
+          "resources": 30000,
+          "median_ms": 0.67,
+          "min_ms": 0.656
+        },
+        {
+          "benchmark": "transient-allocation.log",
+          "scenario": "sequential",
+          "resources": 30000,
+          "median_ms": 0.198,
+          "min_ms": 0.197
+        },
+        {
+          "benchmark": "transient-allocation.log",
+          "scenario": "mixed_classes",
+          "resources": 30000,
+          "median_ms": 0.802,
+          "min_ms": 0.767
+        },
+        {
+          "benchmark": "gpu-budget.log",
+          "scenario": "register",
+          "resources": 30000,
+          "median_ms": 3.437,
+          "min_ms": 3.371
+        },
+        {
+          "benchmark": "gpu-budget.log",
+          "scenario": "touch",
+          "resources": 30000,
+          "median_ms": 3.521,
+          "min_ms": 3.446
+        },
+        {
+          "benchmark": "gpu-budget.log",
+          "scenario": "evict",
+          "resources": 30000,
+          "median_ms": 1.449,
+          "min_ms": 1.402
+        }
+      ]
+    }
+  ]
+}

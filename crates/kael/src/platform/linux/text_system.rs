@@ -1,8 +1,8 @@
 use crate::{
     Bounds, DevicePixels, Font, FontFeature, FontFeatures, FontId, FontMetrics, FontRun, FontStyle,
-    FontWeight, GlyphId, LineLayout, Pixels, PlatformTextSystem, Point, RenderGlyphParams,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ShapedGlyph, ShapedRun, SharedString, Size, point,
-    size,
+    FontWeight, GlyphId, LineLayout, LineTextGeometry, Pixels, PlatformTextSystem, Point,
+    RenderGlyphParams, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ShapedGlyph, ShapedRun,
+    ShapedTextCluster, SharedString, Size, point, size,
 };
 use anyhow::{Context as _, Result};
 use collections::HashMap;
@@ -21,6 +21,7 @@ use smallvec::SmallVec;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     borrow::Cow,
+    ops::Range,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -306,6 +307,23 @@ impl PlatformTextSystem for CosmicTextSystem {
         self.state.write().layout_line(text, font_size, runs)
     }
 
+    fn layout_line_geometry(
+        &self,
+        text: &str,
+        font_size: Pixels,
+        runs: &[FontRun],
+        byte_ranges: &[Range<usize>],
+    ) -> Option<LineTextGeometry> {
+        if !LineTextGeometry::requested_ranges_valid(text, byte_ranges) {
+            return None;
+        }
+        self.ensure_fonts_loaded();
+        self.state
+            .write()
+            .layout_line_impl(text, font_size, runs, Some(byte_ranges))
+            .1
+    }
+
     fn layout_line_with_features(
         &self,
         text: &str,
@@ -564,6 +582,16 @@ impl CosmicTextSystemState {
 
     #[profiling::function]
     fn layout_line(&mut self, text: &str, font_size: Pixels, font_runs: &[FontRun]) -> LineLayout {
+        self.layout_line_impl(text, font_size, font_runs, None).0
+    }
+
+    fn layout_line_impl(
+        &mut self,
+        text: &str,
+        font_size: Pixels,
+        font_runs: &[FontRun],
+        geometry_ranges: Option<&[Range<usize>]>,
+    ) -> (LineLayout, Option<LineTextGeometry>) {
         let mut attrs_list = AttrsList::new(&Attrs::new());
         let mut offs: usize = 0;
         for run in font_runs {
@@ -620,8 +648,40 @@ impl CosmicTextSystemState {
             cosmic_text::Hinting::default(),
         );
         let Some(layout) = layout_lines.first() else {
-            return empty_line_layout(text, font_size);
+            return (empty_line_layout(text, font_size), None);
         };
+
+        let geometry = geometry_ranges.and_then(|requested| {
+            let clusters = layout
+                .glyphs
+                .iter()
+                .filter(|glyph| {
+                    requested
+                        .iter()
+                        .any(|range| range.start < glyph.end && glyph.start < range.end)
+                })
+                .map(|glyph| {
+                    let rtl = glyph.level.is_rtl();
+                    ShapedTextCluster {
+                        bytes: glyph.start..glyph.end,
+                        leading: crate::px(if rtl { glyph.x + glyph.w } else { glyph.x }),
+                        trailing: crate::px(if rtl { glyph.x } else { glyph.x + glyph.w }),
+                        right_to_left: rtl,
+                    }
+                })
+                .collect();
+            let end_caret = layout.glyphs.iter().max_by_key(|glyph| glyph.end).map_or(
+                crate::px(0.0),
+                |glyph| {
+                    crate::px(if glyph.level.is_rtl() {
+                        glyph.x
+                    } else {
+                        glyph.x + glyph.w
+                    })
+                },
+            );
+            LineTextGeometry::new(text, clusters, end_caret)
+        });
 
         let mut runs: Vec<ShapedRun> = Vec::new();
         for glyph in &layout.glyphs {
@@ -648,7 +708,10 @@ impl CosmicTextSystemState {
 
             let shaped_glyph = ShapedGlyph {
                 id: GlyphId(glyph.glyph_id as u32),
-                position: point(glyph.x.into(), glyph.y.into()),
+                position: point(
+                    (glyph.x + glyph.font_size * glyph.x_offset).into(),
+                    (glyph.y - glyph.font_size * glyph.y_offset).into(),
+                ),
                 index: glyph.start,
                 is_emoji,
             };
@@ -666,14 +729,17 @@ impl CosmicTextSystemState {
             }
         }
 
-        LineLayout {
-            font_size,
-            width: layout.w.into(),
-            ascent: layout.max_ascent.into(),
-            descent: layout.max_descent.into(),
-            runs,
-            len: text.len(),
-        }
+        (
+            LineLayout {
+                font_size,
+                width: layout.w.into(),
+                ascent: layout.max_ascent.into(),
+                descent: layout.max_descent.into(),
+                runs,
+                len: text.len(),
+            },
+            geometry,
+        )
     }
 
     fn layout_line_with_features(
@@ -775,7 +841,10 @@ impl CosmicTextSystemState {
 
             let shaped_glyph = ShapedGlyph {
                 id: GlyphId(glyph.glyph_id as u32),
-                position: point(glyph.x.into(), glyph.y.into()),
+                position: point(
+                    (glyph.x + glyph.font_size * glyph.x_offset).into(),
+                    (glyph.y - glyph.font_size * glyph.y_offset).into(),
+                ),
                 index: glyph.start,
                 is_emoji,
             };
@@ -982,4 +1051,63 @@ fn has_color_font_tables(font: &cosmic_text::Font) -> bool {
 /// color glyph data (CBDT/CBLC, COLR/CPAL, sbix, SVG).
 fn is_color_emoji_font(postscript_name: &str, font: &cosmic_text::Font) -> bool {
     check_is_known_emoji_font(postscript_name) || has_color_font_tables(font)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{font, px};
+
+    #[test]
+    fn native_cosmic_geometry_preserves_bidi_clusters_and_requested_utf8_spans() {
+        let fonts = CosmicTextSystem::new();
+        let font_id = fonts
+            .font_id(&font("DejaVu Sans"))
+            .expect("native geometry fixture needs DejaVu Sans");
+        let text = "abc אבג العربية café";
+        let styles = [FontRun {
+            font_id,
+            len: text.len(),
+        }];
+        let start = text.find("אבג").unwrap();
+        let range = start..start + "אבג".len();
+        let geometry = fonts
+            .layout_line_geometry(text, px(20.0), &styles, std::slice::from_ref(&range))
+            .unwrap();
+        assert_eq!(geometry.clusters.len(), 3);
+        assert!(
+            geometry
+                .clusters
+                .iter()
+                .all(|cluster| cluster.right_to_left && cluster.leading > cluster.trailing)
+        );
+        let painted = fonts.layout_line(text, px(20.0), &styles);
+        let hebrew = painted
+            .runs
+            .iter()
+            .flat_map(|run| &run.glyphs)
+            .filter(|glyph| range.contains(&glyph.index))
+            .collect::<Vec<_>>();
+        assert_eq!(hebrew.len(), 3);
+        for glyph in hebrew {
+            let cluster = geometry.cluster_for_byte(glyph.index).unwrap();
+            assert!(
+                (f32::from(glyph.position.x - cluster.trailing)).abs() < 0.01,
+                "painted Hebrew origin disagrees with native cluster hitbox"
+            );
+        }
+        let full = fonts
+            .layout_line_geometry(text, px(20.0), &styles, &[0..text.len()])
+            .unwrap();
+        let accent = text.find('́').unwrap();
+        assert_eq!(
+            &text[full.cluster_for_byte(accent).unwrap().bytes.clone()],
+            "é"
+        );
+        assert!(
+            fonts
+                .layout_line_geometry(text, px(20.0), &styles, &[accent + 1..text.len()])
+                .is_none()
+        );
+    }
 }

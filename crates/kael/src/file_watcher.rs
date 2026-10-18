@@ -832,7 +832,7 @@ fn path_matches_registration(path: &Path, root: &Path, registration: &WatchRegis
         .is_none_or(|max_depth| depth <= max_depth)
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-support")))]
 #[allow(dead_code)]
 pub(crate) fn translate_watch_event_for_test(
     result: notify::Result<Event>,
@@ -850,7 +850,7 @@ pub(crate) fn translate_watch_event_for_test(
     translate_notify_result(result, &registrations)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     use std::{

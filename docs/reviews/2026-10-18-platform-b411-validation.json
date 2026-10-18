@@ -1,0 +1,169 @@
+{
+  "schema": 1,
+  "status": "B411_IMMUTABLE_PLATFORM_COHORT_FAILED_WITH_DISTINCT_LOCAL_PRESENTATION_PASS",
+  "recorded_at_utc": "2026-10-18T05:02:38.729778+00:00",
+  "source_head": "b411223c7d6e846c9f35a6f04a53d8bf4a73593a",
+  "official_run": {
+    "url": "https://github.com/Augani/kael/actions/runs/39096069505",
+    "status": "completed",
+    "conclusion": "failure",
+    "receipt": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-platform-b411-root-summary/official-run.json",
+      "sha256": "7372a54e40b89168786e958fb5110ac1f22213fff0d79549e6e657d0015f7b96",
+      "bytes": 30581
+    }
+  },
+  "jobs": [
+    {
+      "name": "Classify change",
+      "id": 117582663390,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Quality / Native (macOS)",
+      "id": 117582689146,
+      "status": "completed",
+      "conclusion": "failure"
+    },
+    {
+      "name": "Linux Renderer / WebView Runtime",
+      "id": 117582689153,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "WebAssembly / WebGL2 Browser",
+      "id": 117582689155,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Quality / Native (Linux)",
+      "id": 117582689171,
+      "status": "completed",
+      "conclusion": "failure"
+    },
+    {
+      "name": "Windows Native / WebView / MSI (windows-2022)",
+      "id": 117582689201,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Windows Native / WebView / MSI (windows-2025-vs2026)",
+      "id": 117582689223,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Focused Linux / GTK4 native accessibility",
+      "id": 117582689871,
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "Platform readiness",
+      "id": 117590770890,
+      "status": "completed",
+      "conclusion": "failure"
+    }
+  ],
+  "independent_audits": {
+    "Linux_runtime": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-platform-b411-linux-runtime-independent-audit/validation.json",
+      "sha256": "adec496453111e3238b08ac23f0428e3aac476ea6e50364a7a90f339de29904e",
+      "bytes": 14723
+    },
+    "Windows_2022_and_2025": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-platform-b411-windows-runtime-independent-audit/windows-both-terminal-validation.json",
+      "sha256": "ad93e3f1034e7c04c9dd42b29ba6ec5947e463d3a3711317db257a632fe4ac7d",
+      "bytes": 10727
+    },
+    "browser_and_hosted_Mac": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-platform-b411-renderer-audit/review.json",
+      "sha256": "73cabfb4fd74e41aebcd44f978075a599c20519c92f79838f28c227fcc17390f",
+      "bytes": 8537
+    }
+  },
+  "fresh_successes": {
+    "Linux_runtime": "Original X11/GTK accessibility, Unicode protocols, Vulkan/GTK atlas, idle window, generated app and WebView gates pass on software llvmpipe. One runtime job does not establish intermittency cause closure.",
+    "browser": "All original browser job gates pass, including final screenshot capture, the three-engine matrix and real component smoke.",
+    "Windows_2022_and_2025": "Both original native/UIA/TextPattern/WebView/generated-project/MSI runtime jobs pass. Canonical Windows2025 full-workspace compilation/lint passes; Windows2022 intentionally skips it. Direct3D uses software WARP; MSI is unsigned."
+  },
+  "hosted_Mac": {
+    "GPU_test_executions_passed": 59,
+    "distinct_GPU_tests": 58,
+    "ignored": 0,
+    "native_GPU_completions": 43,
+    "native_presentation_callbacks": 41,
+    "positive_presentation_timestamps": 0,
+    "required_native_presentation_gate": "FAIL",
+    "same_job_Apple_controls": {
+      "implementations": 3,
+      "per_implementation_completions": 60,
+      "per_implementation_callbacks": 60,
+      "per_implementation_positive_timestamps": 0,
+      "per_implementation_dropped_frames": 60,
+      "status": "FAIL"
+    },
+    "environment": {
+      "Kael_native_device_identity": "platform identity unavailable",
+      "Apple_controls_and_Metal_browser_device": "Apple Paravirtual",
+      "hypervisor_flag": 1,
+      "lock_state": "unknown",
+      "qualification": "Control/browser adapter metadata is not an established Kael native device identity. GPU completion and successful Metal-backed Chromium performance do not replace native drawable presentation."
+    }
+  },
+  "local_same_b411_Metal": {
+    "receipt": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-b411-physical-metal-current-v2/result.json",
+      "sha256": "dafd583ef5763693bd171bcf7e2fdafeb88a5738c7db9a30c34de63c55c7ad50",
+      "bytes": 1477948
+    },
+    "independent_audit": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-b411-physical-metal-independent-memory-audit/review.json",
+      "sha256": "f902a377ff614474307584f0ca3d45e1fa36913a540a8a4df5aa8064db0ef938",
+      "bytes": 21307
+    },
+    "GPU_test_executions_passed": 59,
+    "distinct_GPU_tests": 58,
+    "ignored": 0,
+    "positive_presentation_frames": 1,
+    "positive_frame_index": 8,
+    "idle_model_wake_ms": 1250,
+    "readback_sha256": "45c69fbf05fa7f1ef8e22eef68a86fad0c619f7abafb8821e45405918f8df979",
+    "device_identity": "platform identity unavailable",
+    "limitation": "Separate local host and source-exact local run; does not make the hosted failed run pass."
+  },
+  "strict_dependency_audit": {
+    "status": "FAIL",
+    "denied_warnings": 3,
+    "ids": [
+      "RUSTSEC-2026-0370",
+      "RUSTSEC-2026-0371",
+      "RUSTSEC-2026-0372"
+    ],
+    "classification": "Unmaintained dependency advisories; no disclosed exploit or patched5.x release is inferred.",
+    "raw_log": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-platform-b411-root-summary/linux-quality.log",
+      "sha256": "446ab0ff5e2d6f541097f3e1bb76486326df9add03548957c2c89116ec9d880f",
+      "bytes": 992776
+    },
+    "policy_unchanged": true
+  },
+  "boundaries": [
+    "Cohort is exactly b411 and predates the later Grid124260c change and unadopted image-budget prototype.",
+    "No overall framework ranking, controlled power, physical assistive-technology, package publication or successful unsigned installer installation/uninstallation claim.",
+    "Benchmark39096072548 is a separate cohort, still running at this record snapshot, and is not a result in this record."
+  ],
+  "browser_boundaries": [
+    "Browser success proves its original software-rendered liveness and contract gates, without cross-framework latency or power budgets.",
+    "WebKit capture reported delivery0/mask0; trusted OS picker and physical IME are not automated."
+  ],
+  "public_summary_independent_review": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-platform-b411-public-draft-independent-memory-review/review.json",
+    "sha256": "e610b6065cc2b5319b26344147c4072c794c9b64266a89c3b1516c69a0c7d88d",
+    "bytes": 26089
+  }
+}

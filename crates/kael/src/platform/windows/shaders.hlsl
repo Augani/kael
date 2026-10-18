@@ -264,6 +264,15 @@ float2 to_tile_position(float2 unit_vertex, AtlasTile tile) {
     return (float2(tile.bounds.origin) + unit_vertex * float2(tile.bounds.size)) / atlas_size;
 }
 
+// Clamp samples rather than vertex UVs to preserve interior interpolation.
+float2 clamp_tile_position(float2 position, AtlasTile tile) {
+    float2 atlas_size;
+    t_sprite.GetDimensions(atlas_size.x, atlas_size.y);
+    float2 origin = float2(tile.bounds.origin);
+    float2 size = float2(tile.bounds.size);
+    return clamp(position, (origin + 0.5) / atlas_size, (origin + size - 0.5) / atlas_size);
+}
+
 // Selects corner radius based on quadrant.
 float pick_corner_radius(float2 center_to_point, Corners corner_radii) {
     if (center_to_point.x < 0.) {
@@ -1009,6 +1018,8 @@ struct BlurPass {
     Hsla tint;
     float blur_radius;
     float saturation;
+    Bounds rounded_clip_bounds;
+    Corners rounded_clip_radii;
 };
 
 struct BlurVertexOutput {
@@ -1024,21 +1035,14 @@ struct BlurFragmentInput {
 
 StructuredBuffer<BlurPass> blurs: register(t1);
 
-float2 blur_position(float2 position, BlurPass blur) {
-    float2 target_origin = blur.target_bounds.origin;
-    float2 target_size = max(blur.target_bounds.size, float2(1.0, 1.0));
-    float2 sample_origin = blur.sample_bounds.origin;
-    float2 sample_size = blur.sample_bounds.size;
-    return sample_origin + ((position - target_origin) / target_size) * sample_size;
-}
-
 float4 blur_along_axis(float2 position, BlurPass blur, float2 axis) {
-    float2 sample_position = blur_position(position, blur);
     float sigma = max(blur.blur_radius, 0.001);
     int radius = min((int)ceil(blur.blur_radius * 3.0), 16);
     float2 texture_size;
     t_sprite.GetDimensions(texture_size.x, texture_size.y);
-    float2 sample_min = blur.sample_bounds.origin;
+    // Captures retain their absolute viewport coordinates. Clamp to texel
+    // centers so linear filtering cannot read outside the copied rectangle.
+    float2 sample_min = blur.sample_bounds.origin + float2(0.5, 0.5);
     float2 sample_max = sample_min + max(blur.sample_bounds.size - float2(1.0, 1.0), float2(0.0, 0.0));
 
     float4 accum = float4(0.0, 0.0, 0.0, 0.0);
@@ -1049,7 +1053,7 @@ float4 blur_along_axis(float2 position, BlurPass blur, float2 axis) {
         }
 
         float weight = gaussian((float)offset, sigma);
-        float2 clamped = clamp(sample_position + axis * (float)offset, sample_min, sample_max);
+        float2 clamped = clamp(position + axis * (float)offset, sample_min, sample_max);
         accum += t_sprite.SampleLevel(s_sprite, clamped / texture_size, 0.0) * weight;
         weight_sum += weight;
     }
@@ -1071,7 +1075,9 @@ float4 composite_blur(float4 blurred, BlurPass blur) {
         return float4(0.0, 0.0, 0.0, 0.0);
     }
 
-    float3 color = (tint.rgb * tint.a + saturated * blurred.a * (1.0 - tint.a)) / alpha;
+    // The blur target stores premultiplied RGB; saturated already includes its
+    // coverage alpha. Convert to straight output after composing the tint.
+    float3 color = (tint.rgb * tint.a + saturated * (1.0 - tint.a)) / alpha;
     return float4(color, alpha);
 }
 
@@ -1106,12 +1112,12 @@ float4 blur_composite_fragment(BlurFragmentInput input): SV_TARGET {
         blur.corner_radii.bottom_left == 0.0 &&
         blur.corner_radii.top_right == 0.0 &&
         blur.corner_radii.bottom_right == 0.0;
-    if (unrounded) {
-        return color;
+    float coverage = rounded_clip_factor(input.position.xy, blur.rounded_clip_bounds, blur.rounded_clip_radii);
+    if (!unrounded) {
+        float distance = quad_sdf(input.position.xy, blur.target_bounds, blur.corner_radii);
+        coverage *= saturate(0.5 - distance);
     }
-
-    float distance = quad_sdf(input.position.xy, blur.target_bounds, blur.corner_radii);
-    return color * float4(1.0, 1.0, 1.0, saturate(0.5 - distance));
+    return color * float4(1.0, 1.0, 1.0, coverage);
 }
 
 /*
@@ -1444,9 +1450,9 @@ MonochromeSpriteVertexOutput monochrome_sprite_vertex(uint vertex_id: SV_VertexI
 }
 
 float4 monochrome_sprite_fragment(MonochromeSpriteFragmentInput input): SV_Target {
-    float sample = t_sprite.Sample(s_sprite, input.tile_position).r;
-    float alpha_corrected = apply_contrast_and_gamma_correction(sample, input.color.rgb, grayscale_enhanced_contrast, gamma_ratios);
     MonochromeSprite sprite = mono_sprites[input.sprite_id];
+    float sample = t_sprite.Sample(s_sprite, clamp_tile_position(input.tile_position, sprite.tile)).r;
+    float alpha_corrected = apply_contrast_and_gamma_correction(sample, input.color.rgb, grayscale_enhanced_contrast, gamma_ratios);
     float rounded_clip = rounded_clip_factor(input.position.xy, sprite.rounded_clip_bounds, sprite.rounded_clip_radii);
     float4 filtered = apply_color_filter(float4(input.color.rgb, input.color.a * alpha_corrected), sprite.color_filter);
     return float4(filtered.rgb, filtered.a * rounded_clip);
@@ -1547,7 +1553,7 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
     PolychromeSprite sprite = poly_sprites[input.sprite_id];
     float rounded_clip = rounded_clip_factor(input.position.xy, sprite.rounded_clip_bounds, sprite.rounded_clip_radii);
     float2 local_position = apply_inverse_transform(input.position.xy, sprite.transformation);
-    float4 sample = t_sprite.Sample(s_sprite, input.tile_position);
+    float4 sample = t_sprite.Sample(s_sprite, clamp_tile_position(input.tile_position, sprite.tile));
     float distance = quad_sdf(local_position, sprite.bounds, sprite.corner_radii);
 
     if (sprite.sprite_kind == 3u) {

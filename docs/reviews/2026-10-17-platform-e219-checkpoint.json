@@ -1,0 +1,156 @@
+{
+  "date": "2026-10-17",
+  "scope": "Frozen hosted e219439 platform/benchmark progress capture. This source predates local animation ownership, tree allocation and notification wire fixes.",
+  "source_commit": "e2194399ad5ec09aba1ac5d82df55bf4a5dbfaea",
+  "platform": {
+    "url": "https://github.com/Augani/kael/actions/runs/39068240744",
+    "status_at_capture": "in_progress",
+    "conclusion_at_capture": "",
+    "jobs": [
+      {
+        "name": "Classify change",
+        "status": "completed",
+        "conclusion": "success",
+        "active_steps": [],
+        "failed_steps": []
+      },
+      {
+        "name": "Linux Renderer / WebView Runtime",
+        "status": "completed",
+        "conclusion": "success",
+        "active_steps": [],
+        "failed_steps": []
+      },
+      {
+        "name": "Quality / Native (macOS)",
+        "status": "completed",
+        "conclusion": "failure",
+        "active_steps": [],
+        "failed_steps": [
+          "Execute Metal retained-scene runtime proof"
+        ]
+      },
+      {
+        "name": "Quality / Native (Linux)",
+        "status": "completed",
+        "conclusion": "failure",
+        "active_steps": [],
+        "failed_steps": [
+          "Audit locked dependencies"
+        ]
+      },
+      {
+        "name": "WebAssembly / WebGL2 Browser",
+        "status": "completed",
+        "conclusion": "success",
+        "active_steps": [],
+        "failed_steps": []
+      },
+      {
+        "name": "Windows Native / WebView / MSI (windows-2022)",
+        "status": "completed",
+        "conclusion": "success",
+        "active_steps": [],
+        "failed_steps": []
+      },
+      {
+        "name": "Windows Native / WebView / MSI (windows-2025-vs2026)",
+        "status": "in_progress",
+        "conclusion": "",
+        "active_steps": [
+          "Compile and lint the complete Windows workspace"
+        ],
+        "failed_steps": []
+      },
+      {
+        "name": "Focused Linux / GTK4 native accessibility",
+        "status": "completed",
+        "conclusion": "skipped",
+        "active_steps": [],
+        "failed_steps": []
+      }
+    ],
+    "macos_failure": {
+      "step": "Execute Metal retained-scene runtime proof",
+      "raw_presented_callback_records": 43,
+      "positive_timestamps": 0,
+      "qualification": "The error text says no callback, but the preserved log proves callbacks actually ran with zero timestamps. Independent Apple controls reproduce zero timestamps in their separately captured environment; no Kael-only cause or workaround is proven."
+    },
+    "linux_failure": {
+      "step": "Audit locked dependencies",
+      "denied_unmaintained_warnings": 6,
+      "advisory_ids": [
+        "RUSTSEC-2026-0370",
+        "RUSTSEC-2026-0371",
+        "RUSTSEC-2026-0372"
+      ],
+      "qualification": "Strict audit remains failing; no ignore or allowance is added."
+    }
+  },
+  "benchmarks": {
+    "url": "https://github.com/Augani/kael/actions/runs/39068242775",
+    "status_at_capture": "in_progress",
+    "conclusion_at_capture": "",
+    "jobs": [
+      {
+        "name": "Benchmark (ubuntu-latest)",
+        "status": "completed",
+        "conclusion": "success",
+        "active_steps": [],
+        "failed_steps": []
+      },
+      {
+        "name": "Benchmark (windows-latest)",
+        "status": "completed",
+        "conclusion": "success",
+        "active_steps": [],
+        "failed_steps": []
+      },
+      {
+        "name": "Benchmark (macos-latest)",
+        "status": "completed",
+        "conclusion": "success",
+        "active_steps": [],
+        "failed_steps": []
+      },
+      {
+        "name": "Matched Kael / GPUI Kit desktop workload",
+        "status": "in_progress",
+        "conclusion": "",
+        "active_steps": [
+          "Measure framework frame instrumentation overhead"
+        ],
+        "failed_steps": []
+      }
+    ],
+    "qualification": "All three microbenchmark OS jobs succeed. The matched application comparison has finished compilation and constrained docking verification and is collecting alternating runs. No completed 100-capture/latest-source ranking is inferred."
+  },
+  "raw_evidence": [
+    {
+      "path": ".artifacts/2026-10-17-platform-e219-checkpoint.json",
+      "sha256": "07d0b13442adb16ab6c0daa3ae428fd12e4bf1666cbd54c0ac33f16c48216537",
+      "bytes": 29222
+    },
+    {
+      "path": ".artifacts/2026-10-17-benchmarks-e219-checkpoint.json",
+      "sha256": "56c80b64811c0721e71a399bae0eaea57e8ed96159dca279568ced414027f630",
+      "bytes": 10552
+    },
+    {
+      "path": ".artifacts/2026-10-17-platform-e219-macos.log",
+      "sha256": "602cb6272884ef0f55b19841ef31824bd8b27f8ba1dbe8dbca424fb06fff8517",
+      "bytes": 725252
+    },
+    {
+      "path": ".artifacts/2026-10-17-platform-e219-linux.log",
+      "sha256": "113dfa7d4f258177f539b356f3614289001ee42409998ce6b3cc0ba8902fcbfd",
+      "bytes": 989275
+    }
+  ],
+  "open_requirements": [
+    "Full Windows 2025 job completion and overall platform conclusion",
+    "Actual positive hosted/native presentation and strict dependency audit",
+    "Completion/independent validation of all matched captures",
+    "Fresh platform/application evidence after later local source changes"
+  ]
+}

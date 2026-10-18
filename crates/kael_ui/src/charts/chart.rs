@@ -1,5 +1,8 @@
 use crate::{
-    charts::{finite_or_zero, format_axis_value},
+    charts::{
+        expand_chart_range, finite_or_zero, format_axis_value, interpolate_chart_value,
+        normalize_chart_value,
+    },
     theme::Theme,
 };
 use kael::{prelude::FluentBuilder as _, *};
@@ -54,14 +57,8 @@ impl DataRange {
         let x_max = finite_or_zero(x_max);
         let y_min = finite_or_zero(y_min);
         let y_max = finite_or_zero(y_max);
-        let (x_min, mut x_max) = (x_min.min(x_max), x_min.max(x_max));
-        let (y_min, mut y_max) = (y_min.min(y_max), y_min.max(y_max));
-        if (x_max - x_min).abs() < f64::EPSILON {
-            x_max = x_min + 1.0;
-        }
-        if (y_max - y_min).abs() < f64::EPSILON {
-            y_max = y_min + 1.0;
-        }
+        let (x_min, x_max) = expand_chart_range(x_min.min(x_max), x_min.max(x_max));
+        let (y_min, y_max) = expand_chart_range(y_min.min(y_max), y_min.max(y_max));
         Self {
             x_min,
             x_max,
@@ -87,12 +84,8 @@ impl DataRange {
             y_max = y_max.max(p.y);
         }
 
-        if (x_max - x_min).abs() < f64::EPSILON {
-            x_max = x_min + 1.0;
-        }
-        if (y_max - y_min).abs() < f64::EPSILON {
-            y_max = y_min + 1.0;
-        }
+        let (x_min, x_max) = expand_chart_range(x_min, x_max);
+        let (y_min, y_max) = expand_chart_range(y_min, y_max);
 
         Self::new(x_min, x_max, y_min, y_max)
     }
@@ -105,11 +98,11 @@ impl DataRange {
     }
 
     pub fn normalize_x(&self, x: f64) -> f32 {
-        ((x - self.x_min) / (self.x_max - self.x_min)) as f32
+        normalize_chart_value(x, self.x_min, self.x_max)
     }
 
     pub fn normalize_y(&self, y: f64) -> f32 {
-        ((y - self.y_min) / (self.y_max - self.y_min)) as f32
+        normalize_chart_value(y, self.y_min, self.y_max)
     }
 
     pub fn with_padding(&self, padding: f64) -> Self {
@@ -118,6 +111,9 @@ impl DataRange {
         } else {
             0.0
         };
+        if padding == 0.0 {
+            return self.clone();
+        }
         let x_range = self.x_max - self.x_min;
         let y_range = self.y_max - self.y_min;
         Self::new(
@@ -206,8 +202,8 @@ impl ChartArea {
         let norm_x = (screen_point.x - self.chart_left()) / chart_width;
         let norm_y = 1.0 - (screen_point.y - self.chart_top()) / chart_height;
 
-        let x = self.range.x_min + (self.range.x_max - self.range.x_min) * norm_x as f64;
-        let y = self.range.y_min + (self.range.y_max - self.range.y_min) * norm_y as f64;
+        let x = interpolate_chart_value(self.range.x_min, self.range.x_max, norm_x as f64);
+        let y = interpolate_chart_value(self.range.y_min, self.range.y_max, norm_y as f64);
 
         DataPoint::new(x, y)
     }
@@ -289,8 +285,15 @@ impl Axis {
     pub fn range(mut self, min: f64, max: f64) -> Self {
         let min = finite_or_zero(min);
         let max = finite_or_zero(max);
-        self.min = Some(min.min(max));
-        self.max = Some(max.max(min) + if min == max { 1.0 } else { 0.0 });
+        let (min, max) = (min.min(max), max.max(min));
+        let (min, max) = if min == max {
+            expand_chart_range(min, max)
+        } else {
+            // Retain the old builder's addition of positive zero (including -0).
+            (min, max + 0.0)
+        };
+        self.min = Some(min);
+        self.max = Some(max);
         self
     }
 
@@ -680,16 +683,21 @@ impl Chart {
     }
 
     fn compute_data_range(&self) -> DataRange {
-        let mut range = DataRange::new(f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        let mut range: Option<DataRange> = None;
 
         for series in &self.series {
+            if series.data.is_empty() {
+                continue;
+            }
             let series_range = series.data_range();
-            range.extend(&series_range);
+            if let Some(range) = &mut range {
+                range.extend(&series_range);
+            } else {
+                range = Some(series_range);
+            }
         }
 
-        if range.x_min == f64::MAX {
-            range = DataRange::new(0.0, 1.0, 0.0, 1.0);
-        }
+        let mut range = range.unwrap_or_else(|| DataRange::new(0.0, 1.0, 0.0, 1.0));
 
         if let Some(min) = self.x_axis.min {
             range.x_min = min;
@@ -739,8 +747,11 @@ impl RenderOnce for Chart {
             (0..=self.y_axis.tick_count)
                 .map(|i| {
                     let normalized = i as f64 / self.y_axis.tick_count as f64;
-                    let value = data_range.y_min
-                        + (data_range.y_max - data_range.y_min) * (1.0 - normalized);
+                    let value = interpolate_chart_value(
+                        data_range.y_min,
+                        data_range.y_max,
+                        1.0 - normalized,
+                    );
                     y_axis_clone.format_value(value)
                 })
                 .collect()
@@ -1109,5 +1120,299 @@ mod tests {
         assert!(summary.contains("and 3 more"));
         assert!(!summary.contains("Latency P12"));
         assert_eq!(chart_summary(&[]), "Chart. No data");
+    }
+
+    #[::core::prelude::v1::test]
+    fn chart_domain_uses_positive_data_extents() {
+        let chart = Chart::new().series(Series::line(
+            "Revenue",
+            vec![DataPoint::new(10.0, 20.0), DataPoint::new(30.0, 80.0)],
+        ));
+        let range = chart.compute_data_range();
+        assert_eq!(
+            (range.x_min, range.x_max, range.y_min, range.y_max),
+            (10.0, 30.0, 20.0, 80.0)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn chart_domain_uses_negative_data_extents() {
+        let chart = Chart::new().series(Series::line(
+            "Loss",
+            vec![DataPoint::new(-30.0, -80.0), DataPoint::new(-10.0, -20.0)],
+        ));
+        let range = chart.compute_data_range();
+        assert_eq!(
+            (range.x_min, range.x_max, range.y_min, range.y_max),
+            (-30.0, -10.0, -80.0, -20.0)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn chart_domain_merges_series_without_empty_unit_domains() {
+        let chart = Chart::new()
+            .series(Series::line("Empty before", Vec::new()))
+            .series(Series::line(
+                "First",
+                vec![DataPoint::new(40.0, 80.0), DataPoint::new(50.0, 90.0)],
+            ))
+            .series(Series::line("Empty between", Vec::new()))
+            .series(Series::line(
+                "Second",
+                vec![DataPoint::new(10.0, 20.0), DataPoint::new(60.0, 100.0)],
+            ))
+            .series(Series::line("Empty after", Vec::new()));
+        let range = chart.compute_data_range();
+        assert_eq!(
+            (range.x_min, range.x_max, range.y_min, range.y_max),
+            (10.0, 60.0, 20.0, 100.0)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn chart_domain_defaults_only_when_all_series_are_empty() {
+        for chart in [
+            Chart::new(),
+            Chart::new()
+                .series(Series::line("Empty one", Vec::new()))
+                .series(Series::line("Empty two", Vec::new())),
+        ] {
+            let range = chart.compute_data_range();
+            assert_eq!(
+                (range.x_min, range.x_max, range.y_min, range.y_max),
+                (0.0, 1.0, 0.0, 1.0)
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn chart_domain_explicit_axes_override_data_extents() {
+        let chart = Chart::new()
+            .series(Series::line(
+                "Revenue",
+                vec![DataPoint::new(10.0, 20.0), DataPoint::new(30.0, 80.0)],
+            ))
+            .x_axis(Axis::new().range(-5.0, 55.0))
+            .y_axis(Axis::new().range(-20.0, 100.0));
+        let range = chart.compute_data_range();
+        assert_eq!(
+            (range.x_min, range.x_max, range.y_min, range.y_max),
+            (-5.0, 55.0, -20.0, 100.0)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn chart_domain_partial_axis_override_keeps_other_data_bounds() {
+        let chart = Chart::new()
+            .series(Series::line(
+                "Revenue",
+                vec![DataPoint::new(10.0, 20.0), DataPoint::new(30.0, 80.0)],
+            ))
+            .x_axis(Axis {
+                min: Some(12.0),
+                ..Axis::new()
+            });
+        let range = chart.compute_data_range();
+        assert_eq!(
+            (range.x_min, range.x_max, range.y_min, range.y_max),
+            (12.0, 30.0, 20.0, 80.0)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn chart_domain_endpoints_project_into_offset_padded_viewport() {
+        for (lower, upper, middle) in [
+            ((10.0, 20.0), (30.0, 80.0), (20.0, 50.0)),
+            ((-30.0, -80.0), (-10.0, -20.0), (-20.0, -50.0)),
+        ] {
+            let chart = Chart::new().series(Series::line(
+                "Data",
+                vec![
+                    DataPoint::new(lower.0, lower.1),
+                    DataPoint::new(upper.0, upper.1),
+                ],
+            ));
+            let area = ChartArea {
+                bounds: Bounds {
+                    origin: point(px(100.0), px(50.0)),
+                    size: Size {
+                        width: px(400.0),
+                        height: px(300.0),
+                    },
+                },
+                range: chart.compute_data_range(),
+                padding: ChartPadding::new(30.0, 10.0, 20.0, 40.0),
+            };
+            assert_eq!(
+                area.data_to_screen(&DataPoint::new(lower.0, lower.1)),
+                point(px(130.0), px(310.0))
+            );
+            assert_eq!(
+                area.data_to_screen(&DataPoint::new(upper.0, upper.1)),
+                point(px(490.0), px(70.0))
+            );
+            assert_eq!(
+                area.data_to_screen(&DataPoint::new(middle.0, middle.1)),
+                point(px(310.0), px(190.0))
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod numeric_range_regressions {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn finite_wide_domain_normalizes_actual_endpoints_and_middle() {
+        let range = DataRange::new(-f64::MAX, f64::MAX, -f64::MAX, f64::MAX);
+        for (value, expected) in [(-f64::MAX, 0.0), (0.0, 0.5), (f64::MAX, 1.0)] {
+            assert_eq!(range.normalize_x(value), expected, "wide x data fraction");
+            assert_eq!(range.normalize_y(value), expected, "wide y data fraction");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn large_constant_public_ranges_keep_finite_neighbor_bounds() {
+        for (value, lower_bits, upper_bits) in [
+            (1e20, 0x4415_af1d_78b5_8c40, 0x4415_af1d_78b5_8c41),
+            (-1e20, 0xc415_af1d_78b5_8c40, 0xc415_af1d_78b5_8c3f),
+            (f64::MAX, 0x7fef_ffff_ffff_fffe, 0x7fef_ffff_ffff_ffff),
+            (-f64::MAX, 0xffef_ffff_ffff_ffff, 0xffef_ffff_ffff_fffe),
+        ] {
+            for range in [
+                DataRange::new(value, value, value, value),
+                DataRange::from_points(&[DataPoint::new(value, value)]),
+            ] {
+                assert_eq!(
+                    range.x_min.to_bits(),
+                    lower_bits,
+                    "large constant public range lower"
+                );
+                assert_eq!(
+                    range.x_max.to_bits(),
+                    upper_bits,
+                    "large constant public range upper"
+                );
+                assert_eq!(range.y_min.to_bits(), lower_bits);
+                assert_eq!(range.y_max.to_bits(), upper_bits);
+                assert!(range.x_min.is_finite() && range.x_max.is_finite());
+                assert!(range.x_min < range.x_max && range.x_min <= value && value <= range.x_max);
+                assert!((0.0..=1.0).contains(&range.normalize_x(value)));
+                assert!((0.0..=1.0).contains(&range.normalize_y(value)));
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn axis_builder_widens_large_constants() {
+        for (value, lower, upper) in [
+            (1e20, 0x4415_af1d_78b5_8c40, 0x4415_af1d_78b5_8c41),
+            (-1e20, 0xc415_af1d_78b5_8c40, 0xc415_af1d_78b5_8c3f),
+            (f64::MAX, 0x7fef_ffff_ffff_fffe, 0x7fef_ffff_ffff_ffff),
+        ] {
+            let axis = Axis::new().range(value, value);
+            assert_eq!(axis.min.unwrap().to_bits(), lower, "axis constant lower");
+            assert_eq!(axis.max.unwrap().to_bits(), upper, "axis constant upper");
+        }
+    }
+
+    fn wide_area() -> ChartArea {
+        ChartArea {
+            bounds: Bounds {
+                origin: point(px(100.0), px(50.0)),
+                size: Size {
+                    width: px(400.0),
+                    height: px(300.0),
+                },
+            },
+            range: Chart::new()
+                .series(Series::line(
+                    "Wide",
+                    vec![
+                        DataPoint::new(-f64::MAX, -f64::MAX),
+                        DataPoint::new(f64::MAX, f64::MAX),
+                    ],
+                ))
+                .compute_data_range(),
+            padding: ChartPadding::new(30.0, 10.0, 20.0, 40.0),
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn wide_domain_projects_offset_padded_viewport() {
+        let area = wide_area();
+        for (value, expected) in [
+            (-f64::MAX, point(px(130.0), px(310.0))),
+            (0.0, point(px(310.0), px(190.0))),
+            (f64::MAX, point(px(490.0), px(70.0))),
+        ] {
+            assert_eq!(
+                area.data_to_screen(&DataPoint::new(value, value)),
+                expected,
+                "wide projected data point"
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn wide_domain_inverse_projection_retains_data_endpoints() {
+        let area = wide_area();
+        for (screen, expected) in [
+            (point(px(130.0), px(310.0)), -f64::MAX),
+            (point(px(310.0), px(190.0)), 0.0),
+            (point(px(490.0), px(70.0)), f64::MAX),
+        ] {
+            let actual = area.screen_to_data(screen);
+            assert_eq!(
+                (actual.x, actual.y),
+                (expected, expected),
+                "wide inverse data point"
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn zero_padding_preserves_wide_finite_endpoints() {
+        let range = DataRange::new(-f64::MAX, f64::MAX, -f64::MAX, f64::MAX);
+        let padded = range.with_padding(0.0);
+        assert_eq!(
+            (padded.x_min, padded.x_max, padded.y_min, padded.y_max),
+            (-f64::MAX, f64::MAX, -f64::MAX, f64::MAX),
+            "zero padding keeps finite wide endpoints",
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn ordinary_and_tiny_ranges_preserve_existing_policy() {
+        for (range, expected) in [
+            (DataRange::new(4.0, 4.0, 4.0, 4.0), (4.0, 5.0, 4.0, 5.0)),
+            (
+                DataRange::new(0.0, f64::EPSILON / 2.0, 0.0, f64::EPSILON / 2.0),
+                (0.0, 1.0, 0.0, 1.0),
+            ),
+            (
+                DataRange::new(30.0, 10.0, -20.0, -80.0),
+                (10.0, 30.0, -80.0, -20.0),
+            ),
+        ] {
+            assert_eq!(
+                (range.x_min, range.x_max, range.y_min, range.y_max),
+                expected
+            );
+        }
+        let axis = Axis::new().range(4.0, 4.0);
+        assert_eq!((axis.min, axis.max), (Some(4.0), Some(5.0)));
+        let tiny_axis = Axis::new().range(0.0, f64::EPSILON / 2.0);
+        assert_eq!(
+            (tiny_axis.min, tiny_axis.max),
+            (Some(0.0), Some(f64::EPSILON / 2.0))
+        );
+        assert_eq!(Axis::new().range(-1.0, -0.0).max.unwrap().to_bits(), 0);
+        let range = DataRange::new(10.0, 30.0, 20.0, 80.0);
+        assert_eq!(
+            (range.normalize_x(20.0), range.normalize_y(50.0)),
+            (0.5, 0.5)
+        );
     }
 }

@@ -16,6 +16,20 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(all(
+    test,
+    any(
+        target_os = "macos",
+        all(target_os = "windows", feature = "custom-shaders"),
+        all(
+            any(target_os = "linux", target_os = "freebsd"),
+            any(feature = "x11", feature = "wayland"),
+            not(feature = "webview-wayland-gtk4")
+        )
+    )
+))]
+pub(crate) mod sprite_sampling_tests;
+
 #[allow(non_camel_case_types, unused)]
 pub(crate) type PathVertex_ScaledPixels = PathVertex<ScaledPixels>;
 
@@ -471,6 +485,9 @@ impl Scene {
         for sprite in &self.polychrome_sprites {
             hash.mix(polychrome_fingerprint(sprite));
         }
+        for surface in &self.surfaces {
+            hash.mix(surface_fingerprint(surface));
+        }
         hash.finish()
     }
 
@@ -622,6 +639,18 @@ impl Scene {
         {
             grow(polychrome_damage_bounds(previous));
         }
+        for (current, previous) in self.surfaces.iter().zip(&prev.surfaces) {
+            if surface_fingerprint(current) != surface_fingerprint(previous) {
+                grow(surface_damage_bounds(current));
+                grow(surface_damage_bounds(previous));
+            }
+        }
+        for current in self.surfaces.iter().skip(prev.surfaces.len()) {
+            grow(surface_damage_bounds(current));
+        }
+        for previous in prev.surfaces.iter().skip(self.surfaces.len()) {
+            grow(surface_damage_bounds(previous));
+        }
 
         if invalid_damage {
             return FrameDamage::Full;
@@ -658,7 +687,16 @@ impl Scene {
     /// primitives. Such frames must never be skipped by whole-frame damage tracking,
     /// because [`Self::structural_checksum`] cannot see their per-frame content.
     pub(crate) fn has_live_surfaces(&self) -> bool {
-        !self.surfaces.is_empty()
+        #[cfg(target_os = "macos")]
+        {
+            self.surfaces
+                .iter()
+                .any(|surface| matches!(surface.source, PaintSurfaceSource::CoreVideo(_)))
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
     }
 
     pub fn push_layer(&mut self, bounds: Bounds<ScaledPixels>) {
@@ -766,7 +804,12 @@ impl Scene {
                             prev_scene.polychrome_sprites[*index].clone(),
                         ),
                         PrimitiveKind::Surface => {
-                            Primitive::Surface(prev_scene.surfaces[*index].clone())
+                            #[cfg(any(target_os = "macos", feature = "custom-shaders"))]
+                            {
+                                Primitive::Surface(prev_scene.surfaces[*index].clone())
+                            }
+                            #[cfg(not(any(target_os = "macos", feature = "custom-shaders")))]
+                            unreachable!("surface primitives cannot be created on this build")
                         }
                     };
                     self.insert_primitive(primitive);
@@ -1291,11 +1334,22 @@ impl BlurRect {
             },
         };
 
-        self.bounds
-            .dilate(margin)
-            .intersect(&viewport_bounds)
-            .map_origin(|origin| origin.floor())
-            .map_size(|size| size.ceil())
+        let capture = self.bounds.dilate(margin).intersect(&viewport_bounds);
+        if capture.is_empty() {
+            return capture;
+        }
+        let origin = point(capture.origin.x.floor(), capture.origin.y.floor());
+        let end = capture.bottom_right();
+        let end = point(end.x.ceil(), end.y.ceil());
+        // Rounding the size independently can omit the last texel when the
+        // origin is fractional. Round both absolute endpoints outward instead.
+        Bounds::new(
+            origin,
+            Size {
+                width: end.x - origin.x,
+                height: end.y - origin.y,
+            },
+        )
     }
 }
 
@@ -1553,8 +1607,59 @@ pub(crate) struct PaintSurface {
     pub order: DrawOrder,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
+    pub source: PaintSurfaceSource,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum PaintSurfaceSource {
     #[cfg(target_os = "macos")]
-    pub image_buffer: core_video::pixel_buffer::CVPixelBuffer,
+    CoreVideo(core_video::pixel_buffer::CVPixelBuffer),
+    #[cfg(feature = "custom-shaders")]
+    RenderTarget {
+        target: crate::RenderTarget,
+        revision: u64,
+        paint: crate::render_target::RenderTargetPaint,
+    },
+}
+
+fn surface_fingerprint(surface: &PaintSurface) -> u64 {
+    let mut hash = FnvHash::new();
+    hash.mix(surface.order as u64);
+    hash.mix_bounds(&surface.bounds);
+    hash.mix_content_mask(&surface.content_mask);
+    match &surface.source {
+        #[cfg(target_os = "macos")]
+        PaintSurfaceSource::CoreVideo(_) => hash.mix(0),
+        #[cfg(feature = "custom-shaders")]
+        PaintSurfaceSource::RenderTarget {
+            target,
+            revision,
+            paint,
+        } => {
+            hash.mix(target.owner());
+            hash.mix(target.id());
+            hash.mix(*revision);
+            hash.mix_f32(paint.opacity);
+            hash.mix_corners(&paint.corner_radii);
+            hash.mix_bounds(&paint.rounded_clip_bounds);
+            hash.mix_corners(&paint.rounded_clip_radii);
+            hash.mix_transform(&paint.transform);
+            hash.mix_color_filter(&paint.color_filter);
+        }
+        #[cfg(not(any(target_os = "macos", feature = "custom-shaders")))]
+        _ => {}
+    }
+    hash.finish()
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn surface_damage_bounds(surface: &PaintSurface) -> Option<Bounds<ScaledPixels>> {
+    #[cfg(feature = "custom-shaders")]
+    #[allow(irrefutable_let_patterns)]
+    if let PaintSurfaceSource::RenderTarget { paint, .. } = &surface.source {
+        return transformed_damage_bounds(surface.bounds, paint.transform);
+    }
+    finite_damage_bounds(surface.bounds)
 }
 
 #[derive(Clone, Debug)]
@@ -1573,6 +1678,20 @@ pub(crate) struct CachedSurfaceSnapshot {
     pub paint_operations: Range<usize>,
     pub source_bounds: Bounds<DevicePixels>,
     pub target: AtlasTile,
+}
+
+impl Scene {
+    pub(crate) fn atlas_tiles(&self) -> impl Iterator<Item = &AtlasTile> {
+        self.monochrome_sprites
+            .iter()
+            .map(|sprite| &sprite.tile)
+            .chain(self.polychrome_sprites.iter().map(|sprite| &sprite.tile))
+            .chain(
+                self.cached_surface_snapshots
+                    .iter()
+                    .map(|snapshot| &snapshot.target),
+            )
+    }
 }
 
 impl From<PaintSurface> for Primitive {
@@ -2180,6 +2299,12 @@ mod tests {
         let source = include_str!("platform/blade/shaders.wgsl");
         let module = naga::front::wgsl::parse_str(source)
             .unwrap_or_else(|err| panic!("shaders.wgsl failed to parse: {err:?}"));
+        // Blade assigns resource bindings when it creates each pipeline. Check
+        // the remaining semantics here even on hosts using Metal or DirectX.
+        let flags = naga::valid::ValidationFlags::all() - naga::valid::ValidationFlags::BINDINGS;
+        naga::valid::Validator::new(flags, naga::valid::Capabilities::empty())
+            .validate(&module)
+            .unwrap_or_else(|err| panic!("{}", err.emit_to_string(source)));
 
         assert_eq!(
             std::mem::size_of::<Quad>(),
@@ -2295,6 +2420,59 @@ mod tests {
             corner_radii: Corners::all(ScaledPixels(4.0)),
             tint: Hsla::transparent_black(),
             saturation: 1.25,
+        }
+    }
+
+    #[test]
+    fn blur_capture_rounds_absolute_endpoints_to_cover_fractional_texels() {
+        let viewport = size(DevicePixels(64), DevicePixels(32));
+        let bounds = Bounds::new(
+            point(ScaledPixels(12.8), ScaledPixels(4.2)),
+            size(ScaledPixels(20.0), ScaledPixels(10.0)),
+        );
+        let mut blur = test_blur_rect(bounds);
+        blur.blur_radius = ScaledPixels(0.0);
+        assert_eq!(
+            blur.capture_bounds(viewport),
+            Bounds::new(
+                point(ScaledPixels(12.0), ScaledPixels(4.0)),
+                size(ScaledPixels(21.0), ScaledPixels(11.0))
+            )
+        );
+        blur.blur_radius = ScaledPixels(1.0);
+        assert_eq!(
+            blur.capture_bounds(viewport),
+            Bounds::new(
+                point(ScaledPixels(9.0), ScaledPixels(1.0)),
+                size(ScaledPixels(27.0), ScaledPixels(17.0))
+            )
+        );
+        blur.bounds = Bounds::new(
+            point(ScaledPixels(-0.8), ScaledPixels(30.2)),
+            size(ScaledPixels(2.0), ScaledPixels(10.0)),
+        );
+        blur.blur_radius = ScaledPixels(0.0);
+        assert_eq!(
+            blur.capture_bounds(viewport),
+            Bounds::new(
+                point(ScaledPixels(0.0), ScaledPixels(30.0)),
+                size(ScaledPixels(2.0), ScaledPixels(2.0))
+            )
+        );
+        // Outward rounding must not turn a zero-area or wholly clipped
+        // rectangle into GPU work.
+        for bounds in [
+            Bounds::new(
+                point(ScaledPixels(12.8), ScaledPixels(4.2)),
+                size(ScaledPixels(0.0), ScaledPixels(10.0)),
+            ),
+            Bounds::new(
+                point(ScaledPixels(64.2), ScaledPixels(4.2)),
+                size(ScaledPixels(2.0), ScaledPixels(10.0)),
+            ),
+        ] {
+            blur.bounds = bounds;
+            assert!(blur.capture_bounds(viewport).is_empty());
         }
     }
 

@@ -1,6 +1,13 @@
 // Doing `if let` gives you nice scoping with passes/encoders
 #![allow(irrefutable_let_patterns)]
 
+#[cfg(feature = "custom-shaders")]
+mod custom_shaders;
+#[cfg(all(test, feature = "custom-shaders"))]
+mod graph_tests;
+#[cfg(test)]
+mod offscreen_tests;
+
 use super::{BladeAtlas, BladeContext};
 use crate::{
     Background, BlurRect, Bounds, Corners, DevicePixels, GpuSpecs, Hsla, MonochromeSprite, Path,
@@ -177,6 +184,8 @@ struct BlurPass {
     tint: Hsla,
     blur_radius: ScaledPixels,
     saturation: f32,
+    rounded_clip_bounds: Bounds<ScaledPixels>,
+    rounded_clip_radii: Corners<ScaledPixels>,
 }
 
 impl BlurPass {
@@ -189,6 +198,8 @@ impl BlurPass {
             tint: Hsla::transparent_black(),
             blur_radius: blur_rect.blur_radius,
             saturation: 1.0,
+            rounded_clip_bounds: Bounds::default(),
+            rounded_clip_radii: Corners::default(),
         }
     }
 
@@ -201,6 +212,8 @@ impl BlurPass {
             tint: blur_rect.tint,
             blur_radius: blur_rect.blur_radius,
             saturation: blur_rect.saturation,
+            rounded_clip_bounds: blur_rect.rounded_clip_bounds,
+            rounded_clip_radii: blur_rect.rounded_clip_radii,
         }
     }
 }
@@ -279,7 +292,13 @@ impl BladePipelines {
                 },
                 depth_stencil: None,
                 fragment: Some(shader.at("fs_blur_horizontal")),
-                color_targets,
+                // Captured framebuffer samples are premultiplied regardless of
+                // the surface's shader-output alpha convention.
+                color_targets: &[gpu::ColorTargetState {
+                    format: surface_info.format,
+                    blend: Some(gpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: gpu::ColorWrites::default(),
+                }],
                 multisample_state: gpu::MultisampleState::default(),
             }),
             blur_composite: gpu.create_render_pipeline(gpu::RenderPipelineDesc {
@@ -353,7 +372,7 @@ impl BladePipelines {
                     format: surface_info.format,
                     blend: Some(gpu::BlendState {
                         color: gpu::BlendComponent::OVER,
-                        alpha: gpu::BlendComponent::ADDITIVE,
+                        alpha: gpu::BlendComponent::OVER,
                     }),
                     write_mask: gpu::ColorWrites::default(),
                 }],
@@ -443,10 +462,16 @@ pub struct BladeSurfaceConfig {
 // the format and alpha mode.
 pub struct BladeRenderer {
     gpu: Arc<gpu::Context>,
-    surface: gpu::Surface,
+    surface: Option<gpu::Surface>,
+    surface_info: gpu::SurfaceInfo,
     surface_config: gpu::SurfaceConfig,
     command_encoder: gpu::CommandEncoder,
     last_sync_point: Option<gpu::SyncPoint>,
+    device_failed: bool,
+    #[cfg(test)]
+    wait_override: Option<Result<bool, gpu::DeviceError>>,
+    #[cfg(test)]
+    wait_calls: usize,
     /// Readback buffers whose copy submission did not complete within the
     /// synchronous export deadline. They remain alive until the queue's
     /// tracked sync point completes (or the device reports a terminal error).
@@ -458,20 +483,35 @@ pub struct BladeRenderer {
     atlas_sampler: gpu::Sampler,
     #[cfg(target_os = "macos")]
     core_video_texture_cache: CVMetalTextureCache,
-    path_intermediate_texture: gpu::Texture,
-    path_intermediate_texture_view: gpu::TextureView,
+    path_intermediate_texture: Option<gpu::Texture>,
+    path_intermediate_texture_view: Option<gpu::TextureView>,
     path_intermediate_msaa_texture: Option<gpu::Texture>,
     path_intermediate_msaa_texture_view: Option<gpu::TextureView>,
-    cached_surface_texture: gpu::Texture,
-    cached_surface_texture_view: gpu::TextureView,
-    blur_source_texture: gpu::Texture,
-    blur_source_texture_view: gpu::TextureView,
-    blur_horizontal_texture: gpu::Texture,
-    blur_horizontal_texture_view: gpu::TextureView,
+    cached_surface_texture: Option<gpu::Texture>,
+    cached_surface_texture_view: Option<gpu::TextureView>,
+    blur_source_texture: Option<gpu::Texture>,
+    blur_source_texture_view: Option<gpu::TextureView>,
+    blur_horizontal_texture: Option<gpu::Texture>,
+    blur_horizontal_texture_view: Option<gpu::TextureView>,
     rendering_parameters: RenderingParameters,
+    #[cfg(feature = "custom-shaders")]
+    custom: custom_shaders::BladeCustomRenderer,
 }
 
 impl BladeRenderer {
+    #[cfg(test)]
+    fn scratch_texture_count(&self) -> usize {
+        [
+            self.path_intermediate_texture,
+            self.path_intermediate_msaa_texture,
+            self.cached_surface_texture,
+            self.blur_source_texture,
+            self.blur_horizontal_texture,
+        ]
+        .iter()
+        .filter(|texture| texture.is_some())
+        .count()
+    }
     pub fn new<I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle>(
         context: &BladeContext,
         window: &I,
@@ -490,6 +530,16 @@ impl BladeRenderer {
             .create_surface_configured(window, surface_config)
             .map_err(|err| anyhow::anyhow!("Failed to create surface: {err:?}"))?;
 
+        let surface_info = surface.info();
+        Self::with_surface(context, Some(surface), surface_info, surface_config)
+    }
+
+    fn with_surface(
+        context: &BladeContext,
+        surface: Option<gpu::Surface>,
+        surface_info: gpu::SurfaceInfo,
+        surface_config: gpu::SurfaceConfig,
+    ) -> anyhow::Result<Self> {
         let command_encoder = context.gpu.create_command_encoder(gpu::CommandEncoderDesc {
             name: "main",
             buffer_count: 2,
@@ -497,7 +547,7 @@ impl BladeRenderer {
         let rendering_parameters = RenderingParameters::from_env(context);
         let pipelines = BladePipelines::new(
             &context.gpu,
-            surface.info(),
+            surface_info,
             rendering_parameters.path_sample_count,
         );
         let instance_belt = BufferBelt::new(BufferBeltDescriptor {
@@ -513,43 +563,6 @@ impl BladeRenderer {
             ..Default::default()
         });
 
-        let (path_intermediate_texture, path_intermediate_texture_view) =
-            create_path_intermediate_texture(
-                &context.gpu,
-                surface.info().format,
-                config.size.width,
-                config.size.height,
-            );
-        let (cached_surface_texture, cached_surface_texture_view) =
-            create_path_intermediate_texture(
-                &context.gpu,
-                surface.info().format,
-                config.size.width,
-                config.size.height,
-            );
-        let (blur_source_texture, blur_source_texture_view) = create_path_intermediate_texture(
-            &context.gpu,
-            surface.info().format,
-            config.size.width,
-            config.size.height,
-        );
-        let (blur_horizontal_texture, blur_horizontal_texture_view) =
-            create_path_intermediate_texture(
-                &context.gpu,
-                surface.info().format,
-                config.size.width,
-                config.size.height,
-            );
-        let (path_intermediate_msaa_texture, path_intermediate_msaa_texture_view) =
-            create_msaa_texture_if_needed(
-                &context.gpu,
-                surface.info().format,
-                config.size.width,
-                config.size.height,
-                rendering_parameters.path_sample_count,
-            )
-            .unzip();
-
         #[cfg(target_os = "macos")]
         let core_video_texture_cache = {
             let metal_device = context.gpu.metal_device();
@@ -564,9 +577,15 @@ impl BladeRenderer {
         Ok(Self {
             gpu: Arc::clone(&context.gpu),
             surface,
+            surface_info,
             surface_config,
             command_encoder,
             last_sync_point: None,
+            device_failed: false,
+            #[cfg(test)]
+            wait_override: None,
+            #[cfg(test)]
+            wait_calls: 0,
             deferred_readbacks: Vec::new(),
             pipelines,
             instance_belt,
@@ -575,67 +594,149 @@ impl BladeRenderer {
             atlas_sampler,
             #[cfg(target_os = "macos")]
             core_video_texture_cache,
-            path_intermediate_texture,
-            path_intermediate_texture_view,
-            path_intermediate_msaa_texture,
-            path_intermediate_msaa_texture_view,
-            cached_surface_texture,
-            cached_surface_texture_view,
-            blur_source_texture,
-            blur_source_texture_view,
-            blur_horizontal_texture,
-            blur_horizontal_texture_view,
+            path_intermediate_texture: None,
+            path_intermediate_texture_view: None,
+            path_intermediate_msaa_texture: None,
+            path_intermediate_msaa_texture_view: None,
+            cached_surface_texture: None,
+            cached_surface_texture_view: None,
+            blur_source_texture: None,
+            blur_source_texture_view: None,
+            blur_horizontal_texture: None,
+            blur_horizontal_texture_view: None,
             rendering_parameters,
+            #[cfg(feature = "custom-shaders")]
+            custom: custom_shaders::BladeCustomRenderer::new(Arc::clone(&context.gpu)),
         })
     }
 
-    fn wait_for_gpu(&mut self) {
-        let waited_for_submission = if let Some(last_sp) = self.last_sync_point.take() {
-            if !self
-                .gpu
-                .wait_for(&last_sp, MAX_FRAME_TIME_MS)
-                .unwrap_or(true)
-            {
-                log::error!("GPU hung");
-                #[cfg(target_os = "linux")]
-                if self.gpu.device_information().driver_name == "radv" {
-                    log::error!(
-                        "there's a known bug with amdgpu/radv, try setting KAEL_PATH_SAMPLE_COUNT=0 as a workaround"
-                    );
-                    log::error!(
-                        "if that helps you're running into a known amdgpu/radv rendering issue"
-                    );
-                }
-                log::error!(
-                    "your device information is: {:?}",
-                    self.gpu.device_information()
-                );
-                while !self
-                    .gpu
-                    .wait_for(&last_sp, MAX_FRAME_TIME_MS)
-                    .unwrap_or(true)
-                {}
-            }
-            true
-        } else {
-            false
-        };
+    #[cfg(target_os = "macos")]
+    pub(crate) fn gpu_allocated_bytes(&self) -> u64 {
+        use objc2_metal::MTLDevice as _;
+        self.gpu.metal_device().currentAllocatedSize() as u64
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn create_gpu_buffer(
+        &mut self,
+        descriptor: crate::GpuBufferDescriptor,
+    ) -> std::result::Result<crate::GpuBuffer, crate::RenderTargetError> {
+        self.custom.create_buffer(descriptor)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn validate_gpu_buffer(
+        &mut self,
+        buffer: &crate::GpuBuffer,
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.custom.validate_buffer(buffer)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn write_gpu_buffer(
+        &mut self,
+        buffer: &crate::GpuBuffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.custom.write_buffer(buffer, offset, bytes)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn read_gpu_buffer(
+        &mut self,
+        buffer: &crate::GpuBuffer,
+    ) -> std::result::Result<Vec<u8>, crate::RenderTargetError> {
+        self.custom.read_buffer(buffer)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn dispatch_compute(
+        &mut self,
+        shader: &crate::ComputeHandle,
+        bindings: &crate::ComputeBindings,
+        groups: [u32; 3],
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.custom.dispatch(shader, bindings, groups)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn write_render_target(
+        &mut self,
+        target: &crate::RenderTarget,
+        pixels: &[u8],
+    ) -> std::result::Result<(), crate::RenderTargetError> {
+        self.custom.write_target(target, pixels)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn create_render_target(
+        &mut self,
+        descriptor: crate::RenderTargetDescriptor,
+    ) -> Result<crate::RenderTarget, crate::RenderTargetError> {
+        self.custom.create(descriptor)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn render_shader(
+        &mut self,
+        target: &crate::RenderTarget,
+        shader: &crate::ShaderHandle,
+        bindings: &crate::ShaderBindings,
+    ) -> Result<(), crate::RenderTargetError> {
+        self.custom.render(target, shader, bindings)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn read_render_target(
+        &mut self,
+        target: &crate::RenderTarget,
+    ) -> Result<crate::RenderTargetReadback, crate::RenderTargetError> {
+        self.custom.read(target)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn validate_render_target(
+        &self,
+        target: &crate::RenderTarget,
+    ) -> Result<(), crate::RenderTargetError> {
+        self.custom.validate(target)
+    }
+    #[cfg(feature = "custom-shaders")]
+    pub(crate) fn set_render_target_byte_budget(&mut self, bytes: u64) {
+        self.custom.set_budget(bytes);
+    }
 
-        if waited_for_submission {
-            // Blade's Vulkan backend frees memory immediately in
-            // destroy_buffer, so these must never be released before the copy
-            // submission is complete. A wait error is terminal for the device
-            // and therefore also ends use of its queued resources.
-            let deferred = std::mem::take(&mut self.deferred_readbacks);
-            for pending in deferred {
-                self.destroy_scene_readback_resources(pending);
+    fn wait_for_submission(&mut self, point: &gpu::SyncPoint) -> Result<bool, gpu::DeviceError> {
+        #[cfg(test)]
+        {
+            self.wait_calls += 1;
+            if let Some(result) = self.wait_override.clone() {
+                return result;
             }
-        } else {
-            debug_assert!(
-                self.deferred_readbacks.is_empty(),
-                "deferred Blade readback buffers require a tracked sync point"
-            );
         }
+        self.gpu.wait_for(point, MAX_FRAME_TIME_MS)
+    }
+
+    fn invalidate_device(&mut self) {
+        self.device_failed = true;
+        #[cfg(feature = "custom-shaders")]
+        self.custom.invalidate_device();
+    }
+
+    /// Return false while encoded resources may still be in flight. A timeout
+    /// or memory error preserves the tracked fence for later retirement; only
+    /// a completed fence permits destroying queued resources.
+    fn wait_for_gpu(&mut self) -> bool {
+        let Some(point) = self.last_sync_point.clone() else {
+            debug_assert!(self.deferred_readbacks.is_empty());
+            return true;
+        };
+        match self.wait_for_submission(&point) {
+            Ok(true) => {}
+            Ok(false) | Err(_) => {
+                self.invalidate_device();
+                log::error!(
+                    "Blade scene submission did not complete within its bounded wait; retaining in-flight resources"
+                );
+                return false;
+            }
+        }
+        self.last_sync_point = None;
+        for pending in std::mem::take(&mut self.deferred_readbacks) {
+            self.destroy_scene_readback_resources(pending);
+        }
+        true
     }
 
     pub fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
@@ -655,92 +756,43 @@ impl BladeRenderer {
 
     fn update_drawable_size_impl(&mut self, size: Size<DevicePixels>, always_resize: bool) {
         let gpu_size = gpu::Extent {
-            width: size.width.0 as u32,
-            height: size.height.0 as u32,
+            width: u32::try_from(size.width.0).unwrap_or(0),
+            height: u32::try_from(size.height.0).unwrap_or(0),
             depth: 1,
         };
 
         if always_resize || gpu_size != self.surface_config.size {
-            self.wait_for_gpu();
+            if !self.wait_for_gpu() {
+                return;
+            }
             self.surface_config.size = gpu_size;
-            self.gpu
-                .reconfigure_surface(&mut self.surface, self.surface_config);
-            self.gpu.destroy_texture(self.path_intermediate_texture);
-            self.gpu
-                .destroy_texture_view(self.path_intermediate_texture_view);
-            self.gpu.destroy_texture(self.cached_surface_texture);
-            self.gpu
-                .destroy_texture_view(self.cached_surface_texture_view);
-            self.gpu.destroy_texture(self.blur_source_texture);
-            self.gpu.destroy_texture_view(self.blur_source_texture_view);
-            self.gpu.destroy_texture(self.blur_horizontal_texture);
-            self.gpu
-                .destroy_texture_view(self.blur_horizontal_texture_view);
-            if let Some(msaa_texture) = self.path_intermediate_msaa_texture {
-                self.gpu.destroy_texture(msaa_texture);
+            if let Some(surface) = &mut self.surface {
+                if gpu_size.width == 0 || gpu_size.height == 0 {
+                    self.release_scratch();
+                    return;
+                }
+                self.gpu.reconfigure_surface(surface, self.surface_config);
+                self.surface_info = surface.info();
             }
-            if let Some(msaa_view) = self.path_intermediate_msaa_texture_view {
-                self.gpu.destroy_texture_view(msaa_view);
-            }
-            let (path_intermediate_texture, path_intermediate_texture_view) =
-                create_path_intermediate_texture(
-                    &self.gpu,
-                    self.surface.info().format,
-                    gpu_size.width,
-                    gpu_size.height,
-                );
-            let (cached_surface_texture, cached_surface_texture_view) =
-                create_path_intermediate_texture(
-                    &self.gpu,
-                    self.surface.info().format,
-                    gpu_size.width,
-                    gpu_size.height,
-                );
-            let (blur_source_texture, blur_source_texture_view) = create_path_intermediate_texture(
-                &self.gpu,
-                self.surface.info().format,
-                gpu_size.width,
-                gpu_size.height,
-            );
-            let (blur_horizontal_texture, blur_horizontal_texture_view) =
-                create_path_intermediate_texture(
-                    &self.gpu,
-                    self.surface.info().format,
-                    gpu_size.width,
-                    gpu_size.height,
-                );
-            self.path_intermediate_texture = path_intermediate_texture;
-            self.path_intermediate_texture_view = path_intermediate_texture_view;
-            self.cached_surface_texture = cached_surface_texture;
-            self.cached_surface_texture_view = cached_surface_texture_view;
-            self.blur_source_texture = blur_source_texture;
-            self.blur_source_texture_view = blur_source_texture_view;
-            self.blur_horizontal_texture = blur_horizontal_texture;
-            self.blur_horizontal_texture_view = blur_horizontal_texture_view;
-            let (path_intermediate_msaa_texture, path_intermediate_msaa_texture_view) =
-                create_msaa_texture_if_needed(
-                    &self.gpu,
-                    self.surface.info().format,
-                    gpu_size.width,
-                    gpu_size.height,
-                    self.rendering_parameters.path_sample_count,
-                )
-                .unzip();
-            self.path_intermediate_msaa_texture = path_intermediate_msaa_texture;
-            self.path_intermediate_msaa_texture_view = path_intermediate_msaa_texture_view;
+            self.release_scratch();
         }
     }
 
     pub fn update_transparency(&mut self, transparent: bool) {
         if transparent != self.surface_config.transparent {
-            self.wait_for_gpu();
+            if !self.wait_for_gpu() {
+                return;
+            }
             self.surface_config.transparent = transparent;
-            self.gpu
-                .reconfigure_surface(&mut self.surface, self.surface_config);
+            if let Some(surface) = &mut self.surface {
+                self.gpu.reconfigure_surface(surface, self.surface_config);
+                self.surface_info = surface.info();
+            }
+            self.release_scratch();
             self.pipelines.destroy(&self.gpu);
             self.pipelines = BladePipelines::new(
                 &self.gpu,
-                self.surface.info(),
+                self.surface_info,
                 self.rendering_parameters.path_sample_count,
             );
         }
@@ -764,6 +816,20 @@ impl BladeRenderer {
     #[allow(dead_code)]
     pub fn set_atlas_byte_budget(&mut self, budget: Option<u64>) {
         self.atlas_byte_budget = budget;
+        self.atlas.set_admission_limits(budget);
+    }
+
+    pub(crate) fn shed_memory(&mut self, level: crate::MemoryPressureLevel) {
+        if level != crate::MemoryPressureLevel::Normal {
+            if !self.wait_for_gpu() {
+                return;
+            }
+            self.release_scratch();
+            #[cfg(feature = "custom-shaders")]
+            self.custom.shed_memory();
+            self.atlas
+                .evict_to_budget_keeping(self.atlas_byte_budget.unwrap_or(0), 4);
+        }
     }
 
     #[cfg_attr(target_os = "macos", allow(dead_code))]
@@ -780,7 +846,108 @@ impl BladeRenderer {
 
     #[cfg(target_os = "macos")]
     pub fn layer_ptr(&self) -> *mut metal::CAMetalLayer {
-        objc2::rc::Retained::as_ptr(&self.surface.metal_layer()) as *mut _
+        objc2::rc::Retained::as_ptr(&self.surface.as_ref().expect("native surface").metal_layer())
+            as *mut _
+    }
+
+    // Scratch images match the current viewport exactly because path UVs use
+    // viewport dimensions. Resize and pressure callers wait for the queue
+    // before releasing the old images; ordinary scenes allocate none.
+    fn ensure_path_intermediate(&mut self) {
+        if self.path_intermediate_texture.is_none() {
+            let size = self.surface_config.size;
+            let (texture, view) = create_path_intermediate_texture(
+                &self.gpu,
+                self.surface_info.format,
+                size.width,
+                size.height,
+            );
+            self.path_intermediate_texture = Some(texture);
+            self.path_intermediate_texture_view = Some(view);
+            (
+                self.path_intermediate_msaa_texture,
+                self.path_intermediate_msaa_texture_view,
+            ) = create_msaa_texture_if_needed(
+                &self.gpu,
+                self.surface_info.format,
+                size.width,
+                size.height,
+                self.rendering_parameters.path_sample_count,
+            )
+            .unzip();
+        }
+    }
+
+    fn ensure_cached_surface(&mut self) {
+        if self.cached_surface_texture.is_none() {
+            let size = self.surface_config.size;
+            let (texture, view) = create_path_intermediate_texture(
+                &self.gpu,
+                self.surface_info.format,
+                size.width,
+                size.height,
+            );
+            self.cached_surface_texture = Some(texture);
+            self.cached_surface_texture_view = Some(view);
+        }
+    }
+
+    fn ensure_blur_intermediates(&mut self) {
+        let size = self.surface_config.size;
+        for (texture, view) in [
+            (
+                &mut self.blur_source_texture,
+                &mut self.blur_source_texture_view,
+            ),
+            (
+                &mut self.blur_horizontal_texture,
+                &mut self.blur_horizontal_texture_view,
+            ),
+        ] {
+            if texture.is_none() {
+                let (new_texture, new_view) = create_path_intermediate_texture(
+                    &self.gpu,
+                    self.surface_info.format,
+                    size.width,
+                    size.height,
+                );
+                *texture = Some(new_texture);
+                *view = Some(new_view);
+            }
+        }
+    }
+
+    /// The tracked scene submission must have completed before calling this.
+    fn release_scratch(&mut self) {
+        for (texture, view) in [
+            (
+                &mut self.path_intermediate_texture,
+                &mut self.path_intermediate_texture_view,
+            ),
+            (
+                &mut self.path_intermediate_msaa_texture,
+                &mut self.path_intermediate_msaa_texture_view,
+            ),
+            (
+                &mut self.cached_surface_texture,
+                &mut self.cached_surface_texture_view,
+            ),
+            (
+                &mut self.blur_source_texture,
+                &mut self.blur_source_texture_view,
+            ),
+            (
+                &mut self.blur_horizontal_texture,
+                &mut self.blur_horizontal_texture_view,
+            ),
+        ] {
+            if let Some(view) = view.take() {
+                self.gpu.destroy_texture_view(view);
+            }
+            if let Some(texture) = texture.take() {
+                self.gpu.destroy_texture(texture);
+            }
+        }
     }
 
     #[profiling::function]
@@ -790,8 +957,9 @@ impl BladeRenderer {
         width: f32,
         height: f32,
     ) {
+        self.ensure_path_intermediate();
         self.command_encoder
-            .init_texture(self.path_intermediate_texture);
+            .init_texture(self.path_intermediate_texture.unwrap());
         if let Some(msaa_texture) = self.path_intermediate_msaa_texture {
             self.command_encoder.init_texture(msaa_texture);
         }
@@ -800,11 +968,11 @@ impl BladeRenderer {
             gpu::RenderTarget {
                 view: msaa_view,
                 init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
-                finish_op: gpu::FinishOp::ResolveTo(self.path_intermediate_texture_view),
+                finish_op: gpu::FinishOp::ResolveTo(self.path_intermediate_texture_view.unwrap()),
             }
         } else {
             gpu::RenderTarget {
-                view: self.path_intermediate_texture_view,
+                view: self.path_intermediate_texture_view.unwrap(),
                 init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
                 finish_op: gpu::FinishOp::Store,
             }
@@ -845,25 +1013,25 @@ impl BladeRenderer {
     }
 
     pub fn destroy(&mut self) {
-        self.wait_for_gpu();
+        if !self.wait_for_gpu() {
+            // Vulkan resources are freed immediately by destroy_*. Preserve
+            // this device and its raw allocations if the queue remains hung.
+            // Metal command buffers retain encoded objects until completion.
+            std::mem::forget(Arc::clone(&self.gpu));
+            log::error!(
+                "Blade scene teardown retained a pending device instead of freeing in-flight resources"
+            );
+            return;
+        }
         self.atlas.destroy();
         self.gpu.destroy_sampler(self.atlas_sampler);
         self.instance_belt.destroy(&self.gpu);
         self.gpu.destroy_command_encoder(&mut self.command_encoder);
         self.pipelines.destroy(&self.gpu);
-        self.gpu.destroy_surface(&mut self.surface);
-        self.gpu.destroy_texture(self.path_intermediate_texture);
-        self.gpu
-            .destroy_texture_view(self.path_intermediate_texture_view);
-        self.gpu.destroy_texture(self.cached_surface_texture);
-        self.gpu
-            .destroy_texture_view(self.cached_surface_texture_view);
-        if let Some(msaa_texture) = self.path_intermediate_msaa_texture {
-            self.gpu.destroy_texture(msaa_texture);
+        if let Some(surface) = &mut self.surface {
+            self.gpu.destroy_surface(surface);
         }
-        if let Some(msaa_view) = self.path_intermediate_msaa_texture_view {
-            self.gpu.destroy_texture_view(msaa_view);
-        }
+        self.release_scratch();
     }
 
     pub fn draw(&mut self, scene: &Scene) {
@@ -882,10 +1050,22 @@ impl BladeRenderer {
         scene: &Scene,
         capture: bool,
     ) -> anyhow::Result<Option<BladeSceneReadback>> {
+        anyhow::ensure!(
+            !self.device_failed,
+            "Blade scene device requires recreation after submission failure"
+        );
+        if !capture && (self.surface_config.size.width == 0 || self.surface_config.size.height == 0)
+        {
+            return Ok(None);
+        }
         if !self.deferred_readbacks.is_empty() {
-            self.wait_for_gpu();
+            anyhow::ensure!(
+                self.wait_for_gpu(),
+                "Blade scene readback retirement is still pending"
+            );
         }
         let readback_layout = capture.then(|| self.scene_readback_layout()).transpose()?;
+        self.atlas.mark_scene_used(scene)?;
         self.command_encoder.start();
         self.atlas.before_frame(&mut self.command_encoder);
 
@@ -893,7 +1073,14 @@ impl BladeRenderer {
             None
         } else {
             profiling::scope!("acquire frame");
-            Some(self.surface.acquire_frame())
+            Some(
+                self.surface
+                    .as_mut()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("offscreen Blade renderer has no presentation surface")
+                    })?
+                    .acquire_frame(),
+            )
         };
         let readback_target =
             readback_layout.map(|layout| self.create_scene_readback_target(layout.format));
@@ -916,7 +1103,7 @@ impl BladeRenderer {
             // Both contracts leave premultiplied pixels in the render target:
             // straight shader output is multiplied by ALPHA_BLENDING, while
             // premultiplied shader output uses PREMULTIPLIED_ALPHA_BLENDING.
-            premultiplied_alpha: match self.surface.info().alpha {
+            premultiplied_alpha: match self.surface_info.alpha {
                 gpu::AlphaMode::Ignored | gpu::AlphaMode::PostMultiplied => 0,
                 gpu::AlphaMode::PreMultiplied => 1,
             },
@@ -1027,7 +1214,7 @@ impl BladeRenderer {
                         0,
                         &ShaderPathsData {
                             globals,
-                            t_sprite: self.path_intermediate_texture_view,
+                            t_sprite: self.path_intermediate_texture_view.unwrap(),
                             s_sprite: self.atlas_sampler,
                             b_path_sprites: instance_buf,
                         },
@@ -1096,9 +1283,27 @@ impl BladeRenderer {
                     encoder.draw(0, 4, 0, sprites.len() as u32);
                 }
                 PrimitiveBatch::Surfaces(surfaces) => {
-                    let mut _encoder = pass.with(&self.pipelines.surfaces);
-
                     for surface in surfaces {
+                        #[cfg(feature = "custom-shaders")]
+                        if let crate::PaintSurfaceSource::RenderTarget { target, .. } =
+                            &surface.source
+                        {
+                            let viewport = crate::size(
+                                DevicePixels(globals.viewport_size[0] as i32),
+                                DevicePixels(globals.viewport_size[1] as i32),
+                            );
+                            if let Err(error) = self.custom.draw(
+                                surface,
+                                target,
+                                viewport,
+                                self.surface_info.format,
+                                &mut pass,
+                            ) {
+                                log::error!("custom target display failed: {error}");
+                            }
+                            continue;
+                        }
+
                         #[cfg(not(target_os = "macos"))]
                         {
                             let _ = surface;
@@ -1107,8 +1312,13 @@ impl BladeRenderer {
 
                         #[cfg(target_os = "macos")]
                         {
+                            let crate::PaintSurfaceSource::CoreVideo(image_buffer) =
+                                &surface.source
+                            else {
+                                continue;
+                            };
                             let (t_y, t_cb_cr) = {
-                                if surface.image_buffer.get_pixel_format()
+                                if image_buffer.get_pixel_format()
                                     != core_video::pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
                                 {
                                     log::warn!("skipping Blade surface with unsupported pixel format");
@@ -1117,11 +1327,11 @@ impl BladeRenderer {
 
                                 let Ok(y_texture) =
                                     self.core_video_texture_cache.create_texture_from_image(
-                                        &surface.image_buffer,
+                                        &image_buffer,
                                         None,
                                         metal::MTLPixelFormat::R8Unorm,
-                                        surface.image_buffer.get_width_of_plane(0),
-                                        surface.image_buffer.get_height_of_plane(0),
+                                        image_buffer.get_width_of_plane(0),
+                                        image_buffer.get_height_of_plane(0),
                                         0,
                                     )
                                 else {
@@ -1130,11 +1340,11 @@ impl BladeRenderer {
                                 };
                                 let Ok(cb_cr_texture) =
                                     self.core_video_texture_cache.create_texture_from_image(
-                                        &surface.image_buffer,
+                                        &image_buffer,
                                         None,
                                         metal::MTLPixelFormat::RG8Unorm,
-                                        surface.image_buffer.get_width_of_plane(1),
-                                        surface.image_buffer.get_height_of_plane(1),
+                                        image_buffer.get_width_of_plane(1),
+                                        image_buffer.get_height_of_plane(1),
                                         1,
                                     )
                                 else {
@@ -1174,6 +1384,7 @@ impl BladeRenderer {
                                 )
                             };
 
+                            let mut _encoder = pass.with(&self.pipelines.surfaces);
                             _encoder.bind(
                                 0,
                                 &ShaderSurfacesData {
@@ -1206,31 +1417,27 @@ impl BladeRenderer {
             self.command_encoder.present(frame);
         }
         let sync_point = self.gpu.submit(&mut self.command_encoder);
+        #[cfg(feature = "custom-shaders")]
+        self.custom.after_frame(&sync_point);
 
         profiling::scope!("finish");
         self.instance_belt.flush(&sync_point);
         self.atlas.after_frame(&sync_point);
 
-        // End of frame: shed least-recently-used atlas tiles to the budget (if configured),
-        // protecting the frames still in flight, then advance the atlas clock.
-        if let Some(budget) = self.atlas_byte_budget {
-            const IN_FLIGHT_FRAMES: u64 = 3;
-            self.atlas.evict_to_budget_keeping(budget, IN_FLIGHT_FRAMES);
-        }
-        self.atlas.advance_frame();
-
         let readback = if let Some(pending) = pending_readback {
-            let wait_result = self.gpu.wait_for(&sync_point, MAX_FRAME_TIME_MS);
+            let wait_result = self.wait_for_submission(&sync_point);
             match wait_result {
                 Ok(true) => Some(self.finish_scene_readback(pending)?),
                 Ok(false) => {
                     // Keep the in-flight resource alive. The current queue
                     // sync point covers this copy and all earlier work.
+                    self.invalidate_device();
                     self.deferred_readbacks.push(pending);
                     self.last_sync_point = Some(sync_point);
                     anyhow::bail!("Blade scene readback timed out waiting for the GPU");
                 }
                 Err(error) => {
+                    self.invalidate_device();
                     self.deferred_readbacks.push(pending);
                     self.last_sync_point = Some(sync_point);
                     return Err(anyhow::anyhow!(
@@ -1242,8 +1449,19 @@ impl BladeRenderer {
             None
         };
 
-        self.wait_for_gpu();
+        let previous_completed = self.wait_for_gpu();
         self.last_sync_point = Some(sync_point);
+        anyhow::ensure!(
+            previous_completed && !self.device_failed,
+            "Blade scene submission failure requires device recreation"
+        );
+        // Only a successful fence gate advances retirement. Failed submissions
+        // must not make pending atlas regions eligible for overwrite or release.
+        if let Some(budget) = self.atlas_byte_budget {
+            const IN_FLIGHT_FRAMES: u64 = 4;
+            self.atlas.evict_to_budget_keeping(budget, IN_FLIGHT_FRAMES);
+        }
+        self.atlas.advance_frame();
         Ok(readback)
     }
 
@@ -1278,7 +1496,7 @@ impl BladeRenderer {
             width > 0 && height > 0,
             "Blade scene readback target is empty"
         );
-        let format = self.surface.info().format;
+        let format = self.surface_info.format;
         anyhow::ensure!(
             matches!(
                 format,
@@ -1421,17 +1639,21 @@ impl BladeRenderer {
     }
 
     fn draw_cached_surface_snapshots(&mut self, scene: &Scene) {
+        if scene.cached_surface_snapshots.is_empty() {
+            return;
+        }
+        self.ensure_cached_surface();
         for snapshot in &scene.cached_surface_snapshots {
             let snapshot_scene = scene.snapshot_subscene(snapshot.paint_operations.clone());
             self.command_encoder
-                .init_texture(self.cached_surface_texture);
+                .init_texture(self.cached_surface_texture.unwrap());
 
             let globals = GlobalParams {
                 viewport_size: [
                     self.surface_config.size.width as f32,
                     self.surface_config.size.height as f32,
                 ],
-                premultiplied_alpha: match self.surface.info().alpha {
+                premultiplied_alpha: match self.surface_info.alpha {
                     gpu::AlphaMode::Ignored | gpu::AlphaMode::PostMultiplied => 0,
                     gpu::AlphaMode::PreMultiplied => 1,
                 },
@@ -1442,7 +1664,7 @@ impl BladeRenderer {
                 "cached surface snapshot",
                 gpu::RenderTargetSet {
                     colors: &[gpu::RenderTarget {
-                        view: self.cached_surface_texture_view,
+                        view: self.cached_surface_texture_view.unwrap(),
                         init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
                         finish_op: gpu::FinishOp::Store,
                     }],
@@ -1456,15 +1678,15 @@ impl BladeRenderer {
                         drop(pass);
                         self.draw_blur_rects(
                             blur_rects,
-                            self.cached_surface_texture,
-                            self.cached_surface_texture_view,
+                            self.cached_surface_texture.unwrap(),
+                            self.cached_surface_texture_view.unwrap(),
                             globals,
                         );
                         pass = self.command_encoder.render(
                             "cached surface snapshot",
                             gpu::RenderTargetSet {
                                 colors: &[gpu::RenderTarget {
-                                    view: self.cached_surface_texture_view,
+                                    view: self.cached_surface_texture_view.unwrap(),
                                     init_op: gpu::InitOp::Load,
                                     finish_op: gpu::FinishOp::Store,
                                 }],
@@ -1512,7 +1734,7 @@ impl BladeRenderer {
                             "cached surface snapshot",
                             gpu::RenderTargetSet {
                                 colors: &[gpu::RenderTarget {
-                                    view: self.cached_surface_texture_view,
+                                    view: self.cached_surface_texture_view.unwrap(),
                                     init_op: gpu::InitOp::Load,
                                     finish_op: gpu::FinishOp::Store,
                                 }],
@@ -1540,7 +1762,7 @@ impl BladeRenderer {
                             0,
                             &ShaderPathsData {
                                 globals,
-                                t_sprite: self.path_intermediate_texture_view,
+                                t_sprite: self.path_intermediate_texture_view.unwrap(),
                                 s_sprite: self.atlas_sampler,
                                 b_path_sprites: instance_buf,
                             },
@@ -1613,15 +1835,38 @@ impl BladeRenderer {
                         encoder.draw(0, 4, 0, sprites.len() as u32);
                     }
                     PrimitiveBatch::Surfaces(surfaces) => {
-                        let mut _encoder = pass.with(&self.pipelines.surfaces);
-
                         for surface in surfaces {
+                            #[cfg(feature = "custom-shaders")]
+                            if let crate::PaintSurfaceSource::RenderTarget { target, .. } =
+                                &surface.source
+                            {
+                                let viewport = crate::size(
+                                    DevicePixels(globals.viewport_size[0] as i32),
+                                    DevicePixels(globals.viewport_size[1] as i32),
+                                );
+                                if let Err(error) = self.custom.draw(
+                                    surface,
+                                    target,
+                                    viewport,
+                                    self.surface_info.format,
+                                    &mut pass,
+                                ) {
+                                    log::error!("custom target display failed: {error}");
+                                }
+                                continue;
+                            }
+
                             #[cfg(not(target_os = "macos"))]
                             let _ = surface;
                             #[cfg(target_os = "macos")]
                             {
+                                let crate::PaintSurfaceSource::CoreVideo(image_buffer) =
+                                    &surface.source
+                                else {
+                                    continue;
+                                };
                                 let (t_y, t_cb_cr) = {
-                                    if surface.image_buffer.get_pixel_format()
+                                    if image_buffer.get_pixel_format()
                                         != core_video::pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
                                     {
                                         log::warn!("skipping Blade surface with unsupported pixel format");
@@ -1630,11 +1875,11 @@ impl BladeRenderer {
 
                                     let Ok(y_texture) =
                                         self.core_video_texture_cache.create_texture_from_image(
-                                            &surface.image_buffer,
+                                            &image_buffer,
                                             None,
                                             metal::MTLPixelFormat::R8Unorm,
-                                            surface.image_buffer.get_width_of_plane(0),
-                                            surface.image_buffer.get_height_of_plane(0),
+                                            image_buffer.get_width_of_plane(0),
+                                            image_buffer.get_height_of_plane(0),
                                             0,
                                         )
                                     else {
@@ -1643,11 +1888,11 @@ impl BladeRenderer {
                                     };
                                     let Ok(cb_cr_texture) =
                                         self.core_video_texture_cache.create_texture_from_image(
-                                            &surface.image_buffer,
+                                            &image_buffer,
                                             None,
                                             metal::MTLPixelFormat::RG8Unorm,
-                                            surface.image_buffer.get_width_of_plane(1),
-                                            surface.image_buffer.get_height_of_plane(1),
+                                            image_buffer.get_width_of_plane(1),
+                                            image_buffer.get_height_of_plane(1),
                                             1,
                                         )
                                     else {
@@ -1695,6 +1940,7 @@ impl BladeRenderer {
                                     )
                                 };
 
+                                let mut _encoder = pass.with(&self.pipelines.surfaces);
                                 _encoder.bind(
                                     0,
                                     &ShaderSurfacesData {
@@ -1724,7 +1970,7 @@ impl BladeRenderer {
             let mut transfers = self.command_encoder.transfer("cached surface blit");
             transfers.copy_texture_to_texture(
                 gpu::TexturePiece {
-                    texture: self.cached_surface_texture,
+                    texture: self.cached_surface_texture.unwrap(),
                     mip_level: 0,
                     array_layer: 0,
                     origin: [
@@ -1763,14 +2009,21 @@ impl BladeRenderer {
             return;
         }
 
-        self.command_encoder.init_texture(self.blur_source_texture);
-        self.command_encoder
-            .init_texture(self.blur_horizontal_texture);
-
         let viewport_size = Size {
             width: DevicePixels(self.surface_config.size.width as i32),
             height: DevicePixels(self.surface_config.size.height as i32),
         };
+        if !blur_rects
+            .iter()
+            .any(|blur| !blur.capture_bounds(viewport_size).is_empty())
+        {
+            return;
+        }
+        self.ensure_blur_intermediates();
+        self.command_encoder
+            .init_texture(self.blur_source_texture.unwrap());
+        self.command_encoder
+            .init_texture(self.blur_horizontal_texture.unwrap());
 
         for blur_rect in blur_rects {
             let capture_bounds = blur_rect.capture_bounds(viewport_size);
@@ -1794,7 +2047,7 @@ impl BladeRenderer {
                     ],
                 },
                 gpu::TexturePiece {
-                    texture: self.blur_source_texture,
+                    texture: self.blur_source_texture.unwrap(),
                     mip_level: 0,
                     array_layer: 0,
                     origin: [
@@ -1815,7 +2068,7 @@ impl BladeRenderer {
                 "blur horizontal",
                 gpu::RenderTargetSet {
                     colors: &[gpu::RenderTarget {
-                        view: self.blur_horizontal_texture_view,
+                        view: self.blur_horizontal_texture_view.unwrap(),
                         init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
                         finish_op: gpu::FinishOp::Store,
                     }],
@@ -1832,7 +2085,7 @@ impl BladeRenderer {
                     0,
                     &ShaderBlurData {
                         globals,
-                        t_sprite: self.blur_source_texture_view,
+                        t_sprite: self.blur_source_texture_view.unwrap(),
                         s_sprite: self.atlas_sampler,
                         b_blurs: instance_buf,
                     },
@@ -1860,7 +2113,7 @@ impl BladeRenderer {
                     0,
                     &ShaderBlurData {
                         globals,
-                        t_sprite: self.blur_horizontal_texture_view,
+                        t_sprite: self.blur_horizontal_texture_view.unwrap(),
                         s_sprite: self.atlas_sampler,
                         b_blurs: instance_buf,
                     },

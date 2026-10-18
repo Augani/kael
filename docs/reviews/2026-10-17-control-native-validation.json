@@ -1,0 +1,109 @@
+{
+  "date": "2026-10-17",
+  "scope": "Physical macOS Metal correctness after cached-parent and ScrollHandle changes; not a timing or power benchmark",
+  "capture_parent_commit": "9bae63b32eb59025bace693024d9da5c29a393be",
+  "source_files_sha256": {
+    "crates/kael/src/accessibility.rs": "ada57711a131801e6317502cc271febcd4c01f870dfe8ae3cd01cd43efb1fd6a",
+    "crates/kael/src/elements/cached.rs": "11b9ec09cf8e6dcc28a2b405224d96827c2a40236b5afcfff4f4fb019b80ec75",
+    "crates/kael/src/elements/deferred.rs": "b46f7a5f59d24bd5c5d04c640565a33a39906aabe2654f27a335b84561f9d64c",
+    "crates/kael/src/view.rs": "6dfccfce267cb6bdbfd069f753b8ad27f3cddc49e76b0a7c5a003edbf9eb18fa",
+    "crates/kael/src/window.rs": "ef373b1e4f96003c698bc8d1c34f78516ca8370078cfd38521a3534c3b384a0b",
+    "crates/kael/src/platform/mac/display_link.rs": "ddc8a6c023b83e6e05920c5042a1d93ed4e83b2de95b7b82041814d24ab76a51",
+    "crates/kael/src/platform/mac/window.rs": "3f2850829331cd6df9c0203882bc87701692c29762dc8fc8389697c9cbea0500",
+    "crates/kael/examples/native_renderer_smoke.rs": "275d33e1ba67d7f8cf3d570fc077eac28553bb5e6ffe6d88bd055be26f12cc71",
+    "crates/kael/src/cache.rs": "b0dda9b73b7d12b42362cc972ba7168108f36a1aa02b693c24482b311a9e0f88",
+    "crates/kael/src/elements/div.rs": "49cce18bf265eebe6d64c4e03d1f42ccc36940f7f1fd32347f11a16cc0422b2a"
+  },
+  "compiler": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: aarch64-apple-darwin\nrelease: 1.97.1\nLLVM version: 22.1.6",
+  "programmable_features": [
+    "font-kit",
+    "runtime_shaders",
+    "custom-shaders"
+  ],
+  "programmable_test_groups": [
+    {
+      "log": ".artifacts/2026-10-17-second-native-quality/programmable/atlas-identity-lifetimes.log",
+      "passed": 4,
+      "sha256": "8b5f33d4131b51c813633d60c5fc28d5fb33ee8d9aae5834d33f1130754375de"
+    },
+    {
+      "log": ".artifacts/2026-10-17-second-native-quality/programmable/atlas-tile-residency.log",
+      "passed": 3,
+      "sha256": "d12536940f0624f6955b48b5dd3700a17eb4b7f183e931e3cdfa98e8955fc483"
+    },
+    {
+      "log": ".artifacts/2026-10-17-second-native-quality/programmable/custom-shaders-and-compute.log",
+      "passed": 7,
+      "sha256": "b532d782d6ffde64d13b452c379e2366fe7bc02fe4be30d7a7385500f498c845"
+    },
+    {
+      "log": ".artifacts/2026-10-17-second-native-quality/programmable/mixed-gpu-graph.log",
+      "passed": 6,
+      "sha256": "9854e0afa831eb69ad2e7713d5aaf0985caaa44d6d370a09ce66a46765f6bc0e"
+    },
+    {
+      "log": ".artifacts/2026-10-17-second-native-quality/programmable/offscreen-scenes.log",
+      "passed": 26,
+      "sha256": "305de9d3b8cb707dfbab31957047a07764f8176a26a282c0ed6afd0d817db035"
+    },
+    {
+      "log": ".artifacts/2026-10-17-second-native-quality/programmable/ordered-atlas-uploads.log",
+      "passed": 13,
+      "sha256": "5435a9947721dd55f13f1924b1c58ccddeb19cf06cbc5c2d511cf3a4c05d273b"
+    }
+  ],
+  "programmable_total_passed": 59,
+  "native_window": {
+    "features": [
+      "font-kit",
+      "runtime_shaders"
+    ],
+    "backend": "metal",
+    "software": false,
+    "initial_client_size": [
+      720,
+      460
+    ],
+    "scale": 2,
+    "idle_model_wake_without_input_resize_or_refresh": true,
+    "gpu_completed_and_displayed_frames": 1,
+    "rendered_revisions": 4,
+    "render_calls": 8,
+    "text_probe_pixels": 6067,
+    "raw_log": ".artifacts/2026-10-17-second-native-quality/native-renderer.log",
+    "raw_log_sha256": "fd19cfcedbd5c10b3d6cdcb808c6f0d1d09f61d8d0b0a0190a24149ef66a5449",
+    "png": ".artifacts/2026-10-17-second-native-quality/native-renderer.png",
+    "png_sha256": "d23fafef2b093bc30849664e7d9dde778e3643fdbf3fb561a0d1c7e60667b09d",
+    "client_size_coordinate_space": "logical pixels"
+  },
+  "limitations": [
+    "Core source was committed and frozen during capture; source-file hashes identify the compiled code.",
+    "Other correctness builds/tests could run during capture; displayed-frame count is correctness evidence, not comparative display latency or performance.",
+    "This result does not waive hosted macOS presentation requirements or establish native screen-reader exploration.",
+    "The display-link lifecycle probe referenced here is the earlier October 17 capture; those source files are unchanged."
+  ],
+  "environment": {
+    "machine": "arm64",
+    "os": "ProductName:\t\tmacOS\nProductVersion:\t\t27.2\nBuildVersion:\t\t26B5112a",
+    "cpu": "Apple M2 Pro",
+    "logical_cpus": 12,
+    "memory_bytes": 17179869184
+  },
+  "executable_sha256": {
+    "benchmarks/desktop-comparison/target/debug/examples/native_renderer_smoke": "909ac049ac04344d189120e41f7629f649e83f0a3455ecf1f0981442796d646c",
+    "benchmarks/desktop-comparison/target/debug/deps/kael-c8a86da3fb1aa4ae": "968a923a37978c64cc03c45e61088d80556e69eb5bde0029ff97850fe02009fa"
+  },
+  "retained_display_link_probe": {
+    "log": ".artifacts/2026-10-17-native-display-link-probe.log",
+    "log_sha256": "1bdf5dd28bfe27eacfd197eadcbada9dce71908e3bdbaf4098f0924f77100845",
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "stop_start_cycles": 128,
+    "native_objects_constructed": 1,
+    "other_display_retargets": 1,
+    "final_stopped": true,
+    "scope": "Explicit native object lifecycle; compositor proof is in native_window."
+  },
+  "matching_core_source_commit": "8d3f530eed5ff3767a41396c587ac4e3880cf0f4"
+}

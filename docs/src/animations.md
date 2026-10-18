@@ -219,6 +219,12 @@ let loader = lottie("animations/spinner.json")
 tracing::info!(summary = loader.to_text(), "lottie element");
 ```
 
+Built-in asset loading admits two concurrent I/O/parse/poster operations per
+native process or Rust/Wasm runtime instance. Playback workers use separate
+admission, and synchronous constructors remain available. See the
+[loader ownership and cancellation limits](graphics.md#lottie) when choosing
+loading/fallback content or budgeting large animations.
+
 Inspect generated animated UI with `LottieSource::to_text()`, `LottieAnimation::to_text()`, `LottiePlayer::to_text()`, and `lottie(...).to_text()`. These summaries report source class, byte presence, decoded metadata, playback state, loop mode, object-fit mode, prefetch counts, and loading/fallback configuration without logging paths, URLs, embedded resource names, raw bytes, or replacement text.
 
 ## Elastic scrolling

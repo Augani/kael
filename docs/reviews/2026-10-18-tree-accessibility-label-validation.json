@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-18",
+  "status": "EXACT_LABEL_V4_ADOPTED_HOST_UI_AND_WASM_QUALITY_PASS",
+  "adoption_performed": true,
+  "summary": "VirtualTree refreshes the accessible root label when an unchanged model is relabeled or a worker-prepared label is stale. Row identities remain stable, including the first worker snapshot.",
+  "production": {
+    "path": "crates/kael_ui/src/navigation/virtual_tree.rs",
+    "preimage_sha256": "0e88d50cf065b2f602370e7a2519ee8dc6e272c1b2ecc44db1b8f5e617f7cce2",
+    "adopted_sha256": "23ada1864922b90519964b6912de606da18b90afb4a0b69725d32caf778cf718",
+    "changes": [
+      "Include SharedString root label in both accessibility reuse decisions.",
+      "Rebuild mismatched semantics, reusing same-root worker IDs only when published state has no prior IDs.",
+      "Keep published state identities authoritative and reject unrelated roots."
+    ]
+  },
+  "functional_proof": {
+    "baseline_expected_runtime_assertion_failures": 2,
+    "candidate_exact_passes": 2,
+    "UI_inventory": 568,
+    "full_UI_passed": 568,
+    "failed_ignored_filtered": 0,
+    "default_parallel": true,
+    "strict_UI_all_targets_clippy": true,
+    "execution_scope": "Host-target headless Rust UI test binary; not native screen-reader exploration.",
+    "regression_names": [
+      "navigation::virtual_tree::tests::accessibility_root_label_updates_on_the_same_tree_model",
+      "navigation::virtual_tree::tests::accessibility_rejects_worker_preparation_for_a_different_root_label"
+    ],
+    "actual": {
+      "path": ".artifacts/2026-10-18-tree-label-v4-regressions/result.json",
+      "sha256": "44aadbc83f14d206528840dcee9546471756c7a22081d54bdd5d91144993e4b3",
+      "bytes": 3275988
+    },
+    "independent_actual_audit": {
+      "path": ".artifacts/2026-10-18-tree-label-v4-actual-independent-general-audit/review.json",
+      "sha256": "98579aff565a05e071d6a14695593226a4dbb3fb54c4328eca37232bdac1e3ae",
+      "bytes": 12688
+    }
+  },
+  "followup_quality": {
+    "commands": 3,
+    "production_browser_Wasm_typecheck": true,
+    "joint_Core_UI_Wasm_test_typecheck": true,
+    "repository_format_check": true,
+    "Wasm_tests_executed": false,
+    "actual": {
+      "path": ".artifacts/2026-10-18-tree-label-v4-followup-quality/result.json",
+      "sha256": "c4fafefbaf6be7abbc89388970dde61b800223c32dad0a539287cd3fc00c5583",
+      "bytes": 4651
+    },
+    "driver": {
+      "path": ".artifacts/2026-10-18-tree-label-v4-followup-quality-driver-v2/run.py",
+      "sha256": "2b36e26d32a4da8e2b849a94e7fd27af4831c022c1a75c2bd24a4d36a012bfb2",
+      "bytes": 3750
+    }
+  },
+  "adoption": {
+    "exact_candidate_copied_to_both_roots_with_current_mtimes": true,
+    "eligible_inputs_before_and_after": 3172,
+    "equal_source_bytes_modes_not_Git_head_claim": true,
+    "before_fingerprint": "e80072eba6157c0311cf0f04e39a2ac2891ea62949a9184e9ede3e6684a5d807",
+    "after_fingerprint": "23cdf8bc0632799ace3dcd67db75db16c2b3c5337ac1f3904c8a6454e52a3d42",
+    "receipt": {
+      "path": ".artifacts/2026-10-18-tree-label-v4-adoption/result.json",
+      "sha256": "6cc50c827d0cde73aa7835fba973bee40c99898d5ae36e7727e754cfe2c6f66f",
+      "bytes": 3146951
+    }
+  },
+  "preserved_authoring_failure": {
+    "reason": "First test overlay placed new cases in a sibling module and failed compilation; it is not counted as intended behavioral RED evidence. V4 places the same test bodies in the existing tests module.",
+    "actual": {
+      "path": ".artifacts/2026-10-18-tree-label-regressions/result.json",
+      "sha256": "964e918b949e543544eec90b37c131d383d6286ab543756931dbfbd5dffbe849",
+      "bytes": 3150147
+    }
+  },
+  "limits": [
+    "No new native assistive-technology, screen-reader, application frame, RSS or performance claim.",
+    "No completion claim for R6/R7/R8 or broader platform acceptance.",
+    "Immutable catalog API remains source-only and uninstalled."
+  ],
+  "independent_adoption_and_followup_quality_audit": {
+    "path": ".artifacts/2026-10-18-tree-label-v4-adoption-independent-memory-audit/review.json",
+    "sha256": "02f4682363628f56e38655fc806ecfc534356dc5d2d5deb99824fb759219aa06",
+    "bytes": 13817
+  }
+}

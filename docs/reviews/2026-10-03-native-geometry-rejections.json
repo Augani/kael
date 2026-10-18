@@ -1,0 +1,361 @@
+{
+  "scope": "Rejected local native geometry/painting acceptance attempts on a sleeping physical display; no CPU or memory ranking",
+  "framework_checkpoint": "f81adaff99f68a1c9bd332f541ca9536fa819a73",
+  "display_state_observed": "CoreGraphics CGDisplayIsAsleep(CGMainDisplayID())=1, display online=1; AppKit occlusion=8192 without Visible bit 2",
+  "binary_build_note": "Kael binaries precede the optional native-poll trace addition; accessibility and native geometry harness changes are included. Exact binaries are identified below.",
+  "binaries": {
+    "kael": {
+      "component_comparison": "bf1b939b46691d50637f43b68f9b7ce556684e8697135c1fe28b7a5f3751d48d",
+      "data_comparison": "261ad022fe94dad2cd3abab8a1f764c940c44cde3d9d0866eb5452ea7204de04",
+      "kael-desktop-comparison": "6001e905473174b2addb1a04af36080538458adc71b2552c11b8df0ed472b223",
+      "tree_comparison": "2f88d175695ca91ca16bb21be178b51f7e5f5051581fe2afbe1beb8fc72c9e84",
+      "workspace_comparison": "2057ef5a09727820a56ae827ebdd99dac31d7cfcac2cef0b2834a7658324975c"
+    },
+    "gpui-kit": {
+      "component_comparison": "1de9a319b1249bdfd00ca7176d94b5c759b8707da8b26a8dfa2311ee5fe98eff",
+      "data_comparison": "01754559d5d883386f120345891f7da009fa1a899e483d26bb2dc75f0ff052e2",
+      "kael-desktop-comparison": "4d1aab3d1997637de770403efd70fa6a2e13f6e5268afc7acb9ea1ea041603d8",
+      "tree_comparison": "a18c7e6234a589c4becdef93e7114950d7cc605e5f23c9839b176fce0b9a3f16",
+      "workspace_comparison": "04d62ece6e1cdd4a897e493ab870671215d690f38ba438ee4ac63cf00d7a6d15"
+    }
+  },
+  "captures": [
+    {
+      "contract": "native-data-table-v1",
+      "raw_file": "00-kael.log",
+      "raw_sha256": "9a8bda995f6cf65ee0f8a7abe014adb0ba3fd528d3cb290ca722453c681f9cb6",
+      "accepted_for_performance": false,
+      "panic": "thread 'main' (34522331) panicked at src/data_comparison.rs:517:34:"
+    },
+    {
+      "contract": "native-dock-workspace-v1",
+      "raw_file": "00-kael.log",
+      "raw_sha256": "4c312918a0274db4b739764d727e2faeeb80648ca22877662dc815ee6a7282b9",
+      "accepted_for_performance": false,
+      "panic": "thread 'main' (34524268) panicked at src/workspace_comparison.rs:850:18:"
+    },
+    {
+      "contract": "native-editor-document-v1",
+      "raw_file": "00-gpui-kit.log",
+      "raw_sha256": "38b5327fb0f1fc2c8ecafc6b41cb376c12273b52d620a6571dcff87e2494d1b3",
+      "accepted_for_performance": false,
+      "engine": "gpui-kit",
+      "renders": 2,
+      "native_window_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "phase_correctness": [
+        [
+          "idle-before",
+          true
+        ],
+        [
+          "active",
+          true
+        ],
+        [
+          "idle-after",
+          true
+        ],
+        [
+          "churn",
+          true
+        ]
+      ],
+      "draw_record_count": 2,
+      "submission_record_count": 0
+    },
+    {
+      "contract": "native-editor-document-v1",
+      "raw_file": "00-kael.log",
+      "raw_sha256": "3741c3c48abf4da5d2ccf644e09b7958ad38c95fe33228bfe681e536473a5e22",
+      "accepted_for_performance": false,
+      "engine": "kael",
+      "renders": 2,
+      "native_window_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 761.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 761.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 761.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 761.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 761.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 761.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 761.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 761.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "phase_correctness": [
+        [
+          "idle-before",
+          true
+        ],
+        [
+          "active",
+          true
+        ],
+        [
+          "idle-after",
+          true
+        ],
+        [
+          "churn",
+          true
+        ]
+      ],
+      "draw_record_count": 2,
+      "submission_record_count": 1
+    },
+    {
+      "contract": "native-navigation-detail-v1",
+      "raw_file": "00-gpui-kit.log",
+      "raw_sha256": "eadb8dea5cce3a7b21043db397280d048b3e209e5032f86289aac47c5b9ce666",
+      "accepted_for_performance": false,
+      "engine": "gpui-kit",
+      "renders": 2,
+      "native_window_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 760.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "phase_correctness": null,
+      "draw_record_count": 2,
+      "submission_record_count": 0
+    },
+    {
+      "contract": "native-navigation-detail-v1",
+      "raw_file": "00-kael.log",
+      "raw_sha256": "646d2dcd985f3b51708bcaf26d02e9c64c61be1ff04e36f39882b7f996915721",
+      "accepted_for_performance": false,
+      "engine": "kael",
+      "renders": 2,
+      "native_window_geometry": [
+        {
+          "phase": "idle-before",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 761.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-before",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 761.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 761.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "active",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 761.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 761.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "idle-after",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 761.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "begin",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 761.0,
+          "scale_factor": 2.0
+        },
+        {
+          "phase": "churn",
+          "boundary": "end",
+          "viewport_width_px": 1100.0,
+          "viewport_height_px": 761.0,
+          "scale_factor": 2.0
+        }
+      ],
+      "phase_correctness": null,
+      "draw_record_count": 2,
+      "submission_record_count": 1
+    },
+    {
+      "contract": "native-virtual-tree-v1",
+      "raw_file": "00-kael.log",
+      "raw_sha256": "456e7ea0d663da6c120e52432ce3b991541e26c70eb1a90d352377d57c0dc7a8",
+      "accepted_for_performance": false,
+      "panic": "thread 'main' (34523245) panicked at src/tree_comparison.rs:685:37:"
+    }
+  ],
+  "conclusions": [
+    "Navigation/editor captured Kael 1100x761 and GPUI 1100x760, both scale 2. The strict paired geometry gate rejects that difference.",
+    "Navigation/editor have only two root render calls and no GPUI CPU submission records; these are paused-window diagnostics, not performance results.",
+    "Data/tree/workspace native mounted-content or fresh-paint oracles reject the occluded runs before a report is completed.",
+    "The subsequent native client-size correction is verified separately at 720x460; full visible-window execution remains pending."
+  ]
+}

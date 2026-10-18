@@ -1,0 +1,287 @@
+{
+  "date": "2026-10-17",
+  "scope": "Source-scoped element-owned Lottie task cancellation, worker admission and stale-geometry correction. Two Kael Rust files only; no dependency, fork, public policy, package publication or performance-comparison change.",
+  "source_identity": {
+    "baseline_commit": "e2194399ad5ec09aba1ac5d82df55bf4a5dbfaea",
+    "validated_changes": "The two ownership source files committed locally at the validated source commit. SHA-256 of each immutable Git blob is also checked against current source bytes.",
+    "files_sha256": {
+      "crates/kael/src/lottie.rs": "10e10daf783fdf7b58dd227f5deb63d9e7b014e641f79b93df8978a7467366de",
+      "crates/kael/src/elements/lottie.rs": "aed398e6ee0cc81a5c93f53d932055f8a4023c98dea785ef9c80d8d47a67f249"
+    },
+    "unchanged_dependency_inputs_sha256": {
+      "Cargo.toml": "ff54489574d916c2213a0c1fc7ec8c39f677b985d5d42bb7a20c7e970333177a",
+      "Cargo.lock": "b1b84f981fcc7d4c0e7a60a0d08a4f5ea5f66fc5f0ed086fc40eeee6e1a70e64",
+      "crates/kael/Cargo.toml": "1a65bcdcf58fe561a5c935df3ce325a804b638c8baf0fbe3d179ba76d9230af0"
+    },
+    "prior_immutable_record": {
+      "path": "docs/reviews/2026-10-17-animation-memory-validation.json",
+      "sha256": "a2ac8fddf5fa01bad8333fb2335a7c89ec1b5d29a2ca87afddc4c51d82d9eb0e"
+    },
+    "prior_record_policy": "The earlier archive/image/batch/prefetch and release-archive evidence remains unchanged and applies only to its recorded sources. This newer record adds ownership validation, not a retroactive extension of the old preflight.",
+    "validated_source_commit": "b8aff24a6dc56a93f5725502c0c84dc8a4cea488"
+  },
+  "implemented_contracts": {
+    "ownership": "PendingFrameBatch owns Task; Drop immediately sets AtomicBool before task cancellation; the background worker never owns the result slot strongly.",
+    "cancellation": "Queued requests cancel on source/size replacement, missing/failed source, zero drawable area or element-state drop. A synchronous frame or preparation already executing is non-preemptible; checks before preparation and between/after frame attempts discard retired partial output and do not reinsert observed-cancelled prepared assets.",
+    "per_element": "One pending request per live element and one worker lane retained across source/size replacement. Replacements asynchronously wait for an old in-flight frame to return.",
+    "process_admission": "Two active element-owned workers, permits held inside each worker until synchronous completion. Existing per-batch 256 MiB output admission therefore permits at most 512 MiB of output for active batches. Completed ready batches and accepted per-element caches, posters, prepared assets, source bytes, renderer/layer/image scratch, other callers and allocator overhead are additional. This is not a unified global memory budget or hard RSS limit.",
+    "geometry": "Changing current size retires pending work before polling; poll also rejects a batch whose requested size differs from current cache size. Source identity replacement clears pending and cached frames.",
+    "throughput": "Fixed two-worker default deliberately limits aggregate element rendering throughput; foreground scheduling remains unblocked while permits are unavailable. Ready results release worker admission so finite queued waiters can progress."
+  },
+  "reproduction": {
+    "red": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "kael",
+        "--lib",
+        "--no-default-features",
+        "--features",
+        "font-kit,test-support,lottie",
+        "ready_batch_for_previous_geometry_is_discarded",
+        "--",
+        "--nocapture"
+      ],
+      "environment": {
+        "KAEL_HEADLESS": "1",
+        "CARGO_TARGET_DIR": "/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target"
+      },
+      "source": "Baseline production behavior plus the new real-frame regression, before production edits.",
+      "expected_exit_code": 101,
+      "executed": 1,
+      "passed": 0,
+      "failed": 1,
+      "ignored": 0,
+      "filtered_out": 2180,
+      "test": "elements::lottie::tests::ready_batch_for_previous_geometry_is_discarded",
+      "observed": "A real ready 1x1 batch resets the already-current 2x2 cache back to 1x1.",
+      "log": {
+        "path": ".artifacts/2026-10-17-lottie-memory-admission/stale-geometry-red.log",
+        "sha256": "1cd319be92fcbd207fb9fe38627f3beb145224c1df2cc8885875827c13633481"
+      }
+    },
+    "focused_green": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "kael",
+        "--lib",
+        "--no-default-features",
+        "--features",
+        "font-kit,test-support,lottie",
+        "lottie",
+        "--",
+        "--nocapture"
+      ],
+      "environment": {
+        "KAEL_HEADLESS": "1",
+        "CARGO_TARGET_DIR": "/Users/augustusotu/Projects/kael/benchmarks/desktop-comparison/target"
+      },
+      "exit_code": 0,
+      "passed": 22,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered_out": 2164,
+      "log": {
+        "path": ".artifacts/2026-10-17-lottie-memory-admission/task-ownership-green.log",
+        "sha256": "b8359177bc8eda17803bb899b3a36cdee0f3ecf776db77b32c2dd4fe110f078f"
+      },
+      "executed_test_names": [
+        "lottie::tests::http_status_display_redacts_location_and_body",
+        "elements::lottie::tests::lottie_element_summary_is_content_safe",
+        "lottie::tests::loops_player_frames",
+        "lottie::tests::parses_basic_animation_metadata",
+        "lottie::tests::ping_pongs_player_frames",
+        "elements::lottie::tests::sync_animation_stops_when_animations_are_disabled",
+        "lottie::tests::player_summary_reports_state_without_animation_content",
+        "lottie::tests::cancelled_render_skips_preparation_and_retires_partial_batch_assets",
+        "lottie::tests::playback_arithmetic_contains_extreme_elapsed_time",
+        "lottie::tests::render_batch_rejects_aggregate_bytes_before_preparation_or_pixels",
+        "elements::lottie::tests::ready_batch_for_previous_geometry_is_discarded",
+        "lottie::tests::render_batch_accounts_for_actual_fitted_and_rounded_canvas",
+        "elements::lottie::tests::admitted_prefetch_clips_real_plans_and_cache_while_frames_advance",
+        "lottie::tests::source_and_animation_summaries_do_not_leak_locations_or_bytes",
+        "lottie::tests::prepared_animation_cache_is_bounded_and_evicts_lru_entries",
+        "lottie::tests::repeated_batches_reuse_the_thread_local_prepared_animation",
+        "lottie::tests::renders_requested_frame_batch_size",
+        "lottie::tests::rejects_unbounded_sources_metadata_and_render_batches",
+        "elements::lottie::tests::shared_slots_bound_workers_without_blocking_foreground_or_starving_waiters",
+        "elements::lottie::tests::source_and_size_replacements_retire_work_before_current_geometry_is_polled",
+        "elements::lottie::tests::dropped_element_cancels_queued_work_and_releases_source",
+        "elements::lottie::tests::running_retired_worker_holds_admission_until_its_current_frame_returns"
+      ]
+    },
+    "controlled_executor_cases": [
+      "Queued element-state drop immediately retires output slot, then task cleanup releases weak animation source without rendering or notification.",
+      "Source replacement and resize retain the same lane, cancel queued old tasks, and accept only real frames for current geometry.",
+      "Three queued requests with two occupied slots allow independent foreground progress; dropping one and releasing one slot completes both survivors without ready-result admission hoarding.",
+      "A real one-pixel background frame pauses inside its synchronous poll; dropping owner and running cancellation cleanup does not release lane/global admission or source until that poll returns, and no obsolete result or notification is published.",
+      "Cancellation before rendering avoids preparation; cancellation after two real frames drops partial output and prepared cache entry; a subsequent render reparses and progresses.",
+      "Real ready old-geometry output is discarded instead of resetting current cache geometry; its image weak reference expires.",
+      "Previous batch aggregate admission, exact fitted canvas geometry, adaptive prefetch/playback and prepared-cache reuse/LRU tests remain green."
+    ],
+    "qualification": "TestAppContext/TestDispatcher controlled scheduling, including a real background thread paused after a genuine one-pixel frame. This proves task/permit ownership and finite-waiter progress, not production frame-clock timing or strict fairness under unlimited arrivals."
+  },
+  "integration_validation": {
+    "checks_manifest": {
+      "path": ".artifacts/2026-10-17-lottie-ownership-checks.json",
+      "sha256": "f65b09bb23260e3599d180f55aba3b577951e9a7609b9684e53e10abcd5685f2"
+    },
+    "native_core": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "kael",
+        "--lib",
+        "--no-default-features",
+        "--features",
+        "font-kit,test-support,lottie",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "discovered": 2186,
+      "passed": 2184,
+      "failed": 0,
+      "ignored": 2,
+      "measured": 0,
+      "filtered_out": 0,
+      "explicit_opt_in_probes": [
+        {
+          "test": "platform::mac::display_link::tests::native_retained_display_link_probe",
+          "reason": "explicit runtime probe: requires an awake native macOS display"
+        },
+        {
+          "test": "platform::mac::text_system::tests::native_sized_font_shaping_diagnostic",
+          "reason": "explicit native shaping timing diagnostic"
+        }
+      ],
+      "all_22_focused_names_present_and_passed": true,
+      "log": {
+        "path": ".artifacts/2026-10-17-lottie-ownership-core.log",
+        "sha256": "14e3d58fe983a9e894859facf6cf7a027ef2790f587a7cf10581cb94b0876ba2"
+      }
+    },
+    "native_all_target_clippy": {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "kael",
+        "-p",
+        "kael_ui",
+        "--all-targets",
+        "--features",
+        "kael/lottie",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "scope": "Kael and kael_ui all-target compilation with Lottie and -D warnings; this is not a new kael_ui runtime test result.",
+      "existing_future_incompatibility_notice": "block 0.1.6; recorded by Cargo independently of the successful strict lint result.",
+      "log": {
+        "path": ".artifacts/2026-10-17-lottie-ownership-clippy.log",
+        "sha256": "2e28d6dd86de1ed13b842d754be5f6e0f1648f568d1a027be6dea3c5c681e63a"
+      }
+    },
+    "browser_wasm_consumer": {
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "kael",
+        "--target",
+        "wasm32-unknown-unknown",
+        "--no-default-features",
+        "--features",
+        "browser,lottie"
+      ],
+      "exit_code": 0,
+      "scope": "Compile-only wasm32-unknown-unknown browser,lottie consumer; no Chrome ownership-runtime execution is claimed.",
+      "log": {
+        "path": ".artifacts/2026-10-17-lottie-ownership-wasm.log",
+        "sha256": "1460487a04ee6b441ba1eb44b5254ff0e5343e46982e48c39eb408009a746be8"
+      }
+    },
+    "compiler": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: aarch64-apple-darwin\nrelease: 1.97.1\nLLVM version: 22.1.6",
+    "provenance": "Root executed and reported the integration commands. The evidence author independently read summaries, matched all focused names, checked exact source hashes and hashed the logs; broad commands were not rerun."
+  },
+  "independent_review": {
+    "reviewer": "renderer agent, read-only source review",
+    "result": "No production blocker found in task/token ordering, worker-owned permits, weak publication, geometry/source retirement or partial/prepared cancellation rollback.",
+    "remaining_race": "Cancellation after the final cooperative frame check may allow an already-completed preparation into the existing bounded weak-source thread-local LRU. This cannot republish a retired result or retain the animation source; stale prepared assets are pruned on subsequent cache use."
+  },
+  "limitations": [
+    "A synchronous frame, decode or preparation already executing cannot be preempted. Retired work keeps its worker and element-lane admission until synchronous completion and releases partial output when cancellation is observed.",
+    "The fixed two-worker default limits aggregate element render throughput. The finite-waiter/foreground tests are not a throughput benchmark or strict fairness guarantee under unlimited arrivals.",
+    "Two active admitted output batches allow up to 512 MiB of active batch output. Ready results and accepted per-element caches, posters, source/model storage, prepared assets, decoder/renderer scratch, allocator overhead and other callers are additional. No global memory ceiling or hard RSS guarantee is established.",
+    "Worker cancellation releases queued source captures when executor cleanup runs; it does not promise immediate cross-thread destruction at the instant the element retires.",
+    "No later-source archive preflight, cross-platform native ownership matrix, actual Chrome ownership runtime, comparative latency/power or physical assistive-technology result is inferred from these local tests.",
+    "Unified configurable application-wide budgeting and cross-platform lifecycle acceptance remain open under R8."
+  ],
+  "local_artifact_references": [
+    {
+      "path": ".artifacts/2026-10-17-lottie-memory-admission/task-ownership-evidence.json",
+      "sha256": "19fe63abbc1cb3e5158d069cded4317b959c42e1e1c663c888828f11b3e2007f"
+    },
+    {
+      "path": ".artifacts/2026-10-17-lottie-memory-admission/task-ownership.patch",
+      "sha256": "ea1fd47dc6c8f06798b4bda7f9d7ca3f9ad9901fe34d6521f31233f5f8f4bd87"
+    }
+  ],
+  "subsequent_independent_release_validation": {
+    "source_commit": "b8aff24a6dc56a93f5725502c0c84dc8a4cea488",
+    "preflight": "All39 package archives built and their extracted consumers verified through fresh isolated staging; no registry upload.",
+    "archive_count": 39,
+    "archive_bytes": 6022866,
+    "rust_file_count": 928,
+    "rust_bytes": 23241370,
+    "all_included_rust_bytes_equal_immutable_source": true,
+    "archived_vcs_metadata_histogram": {
+      "{\"sha1\": \"b8aff24a6dc56a93f5725502c0c84dc8a4cea488\"}": 39
+    },
+    "archived_vcs_dirty_field_histogram": {
+      "absent": 39
+    },
+    "provenance": "Root independently executed the existing v2 archive verifier with explicit --source and --output arguments. No prior verifier/report bytes were overwritten. It rechecks fork payload/provenance, all licenses, package features/registry aliases and every included Rust Git blob.",
+    "initial_environment_failure": "Python SSL default CA path was absent. The first preflight stopped at archive download before packaging. The successful retry explicitly used the existing /etc/ssl/cert.pem trust bundle; certificate verification and pinned archive SHA checking remained enabled.",
+    "historical_archive_preservation": "Before replacement, all39 90743b8 archives were independently hash-verified against their prior report and copied byte-for-byte to .artifacts/2026-10-17-release-archives-90743. Original records remain unchanged.",
+    "evidence": [
+      {
+        "path": ".artifacts/2026-10-17-lottie-ownership-package-preflight.json",
+        "sha256": "5ca4269ffa1134a3149d912bf58832c86acbede154446d491db63ff08f8822ea"
+      },
+      {
+        "path": ".artifacts/2026-10-17-lottie-ownership-package-preflight.log",
+        "sha256": "c1432d3746076673589e8e16a948e570fe7b4bcd2a88bd519a90565fc5662f57"
+      },
+      {
+        "path": ".artifacts/2026-10-17-lottie-ownership-release-archives.json",
+        "sha256": "4e9104025c68a10e035a9a3ef4232a122f6dde0656470596d967890e5b90b113"
+      },
+      {
+        "path": ".artifacts/2026-10-17-lottie-ownership-release-audit.log",
+        "sha256": "e51372e3880d95560cb408c6d9a2fa6b1625901f6e7ceb7eb7f62d4e214534d9"
+      },
+      {
+        "path": ".artifacts/2026-10-17-verify-release-archives-v2.py",
+        "sha256": "e9055d29c2d848f948e7090df3ba08ebc6d0a6a625cad8ba2c80237dacc3dcfb"
+      },
+      {
+        "path": ".artifacts/2026-10-17-lottie-ownership-package-preflight-missing-python-ca.log",
+        "sha256": "93a3e0dc66ac5c280b880a89a8e1b7f7e6baf1108d98c8f02c83612a44975711"
+      }
+    ],
+    "qualification": "This separately executed preflight validates b8aff24 source bytes only. It does not cover later tree/notification edits or imply browser ownership runtime, native presentation, cross-framework performance or a clean archived dirty-state field."
+  }
+}

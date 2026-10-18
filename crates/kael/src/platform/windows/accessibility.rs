@@ -213,6 +213,30 @@ impl AccessibleElementInfo {
 }
 
 type PendingActionQueue = Rc<RefCell<Vec<crate::AccessibilityActionRequest>>>;
+const MAX_PENDING_ACCESSIBILITY_ACTIONS: usize = 1_024;
+
+fn enqueue_action(
+    pending: &PendingActionQueue,
+    request: crate::AccessibilityActionRequest,
+    wake: impl FnOnce(),
+) -> bool {
+    let needs_wake = {
+        let mut pending = pending.borrow_mut();
+        if pending.len() >= MAX_PENDING_ACCESSIBILITY_ACTIONS {
+            return false;
+        }
+        let was_empty = pending.is_empty();
+        pending.push(request);
+        was_empty
+    };
+    // UIA calls can arrive while the window has no pending paints. Posting
+    // avoids re-entering App/COM borrows, coalesces a batch, and lets the
+    // native window's existing forced-frame route drain and dispatch actions.
+    if needs_wake {
+        wake();
+    }
+    true
+}
 
 /// The root UIA provider for a GPUI window. Implements `IRawElementProviderSimple`
 /// and `IRawElementProviderFragment` to expose the window to screen readers.
@@ -573,10 +597,9 @@ impl GpuiElementProvider_Impl {
         if !info.supports_action(action) {
             return false;
         }
-        self.pending_actions
-            .borrow_mut()
-            .push(crate::AccessibilityActionRequest::new(info.node_id, action));
-        true
+        let request = crate::AccessibilityActionRequest::new(info.node_id, action);
+        drop(info);
+        enqueue_action(&self.pending_actions, request, || self.wake_window())
     }
 
     fn record_action_with_payload(
@@ -588,14 +611,24 @@ impl GpuiElementProvider_Impl {
         if !info.supports_action(action) {
             return false;
         }
-        self.pending_actions
-            .borrow_mut()
-            .push(crate::AccessibilityActionRequest::with_payload(
-                info.node_id,
-                action,
-                payload,
-            ));
-        true
+        let request =
+            crate::AccessibilityActionRequest::with_payload(info.node_id, action, payload);
+        drop(info);
+        enqueue_action(&self.pending_actions, request, || self.wake_window())
+    }
+
+    fn wake_window(&self) {
+        #[cfg(not(test))]
+        unsafe {
+            if let Err(error) = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
+                Some(self.hwnd),
+                super::events::WM_GPUI_FORCE_UPDATE_WINDOW,
+                WPARAM(0),
+                LPARAM(0),
+            ) {
+                log::debug!("accessibility action window wake failed: {error}");
+            }
+        }
     }
 
     fn invoke_action(&self) -> Option<crate::AccessibilityAction> {
@@ -747,32 +780,6 @@ impl IValueProvider_Impl for GpuiElementProvider_Impl {
     }
 }
 
-/// Handle `WM_GETOBJECT` message to return the UIA provider for the window.
-/// Returns `Some(lresult)` if handled, `None` to pass to `DefWindowProc`.
-/// Handle `WM_GETOBJECT` message to return the UIA provider for the window.
-/// Returns `Some(lresult)` if handled, `None` to pass to `DefWindowProc`.
-pub fn handle_wm_getobject(
-    hwnd: HWND,
-    wparam: WPARAM,
-    lparam: LPARAM,
-    provider: &ComObject<GpuiUiaProvider>,
-) -> Option<isize> {
-    #[cfg(not(test))]
-    {
-        let objid = lparam.0 as i32;
-        if objid == UiaRootObjectId {
-            let provider_simple: IRawElementProviderSimple = provider.to_interface();
-            let result = unsafe {
-                UiaReturnRawElementProvider(hwnd, wparam, LPARAM(lparam.0), &provider_simple)
-            };
-            return Some(result.0);
-        }
-    }
-    #[cfg(test)]
-    let _ = (hwnd, wparam, lparam, provider);
-    None
-}
-
 /// Check whether UIA is running (i.e., a screen reader or automation tool is active).
 #[allow(dead_code)]
 pub fn is_uia_running() -> bool {
@@ -780,4 +787,50 @@ pub fn is_uia_running() -> bool {
     return unsafe { UiaClientsAreListening().as_bool() };
     #[cfg(test)]
     false
+}
+
+#[cfg(test)]
+mod action_queue_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    fn request(id: u64) -> crate::AccessibilityActionRequest {
+        crate::AccessibilityActionRequest::new(
+            crate::AccessibilityId(id),
+            crate::AccessibilityAction::Click,
+        )
+    }
+
+    #[test]
+    fn idle_actions_wake_once_per_batch_and_can_enqueue_after_drain() {
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        let wakes = Cell::new(0);
+        for id in 1..=3 {
+            assert!(enqueue_action(&pending, request(id), || {
+                // Wake runs outside the queue borrow, including reentrant UIA.
+                assert!(pending.try_borrow_mut().is_ok());
+                wakes.set(wakes.get() + 1);
+            }));
+        }
+        assert_eq!(wakes.get(), 1);
+        assert_eq!(
+            pending.borrow_mut().drain(..).collect::<Vec<_>>(),
+            [request(1), request(2), request(3)]
+        );
+        assert!(enqueue_action(&pending, request(4), || wakes.set(wakes.get() + 1)));
+        assert_eq!(wakes.get(), 2);
+    }
+
+    #[test]
+    fn repeated_uia_requests_cannot_grow_the_queue_past_its_limit() {
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        let wakes = Cell::new(0);
+        for id in 0..MAX_PENDING_ACCESSIBILITY_ACTIONS + 500 {
+            let accepted =
+                enqueue_action(&pending, request(id as u64), || wakes.set(wakes.get() + 1));
+            assert_eq!(accepted, id < MAX_PENDING_ACCESSIBILITY_ACTIONS);
+        }
+        assert_eq!(pending.borrow().len(), MAX_PENDING_ACCESSIBILITY_ACTIONS);
+        assert_eq!(wakes.get(), 1);
+    }
 }

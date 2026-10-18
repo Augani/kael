@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "status": "WHEEL_RUNTIME_NOT_ACCEPTED_FIRST_ATTEMPT_PRESERVED_NO_SCROLL_EVENTS",
+  "source_commit": "ce39eed710dcba0fa70e1fd7dacdefba5d5306b3",
+  "original_V2": "Rust/Swift build and capabilities observation pass; required optional locked=false observation unavailable. No V2 native run.",
+  "separate_V4_scope": "Synthetic direct-to-owned-PID native event delivery and retained GPU pixels; UNKNOWN lock state never means unlocked. No physical/compositor/presentation/cost claim.",
+  "V4_build": "Initial runner stops after successful Cargo fresh=true cache result because its predeclared fresh=false assertion fails. A separate explicit-reuse receipt compares the exact frozen V2 executable, unchanged fixture/source/locks/profile/features and current Cargo selection, then compiles the changed Swift driver. No new Rust compilation is claimed for reuse.",
+  "V4_native": "Fixture child is observed in its own process group; the original strict ownership guard refuses before any scroll. Fixture emits tokened close; outer supervisor records identity/cleanup uncertainty and intervention, so restoration and runtime acceptance remain unproved.",
+  "scroll_events_posted": 0,
+  "native_acceptance": false,
+  "late_recovery": "Later read-only signal-zero observations find both exact PIDs and both groups absent; only then a full3159-input rehash per checkout passes. Original failed cleanup/verdict remains unchanged.",
+  "references": [
+    {
+      "path": ".artifacts/2026-10-18-native-horizontal-wheel-prerequisite-observation/observation.json",
+      "sha256": "e6756c8dc90e8d86183559c9361e8edf380d8810b195b6afa380ad93e37282cb",
+      "bytes": 1426
+    },
+    {
+      "path": ".artifacts/2026-10-18-native-wheel-direct-pid-contract-review/review.json",
+      "sha256": "c5dcc75f0236a4526ef23d0ca62ae075666e163a2731e8eea3ddd1e7e50b1938",
+      "bytes": 4295
+    },
+    {
+      "path": ".artifacts/2026-10-18-native-horizontal-wheel-v4-independent-renderer-review/review.json",
+      "sha256": "a300dd9309dc094addd69cb9152f21cd89e03490f4b08f6234f42eefd31f24f3",
+      "bytes": 7584
+    },
+    {
+      "path": ".artifacts/2026-10-18-native-horizontal-wheel-direct-pid-build-v4/result.json",
+      "sha256": "7fb5dcbb31c85d7586724e6b05214e65da459c3160cc52e286011c75388a7027",
+      "bytes": 3134490
+    },
+    {
+      "path": ".artifacts/2026-10-18-native-horizontal-wheel-direct-pid-build-reuse-v4/result.json",
+      "sha256": "581aef088b2e4a23aceef4e9ff9e095e04ff102c56a7c5a914f79ae9d56c5e38",
+      "bytes": 3136652
+    },
+    {
+      "path": ".artifacts/2026-10-18-native-horizontal-wheel-direct-pid-native-v4/result.json",
+      "sha256": "a802a5a1d671c3805a8b4d23dcc1d1770dd6e663c611884d76914db6c5188fab",
+      "bytes": 1568946
+    },
+    {
+      "path": ".artifacts/2026-10-18-native-wheel-v4-late-quiescence-recovery/recovery.json",
+      "sha256": "496e5aa540480beed95a8f4c567b8fca91a50ca2b0eeb3ef6bff8c831e41f81e",
+      "bytes": 3132066
+    }
+  ]
+}

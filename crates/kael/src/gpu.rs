@@ -9,6 +9,7 @@
 
 use crate::{App, BorrowAppContext, Global, SubscriberSet, Subscription};
 use anyhow::Result;
+use std::collections::{BTreeSet, HashMap};
 
 const MAX_TRACKED_GPU_RESOURCES: usize = 65_536;
 
@@ -20,7 +21,6 @@ pub use kael_gpu_budget::GpuMemoryBudget;
 pub type GpuResourceId = u64;
 
 struct Tracked {
-    id: GpuResourceId,
     bytes: u64,
     last_used: u64,
     on_evict: Box<dyn FnMut() + Send + 'static>,
@@ -31,12 +31,15 @@ struct Tracked {
 ///
 /// The manager never frees memory itself; it invokes each resource's eviction
 /// callback so the owner can drop the underlying GPU object.
+/// Resource lookup is hash-indexed; touches, releases, and each eviction update
+/// an ordered LRU index in O(log N) time for N tracked resources.
 pub struct GpuMemoryManager {
     budget_bytes: u64,
     used_bytes: u64,
     tick: u64,
     next_id: GpuResourceId,
-    tracked: Vec<Tracked>,
+    tracked: HashMap<GpuResourceId, Tracked>,
+    recency: BTreeSet<(u64, GpuResourceId)>,
 }
 
 impl GpuMemoryManager {
@@ -47,7 +50,8 @@ impl GpuMemoryManager {
             used_bytes: 0,
             tick: 0,
             next_id: 1,
-            tracked: Vec::new(),
+            tracked: HashMap::new(),
+            recency: BTreeSet::new(),
         }
     }
 
@@ -106,31 +110,43 @@ impl GpuMemoryManager {
         let id = self.allocate_id()?;
         let tick = self.next_tick();
         self.used_bytes = used_bytes;
-        self.tracked.push(Tracked {
+        self.tracked.insert(
             id,
-            bytes,
-            last_used: tick,
-            on_evict: Box::new(on_evict),
-        });
+            Tracked {
+                bytes,
+                last_used: tick,
+                on_evict: Box::new(on_evict),
+            },
+        );
+        self.recency.insert((tick, id));
         Ok(id)
     }
 
     /// Mark a resource as most-recently-used. Returns `false` if unknown.
     pub fn touch(&mut self, id: GpuResourceId) -> bool {
-        let Some(index) = self.tracked.iter().position(|resource| resource.id == id) else {
+        if !self.tracked.contains_key(&id) {
             return false;
-        };
+        }
         let tick = self.next_tick();
-        self.tracked[index].last_used = tick;
+        let resource = self
+            .tracked
+            .get_mut(&id)
+            .expect("tracked GPU resource disappeared");
+        self.recency.remove(&(resource.last_used, id));
+        resource.last_used = tick;
+        self.recency.insert((tick, id));
         true
     }
 
     /// Stop tracking a resource without invoking its eviction callback (the owner
     /// is freeing it directly). Returns `false` if unknown.
     pub fn release(&mut self, id: GpuResourceId) -> bool {
-        if let Some(index) = self.tracked.iter().position(|resource| resource.id == id) {
-            let resource = self.tracked.remove(index);
+        if let Some(resource) = self.tracked.remove(&id) {
+            self.recency.remove(&(resource.last_used, id));
             self.used_bytes = self.used_bytes.saturating_sub(resource.bytes);
+            if self.tracked.is_empty() {
+                self.tracked = HashMap::new();
+            }
             true
         } else {
             false
@@ -152,14 +168,22 @@ impl GpuMemoryManager {
 
     /// Evict least-recently-used resources until at least `bytes` are free within
     /// the budget. Returns the number of resources evicted.
+    ///
+    /// This is best-effort when `bytes` exceeds the entire budget; use
+    /// [`Self::ensure_available_checked`] to reject that request before eviction.
     pub fn ensure_available(&mut self, bytes: u64) -> usize {
         let target = self.budget_bytes.saturating_sub(bytes);
         self.evict_until(target).0
     }
 
     /// Evict until enough room is available and report callback failure.
+    /// Requests larger than the entire budget fail without evicting resources.
     pub fn ensure_available_checked(&mut self, bytes: u64) -> Result<usize> {
-        let target = self.budget_bytes.saturating_sub(bytes);
+        anyhow::ensure!(
+            bytes <= self.budget_bytes,
+            "requested GPU allocation exceeds the entire memory budget"
+        );
+        let target = self.budget_bytes - bytes;
         let (evicted, callback_panicked) = self.evict_until(target);
         anyhow::ensure!(!callback_panicked, "GPU eviction callback panicked");
         Ok(evicted)
@@ -169,10 +193,13 @@ impl GpuMemoryManager {
         let mut evicted = 0;
         let mut callback_panicked = false;
         while self.used_bytes > target_used {
-            let Some(index) = self.least_recently_used_index() else {
+            let Some((_, id)) = self.recency.pop_first() else {
                 break;
             };
-            let mut resource = self.tracked.remove(index);
+            let mut resource = self
+                .tracked
+                .remove(&id)
+                .expect("LRU GPU resource disappeared");
             self.used_bytes = self.used_bytes.saturating_sub(resource.bytes);
             if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (resource.on_evict)()))
                 .is_err()
@@ -181,22 +208,19 @@ impl GpuMemoryManager {
             }
             evicted += 1;
         }
+        if self.tracked.is_empty() {
+            // A pressure-driven full drain should also release the bookkeeping
+            // table rather than retain its former resource high-water mark.
+            self.tracked = HashMap::new();
+        }
         (evicted, callback_panicked)
-    }
-
-    fn least_recently_used_index(&self) -> Option<usize> {
-        self.tracked
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, resource)| resource.last_used)
-            .map(|(index, _)| index)
     }
 
     fn allocate_id(&mut self) -> Result<GpuResourceId> {
         for _ in 0..=self.tracked.len() {
             let id = self.next_id.max(1);
             self.next_id = id.wrapping_add(1).max(1);
-            if self.tracked.iter().all(|resource| resource.id != id) {
+            if !self.tracked.contains_key(&id) {
                 return Ok(id);
             }
         }
@@ -205,10 +229,15 @@ impl GpuMemoryManager {
 
     fn next_tick(&mut self) -> u64 {
         if self.tick == u64::MAX {
-            let mut order = (0..self.tracked.len()).collect::<Vec<_>>();
-            order.sort_by_key(|index| self.tracked[*index].last_used);
-            for (rank, index) in order.into_iter().enumerate() {
-                self.tracked[index].last_used = rank as u64 + 1;
+            let order = self.recency.iter().map(|(_, id)| *id).collect::<Vec<_>>();
+            self.recency.clear();
+            for (rank, id) in order.into_iter().enumerate() {
+                let tick = rank as u64 + 1;
+                self.tracked
+                    .get_mut(&id)
+                    .expect("LRU GPU resource disappeared")
+                    .last_used = tick;
+                self.recency.insert((tick, id));
             }
             self.tick = self.tracked.len() as u64;
         }
@@ -320,14 +349,36 @@ impl App {
     }
 
     /// Dispatch a pressure level to all subscribers, recording it as the current level.
-    /// A [`MemoryPressureLevel::Critical`] notification also evicts every registered GPU
-    /// resource down to budget before the subscribers run.
+    /// A [`MemoryPressureLevel::Critical`] notification also clears completed default
+    /// assets, releases cache ownership of pending shared assets, and evicts registered
+    /// GPU resources down to budget before subscribers run. External shared owners
+    /// retain their pending loads.
+    /// Image-cache subscribers cancel owned loads and release decoded results on critical
+    /// pressure. Native window shedding and redraw run after the current update cycle.
     pub fn notify_memory_pressure(&mut self, level: MemoryPressureLevel) {
         let _ = self.notify_memory_pressure_checked(level);
     }
 
     /// Dispatch pressure while containing and reporting owner callback panics.
     pub fn notify_memory_pressure_checked(&mut self, level: MemoryPressureLevel) -> Result<()> {
+        let asset_eviction_failed = if level == MemoryPressureLevel::Critical {
+            let completed = self.clear_completed_asset_cache_checked();
+            let pending = self.clear_pending_asset_cache_checked();
+            completed.is_err() || pending.is_err()
+        } else {
+            false
+        };
+        if level != MemoryPressureLevel::Normal {
+            // The active window may be temporarily removed from App.windows.
+            // Run after the update cycle so every window, including that one,
+            // participates and can rebuild dropped native residency on demand.
+            self.defer(move |cx| {
+                for window in cx.windows.values_mut().flatten() {
+                    window.shed_memory(level);
+                    window.refresh();
+                }
+            });
+        }
         let (subscribers, eviction_failed) =
             self.update_default_global::<GpuMemoryRuntime, _>(|runtime, _| {
                 runtime.last_level = level;
@@ -345,6 +396,7 @@ impl App {
             true
         });
         anyhow::ensure!(!eviction_failed, "GPU eviction callback panicked");
+        anyhow::ensure!(!asset_eviction_failed, "asset cache eviction hook panicked");
         anyhow::ensure!(!subscriber_panicked, "memory-pressure subscriber panicked");
         Ok(())
     }
@@ -416,6 +468,24 @@ mod tests {
         let evicted = manager.ensure_available(50);
         assert!(manager.used_bytes() <= 50, "should free room for 50 bytes");
         assert!(evicted >= 1);
+    }
+
+    #[test]
+    fn checked_availability_rejects_impossible_allocations_before_eviction() {
+        let mut manager = GpuMemoryManager::new(100);
+        let (count, callback) = counting_callback();
+        manager.register_checked(10, callback).unwrap();
+        assert!(manager.ensure_available_checked(101).is_err());
+        assert_eq!(manager.used_bytes(), 10);
+        assert_eq!(manager.tracked_count(), 1);
+        assert_eq!(count.load(Ordering::Relaxed), 0);
+        assert_eq!(manager.ensure_available_checked(100).unwrap(), 1);
+        assert_eq!(manager.available_bytes(), 100);
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+
+        let mut disabled = GpuMemoryManager::new(0);
+        assert!(disabled.ensure_available_checked(1).is_err());
+        assert_eq!(disabled.ensure_available_checked(0).unwrap(), 0);
     }
 
     #[test]
@@ -504,6 +574,64 @@ mod tests {
         assert!(overflow.register_checked(1, || {}).is_err());
         assert_eq!(overflow.used_bytes(), u64::MAX);
         assert_eq!(overflow.tracked_count(), 1);
+    }
+
+    #[test]
+    fn lru_index_tracks_release_touch_and_clock_rollover() {
+        use std::sync::Mutex;
+
+        let evicted = Arc::new(Mutex::new(Vec::new()));
+        let mut manager = GpuMemoryManager::new(0);
+        let ids = (0..6)
+            .map(|index| {
+                let evicted = evicted.clone();
+                manager
+                    .register_checked(1, move || evicted.lock().unwrap().push(index))
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert!(manager.touch(ids[0]));
+        assert!(manager.release(ids[2]));
+        manager.tick = u64::MAX;
+        assert!(manager.touch(ids[1]));
+        assert_eq!(manager.recency.len(), manager.tracked_count());
+        assert_eq!(manager.evict_to_budget_checked().unwrap(), 5);
+        assert_eq!(*evicted.lock().unwrap(), [3, 4, 5, 0, 1]);
+        assert!(manager.tracked.is_empty());
+        assert!(manager.recency.is_empty());
+        assert_eq!(manager.tracked.capacity(), 0);
+        assert_eq!(manager.used_bytes(), 0);
+    }
+
+    #[test]
+    fn gpu_manager_scales_to_the_resource_limit_and_drains_all_indices() {
+        let count = Arc::new(AtomicU64::new(0));
+        let mut manager = GpuMemoryManager::new(0);
+        let mut ids = Vec::with_capacity(MAX_TRACKED_GPU_RESOURCES);
+        for _ in 0..MAX_TRACKED_GPU_RESOURCES {
+            let count = count.clone();
+            ids.push(
+                manager
+                    .register_checked(1, move || {
+                        count.fetch_add(1, Ordering::Relaxed);
+                    })
+                    .unwrap(),
+            );
+        }
+        assert!(manager.register_checked(1, || {}).is_err());
+        for id in ids.iter().rev() {
+            assert!(manager.touch(*id));
+        }
+        assert_eq!(manager.recency.len(), MAX_TRACKED_GPU_RESOURCES);
+        assert_eq!(manager.used_bytes(), MAX_TRACKED_GPU_RESOURCES as u64);
+        assert_eq!(manager.evict_to_budget(), MAX_TRACKED_GPU_RESOURCES);
+        assert_eq!(
+            count.load(Ordering::Relaxed),
+            MAX_TRACKED_GPU_RESOURCES as u64
+        );
+        assert_eq!(manager.used_bytes(), 0);
+        assert!(manager.recency.is_empty());
+        assert!(manager.tracked.is_empty());
     }
 
     #[test]

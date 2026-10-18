@@ -11,9 +11,10 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use util::post_inc;
+use web_time::Instant;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 struct TestDispatcherId(usize);

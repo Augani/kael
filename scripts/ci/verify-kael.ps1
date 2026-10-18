@@ -63,12 +63,17 @@ switch ($Mode) {
         Show-DllAudit
         # Compile every crate, target, optional battery, template, and the
         # repository-only Astryx showcase under the native Windows toolchain.
-        Invoke-Step cargo clippy --workspace --all-targets --all-features '--' '-D' warnings
+        # Keep upstream's mutually exclusive Unix runtimes in separate graphs.
+        Invoke-Step cargo clippy --workspace --exclude kael_accesskit_unix --all-targets --all-features '--' '-D' warnings
+        Invoke-Step cargo clippy --package kael_accesskit_unix --all-targets '--' '-D' warnings
+        Invoke-Step cargo clippy --package kael_accesskit_unix --all-targets --no-default-features --features tokio '--' '-D' warnings
         # The hosted Windows Server 2025 runner can fail during process load for
         # GUI-linked Kael test binaries before Rust's test harness starts. Keep
         # Windows CI as a compile/link proof and run the test binaries on
         # macOS/Linux, where the headless runtime is stable in Actions.
-        Invoke-Step cargo test --workspace --all-targets --all-features --no-run
+        Invoke-Step cargo test --workspace --exclude kael_accesskit_unix --all-targets --all-features --no-run
+        Invoke-Step cargo test --package kael_accesskit_unix --lib
+        Invoke-Step cargo test --package kael_accesskit_unix --lib --no-default-features --features tokio
         Invoke-Step cargo check --package kael_http_client --no-default-features
         # These engine crates are hardware-free, so their tests also execute on
         # Windows rather than stopping at the compile/link proof.

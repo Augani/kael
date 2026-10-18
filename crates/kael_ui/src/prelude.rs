@@ -276,6 +276,9 @@ pub use crate::display::markdown::{
     create_incremental_state, createIncrementalState, parse_inline, parse_markdown,
     parse_markdown_incremental, parseInline, parseMarkdown, parseMarkdownIncremental,
 };
+pub use crate::display::remote_sheet::{
+    RemoteSheet, RemoteSheetEvent, RemoteSheetOptions, RemoteSheetRequest, RemoteSheetState,
+};
 pub use crate::display::rich_text::{RichBlock, RichInline, TableAlignment as RichTableAlignment};
 pub use crate::display::selectable_card::SelectableCard;
 pub use crate::display::table::{
@@ -287,13 +290,14 @@ pub use crate::display::table::{
 pub use crate::display::virtual_sheet_grid::{
     SheetCellEdit, SheetCellPosition, SheetCellRange, SheetClipboardExport, SheetEditReason,
     SheetNormalizedRange, SheetTileKey, SheetTileRequest, SheetViewportMetrics,
-    VIRTUAL_SHEET_CLIPBOARD_BYTE_LIMIT, VIRTUAL_SHEET_CLIPBOARD_CELL_LIMIT,
-    VIRTUAL_SHEET_DEFAULT_CACHE_TILES, VIRTUAL_SHEET_DEFAULT_EDIT_BYTE_LIMIT,
-    VIRTUAL_SHEET_DEFAULT_EDIT_LIMIT, VIRTUAL_SHEET_DEFAULT_PENDING_TILES,
-    VIRTUAL_SHEET_DEFAULT_UNDO_BYTE_LIMIT, VIRTUAL_SHEET_DEFAULT_UNDO_CELL_LIMIT,
-    VIRTUAL_SHEET_MAX_CELL_BYTES, VIRTUAL_SHEET_MAX_COLUMNS, VIRTUAL_SHEET_MAX_FROZEN_COLUMNS,
-    VIRTUAL_SHEET_MAX_FROZEN_ROWS, VIRTUAL_SHEET_MAX_ROWS, VIRTUAL_SHEET_MAX_TILE_BYTES,
-    VIRTUAL_SHEET_MAX_TILE_CELLS, VirtualSheetGrid, VirtualSheetGridError,
+    VIRTUAL_SHEET_ACCESSIBILITY_CACHE_CELLS, VIRTUAL_SHEET_CLIPBOARD_BYTE_LIMIT,
+    VIRTUAL_SHEET_CLIPBOARD_CELL_LIMIT, VIRTUAL_SHEET_DEFAULT_CACHE_TILES,
+    VIRTUAL_SHEET_DEFAULT_EDIT_BYTE_LIMIT, VIRTUAL_SHEET_DEFAULT_EDIT_LIMIT,
+    VIRTUAL_SHEET_DEFAULT_PENDING_TILES, VIRTUAL_SHEET_DEFAULT_UNDO_BYTE_LIMIT,
+    VIRTUAL_SHEET_DEFAULT_UNDO_CELL_LIMIT, VIRTUAL_SHEET_MAX_CELL_BYTES, VIRTUAL_SHEET_MAX_COLUMNS,
+    VIRTUAL_SHEET_MAX_FROZEN_COLUMNS, VIRTUAL_SHEET_MAX_FROZEN_ROWS, VIRTUAL_SHEET_MAX_ROWS,
+    VIRTUAL_SHEET_MAX_TILE_BYTES, VIRTUAL_SHEET_MAX_TILE_CELLS, VirtualSheetGrid,
+    VirtualSheetGridError,
 };
 pub use crate::headless::{
     AccordionController, CarouselController, ComboboxController, DisclosureController,
@@ -314,7 +318,11 @@ pub use crate::navigation::breadcrumbs::{
     BreadcrumbItem, BreadcrumbItemProps, Breadcrumbs, BreadcrumbsProps, BreadcrumbsVariant,
     BreadcrumbsVariantMap,
 };
-pub use crate::navigation::file_tree::{FileNode, FileNodeKind, FileTree};
+pub use crate::navigation::file_tree::{
+    FILE_TREE_MAX_PENDING_EXPANSIONS, FileNode, FileNodeKind, FileTree, FileTreeContextAction,
+    FileTreeDrop, FileTreeEntry, FileTreeEvent, FileTreeLoadRequest, FileTreeLoadState,
+    FileTreeState, VirtualFileTree,
+};
 pub use crate::navigation::menu::{
     ContextMenu as NavigationContextMenu, Menu, MenuBar, MenuBarItem, MenuItem, MenuItemKind,
 };
@@ -334,6 +342,9 @@ pub use crate::navigation::toolbar::{
 };
 pub use crate::navigation::top_nav::{TopNav, TopNavHeading, TopNavItem, TopNavMenu};
 pub use crate::navigation::tree::{TreeList, TreeListDensity, TreeNode};
+pub use crate::navigation::virtual_tree::{
+    VirtualTreeList, VirtualTreeModel, VirtualTreeModelError, VirtualTreeState,
+};
 pub use crate::overlays::alert_dialog::AlertDialog;
 pub use crate::overlays::bottom_sheet::{BottomSheet, BottomSheetSize};
 pub use crate::overlays::command_palette::{
@@ -439,3 +450,13 @@ pub use crate::charts::treemap::{TreeMap, TreeMapNode};
 pub use crate::http::{init_http, init_http_with_user_agent};
 
 pub use crate::query::{Generation, Loadable, QueryCache, QueryState};
+
+pub use crate::components::workspace::{
+    DockAxis, DockGroup, DockLayout, DockNode, DockPane, DockPlacement, DockRect, DockWorkspace,
+    DockWorkspaceEvent, DockWorkspaceState, FloatingDock,
+};
+
+pub use crate::components::property_inspector::{
+    PropertyChange, PropertyChoice, PropertyField, PropertyGroup, PropertyInspector,
+    PropertyInspectorEvent, PropertyInspectorState, PropertyKind, PropertyValue,
+};

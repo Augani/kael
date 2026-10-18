@@ -821,7 +821,8 @@ mod tests {
         MagnifyEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
         PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase, point, px,
     };
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
+    use web_time::Instant;
 
     #[test]
     fn velocity_tracker_estimates_recent_velocity() {

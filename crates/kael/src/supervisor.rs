@@ -712,7 +712,7 @@ impl Supervisor for ProcessSupervisor {
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+#[cfg(all(test, any(unix, windows)))]
 mod tests {
     use super::*;
     use crate::process_model::{HealthCheckConfig, ProcessClass};

@@ -30,7 +30,7 @@ workspace = true
 version = "0.41"
 
 [dependencies.zip]
-version = "8.6"
+version = "9"
 default-features = false
 features = ["deflate-flate2"]
 

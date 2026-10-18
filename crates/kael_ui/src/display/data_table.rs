@@ -547,11 +547,13 @@ enum DataBacking<T: Clone + 'static> {
         in_flight_pages: HashMap<usize, u64>,
         page_size: usize,
         max_cached_pages: usize,
+        max_in_flight_pages: usize,
         generation: u64,
     },
 }
 
 const DEFAULT_MAX_CACHED_PAGES: usize = 16;
+const DEFAULT_MAX_IN_FLIGHT_PAGES: usize = 8;
 /// Maximum exact selection size delivered to the legacy slice callback.
 ///
 /// Larger all-except selections remain available through
@@ -567,6 +569,8 @@ pub struct DataTableState<T: Clone + 'static> {
     scroller: VirtualScroller,
     selection: RowSelection,
     backing: DataBacking<T>,
+    #[cfg(test)]
+    last_page_request_visit_count: usize,
 }
 
 impl<T: Clone + 'static> DataTableState<T> {
@@ -589,6 +593,8 @@ impl<T: Clone + 'static> DataTableState<T> {
             scroller: VirtualScroller::new(total_items, viewport),
             selection: RowSelection::default(),
             backing: DataBacking::InMemory { data },
+            #[cfg(test)]
+            last_page_request_visit_count: 0,
         }
     }
 
@@ -665,6 +671,7 @@ impl<T: Clone + 'static> DataTableState<T> {
                     in_flight_pages: HashMap::new(),
                     page_size: page_size.unwrap_or(200).max(1),
                     max_cached_pages: DEFAULT_MAX_CACHED_PAGES,
+                    max_in_flight_pages: DEFAULT_MAX_IN_FLIGHT_PAGES,
                     generation: 1,
                 };
             }
@@ -688,6 +695,7 @@ impl<T: Clone + 'static> DataTableState<T> {
             page_size,
             max_cached_pages,
             generation,
+            ..
         } = &mut self.backing
         {
             let Some(in_flight_generation) = in_flight_pages.get(&page_start).copied() else {
@@ -755,13 +763,29 @@ impl<T: Clone + 'static> DataTableState<T> {
         }
     }
 
+    fn set_max_in_flight_pages(&mut self, max_in_flight_pages: usize) {
+        if let DataBacking::Virtual {
+            max_in_flight_pages: configured,
+            ..
+        } = &mut self.backing
+        {
+            // Existing reservations continue until their callback settles.
+            *configured = max_in_flight_pages.max(1);
+        }
+    }
+
     fn virtual_requests_for_range(&mut self, range: Range<usize>) -> Vec<DataTablePageRequest> {
+        #[cfg(test)]
+        {
+            self.last_page_request_visit_count = 0;
+        }
         let DataBacking::Virtual {
             total_items,
             cached_pages,
             page_lru,
             in_flight_pages,
             page_size,
+            max_in_flight_pages,
             generation,
             ..
         } = &mut self.backing
@@ -780,18 +804,48 @@ impl<T: Clone + 'static> DataTableState<T> {
 
         let first_page = (start / *page_size) * *page_size;
         let last_page = ((end - 1) / *page_size) * *page_size;
+        // Touch resident pages in the same ascending order as the logical
+        // scan, even when admission is full. Work depends on cache size rather
+        // than the requested range; the default cache fits on the stack.
+        let mut cached_page_starts = smallvec::SmallVec::<[usize; DEFAULT_MAX_CACHED_PAGES]>::new();
+        for &cached_start in cached_pages.keys() {
+            #[cfg(test)]
+            {
+                self.last_page_request_visit_count += 1;
+            }
+            if (first_page..=last_page).contains(&cached_start) {
+                cached_page_starts.push(cached_start);
+            }
+        }
+        cached_page_starts.sort_unstable();
+        for cached_start in cached_page_starts {
+            touch_lru_page(page_lru, cached_start);
+        }
+
         let mut requests = Vec::new();
+        if in_flight_pages.len() >= *max_in_flight_pages {
+            return requests;
+        }
+        // Each cursor visit passes a cached/pending page or consumes a free
+        // slot, so even a huge requested range has bounded planning work.
         let mut page_start = first_page;
         loop {
-            if cached_pages.contains_key(&page_start) {
-                touch_lru_page(page_lru, page_start);
-            } else if let Entry::Vacant(entry) = in_flight_pages.entry(page_start) {
+            #[cfg(test)]
+            {
+                self.last_page_request_visit_count += 1;
+            }
+            if !cached_pages.contains_key(&page_start)
+                && let Entry::Vacant(entry) = in_flight_pages.entry(page_start)
+            {
                 entry.insert(*generation);
                 requests.push(DataTablePageRequest {
                     page_start,
                     page_size: (*page_size).min(total_items.saturating_sub(page_start)),
                     generation: *generation,
                 });
+                if in_flight_pages.len() >= *max_in_flight_pages {
+                    break;
+                }
             }
 
             if page_start == last_page {
@@ -824,11 +878,17 @@ impl<T: Clone + 'static> DataTableState<T> {
     }
 
     pub fn sort_by_column(&mut self, column_index: usize, direction: SortDirection) {
-        let Some(column) = self.columns.get(column_index) else {
-            return;
-        };
+        let _ = self.sort_with_remap(column_index, direction);
+    }
+
+    fn sort_with_remap(
+        &mut self,
+        column_index: usize,
+        direction: SortDirection,
+    ) -> Option<HashMap<usize, usize>> {
+        let column = self.columns.get(column_index)?;
         if !column.sortable {
-            return;
+            return None;
         }
         let accessor = column.accessor.clone();
 
@@ -836,7 +896,7 @@ impl<T: Clone + 'static> DataTableState<T> {
         self.sort_direction = direction;
 
         if self.invalidate_virtual_query() {
-            return;
+            return None;
         }
 
         if let DataBacking::InMemory { data } = &mut self.backing {
@@ -863,7 +923,9 @@ impl<T: Clone + 'static> DataTableState<T> {
 
             let sorted_data = indexed_values.into_iter().map(|(_, _, row)| row).collect();
             *data = sorted_data;
+            return Some(old_to_new);
         }
+        None
     }
 
     pub fn toggle_row(&mut self, row_index: usize) {
@@ -926,7 +988,7 @@ impl<T: Clone + 'static> DataTableState<T> {
         }
     }
 
-    /// Number of in-flight virtual pages.
+    /// Number of pending virtual pages in the current query.
     pub fn in_flight_page_count(&self) -> usize {
         match &self.backing {
             DataBacking::Virtual {
@@ -942,6 +1004,17 @@ impl<T: Clone + 'static> DataTableState<T> {
             DataBacking::Virtual {
                 max_cached_pages, ..
             } => Some(*max_cached_pages),
+            DataBacking::InMemory { .. } => None,
+        }
+    }
+
+    /// Configured maximum pending pages in the current virtual query.
+    pub fn max_in_flight_pages(&self) -> Option<usize> {
+        match &self.backing {
+            DataBacking::Virtual {
+                max_in_flight_pages,
+                ..
+            } => Some(*max_in_flight_pages),
             DataBacking::InMemory { .. } => None,
         }
     }
@@ -1038,7 +1111,7 @@ impl<T: Clone + 'static> DataTableState<T> {
     /// Content-safe summary for logs, tests, and AI-agent diagnostics.
     pub fn to_text(&self) -> String {
         format!(
-            "data_table_state(columns={}, rows={}, backing={}, virtual={}, cached_rows={}, cached_pages={}, max_cached_pages={}, in_flight_pages={}, page_size={}, generation={}, selected={}, selection_representation={}, stored_selection_indices={}, has_sort={}, sort_column={}, sort_direction={}, sortable_columns={}, editable_columns={}, resizable_columns={}, row_height_class={}, viewport_class={})",
+            "data_table_state(columns={}, rows={}, backing={}, virtual={}, cached_rows={}, cached_pages={}, max_cached_pages={}, in_flight_pages={}, max_in_flight_pages={}, page_size={}, generation={}, selected={}, selection_representation={}, stored_selection_indices={}, has_sort={}, sort_column={}, sort_direction={}, sortable_columns={}, editable_columns={}, resizable_columns={}, row_height_class={}, viewport_class={})",
             self.column_count(),
             self.row_count(),
             self.backing_kind(),
@@ -1047,6 +1120,7 @@ impl<T: Clone + 'static> DataTableState<T> {
             self.cached_page_count(),
             self.max_cached_pages().unwrap_or(0),
             self.in_flight_page_count(),
+            self.max_in_flight_pages().unwrap_or(0),
             self.page_size().map_or(0, |size| size),
             self.virtual_generation().unwrap_or(0),
             self.selected_count(),
@@ -1098,6 +1172,7 @@ pub struct DataTable<T: Clone + 'static> {
     resize_start_x: f32,
     resize_start_width: Pixels,
     sticky_header: bool,
+    fill_parent: bool,
     on_load_more: Option<Box<dyn Fn(&mut Window, &mut Context<Self>) + 'static>>,
     load_more_threshold: f32,
     load_more_triggered: bool,
@@ -1198,6 +1273,7 @@ impl<T: Clone + 'static> DataTable<T> {
             resize_start_x: 0.0,
             resize_start_width: px(0.0),
             sticky_header: true,
+            fill_parent: false,
             on_load_more: None,
             load_more_threshold: 0.7,
             load_more_triggered: false,
@@ -1239,6 +1315,18 @@ impl<T: Clone + 'static> DataTable<T> {
 
     pub fn sticky_header(mut self, sticky: bool) -> Self {
         self.sticky_header = sticky;
+        self
+    }
+
+    /// Fit the table into the height provided by its parent.
+    ///
+    /// Header, search controls, and horizontal scrollbar keep their natural
+    /// height; the remaining space becomes the vertically scrolling body.
+    /// The parent must provide a bounded height, for example a flex child with
+    /// `flex_1()` and `min_h(px(0.0))`. By default the body keeps its existing
+    /// 600-pixel maximum height (or fewer rows for an in-memory table).
+    pub fn fill_parent(mut self, fill_parent: bool) -> Self {
+        self.fill_parent = fill_parent;
         self
     }
 
@@ -1328,6 +1416,7 @@ impl<T: Clone + 'static> DataTable<T> {
             resize_start_x: 0.0,
             resize_start_width: px(0.0),
             sticky_header: true,
+            fill_parent: false,
             on_load_more: None,
             load_more_threshold: 0.7,
             load_more_triggered: false,
@@ -1412,6 +1501,25 @@ impl<T: Clone + 'static> DataTable<T> {
     /// The default is 16 pages and the minimum is one page.
     pub fn max_cached_pages(mut self, max_cached_pages: usize) -> Self {
         self.state.set_max_cached_pages(max_cached_pages);
+        self
+    }
+
+    /// Configures the maximum pending virtual pages in the current query.
+    ///
+    /// The default is eight pages and the minimum is one. Additional visible
+    /// pages are reconsidered after a request completes or fails; no backlog
+    /// is retained. Finish requests with [`Self::set_page_data_for`] (or legacy
+    /// [`Self::set_page_data`]) and report errors with [`Self::page_load_failed`]
+    /// to release their slots.
+    /// Lowering the limit preserves pending requests and pauses admission
+    /// until their count falls below the new limit.
+    ///
+    /// Fetch tasks belong to the application. Resetting, searching, or sorting
+    /// starts a new query with empty reservations, but does not cancel tasks
+    /// from older queries. Applications must cancel those tasks themselves
+    /// when they need a limit across queries.
+    pub fn max_in_flight_pages(mut self, max_in_flight_pages: usize) -> Self {
+        self.state.set_max_in_flight_pages(max_in_flight_pages);
         self
     }
 
@@ -1657,11 +1765,27 @@ impl<T: Clone + 'static> DataTable<T> {
         cx.notify();
     }
 
+    fn sort_by_column(&mut self, column_index: usize, direction: SortDirection) {
+        let Some(old_to_new) = self.state.sort_with_remap(column_index, direction) else {
+            return;
+        };
+        self.editing_cell = self
+            .editing_cell
+            .and_then(|(row, column)| old_to_new.get(&row).map(|&new_row| (new_row, column)));
+        self.context_menu = self
+            .context_menu
+            .and_then(|(row, position)| old_to_new.get(&row).map(|&new_row| (new_row, position)));
+    }
+
     pub fn append_data(&mut self, mut new_data: Vec<T>, cx: &mut Context<Self>) {
+        let appended_rows = !new_data.is_empty();
         if let DataBacking::InMemory { data } = &mut self.state.backing {
             data.append(&mut new_data);
             let new_count = data.len();
             self.state.scroller.set_total_items(new_count);
+            if appended_rows && let Some(column_index) = self.state.sort_column {
+                self.sort_by_column(column_index, self.state.sort_direction);
+            }
             self.load_more_triggered = false;
             cx.notify();
         }
@@ -1744,6 +1868,16 @@ impl<T: Clone + 'static> DataTable<T> {
     /// Configured maximum resident virtual pages, or `None` for in-memory data.
     pub fn max_cached_page_count(&self) -> Option<usize> {
         self.state.max_cached_pages()
+    }
+
+    /// Number of pending virtual pages in the current query.
+    pub fn in_flight_page_count(&self) -> usize {
+        self.state.in_flight_page_count()
+    }
+
+    /// Configured maximum pending pages, or `None` for in-memory data.
+    pub fn max_in_flight_page_count(&self) -> Option<usize> {
+        self.state.max_in_flight_pages()
     }
 
     /// Number of row indices retained by the compressed selection model.
@@ -1841,6 +1975,7 @@ impl<T: Clone + 'static> DataTable<T> {
 
         div()
             .flex()
+            .when(self.fill_parent, |div| div.flex_shrink_0())
             .items_center()
             .gap(px(12.0))
             .px(px(16.0))
@@ -1889,7 +2024,8 @@ impl<T: Clone + 'static> DataTable<T> {
         let mut header_row = div()
             .accessibility(AccessibilityAttributes::new(AccessibilityRole::Row).row_index(1))
             .flex()
-            .w_full();
+            .w_full()
+            .when(self.fill_parent, |div| div.flex_shrink_0());
 
         if self.show_selection {
             let all_selected = self.is_all_selected();
@@ -2093,7 +2229,7 @@ impl<T: Clone + 'static> DataTable<T> {
                                         } else {
                                             SortDirection::Ascending
                                         };
-                                        this.state.sort_by_column(col_idx, direction);
+                                        this.sort_by_column(col_idx, direction);
                                         cx.notify();
                                     });
                                 })
@@ -2113,7 +2249,7 @@ impl<T: Clone + 'static> DataTable<T> {
                                                 } else {
                                                     SortDirection::Ascending
                                                 };
-                                            this.state.sort_by_column(col_idx, direction);
+                                            this.sort_by_column(col_idx, direction);
                                             cx.notify();
                                         });
                                         app.stop_propagation();
@@ -2159,6 +2295,7 @@ impl<T: Clone + 'static> DataTable<T> {
             },
         )
         .track_scroll(&horizontal_scroll)
+        .restrict_scroll_to_axis(true)
         .overscan(2)
         .h(px(self.state.row_height()))
         .flex_1();
@@ -2195,6 +2332,24 @@ mod tests {
             .resizable(false)
             .sortable(false),
         ]
+    }
+
+    fn indexed_rows(start: usize, count: usize) -> Vec<PrivateRow> {
+        (start..start + count)
+            .map(|index| PrivateRow {
+                name: format!("row-{index}").into(),
+                revenue: "$1".into(),
+            })
+            .collect()
+    }
+
+    fn keyed_rows(rows: &[(&'static str, &'static str)]) -> Vec<PrivateRow> {
+        rows.iter()
+            .map(|&(name, revenue)| PrivateRow {
+                name: name.into(),
+                revenue: revenue.into(),
+            })
+            .collect()
     }
 
     #[::core::prelude::v1::test]
@@ -2307,6 +2462,390 @@ mod tests {
         assert_eq!(state.sort_column_index(), Some(0));
         state.sort_by_column(99, SortDirection::Descending);
         assert_eq!(state.sort_column_index(), Some(0));
+    }
+
+    #[::core::prelude::v1::test]
+    fn appending_data_preserves_active_sort_equal_keys_and_selected_records() {
+        let cx = TestAppContext::single();
+        for (direction, expected_ids, selected_index) in [
+            (
+                SortDirection::Ascending,
+                ["new-first", "old-a", "new-a", "old-b", "new-z"],
+                3,
+            ),
+            (
+                SortDirection::Descending,
+                ["new-z", "old-b", "old-a", "new-a", "new-first"],
+                1,
+            ),
+        ] {
+            let table = cx.update(|cx| {
+                cx.new(|cx| {
+                    DataTable::new(
+                        keyed_rows(&[("Bravo", "old-b"), ("Alpha", "old-a")]),
+                        private_columns(),
+                        cx,
+                    )
+                })
+            });
+            cx.update(|cx| {
+                table.update(cx, |table, cx| {
+                    table.state.sort_by_column(0, direction);
+                    let selected = table
+                        .data()
+                        .iter()
+                        .position(|row| row.revenue == "old-b")
+                        .unwrap();
+                    table.state.toggle_row(selected);
+                    table.load_more_triggered = true;
+
+                    table.append_data(
+                        keyed_rows(&[
+                            ("Alpha", "new-a"),
+                            ("Zulu", "new-z"),
+                            ("Aardvark", "new-first"),
+                        ]),
+                        cx,
+                    );
+
+                    assert_eq!(
+                        table
+                            .data()
+                            .iter()
+                            .map(|row| row.revenue.as_ref())
+                            .collect::<Vec<_>>(),
+                        expected_ids,
+                    );
+                    assert_eq!(table.selected_rows(), Some(vec![selected_index]));
+                    assert_eq!(table.data()[selected_index].revenue, "old-b");
+                    assert_eq!(table.state.sort_column_index(), Some(0));
+                    assert_eq!(table.state.sort_direction, direction);
+                    assert_eq!(table.state.scroller.total_items, 5);
+                    assert!(!table.load_more_triggered);
+                });
+            });
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn appending_sorted_data_remaps_all_except_exclusions_without_expansion() {
+        let cx = TestAppContext::single();
+        let table = cx.update(|cx| {
+            cx.new(|cx| {
+                DataTable::new(
+                    keyed_rows(&[("Bravo", "old-b"), ("Alpha", "old-a")]),
+                    private_columns(),
+                    cx,
+                )
+            })
+        });
+        cx.update(|cx| {
+            table.update(cx, |table, cx| {
+                table.state.sort_by_column(0, SortDirection::Ascending);
+                table.state.selection.select_all();
+                table.state.toggle_row(1);
+
+                table.append_data(
+                    keyed_rows(&[("Alpha", "new-a"), ("Aardvark", "new-first")]),
+                    cx,
+                );
+
+                let selection = table.selection_snapshot();
+                assert_eq!(selection.representation_key(), "all_except");
+                assert_eq!(selection.stored_index_count(), 1);
+                assert_eq!(selection.selected_count(), 3);
+                assert_eq!(selection.deselected(), Some([3].as_slice()));
+                assert_eq!(table.data()[3].revenue, "old-b");
+                for index in 0..3 {
+                    assert!(selection.contains(index));
+                }
+                assert_eq!(table.data()[0].revenue, "new-first");
+                assert_eq!(table.data()[2].revenue, "new-a");
+            });
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn sorted_appends_and_header_sorts_preserve_active_edit_and_menu_records() {
+        for sort_again in [false, true] {
+            let mut cx = TestAppContext::single();
+            cx.update(|cx| {
+                crate::init(cx);
+                crate::theme::install_theme(cx, crate::theme::Theme::dark());
+            });
+            let edits = Rc::new(std::cell::RefCell::new(Vec::new()));
+            let (table, window) = cx.add_window_view({
+                let edits = edits.clone();
+                move |_, cx| {
+                    DataTable::new(
+                        keyed_rows(&[("Bravo", "old-b"), ("Alpha", "old-a"), ("Charlie", "old-c")]),
+                        private_columns(),
+                        cx,
+                    )
+                    .on_cell_edit(
+                        move |index, column, old_value, new_value, _| {
+                            edits
+                                .borrow_mut()
+                                .push((index, column, old_value, new_value));
+                        },
+                    )
+                }
+            });
+            let input = window.update(|window, cx| {
+                table.update(cx, |table, cx| {
+                    table.sort_by_column(0, SortDirection::Ascending);
+                    let input = cx.new(|cx| {
+                        let mut input = InputState::new(cx);
+                        input.set_value("Unsaved Bravo", window, cx);
+                        input
+                    });
+                    table.editing_cell = Some((1, 0));
+                    table.edit_input = Some(input.clone());
+                    table.edit_column_id = "private-name".into();
+                    table.edit_old_value = "Bravo".into();
+                    table.context_menu = Some((0, point(px(40.0), px(80.0))));
+                    input
+                })
+            });
+            let expected_edit_index = if sort_again { 1 } else { 2 };
+            let expected_menu_index = if sort_again { 2 } else { 1 };
+            window.update(|_, cx| {
+                table.update(cx, |table, cx| {
+                    table.append_data(keyed_rows(&[("Aardvark", "new-first")]), cx);
+                    assert_eq!(table.editing_cell, Some((2, 0)));
+                    assert_eq!(table.context_menu.unwrap().0, 1);
+                    // Empty fetch completion preserves the same active state.
+                    table.append_data(Vec::new(), cx);
+                    assert_eq!(table.editing_cell, Some((2, 0)));
+                    assert_eq!(table.context_menu.unwrap().0, 1);
+                    if sort_again {
+                        table.sort_by_column(0, SortDirection::Descending);
+                    }
+
+                    assert_eq!(table.editing_cell, Some((expected_edit_index, 0)));
+                    assert_eq!(table.context_menu.unwrap().0, expected_menu_index);
+                    assert_eq!(table.data()[expected_edit_index].revenue, "old-b");
+                    assert_eq!(table.data()[expected_menu_index].revenue, "old-a");
+                    assert_eq!(table.context_menu.unwrap().1, point(px(40.0), px(80.0)),);
+                    assert_eq!(
+                        table.edit_input.as_ref().unwrap().entity_id(),
+                        input.entity_id()
+                    );
+                    assert_eq!(input.read(cx).content(), "Unsaved Bravo");
+                    assert_eq!(table.edit_column_id, "private-name");
+                    assert_eq!(table.edit_old_value, "Bravo");
+
+                    table.save_edit(cx);
+                    table.save_edit(cx);
+                    assert!(table.editing_cell.is_none());
+                    assert!(table.edit_input.is_none());
+                });
+            });
+            let edits = edits.borrow();
+            assert_eq!(edits.len(), 1);
+            assert_eq!(edits[0].0, expected_edit_index);
+            assert_eq!(edits[0].1, "private-name");
+            assert_eq!(edits[0].2, "Bravo");
+            assert_eq!(edits[0].3, "Unsaved Bravo");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn painted_context_menu_uses_remapped_record_before_redraw_and_ignores_closed_menu() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::dark());
+        });
+        let actions = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let (table, window) = cx.add_window_view({
+            let actions = actions.clone();
+            move |_, cx| {
+                DataTable::new(
+                    keyed_rows(&[("Alpha", "old-a"), ("Bravo", "old-b")]),
+                    private_columns(),
+                    cx,
+                )
+                .row_actions(vec![RowAction::new(
+                    "activate",
+                    "Activate menu",
+                    move |row, _, _| {
+                        actions.borrow_mut().push(row);
+                    },
+                )])
+            }
+        });
+        window.update(|window, cx| {
+            table.update(cx, |table, cx| {
+                table.sort_by_column(0, SortDirection::Ascending);
+                table.context_menu = Some((1, point(px(40.0), px(80.0))));
+                cx.notify();
+            });
+            window.draw(cx).clear();
+        });
+        let menu_center = window
+            .debug_bounds("data-table-context-action-activate")
+            .expect("the active menu action should have painted bounds")
+            .center();
+        window.update(|window, cx| {
+            table.update(cx, |table, cx| {
+                table.append_data(keyed_rows(&[("Aardvark", "new-first")]), cx);
+                assert_eq!(table.context_menu.unwrap().0, 2);
+                assert_eq!(table.data()[2].revenue, "old-b");
+            });
+
+            // Dispatch synchronously, before the test platform can run the
+            // queued frame, against the previously painted menu handlers.
+            let mouse_down = || {
+                PlatformInput::MouseDown(MouseDownEvent {
+                    position: menu_center,
+                    button: MouseButton::Left,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                })
+            };
+            window.dispatch_event(mouse_down(), cx);
+            assert_eq!(actions.borrow().as_slice(), &[2]);
+            let painted_table = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| node.role == AccessibilityRole::Table)
+                .unwrap();
+            assert_eq!(painted_table.row_count, Some(3));
+            window.dispatch_event(
+                PlatformInput::MouseUp(MouseUpEvent {
+                    position: menu_center,
+                    button: MouseButton::Left,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                }),
+                cx,
+            );
+            window.dispatch_event(mouse_down(), cx);
+            assert_eq!(actions.borrow().as_slice(), &[2]);
+            assert!(table.read(cx).context_menu.is_none());
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn appending_unsorted_data_preserves_insertion_order_and_selection() {
+        let cx = TestAppContext::single();
+        let table = cx.update(|cx| {
+            cx.new(|cx| {
+                DataTable::new(
+                    keyed_rows(&[("Bravo", "old-b"), ("Alpha", "old-a")]),
+                    private_columns(),
+                    cx,
+                )
+            })
+        });
+        cx.update(|cx| {
+            table.update(cx, |table, cx| {
+                table.state.toggle_row(1);
+                table.append_data(
+                    keyed_rows(&[("Zulu", "new-z"), ("Aardvark", "new-first")]),
+                    cx,
+                );
+                assert_eq!(
+                    table
+                        .data()
+                        .iter()
+                        .map(|row| row.revenue.as_ref())
+                        .collect::<Vec<_>>(),
+                    ["old-b", "old-a", "new-z", "new-first"],
+                );
+                assert_eq!(table.selected_rows(), Some(vec![1]));
+                assert_eq!(table.state.sort_column_index(), None);
+                assert_eq!(table.state.scroller.total_items, 4);
+            });
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn appending_empty_data_completes_pagination_without_sorting() {
+        let cx = TestAppContext::single();
+        let reads = Rc::new(std::cell::Cell::new(0));
+        let table = cx.update(|cx| {
+            cx.new(|cx| {
+                let reads = reads.clone();
+                DataTable::new(
+                    keyed_rows(&[("Bravo", "old-b"), ("Alpha", "old-a")]),
+                    vec![ColumnDef::new("name", "Name", move |row: &PrivateRow| {
+                        reads.set(reads.get() + 1);
+                        row.name.clone()
+                    })],
+                    cx,
+                )
+            })
+        });
+        let notifications = Rc::new(std::cell::Cell::new(0));
+        let _observation = cx.update(|cx| {
+            let notifications = notifications.clone();
+            cx.observe(&table, move |_, _| {
+                notifications.set(notifications.get() + 1);
+            })
+        });
+        cx.update(|cx| {
+            table.update(cx, |table, cx| {
+                table.state.sort_by_column(0, SortDirection::Ascending);
+                table.state.toggle_row(1);
+                table.load_more_triggered = true;
+                reads.set(0);
+
+                table.append_data(Vec::new(), cx);
+
+                assert_eq!(reads.get(), 0);
+                assert!(!table.load_more_triggered);
+                assert_eq!(table.selected_rows(), Some(vec![1]));
+                assert_eq!(table.data()[1].revenue, "old-b");
+                assert_eq!(table.state.scroller.total_items, 2);
+            });
+        });
+        assert_eq!(notifications.get(), 1);
+    }
+
+    #[::core::prelude::v1::test]
+    fn appending_data_to_virtual_tables_preserves_query_cache_and_pending_work() {
+        let cx = TestAppContext::single();
+        let reads = Rc::new(std::cell::Cell::new(0));
+        let table = cx.update(|cx| {
+            cx.new(|cx| {
+                let reads = reads.clone();
+                DataTable::new_virtual(
+                    100,
+                    vec![ColumnDef::new("name", "Name", move |row: &PrivateRow| {
+                        reads.set(reads.get() + 1);
+                        row.name.clone()
+                    })],
+                    10,
+                    cx,
+                )
+            })
+        });
+        cx.update(|cx| {
+            table.update(cx, |table, cx| {
+                table.state.sort_by_column(0, SortDirection::Ascending);
+                let requests = table.state.virtual_requests_for_range(0..20);
+                assert!(table.set_page_data_for(requests[0], indexed_rows(0, 10), cx));
+                table.state.toggle_row(1);
+                table.load_more_triggered = true;
+                let generation = table.state.virtual_generation();
+
+                table.append_data(keyed_rows(&[("Aardvark", "ignored")]), cx);
+
+                assert_eq!(reads.get(), 0);
+                assert_eq!(table.state.virtual_generation(), generation);
+                assert_eq!(table.state.scroller.total_items, 100);
+                assert_eq!(table.cached_row_count(), 10);
+                assert_eq!(table.in_flight_page_count(), 1);
+                assert_eq!(table.selected_rows(), Some(vec![1]));
+                assert!(table.load_more_triggered);
+                assert_eq!(table.state.get_row(0).unwrap().name, "row-0");
+                assert!(table.set_page_data_for(requests[1], indexed_rows(10, 10), cx));
+            });
+        });
     }
 
     #[::core::prelude::v1::test]
@@ -2552,6 +3091,287 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn virtual_pending_pages_stay_bounded_during_rapid_scrolling() {
+        let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        state.virtual_reset(1_000_000, Some(10));
+        assert_eq!(state.max_in_flight_pages(), Some(8));
+
+        let mut dispatched = Vec::new();
+        for start in (0..100_000).step_by(10) {
+            dispatched.extend(state.virtual_requests_for_range(start..start + 1));
+            assert!(state.in_flight_page_count() <= 8);
+        }
+        assert_eq!(dispatched.len(), 8);
+        assert_eq!(state.in_flight_page_count(), 8);
+        assert_eq!(state.cached_row_count(), 0);
+
+        // Scrolling did not discard an older reservation to conceal its work.
+        let oldest = dispatched[0];
+        assert!(state.virtual_set_page(
+            oldest.page_start(),
+            indexed_rows(oldest.page_start(), oldest.page_size()),
+            Some(oldest.generation()),
+        ));
+        assert_eq!(state.in_flight_page_count(), 7);
+
+        // The next frame admits the current viewport, with no historical queue.
+        let latest = state.virtual_requests_for_range(99_990..100_000);
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].page_start(), 99_990);
+        assert_eq!(state.in_flight_page_count(), 8);
+        assert_eq!(state.get_row(0).unwrap().name, "row-0");
+        assert!(
+            state
+                .virtual_requests_for_range(100_000..100_010)
+                .is_empty()
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn virtual_pending_limit_preserves_failures_retries_and_other_reservations() {
+        let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        state.virtual_reset(1_000, Some(10));
+        state.set_max_in_flight_pages(2);
+
+        let requests = state.virtual_requests_for_range(0..1_000);
+        assert_eq!(requests.len(), 2);
+        assert_eq!(state.in_flight_page_count(), 2);
+        assert!(state.virtual_requests_for_range(900..910).is_empty());
+        assert!(state.virtual_page_failed(requests[0]));
+        assert!(!state.virtual_page_failed(requests[0]));
+        assert_eq!(state.in_flight_page_count(), 1);
+
+        let retry = state.virtual_requests_for_range(0..10);
+        assert_eq!(retry, vec![requests[0]]);
+        assert!(state.virtual_requests_for_range(0..20).is_empty());
+        assert!(state.virtual_set_page(
+            requests[1].page_start(),
+            indexed_rows(10, 10),
+            Some(requests[1].generation()),
+        ));
+
+        let latest = state.virtual_requests_for_range(900..910);
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].page_start(), 900);
+        assert_eq!(state.in_flight_page_count(), 2);
+        assert_eq!(state.get_row(10).unwrap().name, "row-10");
+    }
+
+    #[::core::prelude::v1::test]
+    fn virtual_pending_limit_survives_reset_and_rejects_stale_settlements() {
+        let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        state.virtual_reset(100, Some(10));
+        state.set_max_in_flight_pages(1);
+
+        for reset in [true, false] {
+            let stale = state.virtual_requests_for_range(0..1).remove(0);
+            if reset {
+                state.virtual_reset(100, None);
+            } else {
+                state.sort_by_column(0, SortDirection::Descending);
+            }
+            assert_eq!(state.max_in_flight_pages(), Some(1));
+            assert_eq!(state.in_flight_page_count(), 0);
+            assert_eq!(state.cached_row_count(), 0);
+
+            let current = state.virtual_requests_for_range(0..1).remove(0);
+            assert_ne!(stale.generation(), current.generation());
+            assert!(!state.virtual_page_failed(stale));
+            assert!(!state.virtual_set_page(
+                stale.page_start(),
+                indexed_rows(0, 10),
+                Some(stale.generation()),
+            ));
+            assert_eq!(state.in_flight_page_count(), 1);
+            assert!(state.get_row(0).is_none());
+            assert!(state.virtual_requests_for_range(10..20).is_empty());
+
+            assert!(state.virtual_set_page(
+                current.page_start(),
+                indexed_rows(0, 10),
+                Some(current.generation()),
+            ));
+            assert_eq!(state.in_flight_page_count(), 0);
+            assert_eq!(state.get_row(0).unwrap().name, "row-0");
+            // Make the same page requestable for the next invalidation case.
+            assert!(state.invalidate_virtual_query());
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn virtual_cached_hits_preserve_lru_and_row_identity_at_pending_limit() {
+        let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        state.virtual_reset(35, Some(10));
+        state.set_max_cached_pages(2);
+        state.set_max_in_flight_pages(1);
+        for start in [0, 10] {
+            let request = state.virtual_requests_for_range(start..start + 1)[0];
+            assert!(state.virtual_set_page(
+                start,
+                indexed_rows(start, 10),
+                Some(request.generation()),
+            ));
+        }
+        state.toggle_row(0);
+
+        let last = state.virtual_requests_for_range(30..usize::MAX)[0];
+        assert_eq!(last.page_start(), 30);
+        assert_eq!(last.page_size(), 5);
+        assert!(state.virtual_requests_for_range(0..10).is_empty());
+        assert_eq!(state.in_flight_page_count(), 1);
+        assert!(state.virtual_requests_for_range(20..30).is_empty());
+        assert!(state.virtual_set_page(30, indexed_rows(30, 10), Some(last.generation())));
+
+        assert_eq!(state.cached_page_count(), 2);
+        assert_eq!(state.cached_row_count(), 15);
+        assert!(state.get_row(10).is_none());
+        assert!(state.get_row(35).is_none());
+        for index in (0..10).chain(30..35) {
+            assert_eq!(state.get_row(index).unwrap().name, format!("row-{index}"));
+        }
+        assert!(state.is_row_selected(0));
+        assert!(!state.virtual_set_page(30, indexed_rows(0, 5), Some(last.generation())));
+        assert_eq!(state.get_row(30).unwrap().name, "row-30");
+        assert_eq!(state.virtual_requests_for_range(10..20).len(), 1);
+    }
+
+    #[::core::prelude::v1::test]
+    fn virtual_pending_limit_configuration_normalizes_zero_and_retains_reservations() {
+        let cx = TestAppContext::single();
+        let table = cx.update(|cx| {
+            cx.new(|cx| {
+                DataTable::new_virtual(30, private_columns(), 10, cx).max_in_flight_pages(0)
+            })
+        });
+        cx.update(|cx| {
+            table.update(cx, |table, cx| {
+                assert_eq!(table.max_in_flight_page_count(), Some(1));
+                let requests = table.state.virtual_requests_for_range(0..30);
+                assert_eq!(requests.len(), 1);
+                assert_eq!(table.in_flight_page_count(), 1);
+                assert!(table.page_load_failed(requests[0], cx));
+                let retry = table.state.virtual_requests_for_range(0..30);
+                assert_eq!(retry, requests);
+                assert!(table.set_page_data_for(retry[0], indexed_rows(0, 10), cx));
+                assert_eq!(table.in_flight_page_count(), 0);
+                let legacy = table.state.virtual_requests_for_range(10..20)[0];
+                table.set_page_data(legacy.page_start(), indexed_rows(10, 10), cx);
+                assert_eq!(table.in_flight_page_count(), 0);
+                assert_eq!(table.cached_row_count(), 20);
+                assert!(table.to_text().contains("max_in_flight_pages=1"));
+            });
+        });
+
+        let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        assert_eq!(state.max_in_flight_pages(), None);
+        state.virtual_reset(100, Some(10));
+        state.set_max_in_flight_pages(3);
+        let requests = state.virtual_requests_for_range(0..100);
+        assert_eq!(requests.len(), 3);
+        state.set_max_in_flight_pages(1);
+        assert_eq!(state.in_flight_page_count(), 3);
+        for request in requests {
+            assert!(state.virtual_requests_for_range(90..100).is_empty());
+            assert!(state.virtual_page_failed(request));
+        }
+        assert_eq!(state.virtual_requests_for_range(90..100).len(), 1);
+    }
+
+    #[::core::prelude::v1::test]
+    fn virtual_pending_limit_bounds_huge_range_work_and_preserves_cached_touch_order() {
+        let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        state.virtual_reset(1_000_000, Some(10));
+        state.set_max_cached_pages(2);
+        state.set_max_in_flight_pages(1);
+        for start in [0, 999_990] {
+            let request = state.virtual_requests_for_range(start..start + 1)[0];
+            assert!(state.virtual_set_page(
+                start,
+                indexed_rows(start, 10),
+                Some(request.generation()),
+            ));
+        }
+        // Reverse the existing LRU order before touching the whole range.
+        assert!(state.virtual_requests_for_range(0..1).is_empty());
+        let pending = state.virtual_requests_for_range(10..20)[0];
+
+        assert!(state.virtual_requests_for_range(0..1_000_000).is_empty());
+        assert!(
+            state.last_page_request_visit_count <= 2,
+            "a full pending budget must visit only the two resident pages, visited {}",
+            state.last_page_request_visit_count,
+        );
+        assert!(state.virtual_set_page(10, indexed_rows(10, 10), Some(pending.generation())));
+        assert!(state.get_row(0).is_none());
+        assert_eq!(state.get_row(999_990).unwrap().name, "row-999990");
+        assert_eq!(state.get_row(10).unwrap().name, "row-10");
+
+        // A free slot also stops the logical scan as soon as it is filled.
+        let next = state.virtual_requests_for_range(0..1_000_000);
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].page_start(), 0);
+        assert!(state.last_page_request_visit_count <= 3);
+    }
+
+    #[::core::prelude::v1::test]
+    fn mounted_virtual_table_refills_unchanged_viewport_after_settlement() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::dark());
+        });
+        let requests = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let (table, window) = cx.add_window_view({
+            let requests = requests.clone();
+            move |_, cx| {
+                DataTable::new_virtual(30, private_columns(), 1, cx)
+                    .max_in_flight_pages(1)
+                    .on_fetch_page_request(move |request, _, _| {
+                        requests.borrow_mut().push(request);
+                    })
+            }
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+        });
+        assert_eq!(requests.borrow().len(), 1);
+        let first = requests.borrow()[0];
+        assert_eq!(first.page_start(), 0);
+
+        window.update(|_, cx| {
+            table.update(cx, |table, cx| {
+                assert!(table.set_page_data_for(first, indexed_rows(0, 1), cx));
+            });
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+        });
+        assert_eq!(requests.borrow().len(), 2);
+        let second = requests.borrow()[1];
+        assert_eq!(second.page_start(), 1);
+        assert_eq!(second.generation(), first.generation());
+
+        window.update(|_, cx| {
+            table.update(cx, |table, cx| {
+                assert!(table.page_load_failed(second, cx));
+            });
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+        });
+        assert_eq!(requests.borrow().as_slice(), &[first, second, second]);
+        window.update(|_, cx| {
+            assert_eq!(table.read(cx).in_flight_page_count(), 1);
+            assert_eq!(table.read(cx).cached_row_count(), 1);
+        });
+    }
+
+    #[::core::prelude::v1::test]
     fn data_table_summary_is_content_safe() {
         let cx = TestAppContext::single();
         let table = cx.update(|cx| {
@@ -2626,6 +3446,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
             DataBacking::Virtual { .. } => (self.state.total_items(), None),
         };
         let viewport_height = self.state.effective_viewport_height(total_items);
+        let fill_parent = self.fill_parent;
         let row_extent = px(self.state.row_height());
         let column_extents = ColumnExtents(Rc::new(self.state.column_widths.clone()));
         let horizontal_scroll_handle = self.horizontal_scroll_handle.clone();
@@ -2932,6 +3753,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                             },
                         )
                         .track_scroll(&horizontal_scroll)
+                        .restrict_scroll_to_axis(true)
                         .overscan(2)
                         .h(row_extent)
                         .flex_1();
@@ -2996,6 +3818,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                             },
                         )
                         .track_scroll(&horizontal_scroll)
+                        .restrict_scroll_to_axis(true)
                         .overscan(2)
                         .h(row_extent)
                         .flex_1();
@@ -3016,8 +3839,10 @@ impl<T: Clone + 'static> Render for DataTable<T> {
             renderer,
         )
         .track_scroll(&self.scroll_handle)
+        .restrict_scroll_to_axis(true)
         .overscan(8)
-        .h(px(viewport_height))
+        .when(fill_parent, |list| list.h_full().min_h(px(0.0)))
+        .when(!fill_parent, |list| list.h(px(viewport_height)))
         .on_visible_range(move |range, window, app| {
             let start = range.start;
             let end = range.end;
@@ -3056,7 +3881,6 @@ impl<T: Clone + 'static> Render for DataTable<T> {
         });
 
         let body_content_height = total_items as f32 * self.state.row_height();
-        let body_viewport_height = viewport_height;
         let empty_body_message = if self.search_query.is_empty() {
             self.empty_message.clone()
         } else {
@@ -3084,7 +3908,8 @@ impl<T: Clone + 'static> Render for DataTable<T> {
             .accessibility(
                 AccessibilityAttributes::new(AccessibilityRole::Group).label("Table rows"),
             )
-            .h(px(viewport_height))
+            .when(fill_parent, |div| div.flex_1().min_h(px(0.0)))
+            .when(!fill_parent, |div| div.h(px(viewport_height)))
             .on_scroll_wheel(
                 cx.listener(move |view, event: &ScrollWheelEvent, _window, cx| {
                     let delta_y: f32 = match &event.delta {
@@ -3097,7 +3922,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                     if should_capture_vertical_scroll(
                         scroll_y,
                         body_content_height,
-                        body_viewport_height,
+                        f32::from(view.scroll_handle.bounds().size.height),
                         delta_y,
                     ) {
                         cx.stop_propagation();
@@ -3115,25 +3940,32 @@ impl<T: Clone + 'static> Render for DataTable<T> {
             .flex_col()
             .overflow_hidden()
             .w_full()
+            .when(fill_parent, |div| div.flex_1().min_h(px(0.0)))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .w_full()
+                    .when(fill_parent, |div| div.flex_1().min_h(px(0.0)))
                     .child(self.render_header(cx))
                     .child(body_container),
             )
             .child(
-                div().w_full().h(px(12.0)).child(
-                    scroll_bar(
-                        ElementId::NamedChild(
-                            Box::new(table_id.clone()),
-                            "horizontal-scrollbar".into(),
-                        ),
-                        horizontal_scroll_handle,
-                    )
-                    .horizontal(),
-                ),
+                div()
+                    .w_full()
+                    .h(px(12.0))
+                    .when(fill_parent, |div| div.flex_shrink_0())
+                    .child(
+                        scroll_bar(
+                            ElementId::NamedChild(
+                                Box::new(table_id.clone()),
+                                "horizontal-scrollbar".into(),
+                            ),
+                            horizontal_scroll_handle,
+                        )
+                        .horizontal()
+                        .w_full(),
+                    ),
             );
 
         let table_div = if self.sticky_header {
@@ -3147,6 +3979,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                 .overflow_hidden()
                 .bg(theme.tokens.card)
                 .shadow_sm()
+                .when(fill_parent, |div| div.flex_1().min_h(px(0.0)))
                 .when(self.show_search, |div| {
                     div.child(self.render_search_bar(cx))
                 })
@@ -3166,6 +3999,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                 .overflow_hidden()
                 .bg(theme.tokens.card)
                 .shadow_sm()
+                .when(fill_parent, |div| div.flex_1().min_h(px(0.0)))
                 .when(self.show_search, |div| {
                     div.child(self.render_search_bar(cx))
                 })
@@ -3178,7 +4012,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
 
         let context_menu_elem = self
             .context_menu
-            .map(|(row_idx, position)| self.render_context_menu(row_idx, position, cx));
+            .map(|(_, position)| self.render_context_menu(position, cx));
 
         div()
             .id(table_id)
@@ -3190,6 +4024,9 @@ impl<T: Clone + 'static> Render for DataTable<T> {
             )
             .relative()
             .w_full()
+            .when(fill_parent, |div| {
+                div.flex().flex_col().h_full().min_h(px(0.0))
+            })
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
                 if let Some(col_idx) = this.resizing_column {
                     let current_x: f32 = event.position.x.into();
@@ -3225,7 +4062,6 @@ impl<T: Clone + 'static> Render for DataTable<T> {
 impl<T: Clone + 'static> DataTable<T> {
     fn render_context_menu(
         &self,
-        row_idx: usize,
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<T> {
@@ -3253,6 +4089,9 @@ impl<T: Clone + 'static> DataTable<T> {
                         .children(self.row_actions.iter().map(|action| {
                             let action = action.clone();
                             div()
+                                .debug_selector(|| {
+                                    format!("data-table-context-action-{}", action.id)
+                                })
                                 .flex()
                                 .items_center()
                                 .gap(px(8.0))
@@ -3271,6 +4110,11 @@ impl<T: Clone + 'static> DataTable<T> {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _event, window, cx| {
+                                        // Sorting can remap this menu before its
+                                        // previously painted handler is replaced.
+                                        let Some((row_idx, _)) = this.context_menu else {
+                                            return;
+                                        };
                                         (action.on_click)(row_idx, window, cx);
                                         this.context_menu = None;
                                         cx.notify();
@@ -3292,5 +4136,706 @@ impl<T: Clone + 'static> DataTable<T> {
                         })),
                 ),
         )
+    }
+}
+
+#[cfg(test)]
+mod mounted_parent_layout_regression_tests {
+    use super::*;
+    use kael::{TestAppContext, VisualTestContext};
+
+    #[derive(Clone)]
+    struct Row(usize);
+
+    struct Host {
+        table: Entity<DataTable<Row>>,
+        parent_wheel_events: Rc<std::cell::Cell<usize>>,
+    }
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .p(px(13.0))
+                .gap(px(8.0))
+                .on_scroll_wheel({
+                    let events = self.parent_wheel_events.clone();
+                    move |_, _, _| events.set(events.get() + 1)
+                })
+                .child(div().h(px(32.0)).flex_shrink_0().child("Toolbar"))
+                .child(
+                    div()
+                        .debug_selector(|| "table-layout-slot".to_string())
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .child(self.table.clone()),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "table-layout-footer".to_string())
+                        .h(px(24.0))
+                        .flex_shrink_0()
+                        .child("Record status"),
+                )
+        }
+    }
+
+    fn columns() -> Vec<ColumnDef<Row>> {
+        [200.0, 120.0, 200.0]
+            .into_iter()
+            .enumerate()
+            .map(|(column, width)| {
+                ColumnDef::new(
+                    format!("column-{column}"),
+                    format!("Column {column}"),
+                    move |row: &Row| format!("Record {} / value {column}", row.0).into(),
+                )
+                .width(px(width))
+                .sortable(false)
+                .editable(false)
+            })
+            .collect()
+    }
+
+    fn fixture() -> (Entity<Host>, VisualTestContext) {
+        fixture_with(100, false, false, true)
+    }
+
+    fn fixture_with(
+        rows: usize,
+        virtual_rows: bool,
+        search: bool,
+        fill_parent: bool,
+    ) -> (Entity<Host>, VisualTestContext) {
+        let mut app = TestAppContext::single();
+        app.update(|cx| {
+            crate::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::dark());
+        });
+        let (host, window) = app.add_window_view(|_, cx| Host {
+            table: cx.new(|cx| {
+                let table = if virtual_rows {
+                    DataTable::new_virtual(rows, columns(), 64, cx)
+                } else {
+                    DataTable::new((0..rows).map(Row).collect(), columns(), cx)
+                };
+                table.show_search(search).fill_parent(fill_parent)
+            }),
+            parent_wheel_events: Rc::default(),
+        });
+        (host, window.clone())
+    }
+
+    fn draw_at(window: &mut VisualTestContext, width: f32, height: f32) {
+        window.simulate_resize(size(px(width), px(height)));
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert_eq!(window.viewport_size(), size(px(width), px(height)));
+            window.draw(cx).clear();
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn constrained_table_body_and_footer_do_not_overlap_after_resize() {
+        let (host, mut window) = fixture();
+        for height in [520.0, 360.0, 800.0] {
+            draw_at(&mut window, 700.0, height);
+            let slot = window.debug_bounds("table-layout-slot").unwrap();
+            let footer = window.debug_bounds("table-layout-footer").unwrap();
+            let body = window.update(|_, cx| host.read(cx).table.read(cx).scroll_handle.bounds());
+            assert!(body.size.height > px(0.0));
+            assert!(
+                body.bottom() <= slot.bottom(),
+                "actual table body {body:?} must fit its available parent {slot:?}"
+            );
+            assert!(
+                body.bottom() < footer.top(),
+                "actual table body {body:?} must leave the footer {footer:?} unobscured"
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn table_first_column_aligns_with_actual_body_and_header_when_columns_fit() {
+        let (host, mut window) = fixture();
+        draw_at(&mut window, 700.0, 800.0);
+        window.update(|window, cx| {
+            let body = host.read(cx).table.read(cx).scroll_handle.bounds();
+            let tree = window.accessibility_tree();
+            let cell = tree
+                .nodes
+                .values()
+                .find(|node| {
+                    node.role == AccessibilityRole::Cell
+                        && node.row_index == Some(2)
+                        && node.column_index == Some(1)
+                })
+                .expect("first row's first semantic cell");
+            let cell = cell.bounds.expect("first cell painted bounds");
+            assert!(
+                (cell.x - f64::from(f32::from(body.left()))).abs() < 0.5,
+                "first column {cell:?} must start at the body viewport {body:?}"
+            );
+            assert_eq!(cell.width, 200.0);
+            let header = tree
+                .nodes
+                .values()
+                .find(|node| {
+                    node.role == AccessibilityRole::ColumnHeader && node.column_index == Some(1)
+                })
+                .unwrap()
+                .bounds
+                .unwrap();
+            assert_eq!(header.x, cell.x);
+            assert_eq!(header.width, cell.width);
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn fitted_tables_bound_empty_short_virtual_and_cached_bodies_with_search_and_resize() {
+        for (rows, virtual_rows) in [(0, false), (3, false), (100, false), (1_000, true)] {
+            for search in [false, true] {
+                let (host, mut window) = fixture_with(rows, virtual_rows, search, true);
+                for (width, height) in [(700.0, 520.0), (400.0, 360.0), (1_200.0, 800.0)] {
+                    draw_at(&mut window, width, height);
+                    let slot = window.debug_bounds("table-layout-slot").unwrap();
+                    let footer = window.debug_bounds("table-layout-footer").unwrap();
+                    window.update(|window, _| {
+                        let body = window
+                            .accessibility_tree()
+                            .nodes
+                            .values()
+                            .find(|node| node.label.as_deref() == Some("Table rows"))
+                            .unwrap()
+                            .bounds
+                            .unwrap();
+                        assert!(body.height > 0.0, "{rows} rows / search={search}");
+                        assert!(body.y >= f64::from(f32::from(slot.top())));
+                        assert!(
+                            body.y + body.height <= f64::from(f32::from(slot.bottom())),
+                            "actual body {body:?} must fit slot {slot:?}"
+                        );
+                        assert!(body.y + body.height < f64::from(f32::from(footer.top())));
+                    });
+                }
+                if virtual_rows {
+                    window.update(|_, cx| {
+                        let table = host.read(cx).table.clone();
+                        table.update(cx, |table, cx| {
+                            let request = table.state.virtual_requests_for_range(0..64).remove(0);
+                            assert!(table.set_page_data_for(
+                                request,
+                                (0..64).map(Row).collect(),
+                                cx
+                            ));
+                        });
+                    });
+                    draw_at(&mut window, 700.0, 520.0);
+                    window.update(|window, cx| {
+                        assert_eq!(host.read(cx).table.read(cx).cached_row_count(), 64);
+                        let body = host.read(cx).table.read(cx).scroll_handle.bounds();
+                        let cell = window
+                            .accessibility_tree()
+                            .nodes
+                            .values()
+                            .find(|node| {
+                                node.role == AccessibilityRole::Cell
+                                    && node.row_index == Some(2)
+                                    && node.column_index == Some(1)
+                            })
+                            .unwrap()
+                            .bounds
+                            .unwrap();
+                        assert_eq!(cell.x, f64::from(f32::from(body.left())));
+                    });
+                }
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn default_table_mode_retains_the_existing_body_height() {
+        for virtual_rows in [false, true] {
+            let (host, mut window) = fixture_with(1_000, virtual_rows, false, false);
+            draw_at(&mut window, 700.0, 1_100.0);
+            window.update(|_, cx| {
+                assert_eq!(
+                    host.read(cx)
+                        .table
+                        .read(cx)
+                        .scroll_handle
+                        .bounds()
+                        .size
+                        .height,
+                    px(600.0)
+                );
+            });
+        }
+        let (host, mut window) = fixture_with(3, false, false, false);
+        draw_at(&mut window, 700.0, 520.0);
+        window.update(|_, cx| {
+            assert_eq!(
+                host.read(cx)
+                    .table
+                    .read(cx)
+                    .scroll_handle
+                    .bounds()
+                    .size
+                    .height,
+                px(144.0)
+            );
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn fitted_table_wheel_bubbles_at_the_actual_large_body_bottom() {
+        let (host, mut window) = fixture();
+        draw_at(&mut window, 700.0, 1_100.0);
+        window.update(|window, cx| {
+            let table = host.read(cx).table.clone();
+            table.update(cx, |table, cx| {
+                table
+                    .scroll_handle
+                    .set_offset(point(px(0.0), px(-100_000.0)));
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+        });
+        let (body, previous_offset) = window.update(|_, cx| {
+            let host = host.read(cx);
+            host.parent_wheel_events.set(0);
+            let table = host.table.read(cx);
+            let body = table.scroll_handle.bounds();
+            assert!(body.size.height > px(600.0));
+            let actual_max = px(4_800.0) - body.size.height;
+            assert_eq!(table.scroll_handle.max_offset().height, actual_max);
+            assert_eq!(table.scroll_handle.offset().y, -actual_max);
+            (body, table.scroll_handle.offset().y)
+        });
+        window.simulate_event(ScrollWheelEvent {
+            position: body.origin + point(px(24.0), px(24.0)),
+            delta: ScrollDelta::Lines(point(0.0, -1.0)),
+            ..Default::default()
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            let host = host.read(cx);
+            assert_eq!(
+                host.table.read(cx).scroll_handle.offset().y,
+                previous_offset
+            );
+            assert_eq!(host.parent_wheel_events.get(), 1);
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn table_vertical_and_horizontal_wheels_remain_independent_when_both_axes_overflow() {
+        let (host, mut window) = fixture();
+        draw_at(&mut window, 400.0, 800.0);
+        let body = window.update(|_, cx| {
+            let table = host.read(cx).table.read(cx);
+            assert!(table.scroll_handle.max_offset().height > px(0.0));
+            assert!(table.horizontal_scroll_handle.max_offset().width > px(0.0));
+            table.scroll_handle.bounds()
+        });
+        let position = body.origin + point(px(24.0), px(24.0));
+        window.simulate_event(ScrollWheelEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(0.0), px(-48.0))),
+            ..Default::default()
+        });
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+        let vertical = window.update(|_, cx| {
+            let table = host.read(cx).table.read(cx);
+            assert_eq!(
+                table.horizontal_scroll_handle.offset().x,
+                px(0.0),
+                "vertical wheel must not scroll the horizontal column lists"
+            );
+            assert!(table.scroll_handle.offset().y < px(0.0));
+            table.scroll_handle.offset().y
+        });
+        window.simulate_event(ScrollWheelEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(-48.0), px(0.0))),
+            ..Default::default()
+        });
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+        window.update(|_, cx| {
+            let table = host.read(cx).table.read(cx);
+            assert!(table.horizontal_scroll_handle.offset().x < px(0.0));
+            assert_eq!(table.scroll_handle.offset().y, vertical);
+        });
+    }
+
+    fn assert_unconsumed_horizontal_wheel_bubbles(width: f32, right_edge: bool, delta_x: f32) {
+        let (host, mut window) = fixture();
+        draw_at(&mut window, width, 800.0);
+        window.update(|window, cx| {
+            let table = host.read(cx).table.clone();
+            table.update(cx, |table, cx| {
+                table.scroll_handle.set_offset(point(px(0.0), px(-96.0)));
+                table.horizontal_scroll_handle.set_offset(point(
+                    if right_edge { px(-100_000.0) } else { px(0.0) },
+                    px(0.0),
+                ));
+                cx.notify();
+            });
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+        });
+        let (position, horizontal, vertical) = window.update(|_, cx| {
+            let host = host.read(cx);
+            host.parent_wheel_events.set(0);
+            let table = host.table.read(cx);
+            let horizontal = table.horizontal_scroll_handle.offset().x;
+            if width > 520.0 {
+                assert_eq!(table.horizontal_scroll_handle.max_offset().width, px(0.0));
+            } else {
+                assert!(table.horizontal_scroll_handle.max_offset().width > px(0.0));
+                if right_edge {
+                    assert_eq!(
+                        horizontal,
+                        -table.horizontal_scroll_handle.max_offset().width
+                    );
+                } else {
+                    assert_eq!(horizontal, px(0.0));
+                }
+            }
+            assert_eq!(table.scroll_handle.offset().y, px(-96.0));
+            (
+                table.scroll_handle.bounds().origin + point(px(24.0), px(24.0)),
+                horizontal,
+                table.scroll_handle.offset().y,
+            )
+        });
+        window.simulate_event(ScrollWheelEvent {
+            position,
+            delta: ScrollDelta::Lines(point(delta_x, 0.0)),
+            ..Default::default()
+        });
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+        window.update(|_, cx| {
+            let host = host.read(cx);
+            let table = host.table.read(cx);
+            assert_eq!(table.horizontal_scroll_handle.offset().x, horizontal);
+            assert_eq!(
+                table.scroll_handle.offset().y,
+                vertical,
+                "an unconsumed horizontal wheel must not move the vertical body"
+            );
+            assert_eq!(host.parent_wheel_events.get(), 1);
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn horizontal_wheel_at_left_column_edge_does_not_move_vertical_body() {
+        assert_unconsumed_horizontal_wheel_bubbles(400.0, false, 1.0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn horizontal_wheel_at_right_column_edge_does_not_move_vertical_body() {
+        assert_unconsumed_horizontal_wheel_bubbles(400.0, true, -1.0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn horizontal_wheel_when_columns_fit_does_not_move_vertical_body() {
+        assert_unconsumed_horizontal_wheel_bubbles(700.0, false, -1.0);
+        assert_unconsumed_horizontal_wheel_bubbles(700.0, false, 1.0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn virtual_horizontal_native_qa_skeleton_cached_long_text_and_resize() {
+        let mut app = TestAppContext::single();
+        app.update(|cx| {
+            crate::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::dark());
+        });
+        let (host, window) = app.add_window_view(|_, cx| Host {
+            table: cx.new(|cx| {
+                let columns = [200.0, 120.0, 104.0, 80.0, 104.0, 144.0, 112.0, 200.0]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(column, width)| {
+                        ColumnDef::new(
+                            format!("column-{column}"),
+                            format!("Column {column}"),
+                            move |row: &Row| {
+                                if row.0 == 17 && column == 7 {
+                                    "日本語👩🏽‍💻café".repeat(128).into()
+                                } else {
+                                    format!("Record {} / value {column}", row.0).into()
+                                }
+                            },
+                        )
+                        .width(px(width))
+                        .sortable(false)
+                        .resizable(false)
+                        .editable(false)
+                    })
+                    .collect();
+                DataTable::new_virtual(100_000, columns, 64, cx)
+                    .show_search(false)
+                    .fill_parent(true)
+            }),
+            parent_wheel_events: Rc::default(),
+        });
+        draw_at(window, 1100.0, 792.0);
+        window.update(|_, cx| {
+            assert_eq!(host.read(cx).table.read(cx).cached_row_count(), 0);
+            assert_eq!(
+                host.read(cx)
+                    .table
+                    .read(cx)
+                    .horizontal_scroll_handle
+                    .max_offset()
+                    .width,
+                px(0.0)
+            );
+        });
+        draw_at(window, 950.0, 792.0);
+
+        for phase in ["skeleton", "cached-short", "cached-long"] {
+            if phase == "cached-short" {
+                window.update(|_, cx| {
+                    let table = host.read(cx).table.clone();
+                    table.update(cx, |table, cx| {
+                        let request = table.state.virtual_requests_for_range(0..64).remove(0);
+                        assert!(table.set_page_data_for(request, (0..64).map(Row).collect(), cx));
+                    });
+                });
+            } else if phase == "cached-long" {
+                window.update(|_, cx| {
+                    let table = host.read(cx).table.clone();
+                    table.update(cx, |table, cx| {
+                        table
+                            .scroll_handle
+                            .set_offset(point(px(0.0), px(-16.0 * 48.0)));
+                        cx.notify();
+                    });
+                });
+            }
+            draw_at(window, 950.0, 792.0);
+            let (position, previous_y, first_header_x) = window.update(|window, cx| {
+                let table = host.read(cx).table.read(cx);
+                let body = table.scroll_handle.bounds();
+                let horizontal = &table.horizontal_scroll_handle;
+                assert_eq!(horizontal.offset().x, px(0.0));
+                assert!(horizontal.max_offset().width > px(0.0));
+                assert_eq!(horizontal.max_offset().width, px(1064.0) - horizontal.bounds().size.width);
+                if phase != "skeleton" {
+                    assert_eq!(table.cached_row_count(), 64);
+                }
+                let tree = window.accessibility_tree();
+                let header = tree.nodes.values().find(|node| node.role == AccessibilityRole::ColumnHeader && node.column_index == Some(1)).unwrap().bounds.unwrap();
+                if phase == "cached-long" {
+                    let cell = tree.nodes.values().find(|node| node.role == AccessibilityRole::Cell && node.row_index == Some(19) && node.column_index == Some(8)).expect("long Unicode row17 Notes cell is mounted").bounds.unwrap();
+                    assert_eq!(cell.width, 200.0, "unbroken long value must not expand fixed column geometry");
+                }
+                eprintln!("virtual-horizontal phase={phase} body={body:?} horizontal_bounds={:?} max={:?}", horizontal.bounds(), horizontal.max_offset());
+                (body.origin + point(px(24.0), px(24.0)), table.scroll_handle.offset().y, header.x)
+            });
+            for (delta, expected_x) in [(-48.0, -48.0), (48.0, 0.0)] {
+                window.simulate_event(ScrollWheelEvent {
+                    position,
+                    delta: ScrollDelta::Pixels(point(px(delta), px(0.0))),
+                    ..Default::default()
+                });
+                window.run_until_parked();
+                window.update(|window, cx| {
+                    window.draw(cx).clear();
+                    let table = host.read(cx).table.read(cx);
+                    eprintln!("virtual-horizontal phase={phase} delta={delta} offset={:?} y={:?}", table.horizontal_scroll_handle.offset(), table.scroll_handle.offset());
+                    assert_eq!(table.horizontal_scroll_handle.offset().x, px(expected_x), "actual x-only wheel must move columns: {phase}");
+                    assert_eq!(table.scroll_handle.offset().y, previous_y, "x-only wheel must preserve vertical rows: {phase}");
+                    let tree = window.accessibility_tree();
+                    let bar = tree.nodes.values().find(|node| node.role == AccessibilityRole::ScrollBar).unwrap();
+                    assert!(matches!(bar.value, Some(AccessibilityValue::Range { current, .. }) if current == f64::from(-expected_x)), "scrollbar must expose actual x movement: {phase}");
+                    let header = tree.nodes.values().find(|node| node.role == AccessibilityRole::ColumnHeader && node.column_index == Some(1)).unwrap().bounds.unwrap();
+                    assert_eq!(header.x, first_header_x + f64::from(expected_x), "header must paint the same shared offset: {phase}");
+                });
+            }
+        }
+        // Shrink the scroll range back to zero, then grow it without replacing the table.
+        draw_at(window, 1100.0, 792.0);
+        window.update(|_, cx| {
+            let table = host.read(cx).table.read(cx);
+            assert_eq!(table.horizontal_scroll_handle.max_offset().width, px(0.0));
+            assert_eq!(table.horizontal_scroll_handle.offset().x, px(0.0));
+        });
+        draw_at(window, 950.0, 792.0);
+        let position = window.update(|_, cx| {
+            host.read(cx).table.read(cx).scroll_handle.bounds().origin + point(px(24.0), px(24.0))
+        });
+        window.simulate_event(ScrollWheelEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(-48.0), px(0.0))),
+            ..Default::default()
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(
+                host.read(cx)
+                    .table
+                    .read(cx)
+                    .horizontal_scroll_handle
+                    .offset()
+                    .x,
+                px(-48.0)
+            );
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn virtual_horizontal_native_qa_scrollbar_declared_actions_dispatch() {
+        let (host, mut window) = fixture_with(1_000, true, false, true);
+        draw_at(&mut window, 400.0, 792.0);
+        let (bar_id, declared_actions) = window.update(|window, cx| {
+            let table = host.read(cx).table.read(cx);
+            assert!(table.horizontal_scroll_handle.max_offset().width > px(40.0));
+            let bar = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| node.role == AccessibilityRole::ScrollBar)
+                .unwrap();
+            let actions = bar.actions.clone();
+            eprintln!(
+                "table-scrollbar actions={actions:?} handlers={:?}",
+                actions
+                    .iter()
+                    .map(|action| (
+                        *action,
+                        window.has_accessibility_action_handler(bar.id, *action)
+                    ))
+                    .collect::<Vec<_>>()
+            );
+            (bar.id, actions)
+        });
+        assert!(declared_actions.contains(&AccessibilityAction::SetValue));
+        let first_header_x = window.update(|window, _| {
+            for action in &declared_actions {
+                assert!(window.has_accessibility_action_handler(bar_id, *action));
+            }
+            window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| {
+                    node.role == AccessibilityRole::ColumnHeader && node.column_index == Some(1)
+                })
+                .unwrap()
+                .bounds
+                .unwrap()
+                .x
+        });
+        for (action, payload, expected) in [
+            (
+                AccessibilityAction::SetValue,
+                Some(AccessibilityActionPayload::NumericValue(40.0)),
+                40.0,
+            ),
+            (AccessibilityAction::Increment, None, 80.0),
+            (AccessibilityAction::Decrement, None, 40.0),
+            (
+                AccessibilityAction::SetValue,
+                Some(AccessibilityActionPayload::NumericValue(0.0)),
+                0.0,
+            ),
+        ] {
+            window.update(|window, _| {
+                window.dispatch_accessibility_action_for_test(AccessibilityActionRequest {
+                    node_id: bar_id,
+                    action,
+                    payload,
+                })
+            });
+            window.run_until_parked();
+            window.update(|window, cx| {
+                window.draw(cx).clear();
+                let table = host.read(cx).table.read(cx);
+                assert_eq!(table.horizontal_scroll_handle.offset().x, px(-expected));
+                assert_eq!(table.scroll_handle.offset().y, px(0.0));
+                let tree = window.accessibility_tree();
+                let bar = tree.get(bar_id).unwrap();
+                assert!(matches!(bar.value, Some(AccessibilityValue::Range { current, .. }) if current == f64::from(expected)));
+                let header = tree.nodes.values().find(|node| node.role == AccessibilityRole::ColumnHeader && node.column_index == Some(1)).unwrap().bounds.unwrap();
+                assert_eq!(header.x, first_header_x - f64::from(expected), "native action must move the actual painted header with the shared handle");
+            });
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn horizontal_scrollbar_track_fills_table_viewport_after_shrink_and_grow() {
+        let (host, mut window) = fixture_with(1_000, true, false, true);
+        draw_at(&mut window, 500.0, 600.0);
+        window.update(|_, cx| {
+            let table = host.read(cx).table.clone();
+            table.update(cx, |table, cx| {
+                let request = table.state.virtual_requests_for_range(0..64).remove(0);
+                assert!(table.set_page_data_for(request, (0..64).map(Row).collect(), cx));
+                table
+                    .horizontal_scroll_handle
+                    .set_offset(point(px(-40.0), px(0.0)));
+                table.scroll_handle.set_offset(point(px(0.0), px(-96.0)));
+                cx.notify();
+            });
+        });
+
+        // All sizes keep both axes overflowing and the chosen offsets in range,
+        // so resizing the track must not move columns or change the visible rows.
+        let mut observations = Vec::new();
+        for width in [500.0, 350.0, 480.0] {
+            draw_at(&mut window, width, 600.0);
+            observations.push(window.update(|window, cx| {
+                let table = host.read(cx).table.read(cx);
+                assert_eq!(table.cached_row_count(), 64);
+                let horizontal = &table.horizontal_scroll_handle;
+                let viewport = horizontal.bounds();
+                assert!(horizontal.max_offset().width >= px(40.0));
+                assert_eq!(horizontal.offset(), point(px(-40.0), px(0.0)));
+                assert_eq!(table.scroll_handle.offset(), point(px(0.0), px(-96.0)));
+                assert_eq!(viewport.size.width, table.scroll_handle.bounds().size.width);
+                let bar = window
+                    .accessibility_tree()
+                    .nodes
+                    .values()
+                    .find(|node| node.role == AccessibilityRole::ScrollBar)
+                    .expect("the table exports its horizontal scrollbar");
+                let bounds = bar.bounds.expect("the scrollbar has actual painted bounds");
+                assert!(matches!(
+                    bar.value,
+                    Some(AccessibilityValue::Range { current: 40.0, .. })
+                ));
+                eprintln!(
+                    "table-track-width window={width} viewport={viewport:?} bar={bounds:?} x={:?} y={:?}",
+                    horizontal.offset(),
+                    table.scroll_handle.offset()
+                );
+                (width, viewport, bar.id, bounds)
+            }));
+        }
+        assert!(observations[1].1.size.width < observations[0].1.size.width);
+        assert!(observations[2].1.size.width > observations[1].1.size.width);
+        let stable_id = observations[0].2;
+        for (width, viewport, id, bounds) in observations {
+            assert_eq!(
+                id, stable_id,
+                "resizing must preserve the bar's native identity"
+            );
+            assert_eq!(bounds.x, f64::from(f32::from(viewport.left())));
+            assert_eq!(bounds.height, 12.0);
+            assert_eq!(
+                bounds.width,
+                f64::from(f32::from(viewport.size.width)),
+                "the actual horizontal track must span the table viewport at window width {width}"
+            );
+        }
     }
 }

@@ -11,7 +11,10 @@ use quick_xml::{
     Reader, XmlVersion,
     events::{BytesStart, Event},
 };
-use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter, write::SimpleFileOptions};
+use zip::{
+    CompressionMethod, DateTime, ZipArchive, ZipWriter, read::ZipReadOptions,
+    write::SimpleFileOptions,
+};
 
 const MAX_PACKAGE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_PARTS: usize = 65_536;
@@ -198,14 +201,18 @@ impl OfficePackage {
         let mut parts = BTreeMap::new();
         let mut expanded_bytes = 0u64;
         for index in 0..archive.len() {
+            // ZIP indexes unique names, so iteration alone cannot detect duplicate records.
             let mut entry = archive
-                .by_index(index)
+                .by_index_with_options(
+                    index,
+                    ZipReadOptions::new().enforce_header_consistency(true),
+                )
                 .with_context(|| format!("failed to read ZIP entry {index}"))?;
             let raw_name = std::str::from_utf8(entry.name_raw())
                 .context("Office ZIP part name is not UTF-8")?
                 .to_string();
             ensure!(
-                raw_name == entry.name(),
+                raw_name == entry.name().context("invalid Office ZIP part name")?,
                 "Office ZIP part name is ambiguously encoded"
             );
             if entry.is_dir() {

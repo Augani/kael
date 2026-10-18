@@ -50,6 +50,11 @@ crates=(
   kael_util
   kael_http_client
   kael_diagnostics
+  kael_accesskit_macos
+  kael_accesskit_atspi_common
+  kael_accesskit_unix
+  kael_accesskit_windows
+  kael_rasterlottie
   kael
   kael_ui
 )
@@ -140,6 +145,7 @@ verify_package_archives() {
   local crate
   local archive
   local archive_bytes
+  local package_target_dir
   local -a package_args=()
   local max_crate_bytes=10485760
 
@@ -150,10 +156,20 @@ verify_package_archives() {
   for crate in "${crates[@]}"; do
     package_args+=(--package "$crate")
   done
-  cargo package --locked --allow-dirty "${package_args[@]}"
+  # Cargo caches local-registry sources by registry path and package version.
+  # Reusing target/package/tmp-registry can verify a new UI archive against an
+  # older core archive with the same unreleased version. Give every invocation
+  # a fresh registry identity in both Cargo output directories. Its normal
+  # upstream download cache remains shared. Never delete the user's source cache.
+  package_target_dir="$(mktemp -d "${TMPDIR:-/tmp}/kael-package-preflight.XXXXXX")"
+  echo "Fresh package staging: $package_target_dir"
+  # The maintained fork explicitly allows only crates.io. Select that registry
+  # for the set, including crates whose default publish setting is unrestricted.
+  CARGO_BUILD_BUILD_DIR="$package_target_dir" cargo package \
+    --target-dir "$package_target_dir" --registry crates-io --locked --allow-dirty "${package_args[@]}"
 
   for crate in "${crates[@]}"; do
-    archive="target/package/${crate}-${package_version}.crate"
+    archive="$package_target_dir/package/${crate}-${package_version}.crate"
     if [[ ! -s "$archive" ]]; then
       echo "error: cargo package did not create $archive" >&2
       return 1
@@ -165,6 +181,12 @@ verify_package_archives() {
     fi
     echo "package archive verified: $crate ($archive_bytes bytes)"
   done
+  # Publish the verified outputs only after the entire archive set succeeds.
+  mkdir -p target/package
+  for crate in "${crates[@]}"; do
+    cp "$package_target_dir/package/${crate}-${package_version}.crate" target/package/
+  done
+  rm -rf "$package_target_dir"
 }
 
 registry_has_version() {
@@ -218,6 +240,8 @@ if [[ "$mode" == "execute" ]]; then
     exit 2
   fi
 fi
+
+python3 scripts/ci/verify-rasterlottie-fork.py
 
 echo "Kael $package_version crate ${mode}: ${#crates[@]} packages"
 for crate in "${crates[@]}"; do

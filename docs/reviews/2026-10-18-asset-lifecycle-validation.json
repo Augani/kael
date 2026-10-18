@@ -1,0 +1,191 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-10-18T00:35:32.806129+00:00",
+  "status": "EXACT_FIVE_ASSET_FILES_ADOPTED_AND_FOURTEEN_PRIMARY_INTEGRATION_CHECKS_PASS",
+  "source_base": "0d15aff4288e8e98a54032e6ed149e080ea13104",
+  "scope": "General desktop drawing asset ownership under cache pressure; current nineteen-file primary batch includes the separately reviewed scrollbar, Choker and CI diagnostics.",
+  "source_files": [
+    {
+      "relative_path": "crates/kael/src/asset_cache.rs",
+      "preimage_sha256": "be8aa1da9fbf8e877f4a6d21a2c0dafbd11562270d3e9d9ecbcca4396fba7317",
+      "candidate_sha256": "819d8c4996fd87f21811d3fb4004cbd60f454c35997a7ba337056737d9b2eff8",
+      "bytes": 61931
+    },
+    {
+      "relative_path": "crates/kael/src/app.rs",
+      "preimage_sha256": "0177b1a2ae7ff93f36e27b721b5183733e9f0b5a78f59316b7c274027f2d99b3",
+      "candidate_sha256": "72f465c345be60563ef1dbcd036cd0a7e2692ee3de09199f3a0127053a4db05f",
+      "bytes": 2002480
+    },
+    {
+      "relative_path": "crates/kael/src/window.rs",
+      "preimage_sha256": "ef373b1e4f96003c698bc8d1c34f78516ca8370078cfd38521a3534c3b384a0b",
+      "candidate_sha256": "fb2cc4f17f7bbbad58983b5ab1ceba77967a306dff3b7ab61f1272a7679fd8ce",
+      "bytes": 453991
+    },
+    {
+      "relative_path": "crates/kael/src/lottie.rs",
+      "preimage_sha256": "4b62bad429503718131a580622fae7164547a702b25676eda6aeeb228a3de7e5",
+      "candidate_sha256": "185fa0fa7fce06b9c5c80f682d9261d1eb74c86c787c60f8dc70dd606d4a453a",
+      "bytes": 72461
+    },
+    {
+      "relative_path": "crates/kael/src/subscription.rs",
+      "preimage_sha256": "e86a0db6723ebb827a53eb646258278a76eff461ab0b08de67a49fe06efe8747",
+      "candidate_sha256": "cd0611e042a353dd02e4f133b2aa8a7d0ab481dfe0cce058cf26d9f45f0d8fcf",
+      "bytes": 7377
+    }
+  ],
+  "implementation": [
+    "Frame-scoped namespaced consumers retain only completed Shared results; pending publication uses weak consumers.",
+    "App completion publishes ready ownership before cache accounting/eviction hooks, outside map/cell borrows.",
+    "Epoch+generation checks prevent removed/old requests refilling replacement consumers; explicit remove invalidates even after the LRU entry is gone.",
+    "Cached-view element-state replay preserves active results; normal frame retirement removes unmounted ownership and subscriptions.",
+    "Rejected new requests allocate no persistent consumer before checked pending admission.",
+    "Synchronous ready hits do not notify the rendering owner; asynchronous completion still wakes opted-in views.",
+    "Successful Lottie cache accounting includes source bytes and decoded poster; direct Shared semantics and public method signatures remain unchanged."
+  ],
+  "reproduced_failures_and_checkpoints": {
+    "original_tests_only_baseline": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-asset-consumer-baseline/validation.json",
+      "sha256": "3523385931a37e70c2d6d75e8866687f7e53603085a7006221a6117a05ffe342",
+      "consumer_pass_fail": [
+        2,
+        6
+      ],
+      "lottie_pass_fail": [
+        0,
+        2
+      ],
+      "qualification": "First delivery failures prevented later branches;0-byte loop and eviction254 first failed, leaving3-byte/accounting255 branches unexecuted in baseline."
+    },
+    "initial_same10_green": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-asset-consumer-candidate-initial/validation.json",
+      "sha256": "a1868547d5e8920d95f6685395cc50f02dab6ae76cd9096a35f0bc78cf165fad"
+    },
+    "expanded_lifecycle_checkpoint": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-asset-consumer-candidate-lifecycle/validation.json",
+      "sha256": "ab2cfd3be726ae1fb992fd0c7ee08f2494188350e7edb15110f33f31c035b3c5",
+      "unique_pass": 53,
+      "strict_clippy": "PASS; then reviewed inline-ready issue reproduced separately."
+    },
+    "inline_ready_genuine_red": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-asset-consumer-inline-ready-red/validation.json",
+      "sha256": "33878ebc0443b1e907c42ef1d6720141a60077ecf4a2a62546be2fe3018333af",
+      "executed": 1,
+      "failed": 1,
+      "owner_notifications": 1,
+      "expected": 0,
+      "qualification": "Ready value was delivered; renders2 is diagnostic, not extra-frame attribution. Later clean-frame assertions not reached."
+    },
+    "inline_ready_final_green": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-asset-consumer-final/inline-ready.log",
+      "sha256": "a2202878f5ac8ce4d05738cfdefa170cf15d56d4a161bfb16445213a5955d962",
+      "executed": 1,
+      "passed": 1,
+      "owner_notifications": 0,
+      "two_normal_frame_no_rerender_assertions_reached": true
+    }
+  },
+  "private_focused_validation": {
+    "unique_passed": 54,
+    "groups": {
+      "all_assets": 24,
+      "all_lottie_including_elements": 30
+    },
+    "new_tests": {
+      "active_consumer": 15,
+      "lottie_accounting": 2,
+      "total": 17
+    },
+    "failed": 0,
+    "ignored": 0,
+    "filters": "Intentional selected groups; focused1/15/2 are overlapping subsets, not54 additional passes.",
+    "strict_core_all_target_clippy": true,
+    "lifecycle": [
+      "Zero and below-output completed retention deliver once and do not reload while mounted; unmount/window removal release Weak payload.",
+      "Actual cached child Render counter remains unchanged through4 parent revisions; ready cell stays live through cache reuse and drops on unmount.",
+      "Same source in2 explicit namespaces has2 independent frame cells/subscribers and1 shared loader; each retires independently.",
+      "16 distinct-key cycles alternate pending cancellation and ready ownership; actual retained emitter-key slots/callbacks and frame cells return to0 after every unmount.",
+      "Get-only consumers retain ready output without requesting entity notifications; off-draw legacy polling remains a separate passing control.",
+      "Explicit remove after absent LRU invalidates and reloads; old external Shared output remains valid but cannot refill replacement state.",
+      "Accounting/eviction panics occur after valid handoff; both254/255 controls pass on final candidate.",
+      "Mounted critical pressure preserves active ready output while canceling cache-only pending work and allowing fresh progress.",
+      "Reentrant eviction explicitly removes old consumer state and admits a replacement generation that remains current.",
+      "Preloaded ready cache hit delivers inline without notifying owner; async observer still notifies before user accounting/eviction.",
+      "Lottie successful cache charge is source length plus decoded native poster; tiny60B inclusive budget/LRU and external Shared validity pass."
+    ]
+  },
+  "primary_combined_validation": {
+    "checks": 14,
+    "all_passed": true,
+    "source_frozen": true,
+    "core_passed": 2216,
+    "core_failed": 0,
+    "core_existing_opt_in_ignored": 2,
+    "ui_passed": 538,
+    "ui_ignored": 0,
+    "records_example_tests": 2,
+    "all_target_strict_native_clippy": true,
+    "browser_consumer_check": true,
+    "benchmark_compile_targets": 20,
+    "pure_control_parser_cases": 11,
+    "fork_provenance": "74original\u219281reconstructed;10reviewed modified original Rust paths; same131072byte patch cap.",
+    "format_and_docs": true,
+    "package_preflight": "Pending final immutable-source package pass; no new39-package claim here.",
+    "native_physical": "Separate current-source run in progress; this record does not claim its outcome."
+  },
+  "public_behavior_tradeoffs": [
+    "Drawing consumers retain all ready results, including errors, across ordinary LRU/clear; explicit remove_asset invalidates/retries even without cache entry. No Result-specific inference or automatic retry timer.",
+    "Active ready payload/cell/subscription memory is separate from the bounded completed-cache budget and proportional to live frame consumers. Pending consumers never retain a Shared task.",
+    "Public direct Shared semantics and off-draw get_asset remain unchanged. Source-hash identity/collision contract is unchanged.",
+    "get_asset remains opt-out from owner notifications.",
+    "Prepared animation models, decoded-image caches, source IO, render scratch, live frame caches, GPU residency, allocator overhead and total RSS are not unified by this change.",
+    "LottieAssetLoader poster concurrency is not changed here and remains a separate accepted next slice."
+  ],
+  "evidence": [
+    {
+      "path": ".artifacts/2026-10-18-asset-consumer-final/promotion-manifest.json",
+      "sha256": "ce1eb8991d68cbe9906b81a99016e52cc0340abb93588a71f39022a92da593f5",
+      "bytes": 9425
+    },
+    {
+      "path": ".artifacts/2026-10-18-asset-consumer-final/validation.json",
+      "sha256": "045e90521820f0dc929031c96be2285d507bcc874752686484d6131667463181",
+      "bytes": 14553
+    },
+    {
+      "path": ".artifacts/2026-10-18-asset-consumer-primary/promotion.json",
+      "sha256": "4a3dbe71c6bd1d75624ed63e795c001de070f3caadb191840a59c787c99e9f05",
+      "bytes": 2739
+    },
+    {
+      "path": ".artifacts/2026-10-18-desktop-quality-final/integration.json",
+      "sha256": "8d13e03422794d278f4b2f82fec23d7c7a883c7e20b4f5eb984ab41757aba5a5",
+      "bytes": 7956
+    },
+    {
+      "path": ".artifacts/2026-10-18-desktop-quality-final/source-before.json",
+      "sha256": "5f8e936e64bd358c3a1226d5ed9162b695a8cfcd3de3c066d81475321ca7b232",
+      "bytes": 347070
+    },
+    {
+      "path": ".artifacts/2026-10-18-desktop-quality-final/source-after.json",
+      "sha256": "5f8e936e64bd358c3a1226d5ed9162b695a8cfcd3de3c066d81475321ca7b232",
+      "bytes": 347070
+    },
+    {
+      "path": ".artifacts/2026-10-18-macos-controls-primary/promotion.json",
+      "sha256": "c142e08d9d7fe137a7cd40019b3fd6ed6a1ddc9289d526b5c6164cd4fe8713e8",
+      "bytes": 2192
+    }
+  ],
+  "limitations": [
+    "Headless lifecycle results are not native OS/GPU presentation, physical input-source IME or screen-reader proof.",
+    "Active ready outputs including errors remain outside completed-cache budgets until frame/view retirement or explicit removal.",
+    "No application RSS, controlled power, comparative latency or overall framework ranking.",
+    "Global active/model/image/scratch/atlas accounting and separate Lottie loader concurrency remain open.",
+    "The three denied dependency advisories and hosted presentation remain separate failures.",
+    "Known Select/Combobox queued-action candidates are isolated and not promoted in this batch; no new ignored tests."
+  ]
+}

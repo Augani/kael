@@ -1,0 +1,242 @@
+{
+  "schema_version": 1,
+  "prepared_at_utc": "2026-10-17T22:05:35.179292+00:00",
+  "scope": "General desktop application data storage: immutable shipped-type diagnostic and opt-in compact domain records in the same actual Kael RemoteSheet/VirtualSheetGrid. Requested Rust payload only, not native RSS or cross-framework application performance.",
+  "production_change": "No SharedString/ArcCow representation or Default change; no canonical benchmark model change. Public example validation, if later added, is a separate scope.",
+  "source_checkpoint": {
+    "root_commit": "738695fb20db8113b2868a7e3b9fcaeddc66ad70",
+    "files": [
+      {
+        "path": "crates/kael/src/shared_string.rs",
+        "sha256": "7d2f98a8a0f9dcc0feb47529f5a5115c9f12e7ce60210fbf9c769439bc5c8853"
+      },
+      {
+        "path": "crates/util/src/arc_cow.rs",
+        "sha256": "32d8e5bf56540c9d5f77e593e715fd5b43bee36e96a0372fdf631b39289087fe"
+      },
+      {
+        "path": "crates/kael_ui/src/display/remote_sheet.rs",
+        "sha256": "06dd908d66f795ebe3d83d387630e77a9d011b66d78cbfbed0d28a5ce7f330c3"
+      },
+      {
+        "path": "crates/kael_ui/src/display/virtual_sheet_grid.rs",
+        "sha256": "a8885d2f7c3f76089bf89567369408235e1843d289af9b867445563447336621"
+      },
+      {
+        "path": "crates/kael_ui/src/display/sheet_accessibility.rs",
+        "sha256": "2d4c0d4a53296665e96435ee78315e62a6253a154d51bf878be06b6a6a5a2c81"
+      },
+      {
+        "path": "crates/kael_ui/src/virtual_list.rs",
+        "sha256": "67e97ff10f8e5785aa993dae507a2d28c541cbfbcc27f9c3fb8a76f30e11d9c0"
+      },
+      {
+        "path": "benchmarks/desktop-comparison/src/data_comparison.rs",
+        "sha256": "e03cce6a6e9640c7ee6910a703b15ae4fc5b551dba36ce96662069e1d1d12a95"
+      }
+    ]
+  },
+  "model_storage_diagnostic": {
+    "evidence": {
+      "path": ".artifacts/2026-10-17-data-storage-profile/evidence.json",
+      "bytes": 29273,
+      "sha256": "1346041a81d15334e1101d48b61c83760d9fa9c7adbcaa180e223d4cf7892856"
+    },
+    "independent_audit": {
+      "path": ".artifacts/2026-10-17-data-storage-profile-independent-audit.json",
+      "bytes": 2138,
+      "sha256": "60a34e61492af8c18366fa9fa541954a666074da615a6fb8d08bbe31f3a47790"
+    },
+    "retained_datasets": 2,
+    "rows_each": 100000,
+    "columns": 8,
+    "processes": 8,
+    "cell_checks": 12800000,
+    "string_and_record_layouts": {
+      "kael": {
+        "string_size_bytes": 24,
+        "record_size_bytes": 192,
+        "dataset_size_bytes": 80
+      },
+      "gpui": {
+        "string_size_bytes": 24,
+        "record_size_bytes": 192,
+        "dataset_size_bytes": 80
+      }
+    },
+    "retained_requested_payload_bytes": {
+      "kael": 92800352,
+      "gpui": 38400352
+    },
+    "kael_minus_compact_requested_payload_bytes": 54400000,
+    "scope": "Actual shipped Kael SharedString versus pinned GPUI SharedString/SmolStr storage. All fixture strings fit23UTF8bytes. Three CPU process pairs plus two allocator captures; the bulk clone diagnostic is not a canonical active operation. No application CPU/RSS gap attribution."
+  },
+  "same_grid_compact_domain_model": {
+    "evidence": {
+      "path": ".artifacts/2026-10-17-compact-data-grid/evidence.json",
+      "bytes": 26241,
+      "sha256": "e13ade59c39e0fed29bab5bffb9342b78fe0f6e9f221fd97298e4e6fd2079dc7"
+    },
+    "independent_audit": {
+      "path": ".artifacts/2026-10-17-compact-data-grid-independent-audit.json",
+      "bytes": 167875,
+      "sha256": "6019387d36f034b6ea00303b04bda5de5d044733d85e250a2f6e0e384205ed41"
+    },
+    "binary_sha256": "d263dbf1a2726c8b95f795c8eb431a937e4ea61bb9884964ce3c49bfd1319f0e",
+    "modes": [
+      "current SharedString business records",
+      "opt-in SmolStr0.3.6 business records, long heap Arc sharing through adapter"
+    ],
+    "accepted_processes": 2,
+    "fixture_cell_checks": 3200000,
+    "fingerprints": [
+      [
+        "fnv1a64:4ea6da623acce6b5",
+        "fnv1a64:2c24f28356e1729d"
+      ],
+      [
+        "fnv1a64:cc17af116933398f",
+        "fnv1a64:45df178322aed8a3"
+      ]
+    ],
+    "fixed_controls": {
+      "window": [
+        1100,
+        760
+      ],
+      "control": [
+        780,
+        704
+      ],
+      "tile": [
+        64,
+        8
+      ],
+      "cache_tiles": 16,
+      "pending_tiles": 4,
+      "frozen_columns": 1,
+      "font": "Menlo",
+      "font_px": 13,
+      "line_height_px": 20,
+      "logical_rows": 100000,
+      "logical_columns": 8,
+      "semantics": "All headers+logical dimensions+active coordinate+bounded cached semantics retained"
+    },
+    "stage_retained_payload_comparison": [
+      {
+        "stage": "business_model_two_datasets",
+        "shared_retained_requested_delta": 92800480,
+        "compact_retained_requested_delta": 38400480,
+        "shared_minus_compact_retained_requested_bytes": 54400000
+      },
+      {
+        "stage": "mounted_initial_cache_and_accessibility_settled",
+        "shared_retained_requested_delta": 106577214,
+        "compact_retained_requested_delta": 52194622,
+        "shared_minus_compact_retained_requested_bytes": 54382592
+      },
+      {
+        "stage": "cache_16_tiles_and_accessibility_settled",
+        "shared_retained_requested_delta": 107235620,
+        "compact_retained_requested_delta": 53114148,
+        "shared_minus_compact_retained_requested_bytes": 54121472
+      },
+      {
+        "stage": "64_further_tile_requests_eviction_settled",
+        "shared_retained_requested_delta": 107238981,
+        "compact_retained_requested_delta": 53117509,
+        "shared_minus_compact_retained_requested_bytes": 54121472
+      },
+      {
+        "stage": "stable_business_edit_then_reverse_query",
+        "shared_retained_requested_delta": 106791068,
+        "compact_retained_requested_delta": 52422916,
+        "shared_minus_compact_retained_requested_bytes": 54368152
+      },
+      {
+        "stage": "cancel_old_query_replace_dataset_and_reclaim_old_source",
+        "shared_retained_requested_delta": 60419690,
+        "compact_retained_requested_delta": 33237098,
+        "shared_minus_compact_retained_requested_bytes": 27182592
+      },
+      {
+        "stage": "drop_control_window_and_current_dataset_reclaim",
+        "shared_retained_requested_delta": 2559632,
+        "compact_retained_requested_delta": 2559632,
+        "shared_minus_compact_retained_requested_bytes": 0
+      }
+    ],
+    "source_calls_each": 85,
+    "source_cells_materialized_each": 42752,
+    "oracles_each": {
+      "full_fixture_and_four_hashes": true,
+      "actual_cache_16_after_evictions": true,
+      "full_logical_dimensions_and_bounded_ax": true,
+      "one_focused_descendant": true,
+      "write_business_id_survives_reverse_and_deferred_event": true,
+      "query_reset_retires_positional_history_and_semantic_ids": true,
+      "cancelled_request_old_source_released": true,
+      "stale_response_rejected": true,
+      "control_and_current_source_released": true
+    },
+    "adapter_ownership": {
+      "long_utf8_bytes": 70656,
+      "long_utf8_fnv1a64": "8d833f51bfe5c325",
+      "long_heap_arc_pointer_shared_through_ui_adapter": true,
+      "existing_shared_string_long_arc_pointer_preserved": true,
+      "inline_utf8_byte_control": true,
+      "static_header_pointer_preserved": true
+    },
+    "settled_16_tile_metrics_each": {
+      "cached_tiles": 16,
+      "pending_tiles": 0,
+      "ax_nodes": 1162,
+      "mounted_rows": 27,
+      "mounted_columns": 8,
+      "mounted_cells": 216,
+      "focused_nodes": 1,
+      "viewport_width": 1100.0,
+      "viewport_height": 760.0
+    },
+    "all_final_processes_passed": true,
+    "allocation_balance_snapshots": 14,
+    "final_residual_requested_bytes_each": 2559632,
+    "release_qualification": "Strong datasets/records/query/control ownership is released after cancellation and executor drain. Reporting source wrapper, Weak control blocks, report/runtime bookkeeping and global text caches remain; no claim of zero retained process memory.",
+    "limitations": [
+      "This is a headless TestPlatform settled-control retained-payload probe, not native process RSS, automatic repaint, GPU/presentation, physical input or a framework ranking.",
+      "Both canonical datasets have only<=23B values, so SmolStr0.3.6 retains them inline. Independent actual long multilingual/NUL/CRLF byte/pointer controls prove the adapter retains long heap Arc ownership but do not measure a long-valued business dataset.",
+      "Requested allocation events overlap successful realloc calls; allocator rounding/free-page retention/native resources and internal realloc old+new transient peaks are unmeasured.",
+      "Final report construction is outside stage counters. Other test/app/report owners created after the runtime baseline remain included in retained deltas. The reported bookkeeping_utf8_bytes field is a subset, not an exact total-overhead subtraction; no such subtraction is applied here.",
+      "The source-controller/counter Arc intentionally remains owned for reporting; dataset release does not claim this wrapper is dropped. Weak<Dataset> controls themselves retain small Arc control blocks. Weak-upgrade failures prove strong Dataset/records/query ownership released, not literal release of every Arc metadata allocation. Global text/runtime caches can survive window closure.",
+      "Dataset construction includes stored byte counts and four fingerprint strings; full cell/API checks outside stages still affect global transient allocation tracking but leave no retained scratch.",
+      "The controlled held-request queue temporarily owns old query data until explicitly drained; real source cancellation remains cooperative. Controller pending limits do not instantly kill non-cooperative work.",
+      "One sparse application write is keyed by original record ID+dataset identity. General asynchronous persistence/backpressure/concurrent update policies are not implemented by this probe.",
+      "Manual public viewport requests prime and evict cache tiles while the real mounted viewport remains bounded. This is not a sustained native wheel-scroll workload.",
+      "Three invalid fixture attempts are retained: default TestWindow resize lacked viewport callback; an unaligned controlled64-row request crossed2tiles; and the cancellation-channel assertion preceded executor drain. Strict assertions were preserved; no failed process contributes results. One artifact-only ambiguous-import compile error is also retained.",
+      "All production SharedString/ArcCow contracts, canonical benchmark source/model types, primary manifests and locks are unchanged by this artifact."
+    ]
+  },
+  "empty_default_rejected_lead": {
+    "evidence": {
+      "path": ".artifacts/2026-10-17-shared-string-default/evidence.json",
+      "bytes": 17941,
+      "sha256": "437907e4b67ceb68f3db2ad14ad00ea6a8c338b175a7e0ae36d3eacd4f28f6be"
+    },
+    "result": "NO_MEMORY_FINDING",
+    "processes": 6,
+    "value_checks": 5100000,
+    "allocation_balance_snapshots": 12,
+    "finding": "Actual Rust1.97.1 empty Arc<str> already shares an empty allocation; no per-value heap payload or allocation. Static conversion changes observable Arc-sharing semantics, so Default remains unchanged."
+  },
+  "compatibility": [
+    "Current SharedString publicly exposes Deref and DerefMut Target=ArcCow<static,str>, and the blanket From<T:Into<ArcCow>> accepts that owned/borrowed representation. A direct SmolStr replacement would change source contracts.",
+    "Current new(impl Into<Arc<str>>) and From/Into Arc preserve shared long inputs; new_static preserves static storage. A future option must not silently copy long Arc inputs or modify generic ArcCow for unrelated users.",
+    "Prefer investigating a separately named opt-in compact application-data text type, converting only requested/visible cells to the existing UI string; evaluate real shipped workflow and migration before changing benchmark model types.",
+    "Any global SharedString representation migration requires an explicit API compatibility/version/migration decision, plus Borrow<str>/HashMap, ordering, serde, static/Arc ownership and Unicode-boundary contract tests beyond this bounded probe."
+  ],
+  "remaining_requirements": [
+    "Native application performance/RSS, sustained physical scroll and full R4 comparison are separate requirements.",
+    "The sparse stable-ID write probe does not implement general asynchronous persistence, failure recovery or concurrent update/backpressure policies.",
+    "Uniform R8 total-memory policy and native assistive-technology acceptance remain open."
+  ]
+}

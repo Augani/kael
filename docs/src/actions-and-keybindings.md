@@ -105,7 +105,14 @@ fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
 }
 ```
 
-Window focus methods: `window.focus(&handle)`, `window.focus_next()` (Tab), and `window.focus_prev()` (Shift-Tab). Query state with `handle.is_focused(window)` and style focused elements with `.focus(|s| s.border_color(...))`.
+Window focus methods include `window.focus(&handle)`, `window.focus_next()`
+(Tab), and `window.focus_prev()` (Shift-Tab). For a modal or another retained
+focus scope, use `window.focus_next_within(&root_focus)` and
+`window.focus_prev_within(&root_focus)` to wrap through its current rendered tab
+stops. These choose a target before changing focus, so outside controls receive
+no intermediate focus or blur events. An empty rendered scope keeps focus on its
+root. Query state with `handle.is_focused(window)` and style focused elements
+with `.focus(|s| s.border_color(...))`.
 
 ## Dispatch resolution
 

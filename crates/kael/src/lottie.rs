@@ -14,7 +14,10 @@ use std::{
     io::Read as _,
     path::{Path, PathBuf},
     str,
-    sync::{Arc, Weak},
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use thiserror::Error;
@@ -23,25 +26,185 @@ use web_time::Instant;
 const MAX_LOTTIE_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LOTTIE_DIMENSION: u32 = 8_192;
 const MAX_LOTTIE_FRAME_BYTES: usize = 256 * 1024 * 1024;
+const MAX_LOTTIE_RENDER_BATCH_BYTES: usize = 256 * 1024 * 1024;
 const MAX_LOTTIE_FRAMES: usize = 100_000;
 const MAX_LOTTIE_FPS: f32 = 1_000.0;
 const MAX_LOTTIE_RENDER_BATCH: usize = 256;
+
+// This bounds concurrent framework loader pipelines, not ready outputs, retained
+// source references, renderer scratch, direct constructors or total process RSS.
+static LOTTIE_ASSET_LOAD_SLOTS: std::sync::LazyLock<Arc<async_lock::Semaphore>> =
+    std::sync::LazyLock::new(|| Arc::new(async_lock::Semaphore::new(2)));
 const MAX_PREPARED_ANIMATIONS_PER_THREAD: usize = 4;
+const MAX_PREPARED_IMAGE_BYTES_PER_THREAD: u64 = 64 * 1024 * 1024;
+const MAX_PREPARED_ANIMATIONS_GLOBAL: usize = 16;
+const MAX_PREPARED_IMAGE_BYTES_GLOBAL: u64 = 256 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PreparedCacheUsage {
+    entries: usize,
+    decoded_image_bytes: u64,
+}
+
+/// Metadata only: prepared animations remain in their creating thread's TLS.
+struct PreparedCacheBudget {
+    max_entries: usize,
+    max_decoded_image_bytes: u64,
+    usage: parking_lot::Mutex<PreparedCacheUsage>,
+}
+
+impl PreparedCacheBudget {
+    fn new(max_entries: usize, max_decoded_image_bytes: u64) -> Self {
+        Self {
+            max_entries,
+            max_decoded_image_bytes,
+            usage: parking_lot::Mutex::new(PreparedCacheUsage::default()),
+        }
+    }
+
+    fn reserve(self: &Arc<Self>, bytes: u64) -> Option<PreparedCacheReservation> {
+        let mut usage = self.usage.lock();
+        let entries = usage.entries.checked_add(1)?;
+        let decoded_image_bytes = usage.decoded_image_bytes.checked_add(bytes)?;
+        if entries > self.max_entries || decoded_image_bytes > self.max_decoded_image_bytes {
+            return None;
+        }
+        *usage = PreparedCacheUsage {
+            entries,
+            decoded_image_bytes,
+        };
+        Some(PreparedCacheReservation {
+            budget: self.clone(),
+            decoded_image_bytes: bytes,
+        })
+    }
+}
+
+struct PreparedCacheReservation {
+    budget: Arc<PreparedCacheBudget>,
+    decoded_image_bytes: u64,
+}
+
+impl Drop for PreparedCacheReservation {
+    fn drop(&mut self) {
+        let mut usage = self.budget.usage.lock();
+        usage.entries -= 1;
+        usage.decoded_image_bytes -= self.decoded_image_bytes;
+    }
+}
 
 struct PreparedAnimationCacheEntry {
     source: Weak<[u8]>,
+    // Field order matters: dispose prepared resources before releasing quota.
     animation: PreparedAnimation,
+    reservation: PreparedCacheReservation,
+}
+
+impl PreparedAnimationCacheEntry {
+    fn into_active_animation(self) -> PreparedAnimation {
+        let Self {
+            animation,
+            reservation,
+            ..
+        } = self;
+        // Active rendering is outside the idle-cache budget. Recompute the
+        // charge after rendering because another lazy image may have decoded.
+        drop(reservation);
+        animation
+    }
+}
+
+struct PreparedAnimationCache {
+    entries: VecDeque<PreparedAnimationCacheEntry>,
+    decoded_image_bytes: u64,
+    max_entries: usize,
+    max_decoded_image_bytes: u64,
+    budget: Arc<PreparedCacheBudget>,
+}
+
+impl PreparedAnimationCache {
+    fn new(
+        max_entries: usize,
+        max_decoded_image_bytes: u64,
+        budget: Arc<PreparedCacheBudget>,
+    ) -> Self {
+        Self {
+            entries: VecDeque::with_capacity(max_entries),
+            decoded_image_bytes: 0,
+            max_entries,
+            max_decoded_image_bytes,
+            budget,
+        }
+    }
+
+    fn remove(&mut self, index: usize) -> Option<PreparedAnimationCacheEntry> {
+        let entry = self.entries.remove(index)?;
+        self.decoded_image_bytes -= entry.reservation.decoded_image_bytes;
+        Some(entry)
+    }
+
+    fn retire(&mut self, source: Option<&Weak<[u8]>>) -> Vec<PreparedAnimationCacheEntry> {
+        let mut retired = Vec::new();
+        let mut index = 0;
+        while index < self.entries.len() {
+            let entry = &self.entries[index];
+            if entry.source.strong_count() == 0
+                || source.is_some_and(|source| Weak::ptr_eq(&entry.source, source))
+            {
+                retired.push(self.remove(index).unwrap());
+            } else {
+                index += 1;
+            }
+        }
+        retired
+    }
+
+    #[cfg(test)]
+    fn clear(&mut self) -> VecDeque<PreparedAnimationCacheEntry> {
+        self.decoded_image_bytes = 0;
+        std::mem::take(&mut self.entries)
+    }
+}
+
+#[cfg(not(test))]
+static PREPARED_CACHE_BUDGET: std::sync::LazyLock<Arc<PreparedCacheBudget>> =
+    std::sync::LazyLock::new(|| {
+        Arc::new(PreparedCacheBudget::new(
+            MAX_PREPARED_ANIMATIONS_GLOBAL,
+            MAX_PREPARED_IMAGE_BYTES_GLOBAL,
+        ))
+    });
+
+fn default_prepared_animation_cache() -> PreparedAnimationCache {
+    #[cfg(not(test))]
+    let budget = PREPARED_CACHE_BUDGET.clone();
+    // Unit tests get an isolated budget; multi-thread admission tests explicitly
+    // share an injected budget instead of altering process-global limits.
+    #[cfg(test)]
+    let budget = Arc::new(PreparedCacheBudget::new(
+        MAX_PREPARED_ANIMATIONS_GLOBAL,
+        MAX_PREPARED_IMAGE_BYTES_GLOBAL,
+    ));
+    PreparedAnimationCache::new(
+        MAX_PREPARED_ANIMATIONS_PER_THREAD,
+        MAX_PREPARED_IMAGE_BYTES_PER_THREAD,
+        budget,
+    )
 }
 
 thread_local! {
-    /// Prepared animations contain `Rc` and `RefCell` caches, so they must remain on
-    /// the thread that created them. Render workers each keep a deliberately small
-    /// LRU rather than reparsing and preparing every requested frame batch.
-    static PREPARED_ANIMATION_CACHE: RefCell<VecDeque<PreparedAnimationCacheEntry>> =
-        RefCell::new(VecDeque::with_capacity(MAX_PREPARED_ANIMATIONS_PER_THREAD));
+    /// Idle decoded image buffers are bounded to 64 MiB / 4 entries per thread and
+    /// 256 MiB / 16 entries across threads. These limits exclude active renders,
+    /// parsed models, other preparation caches, scratch and allocator overhead.
+    /// Prepared animations contain Rc/RefCell and never move between threads.
+    static PREPARED_ANIMATION_CACHE: RefCell<PreparedAnimationCache> =
+        RefCell::new(default_prepared_animation_cache());
 
     #[cfg(test)]
     static PREPARED_ANIMATION_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+
+    #[cfg(test)]
+    static RENDERED_FRAME_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A type alias to the resource loader that the `lottie()` element uses.
@@ -82,6 +245,12 @@ pub enum LoopMode {
 }
 
 /// Parsed Lottie animation metadata and source bytes.
+///
+/// Idle worker preparations retain at most 64 MiB of decoded image pixels and
+/// four entries per thread, with process-wide limits of 256 MiB and 16 entries.
+/// Larger valid preparations render without being cached. These bounds exclude
+/// active rendering, parsed models, other preparation caches, scratch buffers,
+/// poster/output frames and allocator overhead; they do not bound total RSS.
 #[derive(Clone, Debug)]
 pub struct LottieAnimation {
     data: Arc<LottieData>,
@@ -128,6 +297,13 @@ pub(crate) struct LottieRenderBatch {
 pub(crate) struct LottieRenderedFrame {
     pub(crate) frame_index: usize,
     pub(crate) image: Arc<RenderImage>,
+}
+
+struct LottieRenderPlan {
+    width: u32,
+    height: u32,
+    frame_bytes: usize,
+    config: RenderConfig,
 }
 
 /// An error that can occur when loading or rendering a Lottie animation.
@@ -313,11 +489,85 @@ impl LottieAnimation {
         self.data.in_point + frame_index.min(self.data.total_frames.saturating_sub(1)) as f32
     }
 
+    #[cfg(test)]
     pub(crate) fn render_batch(
         &self,
         render_size: Size<DevicePixels>,
         frames: &[usize],
     ) -> Result<LottieRenderBatch, LottieError> {
+        self.render_batch_with_budget(render_size, frames, MAX_LOTTIE_RENDER_BATCH_BYTES)
+    }
+
+    pub(crate) fn max_admitted_frame_count(
+        &self,
+        render_size: Size<DevicePixels>,
+    ) -> Result<usize, LottieError> {
+        self.max_admitted_frame_count_with_budget(render_size, MAX_LOTTIE_RENDER_BATCH_BYTES)
+    }
+
+    pub(crate) fn max_admitted_frame_count_with_budget(
+        &self,
+        render_size: Size<DevicePixels>,
+        max_bytes: usize,
+    ) -> Result<usize, LottieError> {
+        let plan = self.render_plan(render_size)?;
+        let frames = (max_bytes / plan.frame_bytes).min(MAX_LOTTIE_RENDER_BATCH);
+        if frames == 0 {
+            return Err(anyhow::anyhow!(
+                "Lottie frame exceeds the {max_bytes} byte render batch limit"
+            )
+            .into());
+        }
+        Ok(frames)
+    }
+
+    fn render_plan(
+        &self,
+        render_size: Size<DevicePixels>,
+    ) -> Result<LottieRenderPlan, LottieError> {
+        validate_render_size(render_size)?;
+        let scale = render_scale(self.data.native_pixel_size, render_size);
+        let (width, height) = render_canvas_dimensions(self.data.native_pixel_size, scale)?;
+        Ok(LottieRenderPlan {
+            width,
+            height,
+            frame_bytes: checked_frame_len(width, height)?,
+            config: RenderConfig::new(Rgba8::TRANSPARENT, scale),
+        })
+    }
+
+    pub(crate) fn render_batch_cancellable(
+        &self,
+        render_size: Size<DevicePixels>,
+        frames: &[usize],
+        cancelled: &AtomicBool,
+    ) -> Result<Option<LottieRenderBatch>, LottieError> {
+        self.render_batch_with_control(render_size, frames, MAX_LOTTIE_RENDER_BATCH_BYTES, |_| {
+            !cancelled.load(Ordering::Acquire)
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn render_batch_with_budget(
+        &self,
+        render_size: Size<DevicePixels>,
+        frames: &[usize],
+        max_bytes: usize,
+    ) -> Result<LottieRenderBatch, LottieError> {
+        self.render_batch_with_control(render_size, frames, max_bytes, |_| true)
+            .map(|batch| batch.expect("unconditionally enabled render"))
+    }
+
+    pub(crate) fn render_batch_with_control(
+        &self,
+        render_size: Size<DevicePixels>,
+        frames: &[usize],
+        max_bytes: usize,
+        mut should_continue: impl FnMut(usize) -> bool,
+    ) -> Result<Option<LottieRenderBatch>, LottieError> {
+        if !should_continue(0) {
+            return Ok(None);
+        }
         validate_render_size(render_size)?;
         if frames.len() > MAX_LOTTIE_RENDER_BATCH {
             return Err(anyhow::anyhow!(
@@ -325,23 +575,58 @@ impl LottieAnimation {
             )
             .into());
         }
-        let scale = render_scale(self.data.native_pixel_size, render_size);
-        let config = RenderConfig::new(Rgba8::TRANSPARENT, scale);
+        if frames.is_empty() {
+            return Ok(Some(LottieRenderBatch {
+                render_size,
+                frames: Vec::new(),
+            }));
+        }
+        let plan = self.render_plan(render_size)?;
+        // Bound output buffers retained by this call before preparation, renderer
+        // execution or the output Vec allocation. Prepared assets, renderer/layer
+        // scratch, concurrent calls and the element's frame cache are additional.
+        let batch_bytes = plan
+            .frame_bytes
+            .checked_mul(frames.len())
+            .ok_or_else(|| anyhow::anyhow!("Lottie render batch byte count overflowed"))?;
+        if batch_bytes > max_bytes {
+            return Err(anyhow::anyhow!(
+                "Lottie render batch cannot exceed {max_bytes} retained frame bytes"
+            )
+            .into());
+        }
+        if !should_continue(0) {
+            return Ok(None);
+        }
         with_prepared_animation(&self.data.bytes, |prepared| {
             let mut rendered_frames = Vec::with_capacity(frames.len());
 
             for &frame_index in frames {
-                let frame = prepared.render_frame(self.timeline_frame(frame_index), config)?;
+                if !should_continue(rendered_frames.len()) {
+                    return Ok(None);
+                }
+                #[cfg(test)]
+                RENDERED_FRAME_COUNT.with(|count| count.set(count.get() + 1));
+                let frame = prepared.render_frame(self.timeline_frame(frame_index), plan.config);
+                // A synchronous frame cannot be interrupted. Retired work releases
+                // its frame and partial batch as soon as that frame returns.
+                if !should_continue(rendered_frames.len() + 1) {
+                    return Ok(None);
+                }
+                let frame = frame?;
+                if (frame.width, frame.height) != (plan.width, plan.height) {
+                    return Err(LottieError::InvalidFrameBuffer);
+                }
                 rendered_frames.push(LottieRenderedFrame {
                     frame_index,
                     image: raster_frame_to_image(frame)?,
                 });
             }
 
-            Ok(LottieRenderBatch {
+            Ok(Some(LottieRenderBatch {
                 render_size,
                 frames: rendered_frames,
-            })
+            }))
         })
     }
 
@@ -580,14 +865,39 @@ impl Asset for LottieAssetLoader {
     type Source = LottieAssetSource;
     type Output = Result<Arc<LottieAnimation>, LottieError>;
 
+    fn cache_bytes(output: &Self::Output) -> u64 {
+        output.as_ref().map_or(0, |animation| {
+            (animation.data.bytes.len() as u64)
+                .saturating_add(animation.data.poster_frame.decoded_bytes())
+        })
+    }
+
     fn load(
         source: Self::Source,
         cx: &mut App,
     ) -> impl futures::Future<Output = Self::Output> + Send + 'static {
+        Self::load_with_admission(source, cx, LOTTIE_ASSET_LOAD_SLOTS.clone(), |bytes| {
+            Ok(Arc::new(LottieAnimation::from_bytes(bytes)?))
+        })
+    }
+}
+
+impl LottieAssetLoader {
+    // Inject admission and the synchronous builder privately so ownership tests
+    // can use isolated permits without modifying the shared default.
+    fn load_with_admission(
+        source: LottieAssetSource,
+        cx: &mut App,
+        slots: Arc<async_lock::Semaphore>,
+        build: impl FnOnce(Arc<[u8]>) -> Result<Arc<LottieAnimation>, LottieError> + Send + 'static,
+    ) -> impl futures::Future<Output = Result<Arc<LottieAnimation>, LottieError>> + Send + 'static
+    {
         let client = cx.http_client();
         let asset_source = cx.asset_source().clone();
 
         async move {
+            // Own admission inside the future through IO and synchronous poster build.
+            let _permit = slots.acquire_arc().await;
             let bytes = match source {
                 LottieAssetSource::Resource(resource) => match resource {
                     Resource::Path(path) => read_lottie_file(path.as_ref())?,
@@ -630,7 +940,7 @@ impl Asset for LottieAssetLoader {
                 LottieAssetSource::Bytes(bytes) => bytes,
             };
 
-            Ok(Arc::new(LottieAnimation::from_bytes(bytes)?))
+            build(bytes)
         }
     }
 }
@@ -764,58 +1074,115 @@ fn prepare_animation(
     Ok(prepared)
 }
 
-fn take_prepared_animation(bytes: &Arc<[u8]>) -> Option<PreparedAnimationCacheEntry> {
+fn take_prepared_animation_from(
+    cache: &RefCell<PreparedAnimationCache>,
+    bytes: &Arc<[u8]>,
+) -> Option<PreparedAnimation> {
     let source = Arc::downgrade(bytes);
-    PREPARED_ANIMATION_CACHE.with(|cache| {
+    let (entry, retired) = {
         let mut cache = cache.borrow_mut();
-        cache.retain(|entry| entry.source.strong_count() > 0);
-        let index = cache
+        let retired = cache.retire(None);
+        let entry = cache
+            .entries
             .iter()
-            .position(|entry| Weak::ptr_eq(&entry.source, &source))?;
-        cache.remove(index)
-    })
+            .position(|entry| Weak::ptr_eq(&entry.source, &source))
+            .and_then(|index| cache.remove(index));
+        (entry, retired)
+    };
+    // No TLS borrow or budget lock is held while resources are destroyed.
+    drop(retired);
+    entry.map(PreparedAnimationCacheEntry::into_active_animation)
+}
+
+fn cache_prepared_animation_in(
+    cache: &RefCell<PreparedAnimationCache>,
+    bytes: &Arc<[u8]>,
+    animation: PreparedAnimation,
+) {
+    let source = Arc::downgrade(bytes);
+    let bytes = animation.cached_decoded_image_bytes();
+    let (budget, mut retired, can_retain) = {
+        let mut cache = cache.borrow_mut();
+        let mut retired = cache.retire(Some(&source));
+        let can_retain = cache.max_entries > 0
+            && bytes <= cache.max_decoded_image_bytes
+            && cache.budget.max_entries > 0
+            && bytes <= cache.budget.max_decoded_image_bytes;
+        if can_retain {
+            while cache.entries.len() >= cache.max_entries
+                || cache.decoded_image_bytes > cache.max_decoded_image_bytes - bytes
+            {
+                let index = cache.entries.len() - 1;
+                retired.push(cache.remove(index).unwrap());
+            }
+        }
+        (cache.budget.clone(), retired, can_retain)
+    };
+    retired.clear();
+    if !can_retain {
+        return;
+    }
+    loop {
+        if let Some(reservation) = budget.reserve(bytes) {
+            let mut cache = cache.borrow_mut();
+            cache.decoded_image_bytes += bytes;
+            cache.entries.push_front(PreparedAnimationCacheEntry {
+                source,
+                animation,
+                reservation,
+            });
+            return;
+        }
+        // Other threads may own the global quota. Evict only this local LRU,
+        // outside its borrow, and bypass caching if no local entry can free it.
+        let entry = {
+            let mut cache = cache.borrow_mut();
+            let index = cache.entries.len().checked_sub(1);
+            index.and_then(|index| cache.remove(index))
+        };
+        let Some(entry) = entry else {
+            return;
+        };
+        drop(entry);
+    }
 }
 
 fn cache_prepared_animation(bytes: &Arc<[u8]>, animation: PreparedAnimation) {
-    let source = Arc::downgrade(bytes);
-    PREPARED_ANIMATION_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        cache.retain(|entry| {
-            entry.source.strong_count() > 0 && !Weak::ptr_eq(&entry.source, &source)
-        });
-        while cache.len() >= MAX_PREPARED_ANIMATIONS_PER_THREAD {
-            cache.pop_back();
-        }
-        cache.push_front(PreparedAnimationCacheEntry { source, animation });
-    });
+    PREPARED_ANIMATION_CACHE.with(|cache| cache_prepared_animation_in(cache, bytes, animation));
+}
+
+fn with_prepared_animation_in<T>(
+    cache: &RefCell<PreparedAnimationCache>,
+    bytes: &Arc<[u8]>,
+    render: impl FnOnce(&PreparedAnimation) -> Result<Option<T>, LottieError>,
+) -> Result<Option<T>, LottieError> {
+    let animation = if let Some(animation) = take_prepared_animation_from(cache, bytes) {
+        animation
+    } else {
+        prepare_animation(&parse_animation(bytes)?)?
+    };
+    // No TLS borrow or budget lock crosses rendering, including nested calls.
+    let result = render(&animation);
+    // Cancellation retires the preparation instead of retaining obsolete assets.
+    if !matches!(result, Ok(None)) {
+        cache_prepared_animation_in(cache, bytes, animation);
+    }
+    result
 }
 
 fn with_prepared_animation<T>(
     bytes: &Arc<[u8]>,
-    render: impl FnOnce(&PreparedAnimation) -> Result<T, LottieError>,
-) -> Result<T, LottieError> {
-    let entry = if let Some(entry) = take_prepared_animation(bytes) {
-        entry
-    } else {
-        let animation = parse_animation(bytes)?;
-        PreparedAnimationCacheEntry {
-            source: Arc::downgrade(bytes),
-            animation: prepare_animation(&animation)?,
-        }
-    };
-
-    // Move the entry out of the RefCell while rendering. Besides shortening the
-    // borrow, this makes a nested render safe: it can independently miss and
-    // prepare instead of panicking on a re-entrant RefCell borrow.
-    let result = render(&entry.animation);
-    cache_prepared_animation(bytes, entry.animation);
-    result
+    render: impl FnOnce(&PreparedAnimation) -> Result<Option<T>, LottieError>,
+) -> Result<Option<T>, LottieError> {
+    PREPARED_ANIMATION_CACHE.with(|cache| with_prepared_animation_in(cache, bytes, render))
 }
 
 #[cfg(test)]
 fn reset_prepared_animation_cache() {
-    PREPARED_ANIMATION_CACHE.with(|cache| cache.borrow_mut().clear());
+    let retired = PREPARED_ANIMATION_CACHE.with(|cache| cache.borrow_mut().clear());
+    drop(retired);
     PREPARED_ANIMATION_COUNT.with(|count| count.set(0));
+    RENDERED_FRAME_COUNT.with(|count| count.set(0));
 }
 
 #[cfg(test)]
@@ -825,7 +1192,7 @@ fn prepared_animation_count() -> usize {
 
 #[cfg(test)]
 fn prepared_animation_cache_len() -> usize {
-    PREPARED_ANIMATION_CACHE.with(|cache| cache.borrow().len())
+    PREPARED_ANIMATION_CACHE.with(|cache| cache.borrow().entries.len())
 }
 
 #[cfg(test)]
@@ -834,6 +1201,7 @@ fn is_prepared_animation_cached(bytes: &Arc<[u8]>) -> bool {
     PREPARED_ANIMATION_CACHE.with(|cache| {
         cache
             .borrow()
+            .entries
             .iter()
             .any(|entry| Weak::ptr_eq(&entry.source, &source))
     })
@@ -961,6 +1329,28 @@ fn render_scale(native_size: Size<DevicePixels>, render_size: Size<DevicePixels>
         .max(1.0 / native_width.max(native_height))
 }
 
+fn render_canvas_dimensions(
+    native_size: Size<DevicePixels>,
+    scale: f32,
+) -> Result<(u32, u32), LottieError> {
+    // Match the pinned rasterlottie resolve_output_canvas_size f32 multiplication
+    // and ceil exactly. Fitted output can differ from the requested rectangle,
+    // including a rounding pixel; actual-pixel regressions guard this coupling.
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(anyhow::anyhow!("Lottie render scale must be finite and positive").into());
+    }
+    let width = ((native_size.width.0 as f32) * scale).ceil().max(1.0);
+    let height = ((native_size.height.0 as f32) * scale).ceil().max(1.0);
+    if !width.is_finite()
+        || !height.is_finite()
+        || width > u32::MAX as f32
+        || height > u32::MAX as f32
+    {
+        return Err(anyhow::anyhow!("Lottie scaled canvas dimensions overflowed").into());
+    }
+    Ok((width as u32, height as u32))
+}
+
 /// Embed a Lottie asset directly into the binary at compile time.
 #[macro_export]
 macro_rules! include_lottie {
@@ -980,6 +1370,42 @@ mod tests {
         "h":32,
         "layers":[]
     }"#;
+
+    #[test]
+    fn cancelled_render_skips_preparation_and_retires_partial_batch_assets() {
+        let animation =
+            LottieAnimation::from_json_str(r#"{"fr":30,"ip":0,"op":30,"w":1,"h":1,"layers":[]}"#)
+                .unwrap();
+        let size = size(DevicePixels(1), DevicePixels(1));
+        reset_prepared_animation_cache();
+        assert!(
+            animation
+                .render_batch_cancellable(size, &[0, 1, 2], &AtomicBool::new(true))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(prepared_animation_count(), 0);
+        assert_eq!(RENDERED_FRAME_COUNT.with(std::cell::Cell::get), 0);
+
+        // Finish two genuine frames, then retire both the partial output and
+        // the prepared animation instead of retaining either in the worker LRU.
+        assert!(
+            animation
+                .render_batch_with_control(size, &[0, 1, 2], 12, |completed| completed < 2)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(RENDERED_FRAME_COUNT.with(std::cell::Cell::get), 2);
+        assert_eq!(prepared_animation_count(), 1);
+        assert_eq!(prepared_animation_cache_len(), 0);
+        let resumed = animation.render_batch(size, &[2, 3]).unwrap();
+        assert_eq!(resumed.frames.len(), 2);
+        assert_eq!(resumed.frames[0].frame_index, 2);
+        assert_eq!(resumed.frames[0].image.size(0), size);
+        assert_eq!(prepared_animation_count(), 2);
+        assert_eq!(prepared_animation_cache_len(), 1);
+        reset_prepared_animation_cache();
+    }
 
     #[test]
     fn parses_basic_animation_metadata() {
@@ -1038,6 +1464,116 @@ mod tests {
     }
 
     #[test]
+    fn render_batch_rejects_aggregate_bytes_before_preparation_or_pixels() {
+        let animation =
+            LottieAnimation::from_json_str(r#"{"fr":30,"ip":0,"op":30,"w":1,"h":1,"layers":[]}"#)
+                .unwrap();
+        reset_prepared_animation_cache();
+        let render_size = size(DevicePixels(1), DevicePixels(1));
+        assert_eq!(
+            animation.max_admitted_frame_count(render_size).unwrap(),
+            MAX_LOTTIE_RENDER_BATCH
+        );
+        assert!(
+            animation
+                .max_admitted_frame_count_with_budget(render_size, 3)
+                .is_err()
+        );
+        assert_eq!(
+            animation
+                .max_admitted_frame_count_with_budget(render_size, 4)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            animation
+                .max_admitted_frame_count_with_budget(render_size, 8)
+                .unwrap(),
+            2
+        );
+        assert!(
+            animation
+                .render_batch_with_budget(render_size, &[0, 1, 2], 8)
+                .is_err()
+        );
+        assert_eq!(prepared_animation_count(), 0);
+        assert_eq!(RENDERED_FRAME_COUNT.with(std::cell::Cell::get), 0);
+        assert_eq!(prepared_animation_cache_len(), 0);
+        let batch = animation
+            .render_batch_with_budget(render_size, &[0, 1], 8)
+            .unwrap();
+        assert_eq!(batch.frames.len(), 2);
+        assert!(
+            batch
+                .frames
+                .iter()
+                .all(|frame| frame.image.size(0) == render_size)
+        );
+        assert_eq!(prepared_animation_count(), 1);
+        assert_eq!(RENDERED_FRAME_COUNT.with(std::cell::Cell::get), 2);
+        assert!(
+            animation
+                .render_batch_with_budget(render_size, &[0, 1], 7)
+                .is_err()
+        );
+        assert_eq!(prepared_animation_count(), 1);
+        assert_eq!(RENDERED_FRAME_COUNT.with(std::cell::Cell::get), 2);
+        reset_prepared_animation_cache();
+        let empty = animation
+            .render_batch_with_budget(render_size, &[], 0)
+            .unwrap();
+        assert!(empty.frames.is_empty());
+        assert_eq!(empty.render_size, render_size);
+        assert_eq!(prepared_animation_count(), 0);
+        assert_eq!(RENDERED_FRAME_COUNT.with(std::cell::Cell::get), 0);
+    }
+
+    #[test]
+    fn render_batch_accounts_for_actual_fitted_and_rounded_canvas() {
+        for (native, requested, actual) in
+            [((13, 1), (7, 7), (8, 1)), ((1, 8192), (10000, 1), (1, 1))]
+        {
+            let animation = LottieAnimation::from_json_str(&format!(
+                r#"{{"fr":30,"ip":0,"op":1,"w":{},"h":{},"layers":[]}}"#,
+                native.0, native.1,
+            ))
+            .unwrap();
+            let requested = size(DevicePixels(requested.0), DevicePixels(requested.1));
+            let exact_bytes = actual.0 * actual.1 * 4;
+            reset_prepared_animation_cache();
+            assert!(
+                animation
+                    .max_admitted_frame_count_with_budget(requested, exact_bytes - 1)
+                    .is_err()
+            );
+            assert_eq!(
+                animation
+                    .max_admitted_frame_count_with_budget(requested, exact_bytes)
+                    .unwrap(),
+                1
+            );
+            assert!(
+                animation
+                    .render_batch_with_budget(requested, &[0], exact_bytes - 1)
+                    .is_err()
+            );
+            assert_eq!(prepared_animation_count(), 0);
+            assert_eq!(RENDERED_FRAME_COUNT.with(std::cell::Cell::get), 0);
+            let batch = animation
+                .render_batch_with_budget(requested, &[0], exact_bytes)
+                .unwrap();
+            assert_eq!(batch.render_size, requested);
+            assert_eq!(
+                batch.frames[0].image.size(0),
+                size(DevicePixels(actual.0 as i32), DevicePixels(actual.1 as i32))
+            );
+            assert_eq!(prepared_animation_count(), 1);
+            assert_eq!(RENDERED_FRAME_COUNT.with(std::cell::Cell::get), 1);
+            reset_prepared_animation_cache();
+        }
+    }
+
+    #[test]
     fn repeated_batches_reuse_the_thread_local_prepared_animation() {
         reset_prepared_animation_cache();
         let animation = LottieAnimation::from_json_str(SIMPLE_LOTTIE).unwrap();
@@ -1084,6 +1620,303 @@ mod tests {
         assert!(is_prepared_animation_cached(&animations[0].data.bytes));
         assert!(!is_prepared_animation_cached(&animations[1].data.bytes));
         reset_prepared_animation_cache();
+    }
+
+    fn pixel_source(width: u32, two_frames: bool) -> Arc<[u8]> {
+        use base64::Engine as _;
+        use image::ImageEncoder as _;
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(&[255, 0, 0, 255], 1, 1, image::ColorType::Rgba8.into())
+            .unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(png);
+        let second_asset = if two_frames {
+            format!(
+                r#",{{"id":"second","w":{width},"h":1,"e":1,"p":"data:image/png;base64,{data}"}}"#
+            )
+        } else {
+            String::new()
+        };
+        let second_layer = if two_frames {
+            r#",{"ty":2,"ind":2,"refId":"second","ip":1,"op":2}"#
+        } else {
+            ""
+        };
+        Arc::from(format!(r#"{{"fr":30,"ip":0,"op":2,"w":{width},"h":1,
+            "assets":[{{"id":"first","w":{width},"h":1,"e":1,"p":"data:image/png;base64,{data}"}}{second_asset}],
+            "layers":[{{"ty":2,"ind":1,"refId":"first","ip":0,"op":1}}{second_layer}]}}"#).into_bytes())
+    }
+
+    fn render_pixel_source(
+        cache: &RefCell<PreparedAnimationCache>,
+        source: &Arc<[u8]>,
+        frame: f32,
+    ) -> Vec<u8> {
+        with_prepared_animation_in(cache, source, |prepared| {
+            let frame = prepared.render_frame(frame, RenderConfig::default())?;
+            assert!(
+                frame
+                    .pixels
+                    .chunks_exact(4)
+                    .all(|pixel| pixel == [255, 0, 0, 255])
+            );
+            Ok(Some(frame.pixels))
+        })
+        .unwrap()
+        .unwrap()
+    }
+
+    fn cache_usage(budget: &PreparedCacheBudget) -> PreparedCacheUsage {
+        *budget.usage.lock()
+    }
+
+    #[test]
+    fn prepared_cache_local_bytes_evict_lru_and_oversize_still_renders() {
+        let budget = Arc::new(PreparedCacheBudget::new(16, 64));
+        let cache = RefCell::new(PreparedAnimationCache::new(4, 8, budget.clone()));
+        let sources: Vec<_> = (0..3).map(|_| pixel_source(1, false)).collect();
+        for source in &sources {
+            render_pixel_source(&cache, source, 0.0);
+        }
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 2,
+                decoded_image_bytes: 8
+            }
+        );
+        assert!(take_prepared_animation_from(&cache, &sources[0]).is_none());
+        // Touch source1, so source2 is the next byte-pressure victim.
+        assert_eq!(
+            render_pixel_source(&cache, &sources[1], 0.0),
+            [255, 0, 0, 255]
+        );
+        render_pixel_source(&cache, &sources[0], 0.0);
+        assert!(take_prepared_animation_from(&cache, &sources[2]).is_none());
+        assert_eq!(
+            Arc::strong_count(&sources[0]),
+            1,
+            "cache identity must stay weak"
+        );
+        let oversized = pixel_source(3, false);
+        for _ in 0..2 {
+            assert_eq!(render_pixel_source(&cache, &oversized, 0.0).len(), 12);
+        }
+        assert!(take_prepared_animation_from(&cache, &oversized).is_none());
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 2,
+                decoded_image_bytes: 8
+            }
+        );
+        drop(cache);
+        assert_eq!(cache_usage(&budget), PreparedCacheUsage::default());
+    }
+
+    #[test]
+    fn prepared_cache_recharges_lazy_growth_and_replaces_same_source() {
+        let budget = Arc::new(PreparedCacheBudget::new(16, 64));
+        let cache = RefCell::new(PreparedAnimationCache::new(4, 8, budget.clone()));
+        let growing = pixel_source(1, true);
+        let other = pixel_source(1, false);
+        render_pixel_source(&cache, &growing, 0.0);
+        render_pixel_source(&cache, &other, 0.0);
+        assert_eq!(cache_usage(&budget).decoded_image_bytes, 8);
+        render_pixel_source(&cache, &growing, 1.0);
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 1,
+                decoded_image_bytes: 8
+            }
+        );
+        assert!(take_prepared_animation_from(&cache, &other).is_none());
+        let replacement = prepare_animation(&parse_animation(&growing).unwrap()).unwrap();
+        replacement
+            .render_frame(0.0, RenderConfig::default())
+            .unwrap();
+        cache_prepared_animation_in(&cache, &growing, replacement);
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 1,
+                decoded_image_bytes: 4
+            }
+        );
+        drop(growing);
+        assert_eq!(
+            cache_usage(&budget).entries,
+            1,
+            "idle cleanup is lazy but remains bounded"
+        );
+        render_pixel_source(&cache, &other, 0.0);
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 1,
+                decoded_image_bytes: 4
+            }
+        );
+        drop(cache);
+        assert_eq!(cache_usage(&budget), PreparedCacheUsage::default());
+    }
+
+    #[test]
+    fn prepared_cache_global_pressure_bypasses_retention_and_bounds_zero_image_entries() {
+        let budget = Arc::new(PreparedCacheBudget::new(1, 4));
+        let first_cache = RefCell::new(PreparedAnimationCache::new(4, 8, budget.clone()));
+        let second_cache = RefCell::new(PreparedAnimationCache::new(4, 8, budget.clone()));
+        let first = pixel_source(1, false);
+        let second = pixel_source(1, false);
+        render_pixel_source(&first_cache, &first, 0.0);
+        // Valid frames are returned even when another thread/cache owns all quota.
+        for _ in 0..2 {
+            render_pixel_source(&second_cache, &second, 0.0);
+        }
+        assert_eq!(second_cache.borrow().entries.len(), 0);
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 1,
+                decoded_image_bytes: 4
+            }
+        );
+        drop(first_cache);
+        render_pixel_source(&second_cache, &second, 0.0);
+        assert_eq!(cache_usage(&budget).entries, 1);
+        drop(second_cache);
+        let zero_cache = RefCell::new(PreparedAnimationCache::new(4, 0, budget.clone()));
+        let other_zero_cache = RefCell::new(PreparedAnimationCache::new(4, 0, budget.clone()));
+        let zero: Arc<[u8]> = Arc::from(SIMPLE_LOTTIE.as_bytes());
+        let other_zero: Arc<[u8]> = Arc::from(SIMPLE_LOTTIE.as_bytes());
+        with_prepared_animation_in(&zero_cache, &zero, |_| Ok(Some(()))).unwrap();
+        with_prepared_animation_in(&other_zero_cache, &other_zero, |_| Ok(Some(()))).unwrap();
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 1,
+                decoded_image_bytes: 0
+            }
+        );
+        assert_eq!(other_zero_cache.borrow().entries.len(), 0);
+        drop(zero_cache);
+        drop(other_zero_cache);
+        assert_eq!(cache_usage(&budget), PreparedCacheUsage::default());
+    }
+
+    #[test]
+    fn prepared_cache_checkout_error_cancel_panic_and_reentrancy_balance_quota() {
+        let budget = Arc::new(PreparedCacheBudget::new(4, 8));
+        let cache = RefCell::new(PreparedAnimationCache::new(4, 8, budget.clone()));
+        let source = pixel_source(1, false);
+        render_pixel_source(&cache, &source, 0.0);
+        let other = pixel_source(1, false);
+        with_prepared_animation_in(&cache, &source, |prepared| {
+            assert_eq!(
+                cache_usage(&budget),
+                PreparedCacheUsage::default(),
+                "checkout releases idle quota"
+            );
+            assert!(cache.try_borrow_mut().is_ok());
+            assert!(budget.usage.try_lock().is_some());
+            assert_eq!(
+                prepared.render_frame(0.0, RenderConfig::default())?.pixels,
+                [255, 0, 0, 255]
+            );
+            render_pixel_source(&cache, &other, 0.0);
+            Ok(Some(()))
+        })
+        .unwrap();
+        assert_eq!(cache_usage(&budget).decoded_image_bytes, 8);
+        let error = with_prepared_animation_in::<()>(&cache, &source, |_| {
+            Err(anyhow::anyhow!("render error").into())
+        });
+        assert!(error.is_err());
+        assert_eq!(cache_usage(&budget).decoded_image_bytes, 8);
+        assert!(
+            with_prepared_animation_in::<()>(&cache, &source, |_| Ok(None))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 1,
+                decoded_image_bytes: 4
+            }
+        );
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = with_prepared_animation_in::<()>(&cache, &other, |_| {
+                panic!("simulated raster panic")
+            });
+        }));
+        assert!(panic.is_err());
+        assert_eq!(cache_usage(&budget), PreparedCacheUsage::default());
+        render_pixel_source(&cache, &source, 0.0);
+        drop(cache);
+        assert_eq!(cache_usage(&budget), PreparedCacheUsage::default());
+    }
+
+    #[test]
+    fn prepared_cache_metadata_admission_checks_overflow_without_allocating_pixels() {
+        let budget = Arc::new(PreparedCacheBudget::new(2, u64::MAX));
+        let reservation = budget.reserve(u64::MAX).unwrap();
+        assert!(budget.reserve(1).is_none());
+        let empty = budget.reserve(0).unwrap();
+        assert!(budget.reserve(0).is_none());
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 2,
+                decoded_image_bytes: u64::MAX
+            }
+        );
+        drop(reservation);
+        drop(empty);
+        assert_eq!(cache_usage(&budget), PreparedCacheUsage::default());
+    }
+
+    #[test]
+    fn prepared_cache_shared_admission_is_race_safe_and_thread_exit_releases() {
+        let budget = Arc::new(PreparedCacheBudget::new(2, 8));
+        let start = Arc::new(std::sync::Barrier::new(9));
+        let finish = Arc::new(std::sync::Barrier::new(9));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let budget = budget.clone();
+                let start = start.clone();
+                let finish = finish.clone();
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    let cache = RefCell::new(PreparedAnimationCache::new(4, 8, budget.clone()));
+                    let source = pixel_source(1, false);
+                    start.wait();
+                    render_pixel_source(&cache, &source, 0.0);
+                    let usage = cache_usage(&budget);
+                    assert!(usage.entries <= 2 && usage.decoded_image_bytes <= 8);
+                    tx.send(cache.borrow().entries.len()).unwrap();
+                    finish.wait();
+                    // Drop the source and leave its cache idle until this thread exits.
+                    drop(source);
+                })
+            })
+            .collect();
+        start.wait();
+        assert_eq!((0..8).map(|_| rx.recv().unwrap()).sum::<usize>(), 2);
+        assert_eq!(
+            cache_usage(&budget),
+            PreparedCacheUsage {
+                entries: 2,
+                decoded_image_bytes: 8
+            }
+        );
+        finish.wait();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert_eq!(cache_usage(&budget), PreparedCacheUsage::default());
     }
 
     #[test]
@@ -1205,5 +2038,678 @@ mod tests {
         assert!(!text.contains("example.com"));
         assert!(!text.contains("private"));
         assert!(text.contains("400"));
+    }
+}
+
+#[cfg(test)]
+mod asset_payload_tests {
+    use super::*;
+    use crate::TestAppContext;
+    use futures::FutureExt as _;
+
+    const TINY: &[u8] = br#"{"fr":30,"ip":0,"op":2,"w":1,"h":1,"nm":"A","layers":[]}"#;
+
+    #[test]
+    fn lottie_loader_and_logger_charge_source_plus_native_poster() {
+        let output = Ok(Arc::new(
+            LottieAnimation::from_bytes(Arc::<[u8]>::from(TINY)).unwrap(),
+        ));
+        let expected = TINY.len() as u64 + 4;
+        assert_eq!(LottieAssetLoader::cache_bytes(&output), expected);
+        assert_eq!(LottieResourceLoader::cache_bytes(&output), expected);
+    }
+
+    #[test]
+    fn completed_lottie_payload_obeys_exact_shared_cache_budget() {
+        let mut cx = TestAppContext::single();
+        let first = LottieAssetSource::Bytes(Arc::from(TINY));
+        let mut next_bytes = TINY.to_vec();
+        let offset = next_bytes.iter().position(|byte| *byte == b'A').unwrap();
+        next_bytes[offset] = b'B';
+        let next = LottieAssetSource::Bytes(next_bytes.into());
+        let charge = TINY.len() as u64 + 4;
+        cx.update(|cx| cx.set_completed_asset_cache_limits(8, charge));
+        let first_task = cx.update(|cx| {
+            cx.fetch_asset_checked::<LottieResourceLoader>(&first)
+                .unwrap()
+                .0
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(cx.completed_asset_count(), 1);
+            assert_eq!(cx.completed_asset_bytes(), charge);
+        });
+        let next_task = cx.update(|cx| {
+            cx.fetch_asset_checked::<LottieResourceLoader>(&next)
+                .unwrap()
+                .0
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(cx.completed_asset_count(), 1);
+            assert_eq!(cx.completed_asset_bytes(), charge);
+            assert!(!cx.fetch_asset::<LottieResourceLoader>(&next).1);
+            assert!(cx.fetch_asset::<LottieResourceLoader>(&first).1);
+        });
+        assert_eq!(
+            first_task
+                .now_or_never()
+                .unwrap()
+                .unwrap()
+                .poster_frame()
+                .decoded_bytes(),
+            4
+        );
+        assert_eq!(
+            next_task
+                .now_or_never()
+                .unwrap()
+                .unwrap()
+                .poster_frame()
+                .decoded_bytes(),
+            4
+        );
+    }
+}
+
+#[cfg(test)]
+mod loader_admission_tests {
+    use super::*;
+    use crate::{Task, TestAppContext};
+    use futures::{FutureExt as _, channel::oneshot, future::Shared};
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    const TINY: &[u8] = br#"{"fr":30,"ip":0,"op":2,"w":1,"h":1,"layers":[]}"#;
+    type Loaded = Result<Arc<LottieAnimation>, LottieError>;
+    type LoadTask = Shared<Task<Loaded>>;
+
+    struct RequestLifetime {
+        active: Arc<AtomicUsize>,
+        retired: Arc<AtomicUsize>,
+    }
+
+    impl Drop for RequestLifetime {
+        fn drop(&mut self) {
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            self.retired.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[derive(Default)]
+    struct HeldHttp {
+        started: Arc<AtomicUsize>,
+        active: Arc<AtomicUsize>,
+        retired: Arc<AtomicUsize>,
+        responses: Arc<Mutex<VecDeque<oneshot::Sender<()>>>>,
+    }
+
+    impl HeldHttp {
+        fn install(&self, cx: &TestAppContext) {
+            let started = self.started.clone();
+            let active = self.active.clone();
+            let retired = self.retired.clone();
+            let responses = self.responses.clone();
+            let client = http_client::FakeHttpClient::create(move |_| {
+                started.fetch_add(1, Ordering::SeqCst);
+                active.fetch_add(1, Ordering::SeqCst);
+                let lifetime = RequestLifetime {
+                    active: active.clone(),
+                    retired: retired.clone(),
+                };
+                let (sender, receiver) = oneshot::channel();
+                responses.lock().unwrap().push_back(sender);
+                async move {
+                    let _lifetime = lifetime;
+                    receiver
+                        .await
+                        .map_err(|_| anyhow::anyhow!("controlled response canceled"))?;
+                    Ok(http_client::Response::builder()
+                        .status(200)
+                        .body(http_client::AsyncBody::from(TINY.to_vec()))
+                        .unwrap())
+                }
+            });
+            cx.update(|cx| cx.set_http_client(client));
+        }
+
+        fn release_next(&self) -> bool {
+            let sender = self.responses.lock().unwrap().pop_front().unwrap();
+            sender.send(()).is_ok()
+        }
+    }
+
+    fn uri(name: &str) -> LottieAssetSource {
+        LottieAssetSource::Resource(Resource::Uri(
+            format!("https://example.invalid/{name}.json").into(),
+        ))
+    }
+
+    fn spawn_with_builder(
+        cx: &TestAppContext,
+        source: LottieAssetSource,
+        slots: Arc<async_lock::Semaphore>,
+        build: impl FnOnce(Arc<[u8]>) -> Loaded + Send + 'static,
+    ) -> LoadTask {
+        cx.update(|cx| {
+            let future = LottieAssetLoader::load_with_admission(source, cx, slots, build);
+            cx.background_executor().spawn(future).shared()
+        })
+    }
+
+    fn spawn(
+        cx: &TestAppContext,
+        source: LottieAssetSource,
+        slots: Arc<async_lock::Semaphore>,
+        builds: &Arc<AtomicUsize>,
+    ) -> LoadTask {
+        let builds = builds.clone();
+        spawn_with_builder(cx, source, slots, move |bytes| {
+            builds.fetch_add(1, Ordering::SeqCst);
+            Ok(Arc::new(LottieAnimation::from_bytes(bytes)?))
+        })
+    }
+
+    fn assert_poster(animation: &LottieAnimation) {
+        let poster = animation.poster_frame();
+        assert_eq!(poster.size(0), size(DevicePixels(1), DevicePixels(1)));
+        assert_eq!(poster.decoded_bytes(), 4);
+        assert_eq!(poster.as_bytes(0), Some(&[0, 0, 0, 0][..]));
+    }
+
+    fn take_ready(task: LoadTask) -> Arc<LottieAnimation> {
+        let result = task.now_or_never().expect("load must have completed");
+        let animation = result.expect("tiny animation must decode");
+        assert_poster(&animation);
+        animation
+    }
+
+    #[test]
+    fn held_loader_admission_performs_no_http_or_build_and_does_not_block_foreground() {
+        let cx = TestAppContext::single();
+        let slots = Arc::new(async_lock::Semaphore::new(2));
+        let first = slots.try_acquire_arc().unwrap();
+        let second = slots.try_acquire_arc().unwrap();
+        let http = HeldHttp::default();
+        http.install(&cx);
+        let builds = Arc::new(AtomicUsize::new(0));
+        let tasks = (0..3)
+            .map(|index| spawn(&cx, uri(&index.to_string()), slots.clone(), &builds))
+            .collect::<Vec<_>>();
+        let foreground = Arc::new(AtomicBool::new(false));
+        let progress = foreground.clone();
+        let ui_task = cx.foreground_executor().spawn(async move {
+            progress.store(true, Ordering::SeqCst);
+        });
+        cx.executor().run_until_parked();
+        assert!(foreground.load(Ordering::SeqCst));
+        assert_eq!(http.started.load(Ordering::SeqCst), 0);
+        assert_eq!(builds.load(Ordering::SeqCst), 0);
+        assert!(
+            tasks
+                .iter()
+                .all(|task| task.clone().now_or_never().is_none())
+        );
+
+        drop(first);
+        cx.executor().run_until_parked();
+        assert_eq!(http.started.load(Ordering::SeqCst), 1);
+        assert_eq!(http.active.load(Ordering::SeqCst), 1);
+        assert_eq!(builds.load(Ordering::SeqCst), 0);
+        // One available slot services every waiter while the second remains held.
+        for completed in 1..=3 {
+            assert!(http.release_next());
+            cx.executor().run_until_parked();
+            assert_eq!(builds.load(Ordering::SeqCst), completed);
+            assert_eq!(http.started.load(Ordering::SeqCst), (completed + 1).min(3));
+        }
+        for task in tasks {
+            take_ready(task);
+        }
+        assert_eq!(http.active.load(Ordering::SeqCst), 0);
+        assert_eq!(http.retired.load(Ordering::SeqCst), 3);
+        drop((second, ui_task));
+        let first = slots.try_acquire_arc().unwrap();
+        let second = slots.try_acquire_arc().unwrap();
+        assert!(slots.try_acquire_arc().is_none());
+        drop((first, second));
+    }
+
+    #[test]
+    fn two_loaders_admit_two_of_three_and_ready_outputs_do_not_hoard_slots() {
+        let cx = TestAppContext::single();
+        let slots = Arc::new(async_lock::Semaphore::new(2));
+        let http = HeldHttp::default();
+        http.install(&cx);
+        let builds = Arc::new(AtomicUsize::new(0));
+        let tasks = (0..3)
+            .map(|index| spawn(&cx, uri(&index.to_string()), slots.clone(), &builds))
+            .collect::<Vec<_>>();
+        cx.executor().run_until_parked();
+        assert_eq!(http.started.load(Ordering::SeqCst), 2);
+        assert_eq!(http.active.load(Ordering::SeqCst), 2);
+        assert_eq!(builds.load(Ordering::SeqCst), 0);
+        assert!(slots.try_acquire_arc().is_none());
+        assert!(http.release_next());
+        cx.executor().run_until_parked();
+        assert_eq!(http.started.load(Ordering::SeqCst), 3);
+        assert_eq!(http.active.load(Ordering::SeqCst), 2);
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+        for _ in 0..2 {
+            assert!(http.release_next());
+        }
+        cx.executor().run_until_parked();
+        assert_eq!(http.active.load(Ordering::SeqCst), 0);
+        assert_eq!(builds.load(Ordering::SeqCst), 3);
+        // Completed Shared outputs remain live; neither permit belongs to them.
+        let first = slots.try_acquire_arc().unwrap();
+        let second = slots.try_acquire_arc().unwrap();
+        for task in tasks {
+            take_ready(task);
+        }
+        drop((first, second));
+    }
+
+    #[test]
+    fn canceled_waiting_loader_releases_source_without_io_and_next_waiter_progresses() {
+        let cx = TestAppContext::single();
+        let slots = Arc::new(async_lock::Semaphore::new(1));
+        let blocker = slots.try_acquire_arc().unwrap();
+        let http = HeldHttp::default();
+        http.install(&cx);
+        let canceled_builds = Arc::new(AtomicUsize::new(0));
+        let next_builds = Arc::new(AtomicUsize::new(0));
+        let bytes = Arc::<[u8]>::from(TINY);
+        let source = Arc::downgrade(&bytes);
+        let canceled = spawn(
+            &cx,
+            LottieAssetSource::Bytes(bytes),
+            slots.clone(),
+            &canceled_builds,
+        );
+        let next = spawn(&cx, uri("next"), slots.clone(), &next_builds);
+        cx.executor().run_until_parked();
+        assert!(source.upgrade().is_some());
+        assert_eq!(http.started.load(Ordering::SeqCst), 0);
+        drop(canceled); // The final Shared/Task owner, not a detached observer.
+        cx.executor().run_until_parked();
+        assert!(source.upgrade().is_none());
+        drop(blocker);
+        cx.executor().run_until_parked();
+        assert_eq!(http.started.load(Ordering::SeqCst), 1);
+        assert_eq!(canceled_builds.load(Ordering::SeqCst), 0);
+        assert!(http.release_next());
+        cx.executor().run_until_parked();
+        take_ready(next);
+        assert_eq!(next_builds.load(Ordering::SeqCst), 1);
+        assert!(slots.try_acquire_arc().is_some());
+    }
+
+    #[test]
+    fn canceling_pending_http_retires_request_and_returns_admission_to_next_load() {
+        let cx = TestAppContext::single();
+        let slots = Arc::new(async_lock::Semaphore::new(1));
+        let http = HeldHttp::default();
+        http.install(&cx);
+        let builds = Arc::new(AtomicUsize::new(0));
+        let canceled = spawn(&cx, uri("canceled"), slots.clone(), &builds);
+        cx.executor().run_until_parked();
+        assert_eq!(http.started.load(Ordering::SeqCst), 1);
+        assert_eq!(http.active.load(Ordering::SeqCst), 1);
+        assert!(slots.try_acquire_arc().is_none());
+        drop(canceled);
+        cx.executor().run_until_parked();
+        assert_eq!(http.active.load(Ordering::SeqCst), 0);
+        assert_eq!(http.retired.load(Ordering::SeqCst), 1);
+        assert_eq!(builds.load(Ordering::SeqCst), 0);
+        assert!(!http.release_next()); // Canceled receiver has no hidden owner.
+        let next = spawn(&cx, uri("next"), slots.clone(), &builds);
+        cx.executor().run_until_parked();
+        assert_eq!(http.started.load(Ordering::SeqCst), 2);
+        assert_eq!(http.active.load(Ordering::SeqCst), 1);
+        assert!(http.release_next());
+        cx.executor().run_until_parked();
+        take_ready(next);
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+        assert_eq!(http.active.load(Ordering::SeqCst), 0);
+        assert_eq!(http.retired.load(Ordering::SeqCst), 2);
+        assert!(slots.try_acquire_arc().is_some());
+    }
+
+    #[test]
+    fn every_source_branch_waits_before_validation_while_direct_constructors_stay_callable() {
+        let cx = TestAppContext::single();
+        for (source, valid) in [
+            (LottieAssetSource::Bytes(Arc::from(TINY)), true),
+            (
+                LottieAssetSource::Resource(Resource::Embedded("missing.json".into())),
+                false,
+            ),
+            (
+                LottieAssetSource::Resource(Resource::Path(PathBuf::from("\0").into())),
+                false,
+            ),
+        ] {
+            let slots = Arc::new(async_lock::Semaphore::new(1));
+            let blocker = slots.try_acquire_arc().unwrap();
+            let builds = Arc::new(AtomicUsize::new(0));
+            let task = spawn(&cx, source, slots.clone(), &builds);
+            cx.executor().run_until_parked();
+            assert!(task.clone().now_or_never().is_none());
+            assert_eq!(builds.load(Ordering::SeqCst), 0);
+            assert_poster(&LottieAnimation::from_bytes(Arc::<[u8]>::from(TINY)).unwrap());
+            assert_poster(
+                &LottieAnimation::from_json_str(std::str::from_utf8(TINY).unwrap()).unwrap(),
+            );
+            drop(blocker);
+            cx.executor().run_until_parked();
+            let result = task.now_or_never().unwrap();
+            assert_eq!(result.is_ok(), valid);
+            assert_eq!(builds.load(Ordering::SeqCst), usize::from(valid));
+            if let Ok(animation) = result {
+                assert_poster(&animation);
+            }
+            assert!(slots.try_acquire_arc().is_some());
+        }
+    }
+
+    #[test]
+    fn transport_status_and_decode_errors_release_slot_for_following_real_poster() {
+        let cx = TestAppContext::single();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let started = requests.clone();
+        let client = http_client::FakeHttpClient::create(move |request| {
+            started.fetch_add(1, Ordering::SeqCst);
+            async move {
+                match request.uri().path() {
+                    "/transport.json" => Err(anyhow::anyhow!("controlled transport failure")),
+                    "/status.json" => Ok(http_client::Response::builder()
+                        .status(503)
+                        .body(Default::default())
+                        .unwrap()),
+                    "/decode.json" => Ok(http_client::Response::builder()
+                        .status(200)
+                        .body(http_client::AsyncBody::from(b"{".to_vec()))
+                        .unwrap()),
+                    _ => panic!("unexpected in-memory request"),
+                }
+            }
+        });
+        cx.update(|cx| cx.set_http_client(client));
+        let slots = Arc::new(async_lock::Semaphore::new(1));
+        let builds = Arc::new(AtomicUsize::new(0));
+        for (index, name) in ["transport", "status", "decode"].into_iter().enumerate() {
+            let before = builds.load(Ordering::SeqCst);
+            let task = spawn(&cx, uri(name), slots.clone(), &builds);
+            cx.executor().run_until_parked();
+            let error = task.now_or_never().unwrap().unwrap_err();
+            if name == "status" {
+                assert!(
+                    matches!(error, LottieError::BadStatus { status, .. } if status == http_client::StatusCode::SERVICE_UNAVAILABLE)
+                );
+            }
+            assert_eq!(
+                builds.load(Ordering::SeqCst),
+                before + usize::from(name == "decode")
+            );
+            assert_eq!(requests.load(Ordering::SeqCst), index + 1);
+            let next = spawn(
+                &cx,
+                LottieAssetSource::Bytes(Arc::from(TINY)),
+                slots.clone(),
+                &builds,
+            );
+            cx.executor().run_until_parked();
+            take_ready(next);
+            assert!(slots.try_acquire_arc().is_some());
+        }
+    }
+
+    #[test]
+    fn completed_output_owns_source_and_poster_but_no_loader_permit() {
+        let cx = TestAppContext::single();
+        let slots = Arc::new(async_lock::Semaphore::new(1));
+        let builds = Arc::new(AtomicUsize::new(0));
+        let bytes = Arc::<[u8]>::from(TINY);
+        let source = Arc::downgrade(&bytes);
+        let task = spawn(&cx, LottieAssetSource::Bytes(bytes), slots.clone(), &builds);
+        cx.executor().run_until_parked();
+        let animation = take_ready(task);
+        let output = Arc::downgrade(&animation);
+        let poster = Arc::downgrade(&animation.poster_frame());
+        assert!(source.upgrade().is_some());
+        assert!(output.upgrade().is_some());
+        assert!(poster.upgrade().is_some());
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+        let permit = slots.try_acquire_arc().unwrap();
+        drop(animation);
+        assert!(source.upgrade().is_none());
+        assert!(output.upgrade().is_none());
+        assert!(poster.upgrade().is_none());
+        drop(permit);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn canceled_running_loader_holds_permit_until_actual_tiny_poster_builder_returns() {
+        use std::{sync::mpsc, thread, time::Duration};
+
+        // On every unwind, release the owned worker and join. Its only wait is
+        // bounded, and it renders just one transparent pixel before that wait.
+        struct WorkerRelease {
+            release: Option<mpsc::Sender<()>>,
+            worker: Option<thread::JoinHandle<()>>,
+        }
+        impl WorkerRelease {
+            fn finish(&mut self) {
+                self.release.take().unwrap().send(()).unwrap();
+                self.worker.take().unwrap().join().unwrap();
+            }
+        }
+        impl Drop for WorkerRelease {
+            fn drop(&mut self) {
+                if let Some(release) = self.release.take() {
+                    let _ = release.send(());
+                }
+                if let Some(worker) = self.worker.take() {
+                    let _ = worker.join();
+                }
+            }
+        }
+
+        let cx = TestAppContext::single();
+        let executor = cx.executor();
+        // Drain startup before selecting one background runnable. No App or
+        // dispatcher call may run concurrently with the blocked worker below.
+        executor.run_until_parked();
+        let slots = Arc::new(async_lock::Semaphore::new(1));
+        let http = HeldHttp::default();
+        http.install(&cx);
+        let bytes = Arc::<[u8]>::from(TINY);
+        let source = Arc::downgrade(&bytes);
+        let observed_output = Arc::new(Mutex::new(None));
+        let observed = observed_output.clone();
+        let returned = Arc::new(AtomicUsize::new(0));
+        let completed = returned.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let next_builds = Arc::new(AtomicUsize::new(0));
+        let next_builder = next_builds.clone();
+        // Capture all App-owned handles on the foreground before the worker
+        // changes TestDispatcher's shared is_main_thread state.
+        let mut next_future = cx.update(|cx| -> futures::future::BoxFuture<'static, Loaded> {
+            LottieAssetLoader::load_with_admission(uri("next"), cx, slots.clone(), move |bytes| {
+                next_builder.fetch_add(1, Ordering::SeqCst);
+                Ok(Arc::new(LottieAnimation::from_bytes(bytes)?))
+            })
+            .boxed()
+        });
+        let first = spawn_with_builder(
+            &cx,
+            LottieAssetSource::Bytes(bytes),
+            slots.clone(),
+            move |bytes| {
+                let animation = Arc::new(LottieAnimation::from_bytes(bytes)?);
+                assert_poster(&animation);
+                *observed.lock().unwrap() = Some(Arc::downgrade(&animation));
+                started_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                completed.fetch_add(1, Ordering::SeqCst);
+                Ok(animation)
+            },
+        );
+        let worker_executor = executor.clone();
+        let worker = thread::spawn(move || {
+            assert!(worker_executor.dispatcher.as_test().unwrap().tick(true));
+        });
+        let mut cleanup = WorkerRelease {
+            release: Some(release_tx),
+            worker: Some(worker),
+        };
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(slots.try_acquire_arc().is_none());
+        assert!(source.upgrade().is_some());
+        // This future owns only previously captured Send handles. Poll it
+        // directly to register a semaphore waiter without App/dispatcher calls
+        // while the real first Task remains inside its running poll.
+        let mut poll_context = std::task::Context::from_waker(futures::task::noop_waker_ref());
+        assert!(futures::Future::poll(next_future.as_mut(), &mut poll_context).is_pending());
+        assert_eq!(http.started.load(Ordering::SeqCst), 0);
+        drop(first);
+        assert!(futures::Future::poll(next_future.as_mut(), &mut poll_context).is_pending());
+        assert!(slots.try_acquire_arc().is_none());
+        assert_eq!(http.started.load(Ordering::SeqCst), 0);
+        assert_eq!(returned.load(Ordering::SeqCst), 0);
+        assert!(source.upgrade().is_some());
+        assert!(
+            observed_output
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .upgrade()
+                .is_some()
+        );
+        cleanup.finish();
+        // Join restores the dispatcher thread flag before normal scheduling.
+        let next = executor.spawn(next_future).shared();
+        executor.run_until_parked();
+        // Cancellation cannot preempt that poll; its discarded result retires
+        // only after the real builder has returned. It cannot hoard admission.
+        assert_eq!(returned.load(Ordering::SeqCst), 1);
+        assert!(source.upgrade().is_none());
+        assert!(
+            observed_output
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .upgrade()
+                .is_none()
+        );
+        assert_eq!(http.started.load(Ordering::SeqCst), 1);
+        assert_eq!(next_builds.load(Ordering::SeqCst), 0);
+        assert!(http.release_next());
+        executor.run_until_parked();
+        take_ready(next);
+        assert_eq!(next_builds.load(Ordering::SeqCst), 1);
+        assert!(slots.try_acquire_arc().is_some());
+    }
+
+    #[test]
+    fn loader_holds_admission_during_body_read_and_canceling_it_unblocks_waiter() {
+        use std::{
+            pin::Pin,
+            task::{Context, Poll},
+        };
+
+        struct PausedBody {
+            gate: oneshot::Receiver<()>,
+            cursor: futures::io::Cursor<&'static [u8]>,
+            released: bool,
+            polls: Arc<AtomicUsize>,
+            dropped: Arc<AtomicUsize>,
+        }
+        impl futures::AsyncRead for PausedBody {
+            fn poll_read(
+                mut self: Pin<&mut Self>,
+                cx: &mut Context<'_>,
+                bytes: &mut [u8],
+            ) -> Poll<io::Result<usize>> {
+                if !self.released {
+                    self.polls.fetch_add(1, Ordering::SeqCst);
+                    match futures::Future::poll(Pin::new(&mut self.gate), cx) {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(Ok(())) => self.released = true,
+                        Poll::Ready(Err(_)) => {
+                            return Poll::Ready(Err(io::Error::new(
+                                io::ErrorKind::Interrupted,
+                                "controlled body canceled",
+                            )));
+                        }
+                    }
+                }
+                futures::AsyncRead::poll_read(Pin::new(&mut self.cursor), cx, bytes)
+            }
+        }
+        impl Drop for PausedBody {
+            fn drop(&mut self) {
+                self.dropped.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let cx = TestAppContext::single();
+        let slots = Arc::new(async_lock::Semaphore::new(1));
+        let builds = Arc::new(AtomicUsize::new(0));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let polls = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let (sender, receiver) = oneshot::channel();
+        let receiver = Arc::new(Mutex::new(Some(receiver)));
+        let client = http_client::FakeHttpClient::create({
+            let requests = requests.clone();
+            let polls = polls.clone();
+            let dropped = dropped.clone();
+            move |request| {
+                requests.fetch_add(1, Ordering::SeqCst);
+                let body = if request.uri().path() == "/body.json" {
+                    http_client::AsyncBody::from_reader(PausedBody {
+                        gate: receiver.lock().unwrap().take().unwrap(),
+                        cursor: futures::io::Cursor::new(TINY),
+                        released: false,
+                        polls: polls.clone(),
+                        dropped: dropped.clone(),
+                    })
+                } else {
+                    http_client::AsyncBody::from(TINY)
+                };
+                async move {
+                    Ok(http_client::Response::builder()
+                        .status(200)
+                        .body(body)
+                        .unwrap())
+                }
+            }
+        });
+        cx.update(|cx| cx.set_http_client(client));
+        let first = spawn(&cx, uri("body"), slots.clone(), &builds);
+        cx.executor().run_until_parked();
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        assert!(polls.load(Ordering::SeqCst) > 0);
+        assert_eq!(builds.load(Ordering::SeqCst), 0);
+        assert!(slots.try_acquire_arc().is_none());
+        let next = spawn(&cx, uri("next"), slots.clone(), &builds);
+        cx.executor().run_until_parked();
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        drop(first);
+        cx.executor().run_until_parked();
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        assert!(sender.send(()).is_err());
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        take_ready(next);
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+        assert!(slots.try_acquire_arc().is_some());
     }
 }

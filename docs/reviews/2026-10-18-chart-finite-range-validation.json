@@ -1,0 +1,822 @@
+{
+  "schema_version": 1,
+  "status": "ADOPTED_EXACT_TESTED_CHART_FINITE_RANGE37_SOURCE_PUBLICATION_PENDING_AT_PREPARATION",
+  "source_context": {
+    "primary_commit": "88abc87f556b7b43b424cd731cad44abef0ca755",
+    "managed_head": "d766b5dc1c3f061944fbf6b0c24fc00cb49f8621",
+    "root_input_capture": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-root-inputs-v1/capture.json",
+      "sha256": "52431080dcb605dee0ec1a8dd943bca4b1da962f5da949218db5d4b4ab024c90",
+      "bytes": 4113
+    },
+    "eligible_inputs_per_root_at_test": 3192,
+    "fingerprint": "4150d0c7eb09b9290bffdfc5aab424ace64ffe2865b0bf56d390ed6a85fbb5a4",
+    "distinct_heads_equal_recorded_source_entries": true
+  },
+  "source_descriptor": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-formatted-source-v3/preparation.json",
+    "sha256": "f155556b819ba4d1bda9f579d17099ccae97a9e8333359b51daa452629218785",
+    "bytes": 13902
+  },
+  "source_peer": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-formatted-v3-independent-renderer-review/review.json",
+    "sha256": "1225d33013edc1ae42aa1085b4190d36b112aa600bd28176f2d1e7c26fea36be",
+    "bytes": 46168
+  },
+  "semantic_source_peer": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-v2-independent-memory-source-review/review.json",
+    "sha256": "600b5c78f253ac26f741705d382817883989899800d977eb380fda25d5264dbe",
+    "bytes": 32838
+  },
+  "Root_artifact_format": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-root-format-v1/result.json",
+    "sha256": "b5b8734d87e6fbf01b02b813b6ec3f1747e438c21490ce0feb9a0b1823821827",
+    "bytes": 16949
+  },
+  "change": "Private shared finite-range math, explicit data-presence handling and zero-padding identity repair public numeric paths for overflowing finite spans, large constants and finite-MAX samples. Public API signatures and the ordinary aggregation/seven existing regressions remain unchanged.",
+  "exact_tested_source_files": {
+    "crates/kael_ui/src/charts/area_chart.rs": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-formatted-source-v3/candidate/crates/kael_ui/src/charts/area_chart.rs",
+      "sha256": "3449add204542b4ae5bd13f855569036e92b3d4cfc54348f6bc688bb8bc5830f",
+      "bytes": 26771
+    },
+    "crates/kael_ui/src/charts/chart.rs": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-formatted-source-v3/candidate/crates/kael_ui/src/charts/chart.rs",
+      "sha256": "2008644b100aad07693cbed2fce9c36ade2d389547a78d7fa49b3be0357cbf09",
+      "bytes": 48551
+    },
+    "crates/kael_ui/src/charts/line_chart.rs": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-formatted-source-v3/candidate/crates/kael_ui/src/charts/line_chart.rs",
+      "sha256": "658b51af68639da3889b6f7d2c85c26acd6c27759080bfb5a020f97f8e6d85e3",
+      "bytes": 26230
+    },
+    "crates/kael_ui/src/charts/mod.rs": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-formatted-source-v3/candidate/crates/kael_ui/src/charts/mod.rs",
+      "sha256": "e3b68a457aa71a4256081072afdf057b37e2226e69ff1df123e41e2c9b8afa48",
+      "bytes": 7191
+    }
+  },
+  "production_only_files_for_scope_comparison": {
+    "crates/kael_ui/src/charts/area_chart.rs": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-formatted-source-v3/production/crates/kael_ui/src/charts/area_chart.rs",
+      "sha256": "f338abb4be989e53cbe914819646592887476626918b1dfd93d9da6abaae4767",
+      "bytes": 24199
+    },
+    "crates/kael_ui/src/charts/chart.rs": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-formatted-source-v3/production/crates/kael_ui/src/charts/chart.rs",
+      "sha256": "f70068c32b8b858fbd71a12eef41b3dd274d8d9e186387bcffc2b2f5e6cdf70d",
+      "bytes": 42617
+    },
+    "crates/kael_ui/src/charts/line_chart.rs": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-formatted-source-v3/production/crates/kael_ui/src/charts/line_chart.rs",
+      "sha256": "7ef377f38fd1b1dd8f5b6080443168de2df03f0c15848ff35053b24c7b45af69",
+      "bytes": 21971
+    },
+    "crates/kael_ui/src/charts/mod.rs": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-formatted-source-v3/production/crates/kael_ui/src/charts/mod.rs",
+      "sha256": "e3b68a457aa71a4256081072afdf057b37e2226e69ff1df123e41e2c9b8afa48",
+      "bytes": 7191
+    }
+  },
+  "preimage_files": {
+    "crates/kael_ui/src/charts/area_chart.rs": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-candidate-v2/preimages/crates/kael_ui/src/charts/area_chart.rs",
+      "sha256": "3dcea462135496772ded205ad5e1eef5509ac9403edab50cde33309d58a813cc",
+      "bytes": 24155
+    },
+    "crates/kael_ui/src/charts/chart.rs": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-candidate-v2/preimages/crates/kael_ui/src/charts/chart.rs",
+      "sha256": "0ca77f793ada40983e872b880a2a3f712d5e9016f3d3b3b6b49359df29f6710d",
+      "bytes": 42387
+    },
+    "crates/kael_ui/src/charts/line_chart.rs": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-candidate-v2/preimages/crates/kael_ui/src/charts/line_chart.rs",
+      "sha256": "bb530d367baa751a98c34ed2fc0c8d4cfa47f705f862e55c1408e6a701408d07",
+      "bytes": 21705
+    },
+    "crates/kael_ui/src/charts/mod.rs": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-candidate-v2/preimages/crates/kael_ui/src/charts/mod.rs",
+      "sha256": "26dd5a504076d0601d45699e3a2c58aedda6108db7c5e9852f285f7614f8cdeb",
+      "bytes": 5370
+    }
+  },
+  "actual": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-actual37-v2/result.json",
+    "sha256": "bb37dc029a3a3de2503b0f45efe6ead2479c2684d2b35cc1b74bee931efdfad4",
+    "bytes": 4152099
+  },
+  "independent_actual_audit": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart37-independent-memory-actual-audit-v1/review.json",
+    "sha256": "8ab62a8ee3b6621be074122b5ba996b944e4d9fe099276d4dbbff6678ba17cc5",
+    "bytes": 79914
+  },
+  "driver": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-path-preflight-successor-v2/run.py",
+    "sha256": "2ba0e75a422b17137ba1359df21fa954f737516c5b3a3f97d0bd5425aba7a7b3",
+    "bytes": 29639
+  },
+  "config": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-path-inputs-v2/config-reviewed-pending-input-peer.json",
+    "sha256": "49ec9c73f1fdda3b976e88f3620d4ffec2d23ee1e50db15f48ac3c00ab681417",
+    "bytes": 23387
+  },
+  "actual_input_peer": {
+    "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart37-path-inputs-v2-independent-memory-review-v1/review.json",
+    "sha256": "1ae651d5bc905257aae09be4df52e0c28b650364b7f18d175a08f307737333f5",
+    "bytes": 17970
+  },
+  "validation": {
+    "supervised_commands": 37,
+    "all37_distinct_owned_groups_quiescent": true,
+    "maintained_UI_names": 588,
+    "baseline_listed_inventory": 602,
+    "candidate_listed_inventory": 602,
+    "baseline_specific_runtime_assertion_failures": 12,
+    "baseline_passing_controls": 2,
+    "candidate_focused_passes": 14,
+    "full_UI": {
+      "passed": 602,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0,
+      "default_parallel": true,
+      "focused_fourteen_repeated_subset": true
+    },
+    "all_baseline_runtime_failures_pin_source_macro_line_message_and_typed_values": true,
+    "case_results": [
+      {
+        "variant": "baseline",
+        "name": "charts::chart::numeric_range_regressions::finite_wide_domain_normalizes_actual_endpoints_and_middle",
+        "verdict": "EXPECTED_SPECIFIC_RUNTIME_RED",
+        "actual_left_right": [
+          0.0,
+          0.5
+        ]
+      },
+      {
+        "variant": "baseline",
+        "name": "charts::chart::numeric_range_regressions::large_constant_public_ranges_keep_finite_neighbor_bounds",
+        "verdict": "EXPECTED_SPECIFIC_RUNTIME_RED",
+        "actual_left_right": [
+          4906019910204099648,
+          4906019910204099649
+        ]
+      },
+      {
+        "variant": "baseline",
+        "name": "charts::chart::numeric_range_regressions::axis_builder_widens_large_constants",
+        "verdict": "EXPECTED_SPECIFIC_RUNTIME_RED",
+        "actual_left_right": [
+          4906019910204099648,
+          4906019910204099649
+        ]
+      },
+      {
+        "variant": "baseline",
+        "name": "charts::chart::numeric_range_regressions::wide_domain_projects_offset_padded_viewport",
+        "verdict": "EXPECTED_SPECIFIC_RUNTIME_RED",
+        "actual_left_right": [
+          [
+            130.0,
+            310.0
+          ],
+          [
+            310.0,
+            190.0
+          ]
+        ]
+      },
+      {
+        "variant": "baseline",
+        "name": "charts::chart::numeric_range_regressions::wide_domain_inverse_projection_retains_data_endpoints",
+        "verdict": "EXPECTED_SPECIFIC_RUNTIME_RED",
+        "actual_left_right": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            -1.7976931348623157e+308,
+            -1.7976931348623157e+308
+          ]
+        ]
+      },
+      {
+        "variant": "baseline",
+        "name": "charts::chart::numeric_range_regressions::zero_padding_preserves_wide_finite_endpoints",
+        "verdict": "EXPECTED_SPECIFIC_RUNTIME_RED",
+        "actual_left_right": [
+          [
+            0.0,
+            1.0,
+            0.0,
+            1.0
+          ],
+          [
+            -1.7976931348623157e+308,
+            1.7976931348623157e+308,
+            -1.7976931348623157e+308,
+            1.7976931348623157e+308
+          ]
+        ]
+      },
+      {
+        "variant": "baseline",
+        "name": "charts::chart::numeric_range_regressions::ordinary_and_tiny_ranges_preserve_existing_policy",
+        "verdict": "PASS",
+        "actual_left_right": null
+      },
+      {
+        "variant": "baseline",
+        "name": "charts::line_chart::numeric_range_regressions::wide_finite_series_normalize_and_interpolate_ticks",
+        "verdict": "EXPECTED_SPECIFIC_RUNTIME_RED",
+        "actual_left_right": [
+          0.0,
+          0.5
+        ]
+      },
+      {
+        "variant": "baseline",
+        "name": "charts::line_chart::numeric_range_regressions::maximum_finite_samples_are_not_empty",
+        "verdict": "EXPECTED_SPECIFIC_RUNTIME_RED",
+        "actual_left_right": [
+          [
+            0,
+            4607182418800017408,
+            0,
+            4607182418800017408
+          ],
+          [
+            9218868437227405310,
+            9218868437227405311,
+            9218868437227405310,
+            9218868437227405311
+          ]
+        ]
+      },
+      {
+        "variant": "baseline",
+        "name": "charts::line_chart::numeric_range_regressions::large_constant_series_and_y_override_use_finite_neighbors",
+        "verdict": "EXPECTED_SPECIFIC_RUNTIME_RED",
+        "actual_left_right": [
+          [
+            4906019910204099648,
+            4906019910204099648
+          ],
+          [
+            4906019910204099648,
+            4906019910204099649
+          ]
+        ]
+      },
+      {
+        "variant": "baseline",
+        "name": "charts::line_chart::numeric_range_regressions::empty_and_ordinary_line_ranges_preserve_controls",
+        "verdict": "PASS",
+        "actual_left_right": null
+      },
+      {
+        "variant": "baseline",
+        "name": "charts::area_chart::numeric_range_regressions::wide_overlaid_x_normalizes_without_changing_y_policy",
+        "verdict": "EXPECTED_SPECIFIC_RUNTIME_RED",
+        "actual_left_right": [
+          0.0,
+          0.5
+        ]
+      },
+      {
+        "variant": "baseline",
+        "name": "charts::area_chart::numeric_range_regressions::maximum_finite_area_x_is_not_empty_in_either_mode",
+        "verdict": "EXPECTED_SPECIFIC_RUNTIME_RED",
+        "actual_left_right": [
+          [
+            0,
+            4607182418800017408
+          ],
+          [
+            9218868437227405310,
+            9218868437227405311
+          ]
+        ]
+      },
+      {
+        "variant": "baseline",
+        "name": "charts::area_chart::numeric_range_regressions::large_constant_area_x_and_empty_controls",
+        "verdict": "EXPECTED_SPECIFIC_RUNTIME_RED",
+        "actual_left_right": [
+          [
+            4906019910204099648,
+            4906019910204099648
+          ],
+          [
+            4906019910204099648,
+            4906019910204099649
+          ]
+        ]
+      },
+      {
+        "variant": "candidate",
+        "name": "charts::chart::numeric_range_regressions::finite_wide_domain_normalizes_actual_endpoints_and_middle",
+        "verdict": "PASS",
+        "actual_left_right": null
+      },
+      {
+        "variant": "candidate",
+        "name": "charts::chart::numeric_range_regressions::large_constant_public_ranges_keep_finite_neighbor_bounds",
+        "verdict": "PASS",
+        "actual_left_right": null
+      },
+      {
+        "variant": "candidate",
+        "name": "charts::chart::numeric_range_regressions::axis_builder_widens_large_constants",
+        "verdict": "PASS",
+        "actual_left_right": null
+      },
+      {
+        "variant": "candidate",
+        "name": "charts::chart::numeric_range_regressions::wide_domain_projects_offset_padded_viewport",
+        "verdict": "PASS",
+        "actual_left_right": null
+      },
+      {
+        "variant": "candidate",
+        "name": "charts::chart::numeric_range_regressions::wide_domain_inverse_projection_retains_data_endpoints",
+        "verdict": "PASS",
+        "actual_left_right": null
+      },
+      {
+        "variant": "candidate",
+        "name": "charts::chart::numeric_range_regressions::zero_padding_preserves_wide_finite_endpoints",
+        "verdict": "PASS",
+        "actual_left_right": null
+      },
+      {
+        "variant": "candidate",
+        "name": "charts::chart::numeric_range_regressions::ordinary_and_tiny_ranges_preserve_existing_policy",
+        "verdict": "PASS",
+        "actual_left_right": null
+      },
+      {
+        "variant": "candidate",
+        "name": "charts::line_chart::numeric_range_regressions::wide_finite_series_normalize_and_interpolate_ticks",
+        "verdict": "PASS",
+        "actual_left_right": null
+      },
+      {
+        "variant": "candidate",
+        "name": "charts::line_chart::numeric_range_regressions::maximum_finite_samples_are_not_empty",
+        "verdict": "PASS",
+        "actual_left_right": null
+      },
+      {
+        "variant": "candidate",
+        "name": "charts::line_chart::numeric_range_regressions::large_constant_series_and_y_override_use_finite_neighbors",
+        "verdict": "PASS",
+        "actual_left_right": null
+      },
+      {
+        "variant": "candidate",
+        "name": "charts::line_chart::numeric_range_regressions::empty_and_ordinary_line_ranges_preserve_controls",
+        "verdict": "PASS",
+        "actual_left_right": null
+      },
+      {
+        "variant": "candidate",
+        "name": "charts::area_chart::numeric_range_regressions::wide_overlaid_x_normalizes_without_changing_y_policy",
+        "verdict": "PASS",
+        "actual_left_right": null
+      },
+      {
+        "variant": "candidate",
+        "name": "charts::area_chart::numeric_range_regressions::maximum_finite_area_x_is_not_empty_in_either_mode",
+        "verdict": "PASS",
+        "actual_left_right": null
+      },
+      {
+        "variant": "candidate",
+        "name": "charts::area_chart::numeric_range_regressions::large_constant_area_x_and_empty_controls",
+        "verdict": "PASS",
+        "actual_left_right": null
+      }
+    ],
+    "frozen_case_oracles": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-runnable-validation-plan-v1/cases-and-specific-negative-oracles.json",
+      "sha256": "3b590f30d3dd68e6ccc5fb062790aa91eadedc4b1fdf6e4e7488421c6be0d507",
+      "bytes": 12724
+    },
+    "quality_commands": [
+      {
+        "command": {
+          "argv": [
+            "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-actual37-v2/candidate-ui-tests",
+            "--show-output"
+          ],
+          "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+          "timed_out": false,
+          "interrupted": null,
+          "source_restoration_safe": true,
+          "owned_pid_and_pgid": 15764,
+          "normal_owned_group_states_before_reap": [
+            {
+              "pid": 15764,
+              "pgid": 15764,
+              "state": "Z"
+            }
+          ],
+          "normal_owned_group_zombie_only_verified_before_reap": true,
+          "exit_code": 0,
+          "seconds_diagnostic_only": 10.847629070281982,
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-actual37-v2/candidate-full-UI/stdout",
+            "sha256": "a33f8de5d392320351d6381bd2275d26b50da91248a11b54f0b757d6e5a286eb",
+            "bytes": 116121
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-actual37-v2/candidate-full-UI/stderr",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        "scope": "Runtime full_UI602"
+      },
+      {
+        "command": {
+          "argv": [
+            "/Users/augustusotu/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "-p",
+            "kael_ui",
+            "--all-targets",
+            "--features",
+            "kael/lottie,kael/test-support",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+          "timed_out": false,
+          "interrupted": null,
+          "source_restoration_safe": true,
+          "owned_pid_and_pgid": 15780,
+          "normal_owned_group_states_before_reap": [
+            {
+              "pid": 15780,
+              "pgid": 15780,
+              "state": "Z"
+            }
+          ],
+          "normal_owned_group_zombie_only_verified_before_reap": true,
+          "exit_code": 0,
+          "seconds_diagnostic_only": 25.144716024398804,
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-actual37-v2/strict-UI-alltargets/stdout",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-actual37-v2/strict-UI-alltargets/stderr",
+            "sha256": "be1e032f431b938c3b33214fcb5c3454be21b85749f10c8719533836a0ec0d5d",
+            "bytes": 530
+          }
+        },
+        "scope": "Strict all-target UI Clippy"
+      },
+      {
+        "command": {
+          "argv": [
+            "/Users/augustusotu/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/cargo",
+            "check",
+            "--offline",
+            "--locked",
+            "-p",
+            "kael_ui",
+            "--lib",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--no-default-features",
+            "--features",
+            "browser,kael/lottie"
+          ],
+          "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+          "timed_out": false,
+          "interrupted": null,
+          "source_restoration_safe": true,
+          "owned_pid_and_pgid": 15830,
+          "normal_owned_group_states_before_reap": [
+            {
+              "pid": 15830,
+              "pgid": 15830,
+              "state": "Z"
+            }
+          ],
+          "normal_owned_group_zombie_only_verified_before_reap": true,
+          "exit_code": 0,
+          "seconds_diagnostic_only": 9.417316198348999,
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-actual37-v2/wasm-UI-production/stdout",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-actual37-v2/wasm-UI-production/stderr",
+            "sha256": "9c8cdb95dc3e368fdc6a3df17a16eb1dc148fc9f11bf18741424f6edf930612a",
+            "bytes": 286
+          }
+        },
+        "scope": "Production UI Wasm TYPECHECK"
+      },
+      {
+        "command": {
+          "argv": [
+            "/Users/augustusotu/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/cargo",
+            "check",
+            "--offline",
+            "--locked",
+            "-p",
+            "kael",
+            "-p",
+            "kael_ui",
+            "--tests",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--no-default-features",
+            "--features",
+            "kael/browser,kael/test-support,kael/lottie,kael_ui/browser"
+          ],
+          "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+          "timed_out": false,
+          "interrupted": null,
+          "source_restoration_safe": true,
+          "owned_pid_and_pgid": 15865,
+          "normal_owned_group_states_before_reap": [
+            {
+              "pid": 15865,
+              "pgid": 15865,
+              "state": "Z"
+            }
+          ],
+          "normal_owned_group_zombie_only_verified_before_reap": true,
+          "exit_code": 0,
+          "seconds_diagnostic_only": 21.359659910202026,
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-actual37-v2/wasm-Core-UI-tests-TYPECHECK/stdout",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-actual37-v2/wasm-Core-UI-tests-TYPECHECK/stderr",
+            "sha256": "a4834b3c15401410ebd5a67ddb38f320fa7558b11ca5cdc85e9dae275abe396c",
+            "bytes": 623
+          }
+        },
+        "scope": "Joint Core/UI tests Wasm TYPECHECK"
+      },
+      {
+        "command": {
+          "argv": [
+            "/Users/augustusotu/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/cargo",
+            "fmt",
+            "--all",
+            "--",
+            "--check"
+          ],
+          "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+          "timed_out": false,
+          "interrupted": null,
+          "source_restoration_safe": true,
+          "owned_pid_and_pgid": 15910,
+          "normal_owned_group_states_before_reap": [
+            {
+              "pid": 15910,
+              "pgid": 15910,
+              "state": "Z"
+            }
+          ],
+          "normal_owned_group_zombie_only_verified_before_reap": true,
+          "exit_code": 0,
+          "seconds_diagnostic_only": 33.29414701461792,
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-actual37-v2/format-all/stdout",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-actual37-v2/format-all/stderr",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        "scope": "Workspace format check"
+      }
+    ],
+    "independent_audit_checks": 183,
+    "focused14_are_repeated_subset_of_full602": true
+  },
+  "compiler_producers": {
+    "baseline": {
+      "UI_fresh": false,
+      "Core_fresh": false,
+      "binary": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-actual37-v2/baseline-ui-tests",
+        "sha256": "267cf8929ee43d57babff5404b9b34f98d110af84c3d9fc04f68fa644a4d8021",
+        "bytes": 138916536
+      },
+      "ui_profile": {
+        "opt_level": "0",
+        "debuginfo": 2,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": true
+      },
+      "ui_features": [
+        "default",
+        "editor",
+        "http",
+        "native"
+      ],
+      "core_profile": {
+        "opt_level": "0",
+        "debuginfo": 2,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": false
+      },
+      "core_features": [
+        "as-raw-xcb-connection",
+        "backtrace",
+        "calloop-wayland-source",
+        "default",
+        "font-kit",
+        "http-client",
+        "icons",
+        "leak-detection",
+        "linux-platform",
+        "linux-wayland-protocols",
+        "linux-x11-protocols",
+        "lottie",
+        "rand",
+        "runtime_shaders",
+        "test-support",
+        "wayland",
+        "wayland-cursor",
+        "wayland-protocols-plasma",
+        "wayland-protocols-wlr",
+        "windows-manifest",
+        "x11",
+        "x11-clipboard",
+        "xim"
+      ]
+    },
+    "candidate": {
+      "UI_fresh": false,
+      "Core_fresh": true,
+      "binary": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-actual37-v2/candidate-ui-tests",
+        "sha256": "619cedf3b6fdc7d39dc273e55a93ddd80199bced630e2ae86cb8dc3d2b06f9fa",
+        "bytes": 138918968
+      },
+      "ui_profile": {
+        "opt_level": "0",
+        "debuginfo": 2,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": true
+      },
+      "ui_features": [
+        "default",
+        "editor",
+        "http",
+        "native"
+      ],
+      "core_profile": {
+        "opt_level": "0",
+        "debuginfo": 2,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": false
+      },
+      "core_features": [
+        "as-raw-xcb-connection",
+        "backtrace",
+        "calloop-wayland-source",
+        "default",
+        "font-kit",
+        "http-client",
+        "icons",
+        "leak-detection",
+        "linux-platform",
+        "linux-wayland-protocols",
+        "linux-x11-protocols",
+        "lottie",
+        "rand",
+        "runtime_shaders",
+        "test-support",
+        "wayland",
+        "wayland-cursor",
+        "wayland-protocols-plasma",
+        "wayland-protocols-wlr",
+        "windows-manifest",
+        "x11",
+        "x11-clipboard",
+        "xim"
+      ]
+    }
+  },
+  "producer_scope": "Both UI test producers are actual fresh=false with copied owned binaries rehashed against selected compiler events. Baseline Core fresh=false and candidate Core fresh=true are dependency diagnostics only; no full Core suite or strict Core Clippy result is asserted.",
+  "ownership_and_restoration": {
+    "four_existing_Managed_chart_paths_only": true,
+    "Primary_source_and_mtimes_unmodified": true,
+    "all_owned_and_unowned_validated_before_any_restore": true,
+    "both3192_maps_exact_restored_current_mtimes": true,
+    "fingerprint": "4150d0c7eb09b9290bffdfc5aab424ace64ffe2865b0bf56d390ed6a85fbb5a4",
+    "recorded_before_maps": {
+      "primary": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-root-inputs-v1/primary-source.json",
+        "sha256": "cb70f4994fd90d850e19ee923df584985dba99aa9ea7d9b140ac528d4212da39",
+        "bytes": 701881
+      },
+      "managed": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-root-inputs-v1/managed-source.json",
+        "sha256": "d7d5779250aedb731402c54e5eb394ddd0c7df6d4f05d503d218fa8472279efb",
+        "bytes": 701913
+      }
+    },
+    "actual_result_contains_after_maps_and_install_restore_journal": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-actual37-v2/result.json",
+      "sha256": "bb37dc029a3a3de2503b0f45efe6ead2479c2684d2b35cc1b74bee931efdfad4",
+      "bytes": 4152099
+    }
+  },
+  "preserved_preflight_history": {
+    "original_zero_child_failure": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-path-preflight-successor-v2/preserved-preflight-failure.json",
+      "sha256": "c85eff4a41a46e14872aa074fb78b9f279cecb4715b1a547e0c8246c8131edff",
+      "bytes": 1443
+    },
+    "single_Path_ref_adapter_fix": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-path-preflight-successor-v2/preparation.json",
+      "sha256": "51ef99e66437e1c12d740eae5a1a22cc1ec0c9906207a79469f6053e3b96f86d",
+      "bytes": 1786
+    },
+    "original_driver_peer_erratum": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart37-independent-memory-driver-review-v1/review-erratum.json",
+      "sha256": "68b9d9145f7698fc167effc334ec663c2b36153d8740080b164cde3e6d09539c",
+      "bytes": 2131
+    },
+    "independent_adapter_delta_peer": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart37-path-adapter-independent-general-review-v1/review.json",
+      "sha256": "c8881ea4b693d4bb935c94b72964029bfc720f2983b5a98544d2ce3633f85d31",
+      "bytes": 8094
+    },
+    "scope": "The first V1 invocation stopped before helpers/output/source writes/children on a Path/reference adapter TypeError. It is not a baseline RED or test/compiler failure. The corrected37 retains every case, witness, command and gate."
+  },
+  "source_adoption": {
+    "applied_at_preparation": true,
+    "Root_adoption_receipt": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-exact-adoption-v1/result.json",
+      "sha256": "4379dd8610e3dfa59505b61037c9f1d40ef1c8ccbb64f959c40fc92184ea0dd1",
+      "bytes": 8988
+    },
+    "pending_at_preparation": false,
+    "exact_tested_files": {
+      "crates/kael_ui/src/charts/area_chart.rs": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-formatted-source-v3/candidate/crates/kael_ui/src/charts/area_chart.rs",
+        "sha256": "3449add204542b4ae5bd13f855569036e92b3d4cfc54348f6bc688bb8bc5830f",
+        "bytes": 26771
+      },
+      "crates/kael_ui/src/charts/chart.rs": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-formatted-source-v3/candidate/crates/kael_ui/src/charts/chart.rs",
+        "sha256": "2008644b100aad07693cbed2fce9c36ade2d389547a78d7fa49b3be0357cbf09",
+        "bytes": 48551
+      },
+      "crates/kael_ui/src/charts/line_chart.rs": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-formatted-source-v3/candidate/crates/kael_ui/src/charts/line_chart.rs",
+        "sha256": "658b51af68639da3889b6f7d2c85c26acd6c27759080bfb5a020f97f8e6d85e3",
+        "bytes": 26230
+      },
+      "crates/kael_ui/src/charts/mod.rs": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-finite-range-formatted-source-v3/candidate/crates/kael_ui/src/charts/mod.rs",
+        "sha256": "e3b68a457aa71a4256081072afdf057b37e2226e69ff1df123e41e2c9b8afa48",
+        "bytes": 7191
+      }
+    },
+    "eligible_input_count_after_adoption_recorded": 3192,
+    "after_fingerprint_recorded": "425a7529e44c38816883696b1e471843449bcb907524b9f0b8a608b36c05a215",
+    "matches_frozen_experimental_candidate_fingerprint": true,
+    "new_compiler_runtime_or_future_HEAD_proof": false
+  },
+  "publication_pending_at_preparation": true,
+  "commit_pending_at_preparation": true,
+  "limits": [
+    "This proves selected existing-API numeric correctness and the recorded UI/strict/typecheck/format cohort at the frozen source context, not later HEAD, native AT or whole-platform closure.",
+    "Scope includes ordered finite spans whose subtraction overflows; large constants need a finite representable neighbor, with downward widening at positive f64::MAX; finite MAX data must not be treated as empty; zero padding must preserve finite endpoints.",
+    "Positive-padding overflow, stacked aggregate overflow, arbitrary invalid direct-field state, broader partial-override sanitization, clipping and out-of-domain extrapolation policy remain separate. No broad numeric-policy completion is claimed.",
+    "Projection tests compare numeric coordinates and values, not actual native pixels, mounted-frame images, accessibility input, display/GPU/compositor presentation or browser runtime.",
+    "Wasm production and joint Core/UI tests are TYPECHECKS. The full602 UI suite and14 focused repeats do not imply a new full Core runtime suite.",
+    "No CPU, allocation, RSS, memory, power, ranking or performance benefit is measured by this correctness experiment.",
+    "All old reports, rejected experiments and original failure artifacts remain unchanged. Exact four-file Root adoption is recorded separately; publication and commit remain pending at preparation. No new compiler/runtime proof, current-source capture or maintained write by this draft author."
+  ],
+  "new_subject_execution_by_draft_author": false
+}

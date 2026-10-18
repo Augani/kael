@@ -1,0 +1,948 @@
+{
+  "schema": 1,
+  "title": "Chart domain aggregation: ordinary data extents and offset viewport projection",
+  "status": "EXACT_VALIDATED_CHART_DOMAIN_FIX_ADOPTED_BOTH_ROOTS_DOCUMENT_PUBLICATION_COMMIT_PENDING_AT_PREPARATION",
+  "summary": "Private aggregation now starts with the first nonempty series and defaults to0..1 only when all series are empty; unchanged explicit-axis overrides still run afterward. Six exact runtime baseline assertion failures, one passing baseline override control and all seven candidate cases were verified. Full candidate UI588, strict UI alltargets, production/joint-test Wasm TYPECHECK and formatting passed; exact tested one-path source adopted afterward.",
+  "adopted": true,
+  "source": {
+    "descriptor": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-formatted-source-v2/preparation.json",
+      "sha256": "d37d81e119df4c225231df6857932ec3885cf21eddde8dd6efa7e63d009e54e4",
+      "bytes": 7728
+    },
+    "preimage": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-formatted-source-v2/preimages/crates/kael_ui/src/charts/chart.rs",
+      "sha256": "80854a0caf7476530604d6cd459420a2ddcb6a050a1b11edf613110e666607f5",
+      "bytes": 37429
+    },
+    "baseline_with_same_seven_tests": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-formatted-source-v2/baseline/crates/kael_ui/src/charts/chart.rs",
+      "sha256": "433720863c4fe152bb6c10be4ee16b7a03d5b907029aee2c5d0b996f02001436",
+      "bytes": 42227
+    },
+    "candidate_with_seven_tests": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-formatted-source-v2/candidate/crates/kael_ui/src/charts/chart.rs",
+      "sha256": "0ca77f793ada40983e872b880a2a3f712d5e9016f3d3b3b6b49359df29f6710d",
+      "bytes": 42387
+    },
+    "changed_path": "crates/kael_ui/src/charts/chart.rs",
+    "public_API_changes": false,
+    "change_scope": [
+      "Only private compute_data_range aggregation changes.",
+      "Skip empty series before their existing per-series data_range fallback can add a0..1 unit domain.",
+      "Move first real data range into optional accumulator and extend with subsequent nonempty ranges.",
+      "No-series/all-empty receive existing0..1 default.",
+      "All four explicit axis override branches and all other production code remain unchanged.",
+      "Seven common regression cases reside in the existing test module; legacy581 names retained."
+    ]
+  },
+  "validation": {
+    "actual_result": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/result.json",
+      "sha256": "66f97a85746a2f5cec925290286168d9cf8b9c1f360d48334b33930851e2f38a",
+      "bytes": 4098952
+    },
+    "independent_actual_audit": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart23-actual-independent-memory-audit-v1/review.json",
+      "sha256": "c7ecb79833946dc5d1eae606ebcdcf7ae9b99b38b688acadf35423e007a0b71f",
+      "bytes": 48254
+    },
+    "recomputed_proof": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart23-actual-independent-memory-audit-v1/recomputed-proof.json",
+      "sha256": "e0f9a6354db2267a22c61242505063cee4c78b422b76009a582adc6c6cbd6077",
+      "bytes": 167325
+    },
+    "driver": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-runnable-validation-plan-v3/run.py",
+      "sha256": "cc9a5619f3cd43b0007d3174d027343979986ca0bb1c63a9aeda84475a780381",
+      "bytes": 28614
+    },
+    "ready_config": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-root-ready-v2/config-reviewed.json",
+      "sha256": "f6bc5268d22c6f0a067d13068ca4ca0cd52e826fbdbbd5783b82a2ea548603ec",
+      "bytes": 21467
+    },
+    "final_input_peer": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-root-inputs-v2-independent-memory-review/review.json",
+      "sha256": "346f2a537d4b48ea80342ee91dc8031a466e14d6fb0d344162d3e4281d229326",
+      "bytes": 19125
+    },
+    "commands": 23,
+    "unique_terminal_quiescent_groups": 23,
+    "command_exit0": 17,
+    "designated_runtime_exit101": 6,
+    "unexplained_failures": 0,
+    "retries": 0,
+    "focused": {
+      "baseline_RED": 6,
+      "baseline_override_control_PASS": 1,
+      "candidate_PASS": 7,
+      "invocations": 14,
+      "each_exact_once_per_variant": true,
+      "ignored_each": 0,
+      "filtered_each": 587,
+      "all_seven_candidate_cases_repeat_in_full_suite": true
+    },
+    "inventories": {
+      "legacy": 581,
+      "baseline_with_common_tests": 588,
+      "candidate": 588,
+      "baseline_list": {
+        "argv": [
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-ui-tests",
+          "--list"
+        ],
+        "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "owned_pid_and_pgid": 2506,
+        "normal_owned_group_states_before_reap": [
+          {
+            "pid": 2506,
+            "pgid": 2506,
+            "state": "Z"
+          }
+        ],
+        "normal_owned_group_zombie_only_verified_before_reap": true,
+        "exit_code": 0,
+        "seconds_diagnostic_only": 1.8920183181762695,
+        "stdout": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-inventory/stdout",
+          "sha256": "c54d9fcf66444d0937482acf922f1832b1bd17723cfc02b3a19eb83ebd02ba9a",
+          "bytes": 52682
+        },
+        "stderr": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-inventory/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      },
+      "candidate_list": {
+        "argv": [
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-ui-tests",
+          "--list"
+        ],
+        "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "owned_pid_and_pgid": 2621,
+        "normal_owned_group_states_before_reap": [
+          {
+            "pid": 2621,
+            "pgid": 2621,
+            "state": "Z"
+          }
+        ],
+        "normal_owned_group_zombie_only_verified_before_reap": true,
+        "exit_code": 0,
+        "seconds_diagnostic_only": 1.266960859298706,
+        "stdout": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-inventory/stdout",
+          "sha256": "c54d9fcf66444d0937482acf922f1832b1bd17723cfc02b3a19eb83ebd02ba9a",
+          "bytes": 52682
+        },
+        "stderr": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-inventory/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      }
+    },
+    "full_UI": {
+      "passed": 588,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered_out": 0,
+      "unfiltered": true,
+      "default_parallel": true,
+      "RUST_TEST_THREADS": null,
+      "command": {
+        "argv": [
+          "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-ui-tests",
+          "--show-output"
+        ],
+        "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "owned_pid_and_pgid": 2676,
+        "normal_owned_group_states_before_reap": [
+          {
+            "pid": 2676,
+            "pgid": 2676,
+            "state": "Z"
+          }
+        ],
+        "normal_owned_group_zombie_only_verified_before_reap": true,
+        "exit_code": 0,
+        "seconds_diagnostic_only": 16.679696083068848,
+        "stdout": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-full-UI/stdout",
+          "sha256": "46c3e5c4d8899bfdca7b3d577a1419d0faf28e84b9b654b950295d1cb301044e",
+          "bytes": 113281
+        },
+        "stderr": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-full-UI/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      }
+    },
+    "quality": {
+      "strict_UI": {
+        "argv": [
+          "/Users/augustusotu/.cargo/bin/cargo",
+          "clippy",
+          "--offline",
+          "--locked",
+          "-p",
+          "kael_ui",
+          "--all-targets",
+          "--features",
+          "kael/lottie,kael/test-support",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "owned_pid_and_pgid": 2701,
+        "normal_owned_group_states_before_reap": [
+          {
+            "pid": 2701,
+            "pgid": 2701,
+            "state": "Z"
+          }
+        ],
+        "normal_owned_group_zombie_only_verified_before_reap": true,
+        "exit_code": 0,
+        "seconds_diagnostic_only": 22.538259267807007,
+        "stdout": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/strict-UI-alltargets/stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "stderr": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/strict-UI-alltargets/stderr",
+          "sha256": "4b5c8e5b71674f7f7f59eaa4a5089a74f00f9ac12784862aa23f4363f57455b2",
+          "bytes": 530
+        }
+      },
+      "production_Wasm_TYPECHECK": {
+        "argv": [
+          "/Users/augustusotu/.cargo/bin/cargo",
+          "check",
+          "--offline",
+          "--locked",
+          "-p",
+          "kael_ui",
+          "--lib",
+          "--target",
+          "wasm32-unknown-unknown",
+          "--no-default-features",
+          "--features",
+          "browser,kael/lottie"
+        ],
+        "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "owned_pid_and_pgid": 2748,
+        "normal_owned_group_states_before_reap": [
+          {
+            "pid": 2748,
+            "pgid": 2748,
+            "state": "Z"
+          }
+        ],
+        "normal_owned_group_zombie_only_verified_before_reap": true,
+        "exit_code": 0,
+        "seconds_diagnostic_only": 7.69547700881958,
+        "stdout": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/wasm-UI-production/stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "stderr": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/wasm-UI-production/stderr",
+          "sha256": "e5dc84822b1ec2d4d386784160dcaf9afeef291e16e7fe7ec29f2850ba6ef1b8",
+          "bytes": 286
+        }
+      },
+      "joint_Core_UI_tests_Wasm_TYPECHECK": {
+        "argv": [
+          "/Users/augustusotu/.cargo/bin/cargo",
+          "check",
+          "--offline",
+          "--locked",
+          "-p",
+          "kael",
+          "-p",
+          "kael_ui",
+          "--tests",
+          "--target",
+          "wasm32-unknown-unknown",
+          "--no-default-features",
+          "--features",
+          "kael/browser,kael/test-support,kael/lottie,kael_ui/browser"
+        ],
+        "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "owned_pid_and_pgid": 2775,
+        "normal_owned_group_states_before_reap": [
+          {
+            "pid": 2775,
+            "pgid": 2775,
+            "state": "Z"
+          }
+        ],
+        "normal_owned_group_zombie_only_verified_before_reap": true,
+        "exit_code": 0,
+        "seconds_diagnostic_only": 18.76394510269165,
+        "stdout": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/wasm-Core-UI-tests/stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "stderr": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/wasm-Core-UI-tests/stderr",
+          "sha256": "d4ce310aa31570992b189bc1312ccacf193415133edaac055d4976bcd57cf75b",
+          "bytes": 623
+        }
+      },
+      "fmt": {
+        "argv": [
+          "/Users/augustusotu/.cargo/bin/cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "cwd": "/Users/augustusotu/.codex/worktrees/animation-working-proof/kael",
+        "timed_out": false,
+        "interrupted": null,
+        "source_restoration_safe": true,
+        "owned_pid_and_pgid": 2815,
+        "normal_owned_group_states_before_reap": [
+          {
+            "pid": 2815,
+            "pgid": 2815,
+            "state": "Z"
+          }
+        ],
+        "normal_owned_group_zombie_only_verified_before_reap": true,
+        "exit_code": 0,
+        "seconds_diagnostic_only": 35.901663064956665,
+        "stdout": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/format-all/stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "stderr": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/format-all/stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        }
+      }
+    },
+    "cases": [
+      {
+        "name": "charts::chart::tests::chart_domain_uses_positive_data_extents",
+        "baseline": {
+          "verdict": "RED_ASSERTION",
+          "exit_code": 101,
+          "specific_first_failure": {
+            "source_line": 1121,
+            "left": [
+              -1.7976931348623157e+308,
+              1.7976931348623157e+308,
+              -1.7976931348623157e+308,
+              1.7976931348623157e+308
+            ],
+            "right": [
+              10.0,
+              30.0,
+              20.0,
+              80.0
+            ],
+            "kind": "tuple4"
+          },
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-chart_domain_uses_positive_data_extents/stdout",
+            "sha256": "448d7bd9b7271e394bdec80223fd3ea87a70c1eae486f3467975b01139c3aebc",
+            "bytes": 777
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-chart_domain_uses_positive_data_extents/stderr",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        "candidate": {
+          "verdict": "PASS",
+          "exit_code": 0,
+          "entire_case_completed": true,
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-chart_domain_uses_positive_data_extents/stdout",
+            "sha256": "431583d0e67151dce51b97af907caf191e5cf282c30b4706bb145ae04c9a009f",
+            "bytes": 278
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-chart_domain_uses_positive_data_extents/stderr",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        "source_oracle": [
+          10.0,
+          30.0,
+          20.0,
+          80.0
+        ]
+      },
+      {
+        "name": "charts::chart::tests::chart_domain_uses_negative_data_extents",
+        "baseline": {
+          "verdict": "RED_ASSERTION",
+          "exit_code": 101,
+          "specific_first_failure": {
+            "source_line": 1134,
+            "left": [
+              -1.7976931348623157e+308,
+              1.7976931348623157e+308,
+              -1.7976931348623157e+308,
+              1.7976931348623157e+308
+            ],
+            "right": [
+              -30.0,
+              -10.0,
+              -80.0,
+              -20.0
+            ],
+            "kind": "tuple4"
+          },
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-chart_domain_uses_negative_data_extents/stdout",
+            "sha256": "4fd83c423a443d3894f78cd5c93dd3e51880d3e51e9ca82ee499bed6b2336fdc",
+            "bytes": 781
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-chart_domain_uses_negative_data_extents/stderr",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        "candidate": {
+          "verdict": "PASS",
+          "exit_code": 0,
+          "entire_case_completed": true,
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-chart_domain_uses_negative_data_extents/stdout",
+            "sha256": "2f1a562f623e7442a133a14a6fe478dcf97060a529d21c995a152847f17e208d",
+            "bytes": 278
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-chart_domain_uses_negative_data_extents/stderr",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        "source_oracle": [
+          -30.0,
+          -10.0,
+          -80.0,
+          -20.0
+        ]
+      },
+      {
+        "name": "charts::chart::tests::chart_domain_merges_series_without_empty_unit_domains",
+        "baseline": {
+          "verdict": "RED_ASSERTION",
+          "exit_code": 101,
+          "specific_first_failure": {
+            "source_line": 1155,
+            "left": [
+              -1.7976931348623157e+308,
+              1.7976931348623157e+308,
+              -1.7976931348623157e+308,
+              1.7976931348623157e+308
+            ],
+            "right": [
+              10.0,
+              60.0,
+              20.0,
+              100.0
+            ],
+            "kind": "tuple4"
+          },
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-chart_domain_merges_series_without_empty_unit_domains/stdout",
+            "sha256": "3df5f15911c1f2a1a840de66eab4c8811b5c04c8dd4deca7fb8bac9dac7ecd5f",
+            "bytes": 834
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-chart_domain_merges_series_without_empty_unit_domains/stderr",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        "candidate": {
+          "verdict": "PASS",
+          "exit_code": 0,
+          "entire_case_completed": true,
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-chart_domain_merges_series_without_empty_unit_domains/stdout",
+            "sha256": "d84732df5f29eea0b981b004060c81cf5d84909de4cc8c63bb14eb59a9086b55",
+            "bytes": 306
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-chart_domain_merges_series_without_empty_unit_domains/stderr",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        "source_oracle": [
+          10.0,
+          60.0,
+          20.0,
+          100.0
+        ]
+      },
+      {
+        "name": "charts::chart::tests::chart_domain_defaults_only_when_all_series_are_empty",
+        "baseline": {
+          "verdict": "RED_ASSERTION",
+          "exit_code": 101,
+          "specific_first_failure": {
+            "source_line": 1170,
+            "left": [
+              -1.7976931348623157e+308,
+              1.7976931348623157e+308,
+              -1.7976931348623157e+308,
+              1.7976931348623157e+308
+            ],
+            "right": [
+              0.0,
+              1.0,
+              0.0,
+              1.0
+            ],
+            "kind": "tuple4"
+          },
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-chart_domain_defaults_only_when_all_series_are_empty/stdout",
+            "sha256": "efeec4542c03e327561c823541286a245955871f5e353c8362c0130d84397914",
+            "bytes": 826
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-chart_domain_defaults_only_when_all_series_are_empty/stderr",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        "candidate": {
+          "verdict": "PASS",
+          "exit_code": 0,
+          "entire_case_completed": true,
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-chart_domain_defaults_only_when_all_series_are_empty/stdout",
+            "sha256": "6f4a0d7e09823925af96d56eff2d385563c4bdb734e37cf539601197fb07aefc",
+            "bytes": 304
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-chart_domain_defaults_only_when_all_series_are_empty/stderr",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        "source_oracle": [
+          0.0,
+          1.0,
+          0.0,
+          1.0
+        ]
+      },
+      {
+        "name": "charts::chart::tests::chart_domain_explicit_axes_override_data_extents",
+        "baseline": {
+          "verdict": "PASS",
+          "exit_code": 0,
+          "specific_first_failure": null,
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-chart_domain_explicit_axes_override_data_extents/stdout",
+            "sha256": "364d3e4bbfbaa5ae15289783b296e4fac2acd9210d12795c2f03376f0fe51d71",
+            "bytes": 296
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-chart_domain_explicit_axes_override_data_extents/stderr",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        "candidate": {
+          "verdict": "PASS",
+          "exit_code": 0,
+          "entire_case_completed": true,
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-chart_domain_explicit_axes_override_data_extents/stdout",
+            "sha256": "364d3e4bbfbaa5ae15289783b296e4fac2acd9210d12795c2f03376f0fe51d71",
+            "bytes": 296
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-chart_domain_explicit_axes_override_data_extents/stderr",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        "source_oracle": [
+          -5.0,
+          55.0,
+          -20.0,
+          100.0
+        ]
+      },
+      {
+        "name": "charts::chart::tests::chart_domain_partial_axis_override_keeps_other_data_bounds",
+        "baseline": {
+          "verdict": "RED_ASSERTION",
+          "exit_code": 101,
+          "specific_first_failure": {
+            "source_line": 1205,
+            "left": [
+              12.0,
+              1.7976931348623157e+308,
+              -1.7976931348623157e+308,
+              1.7976931348623157e+308
+            ],
+            "right": [
+              12.0,
+              30.0,
+              20.0,
+              80.0
+            ],
+            "kind": "tuple4"
+          },
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-chart_domain_partial_axis_override_keeps_other_data_bounds/stdout",
+            "sha256": "0cb99dde080f45cc0f78b0bcf0aa70fbb1762ce2fe99e91f5a624b8418d5b930",
+            "bytes": 834
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-chart_domain_partial_axis_override_keeps_other_data_bounds/stderr",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        "candidate": {
+          "verdict": "PASS",
+          "exit_code": 0,
+          "entire_case_completed": true,
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-chart_domain_partial_axis_override_keeps_other_data_bounds/stdout",
+            "sha256": "7617277d2ef177df2a23be9c81b33913357d4ae3ad9dd2e36f7ad5107d4b4e6e",
+            "bytes": 316
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-chart_domain_partial_axis_override_keeps_other_data_bounds/stderr",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        "source_oracle": [
+          12.0,
+          30.0,
+          20.0,
+          80.0
+        ]
+      },
+      {
+        "name": "charts::chart::tests::chart_domain_endpoints_project_into_offset_padded_viewport",
+        "baseline": {
+          "verdict": "RED_ASSERTION",
+          "exit_code": 101,
+          "specific_first_failure": {
+            "source_line": 1239,
+            "left": [
+              130.0,
+              310.0
+            ],
+            "right": [
+              490.0,
+              70.0
+            ],
+            "kind": "point2_pixels"
+          },
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-chart_domain_endpoints_project_into_offset_padded_viewport/stdout",
+            "sha256": "993fe57dd974ccaf23eed60ec6c455744e7ab0dad2e2a0f83fe2f7b6c47d15e0",
+            "bytes": 787
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-chart_domain_endpoints_project_into_offset_padded_viewport/stderr",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        "candidate": {
+          "verdict": "PASS",
+          "exit_code": 0,
+          "entire_case_completed": true,
+          "stdout": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-chart_domain_endpoints_project_into_offset_padded_viewport/stdout",
+            "sha256": "e1f4c32d14f0fab68ce071661619735c462adb913683187984fd23c7dd89d3d3",
+            "bytes": 316
+          },
+          "stderr": {
+            "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-chart_domain_endpoints_project_into_offset_padded_viewport/stderr",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        "source_oracle": {
+          "lower": [
+            130.0,
+            310.0
+          ],
+          "upper": [
+            490.0,
+            70.0
+          ],
+          "middle": [
+            310.0,
+            190.0
+          ],
+          "positive_and_negative_domains": true
+        }
+      }
+    ],
+    "first_failure_scope": [
+      "Baseline no-series/all-empty case fails in its first no-series iteration; baseline does not establish later loop assertions. Candidate completes both no-series and multiple-empty-series iterations.",
+      "Baseline offset viewport case passes the first positive lower-endpoint assertion, then fails the second positive upper-endpoint assertion at source line1239. Baseline does not reach midpoint or the negative-domain iteration. Candidate completes lower/upper/midpoint assertions for both positive and negative domains.",
+      "The four explicit-axis overrides are a real passing baseline control; arbitrary panic, setup/parser or compiler failure cannot count as the six designated RED outcomes."
+    ]
+  },
+  "compiler_provenance": {
+    "UI": {
+      "baseline_fresh": false,
+      "candidate_fresh": false,
+      "profile": {
+        "opt_level": "0",
+        "debuginfo": 2,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": true
+      },
+      "features": [
+        "default",
+        "editor",
+        "http",
+        "native"
+      ],
+      "baseline_copied_binary": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/baseline-ui-tests",
+        "sha256": "44566f0efb7818dc3cb37fa9d7891554a9a92f2db372598cf44b8636e488fb22",
+        "bytes": 138853912
+      },
+      "candidate_copied_binary": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/candidate-ui-tests",
+        "sha256": "3bf00dabee976ea3032578e671cbdeb88921b88a603d39b2d0bb1e372dfd1e57",
+        "bytes": 138854488
+      },
+      "actual_compiler_selected_executables_copied_and_hashed": true,
+      "inventory_bound_to_each_copy": true
+    },
+    "Core_dependency": {
+      "baseline_fresh": false,
+      "candidate_fresh": true,
+      "profile": {
+        "opt_level": "0",
+        "debuginfo": 2,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": false
+      },
+      "features": [
+        "as-raw-xcb-connection",
+        "backtrace",
+        "calloop-wayland-source",
+        "default",
+        "font-kit",
+        "http-client",
+        "icons",
+        "leak-detection",
+        "linux-platform",
+        "linux-wayland-protocols",
+        "linux-x11-protocols",
+        "lottie",
+        "rand",
+        "runtime_shaders",
+        "test-support",
+        "wayland",
+        "wayland-cursor",
+        "wayland-protocols-plasma",
+        "wayland-protocols-wlr",
+        "windows-manifest",
+        "x11",
+        "x11-clipboard",
+        "xim"
+      ],
+      "scope": "Baseline Core dependency event is fresh=false; candidate Core is a cached fresh=true event. This is not a second fresh Core compilation or a new full Core test-suite pass."
+    },
+    "historical_profile_inventory_source": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-catalog-post-icon-correctness24-actual-v1/result.json",
+      "sha256": "1f46a41c511a9ab46ae514ca2e302fa39b518a4175e52d0f5df574e880e2ecdf",
+      "bytes": 4272859
+    },
+    "historical_profile_selector": [
+      "variants",
+      "candidate"
+    ],
+    "historical_receipt_scope": "Compatibility expectations and581 legacy names only. New actual Chart artifacts/inventories/verdicts are recorded separately.",
+    "environment": {
+      "RUSTFLAGS": null,
+      "CARGO_ENCODED_RUSTFLAGS": null,
+      "RUSTC": null,
+      "RUSTC_WRAPPER": null,
+      "RUSTC_WORKSPACE_WRAPPER": null,
+      "CARGO_BUILD_TARGET": null,
+      "CARGO_BUILD_BUILD_DIR": null,
+      "RUST_TEST_THREADS": null,
+      "MACOSX_DEPLOYMENT_TARGET": null,
+      "PATH": "/Applications/ChatGPT.app/Contents/Resources/codex-cli/codex-path:/Users/augustusotu/.kimi-code/bin:/Users/augustusotu/.dory/bin:/Users/augustusotu/.minimax/bin:/Users/augustusotu/.local/bin:/Users/augustusotu/.opencode/bin:/Users/augustusotu/.grok/bin:/Users/augustusotu/.qlty/bin:/Users/augustusotu/.antigravity/antigravity/bin:/Users/augustusotu/.codeium/windsurf/bin:/Users/augustusotu/.rbenv/shims:/usr/local/opt/ruby/bin:/Users/augustusotu/.local/bin:/opt/homebrew/Cellar/pyenv-virtualenv/1.2.4/shims:/Users/augustusotu/.pyenv/shims:/Users/augustusotu/.pyenv/bin:/opt/homebrew/opt/python@3.11/bin:/Users/augustusotu/Projects/google-cloud-sdk/bin:/Users/augustusotu/.bun/bin:/opt/homebrew/opt/mysql-client/bin:/Users/augustusotu/.dory/bin:/Users/augustusotu/.local/bin:/Library/Frameworks/Python.framework/Versions/3.13/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:/usr/local/go/bin:/Users/augustusotu/.codex/tmp/arg0-macos/codex-arg0QvmkAl:/Applications/ChatGPT.app/Contents/Resources/codex-cli/codex-path:/Users/augustusotu/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/Users/augustusotu/.kimi-code/bin:/Users/augustusotu/.dory/bin:/Users/augustusotu/.minimax/bin:/Users/augustusotu/.local/bin:/Users/augustusotu/.opencode/bin:/Users/augustusotu/.grok/bin:/Users/augustusotu/.qlty/bin:/Users/augustusotu/.antigravity/antigravity/bin:/Users/augustusotu/.codeium/windsurf/bin:/Users/augustusotu/.rbenv/shims:/usr/local/opt/ruby/bin:/opt/homebrew/Cellar/pyenv-virtualenv/1.2.4/shims:/Users/augustusotu/.pyenv/bin:/opt/homebrew/opt/python@3.11/bin:/Users/augustusotu/Projects/google-cloud-sdk/bin:/Users/augustusotu/.bun/bin:/opt/homebrew/opt/mysql-client/bin:/Library/Frameworks/Python.framework/Versions/3.13/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Users/augustusotu/.cargo/bin:/Users/augustusotu/go/bin:/Users/augustusotu/.lmstudio/bin:/Users/augustusotu/Library/Android/sdk/platform-tools:/Users/augustusotu/Library/Android/sdk/emulator:/Users/augustusotu/Library/Android/sdk/cmdline-tools/latest/bin:/Users/augustusotu/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources:/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS:/Users/augustusotu/go/bin:/Users/augustusotu/.lmstudio/bin:/Users/augustusotu/Library/Android/sdk/platform-tools:/Users/augustusotu/Library/Android/sdk/emulator:/Users/augustusotu/Library/Android/sdk/cmdline-tools/latest/bin",
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_TARGET_DIR": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-17-control-identity-baseline/target",
+      "CARGO_NET_OFFLINE": "true",
+      "KAEL_HEADLESS": "1"
+    },
+    "compiler_context": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-root-context-v1/context.json",
+      "sha256": "8bfb7f2cf5d7b646136c0aaff91eedc56162b8ca4dff8fa88067571bebb21fe8",
+      "bytes": 12106
+    },
+    "toolchain": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-tree-catalog-cost-toolchain-v1/toolchain.json",
+      "sha256": "6ce3f11a55e715fac9a924ea9af1bf02dbadeb753b3357a7f8b79989a51301bb",
+      "bytes": 3980
+    },
+    "producer_copy_limits": "Copied UI binaries were independently rehashed. Mutable Cargo target executables and Core producer files were not reread by the auditor; actual compiler event/copytime identity records remain the producer evidence. No hermetic SDK or fresh transitive-dependency claim."
+  },
+  "source_context": {
+    "baseline_primary_head": "f201d643673a9c224a85204ad50f8a4f027e0b3a",
+    "baseline_managed_head": "d766b5dc1c3f061944fbf6b0c24fc00cb49f8621",
+    "heads_distinct": true,
+    "baseline_inputs_each_root": 3191,
+    "baseline_restored_fingerprint": "37ff49de16033728bcdb6da5f9483dffde8530a681cd18a0b6a7848266450f01",
+    "baseline_source_context": {
+      "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-root-context-v1/context.json",
+      "sha256": "8bfb7f2cf5d7b646136c0aaff91eedc56162b8ca4dff8fa88067571bebb21fe8",
+      "bytes": 12106
+    },
+    "restoration": {
+      "actual_result": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-actual23-v1/result.json",
+        "sha256": "66f97a85746a2f5cec925290286168d9cf8b9c1f360d48334b33930851e2f38a",
+        "bytes": 4098952
+      },
+      "both_full_maps_exact": true,
+      "all_owned_and_unowned_validated_before_restore": true,
+      "current_mtimes": true,
+      "original_mode": "0644",
+      "owned_path": "crates/kael_ui/src/charts/chart.rs",
+      "restore_began_ns": 1792338344145750000,
+      "restored_mtime_ns": 1792338344146196000,
+      "primary_saved_map": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-catalog-f201-commit-source-v1/primary-source.json",
+        "sha256": "3fa8e367ce37ce4fadc90dfbd5771ef75e68f9bb2309b84b4b5de2e0ae92197f",
+        "bytes": 701649
+      },
+      "managed_saved_map": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-catalog-f201-commit-source-v1/managed-source.json",
+        "sha256": "f6efc1a13528af2dcf9b5721db44eb863b6b5222bcd12455b2b532ff6a15f6d0",
+        "bytes": 701681
+      }
+    },
+    "adoption": {
+      "receipt": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-exact-adoption-v1/result.json",
+        "sha256": "71de020a21f8ae87ad4ef235122437aaf15426756a2f57de8869780ea89ba711",
+        "bytes": 2220
+      },
+      "status": "EXACT_VALIDATED_CHART_RANGE_FIX_AND_SEVEN_TESTS_ADOPTED_BOTH_ROOTS_PENDING_PUBLICATION_COMMIT",
+      "both_roots_exact_tested_candidate": true,
+      "applied_paths_each_root": 1,
+      "eligible_inputs_each_root": 3191,
+      "source_fingerprint": "09c168606092e87c073bcbf98a3c533ee21b3d6e86e103e987b0ea0f2e5627e2",
+      "recorded_after_maps": {
+        "primary": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-exact-adoption-v1/primary-after.json",
+          "sha256": "d6e58681ccb06d90b8fed6fa6f0090dc8a2a46c8b4423c3f88fb473fdea74e45",
+          "bytes": 701649
+        },
+        "managed": {
+          "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-exact-adoption-v1/managed-after.json",
+          "sha256": "442167e056ec50acf9a2c54cfe2601704e042c1691605eac9528bbf9fdb589bd",
+          "bytes": 701681
+        }
+      },
+      "all_entry_bytes_and_modes_equal_experimental_candidate": true,
+      "publication_pending_at_preparation": true,
+      "commit_pending_at_preparation": true,
+      "adoption_commit_at_preparation": null,
+      "scope": "Adoption snapshot after the successful run and restoration. Exact code copy adds no compiler/runtime/performance proof or future-HEAD acceptance."
+    }
+  },
+  "preserved_history": {
+    "wrong_Rust2021_formatter_attempt": {
+      "result": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-root-format-v1/result.json",
+        "sha256": "5cccb9bed01d51bb60d6dd82c9f0b110246fb1dd3f13da701d879c0277dc23a9",
+        "bytes": 3140
+      },
+      "scope": "Actual artifact-only formatter parse failure; no typecheck, compiler test or expected runtime RED."
+    },
+    "correct_Rust2024_format_and_check": {
+      "result": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-domain-root-format-v2/result.json",
+        "sha256": "6e6530591d0b8af0d8cf8632fa2828799bc31af003452c412737349f0a30c97c",
+        "bytes": 4191
+      },
+      "scope": "Successful formatter/check, payload bytes exact reviewed source."
+    },
+    "pre_execution_driver_header_binding_blocker": {
+      "peer": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart23-driver-independent-memory-review-v1/review.json",
+        "sha256": "78e00a5ede5120fae1d0eff9187091a4d828182caab6cffb9e6cf3a3e6c4bc44",
+        "bytes": 29197
+      },
+      "scope": "Unexecuted V2 compared adoption-time catalog header to the later published documentation header. V3 exact tested-tail/header bridge resolved it without weakening implementation/test identity."
+    },
+    "pre_execution_ready_source_peer_binding_blocker": {
+      "peer": {
+        "path": "/Users/augustusotu/Projects/kael/.artifacts/2026-10-18-chart-root-inputs-independent-memory-review-v1/review.json",
+        "sha256": "75821f91d3ff57f65b29e7250573c18dd491e72e45114727374eb2c2c745619a",
+        "bytes": 17428
+      },
+      "scope": "Rejected config bound a format peer without exact formatted-descriptor subject. New immutable source supplement and final config close that binding before all23 actual commands."
+    }
+  },
+  "observed_quality_notes": {
+    "strict_future_dependency_warning": "block v0.1.6 future incompatibility note is present despite exit0; no new crate lint failure inferred.",
+    "joint_Wasm_existing_warning": "safe_gpu_dimension dead_code warning appears in Core lib-test typecheck; exit0, not browser execution."
+  },
+  "limits": [
+    "The correction covers ordinary data extents and existing override behavior, not arbitrary numerical-domain validation.",
+    "Finite endpoints spanning -f64::MAX..f64::MAX can still overflow subtraction; normalization/padding may be nonfinite under unchanged public DataRange arithmetic.",
+    "At large magnitudes, min+1 may round to min. Existing tiny-span EPSILON and per-series expansion behavior is unchanged.",
+    "Direct public fields/overrides may create reversed/equal/nonfinite domains; partial override sanitation and existing zero-size/padding projection limits remain separate.",
+    "Headless source/oracle and suite evidence only. Wasm commands are TYPECHECKS, not browser execution. No new native/GPU chart pixels, accessibility-service, input, performance, RSS/power, package/archive or platform matrix claim.",
+    "No full new Core suite claim, global readiness closure, future-HEAD evidence or acceptance inferred from source adoption.",
+    "Document publication and commit remain pending at preparation; the source adoption receipt is actual and separately bound."
+  ]
+}

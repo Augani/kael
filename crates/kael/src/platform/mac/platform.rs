@@ -198,6 +198,15 @@ define_class!(
                 }
 
                 let platform = self.mac_platform();
+                let policy = if platform.0.lock().keep_alive_without_windows {
+                    NSApplicationActivationPolicy::Accessory
+                } else {
+                    NSApplicationActivationPolicy::Regular
+                };
+                // Startup callbacks may activate and show their first window.
+                // A process launched from a terminal initially has a prohibited
+                // policy, so establish the requested policy before those calls.
+                let _: Bool = msg_send![app, setActivationPolicy: policy];
                 let callback = platform.0.lock().finish_launching.take();
                 if let Some(callback) = callback {
                     catch_platform_callback("finish launching", (), callback);

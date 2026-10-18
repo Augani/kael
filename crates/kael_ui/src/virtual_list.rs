@@ -94,6 +94,13 @@ impl UniformVirtualList {
         self
     }
 
+    /// Consume wheel movement only along this list's axis. This lets nested
+    /// horizontal lists pass vertical wheel movement to their scrolling parent.
+    pub fn restrict_scroll_to_axis(mut self, restrict: bool) -> Self {
+        self.base.style().restrict_scroll_to_axis = Some(restrict);
+        self
+    }
+
     pub fn with_sizing_behavior(mut self, behavior: ListSizingBehavior) -> Self {
         self.sizing_behavior = behavior;
         self
@@ -607,6 +614,13 @@ impl<P: ItemExtentProvider + 'static> VariableVirtualList<P> {
         self.scroll_handle = handle.clone();
         self
     }
+
+    /// Consume wheel movement only along this list's axis. This lets nested
+    /// horizontal lists pass vertical wheel movement to their scrolling parent.
+    pub fn restrict_scroll_to_axis(mut self, restrict: bool) -> Self {
+        self.base.style().restrict_scroll_to_axis = Some(restrict);
+        self
+    }
     pub fn with_sizing_behavior(mut self, behavior: ListSizingBehavior) -> Self {
         self.sizing_behavior = behavior;
         self
@@ -787,23 +801,18 @@ impl<P: ItemExtentProvider + 'static> Element for VariableVirtualList<P> {
                 - point(border.right + padding.right, border.bottom + padding.bottom),
         );
 
-        let mut offset = self.scroll_handle.offset();
         let viewport_len = content_bounds.size.along(self.axis);
-
         let total = self.engine.total_extent();
-        let min_scroll_offset = viewport_len - total;
-        if min_scroll_offset.as_f32() >= 0.0 {
-            offset.x = px(0.);
-            offset.y = px(0.);
-        }
-
-        if self.axis.is_vertical() {
-            if offset.y < min_scroll_offset {
-                offset.y = min_scroll_offset;
-            }
-        } else if offset.x < min_scroll_offset {
-            offset.x = min_scroll_offset;
-        }
+        let min_scroll_offset = (viewport_len - total).min(px(0.0));
+        let along = self
+            .scroll_handle
+            .offset()
+            .along(self.axis)
+            .clamp(min_scroll_offset, px(0.0));
+        let offset = match self.axis {
+            Axis::Horizontal => point(along, px(0.0)),
+            Axis::Vertical => point(px(0.0), along),
+        };
 
         let start_px = -offset.along(self.axis);
         let end_px = start_px + viewport_len;
@@ -1067,5 +1076,169 @@ mod tests {
 
         assert!(mounted <= (viewport / extent).ceil() as usize + overscan * 2);
         assert!(mounted < 64);
+    }
+}
+
+#[cfg(test)]
+mod mounted_layout_regression_tests {
+    use super::*;
+    use kael::{ParentElement, TestAppContext};
+
+    const PADDING: f32 = 13.0;
+
+    struct Extents;
+    impl ItemExtentProvider for Extents {
+        fn extent(&self, index: usize) -> Pixels {
+            [px(32.0), px(48.0)][index]
+        }
+    }
+
+    struct Host {
+        axis: Axis,
+        scroll: kael::ScrollHandle,
+    }
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let list = VariableVirtualList::new(
+                "mounted-variable-layout",
+                self.axis,
+                2,
+                Extents,
+                |range, _, _| {
+                    range
+                        .map(|index| {
+                            div()
+                                .debug_selector(move || {
+                                    if index == 0 {
+                                        "variable-first".to_string()
+                                    } else {
+                                        "variable-second".to_string()
+                                    }
+                                })
+                                .size_full()
+                        })
+                        .collect::<Vec<_>>()
+                },
+            )
+            .track_scroll(&self.scroll)
+            .overscan(2)
+            .size_full();
+            div().size_full().p(px(PADDING)).child(list)
+        }
+    }
+
+    fn set_offset(host: &Entity<Host>, cx: &mut kael::VisualTestContext, value: f32) {
+        cx.update(|_, cx| {
+            host.update(cx, |host, cx| {
+                host.scroll.set_offset(match host.axis {
+                    Axis::Horizontal => point(px(value), px(0.0)),
+                    Axis::Vertical => point(px(0.0), px(value)),
+                });
+                cx.notify();
+            });
+        });
+    }
+
+    fn resize_and_assert(
+        host: &Entity<Host>,
+        cx: &mut kael::VisualTestContext,
+        viewport: f32,
+        expected_offset: f32,
+    ) {
+        let axis = cx.update(|_, cx| host.read(cx).axis);
+        let along = viewport + 2.0 * PADDING;
+        let across = 60.0 + 2.0 * PADDING;
+        cx.simulate_resize(match axis {
+            Axis::Horizontal => size(px(along), px(across)),
+            Axis::Vertical => size(px(across), px(along)),
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        let (bounds, offset) = cx.update(|_, cx| {
+            let host = host.read(cx);
+            (host.scroll.bounds(), host.scroll.offset())
+        });
+        assert_eq!(bounds.size.along(axis), px(viewport));
+        assert_eq!(offset.along(axis), px(expected_offset));
+        let first = cx
+            .debug_bounds("variable-first")
+            .expect("first item painted");
+        let second = cx
+            .debug_bounds("variable-second")
+            .expect("second item painted");
+        assert_eq!(
+            first.origin.along(axis),
+            bounds.origin.along(axis) + px(expected_offset),
+            "first item must use the same bounded offset as the actual scroll handle"
+        );
+        assert_eq!(
+            second.origin.along(axis),
+            bounds.origin.along(axis) + px(32.0 + expected_offset)
+        );
+        assert_eq!(first.size.along(axis), px(32.0));
+        assert_eq!(second.size.along(axis), px(48.0));
+        let cross = match axis {
+            Axis::Horizontal => Axis::Vertical,
+            Axis::Vertical => Axis::Horizontal,
+        };
+        assert_eq!(first.origin.along(cross), bounds.origin.along(cross));
+    }
+
+    #[::core::prelude::v1::test]
+    fn short_variable_lists_start_at_the_actual_viewport_origin_on_both_axes() {
+        for axis in [Axis::Horizontal, Axis::Vertical] {
+            let mut app = TestAppContext::single();
+            let (host, cx) = app.add_window_view(|_, _| Host {
+                axis,
+                scroll: kael::ScrollHandle::new(),
+            });
+            resize_and_assert(&host, cx, 240.0, 0.0);
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn equal_variable_lists_start_at_the_actual_viewport_origin_on_both_axes() {
+        for axis in [Axis::Horizontal, Axis::Vertical] {
+            let mut app = TestAppContext::single();
+            let (host, cx) = app.add_window_view(|_, _| Host {
+                axis,
+                scroll: kael::ScrollHandle::new(),
+            });
+            resize_and_assert(&host, cx, 80.0, 0.0);
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn overflowing_variable_lists_clamp_both_scroll_limits_on_both_axes() {
+        for axis in [Axis::Horizontal, Axis::Vertical] {
+            let mut app = TestAppContext::single();
+            let (host, cx) = app.add_window_view(|_, _| Host {
+                axis,
+                scroll: kael::ScrollHandle::new(),
+            });
+            resize_and_assert(&host, cx, 60.0, 0.0);
+            set_offset(&host, cx, -999.0);
+            resize_and_assert(&host, cx, 60.0, -20.0);
+            set_offset(&host, cx, 999.0);
+            resize_and_assert(&host, cx, 60.0, 0.0);
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn variable_list_resize_reclamps_painted_origins_and_retains_valid_scroll_on_both_axes() {
+        for axis in [Axis::Horizontal, Axis::Vertical] {
+            let mut app = TestAppContext::single();
+            let (host, cx) = app.add_window_view(|_, _| Host {
+                axis,
+                scroll: kael::ScrollHandle::new(),
+            });
+            resize_and_assert(&host, cx, 60.0, 0.0);
+            set_offset(&host, cx, -12.0);
+            resize_and_assert(&host, cx, 60.0, -12.0);
+            resize_and_assert(&host, cx, 70.0, -10.0);
+            resize_and_assert(&host, cx, 80.0, 0.0);
+            resize_and_assert(&host, cx, 240.0, 0.0);
+            resize_and_assert(&host, cx, 60.0, 0.0);
+        }
     }
 }

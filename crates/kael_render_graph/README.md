@@ -50,6 +50,22 @@ derive that class from every allocation constraint, including dimensions,
 format, sample count, and usage. `CompiledGraph::is_current_for` detects a
 compilation made stale by subsequent graph construction.
 
+Allocation planning uses a bounded scan for small slot counts and per-class
+interval heaps for larger graphs. Planning takes O(R log R) time and O(R)
+temporary storage for R used transient resources, preserving deterministic
+first-fit slot IDs and inclusive lifetimes. A resource read and written during
+the same pass cannot share its allocation with another resource touched there.
+
+Run the maintained planning benchmark with:
+
+```bash
+cargo bench -p kael_render_graph --bench transient_allocation
+```
+
+It measures 30,000 simultaneously live resources, sequential reuse, and 256
+allocation classes. Graph construction/compilation and GPU work are excluded
+from these timings; the benchmark also checks the required slot counts.
+
 ## Cache identity contract
 
 `PassDesc::param_hash` is caller-defined. It must represent the operation
@@ -85,3 +101,18 @@ their rendering backend; the reference implementation is the portable oracle.
 
 Licensed under the Apache License, Version 2.0. See
 [LICENSE-APACHE](LICENSE-APACHE).
+## Core GPU executor
+
+This crate supplies declarations and compilation without owning a graphics
+device. Enable Kael's `custom-shaders` feature to execute its plans through
+`kael::GpuRenderGraph` and `Window::execute_gpu_graph`. The executor supports
+mixed native compute/fragment passes, typed imported textures and storage
+buffers, bounded transient reuse, exact revision-aware caching and pinned
+exports. `kael::gpu_graph` re-exports this crate so consumers can use the planner
+without declaring another dependency.
+
+Run the complete native GPU-to-UI example with:
+
+```sh
+cargo run --locked -p kael --example compute_graph --features custom-shaders
+```

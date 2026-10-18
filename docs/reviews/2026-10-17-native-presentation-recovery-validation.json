@@ -1,0 +1,868 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-10-17T22:09:08.439898+00:00",
+  "contract": "physical-metal-presentation-and-compact-layout-correctness",
+  "source_commits": {
+    "native_59_frame_proof": "95ebb7878c976fed63536f790fe152de840c757e",
+    "compact_example_immutable_blob": "738695fb20db8113b2868a7e3b9fcaeddc66ad70"
+  },
+  "source_hashes_identical_across_95_and_738": {
+    "crates/kael/src/platform/mac/metal_renderer.rs": "0ed6a771b4ab2cda8aa33813b7b236e5661bedf35aeb9b42946ae3d8b8e08ef0",
+    "crates/kael/src/platform/mac/window.rs": "3f2850829331cd6df9c0203882bc87701692c29762dc8fc8389697c9cbea0500",
+    "crates/kael/src/frame_timing.rs": "ccbec65cb88b7eb98b5dc94b1cd3cb6d3ed5823e4859e398364bea19943ddcb4",
+    "crates/kael/src/scene.rs": "b12d126fab9be19fa8da735fb8dd4f2f64b90a73366356252614750c326efd16",
+    "crates/kael/src/window.rs": "ef373b1e4f96003c698bc8d1c34f78516ca8370078cfd38521a3534c3b384a0b"
+  },
+  "example_sha256_at_738": "e125340ccfed0274c6ecc2f172f80a54f41cb25300377f3519536e6bc9cb6727",
+  "environment": {
+    "host": "physical Apple M2 Pro;macOS27.2 build26B5112a;arm64",
+    "on_console": true,
+    "login_done": true,
+    "lock_status": "UNKNOWN; optional CGSession lock key absent; no known-unlocked inference",
+    "displays": "two online active displays asleep=0 before/after normal controls",
+    "wake_or_fullscreen_used_in_accepted_controls": false,
+    "possible_concurrent_compiler_load": true,
+    "evidence": [
+      {
+        "path": ".artifacts/2026-10-17-metal-presentation-probe/normal-controls-20261017T214354Z/evidence.json",
+        "bytes": 15451,
+        "sha256": "bf3f5571e6b338b90bc35316dd8073650d73e124d62cd1d9bf8eb6603aab9b45"
+      },
+      {
+        "path": ".artifacts/2026-10-17-metal-presentation-probe/normal-controls-20261017T214354Z/diagnose-before.log",
+        "bytes": 417,
+        "sha256": "00aaf57f156fac8d128ac56865a383bc75f95f80fa9a9172e76d33bbd0fa0b78"
+      },
+      {
+        "path": ".artifacts/2026-10-17-metal-presentation-probe/normal-controls-20261017T214354Z/diagnose-after.log",
+        "bytes": 417,
+        "sha256": "00aaf57f156fac8d128ac56865a383bc75f95f80fa9a9172e76d33bbd0fa0b78"
+      },
+      {
+        "path": ".artifacts/2026-10-17-metal-presentation-probe/normal-controls-20261017T214354Z/os.log",
+        "bytes": 66,
+        "sha256": "c57ab3d857bdebc1ae792a33d835702f92eeec48e822f6f56a87309c4256c9b9"
+      },
+      {
+        "path": ".artifacts/2026-10-17-metal-presentation-probe/normal-controls-20261017T214354Z/architecture.log",
+        "bytes": 6,
+        "sha256": "c1669e1d8edca98769c37d494b76442a1d6e5ffffd7b4da1fb63aef8ebaf6f01"
+      },
+      {
+        "path": ".artifacts/2026-10-17-metal-presentation-probe/normal-controls-20261017T214354Z/probe-source.m",
+        "bytes": 14103,
+        "sha256": "e61912654259c3a3495181401a0290c20053aaa93bd2dd121bdfc29010413fba"
+      },
+      {
+        "path": ".artifacts/2026-10-17-metal-presentation-probe/normal-controls-20261017T214354Z/probe-binary",
+        "bytes": 81272,
+        "sha256": "006ab61dbdc6e56af895ac44c63fcd0a39e691c2954db098d87932705d049d2b"
+      }
+    ]
+  },
+  "independent_apple_controls": [
+    {
+      "mode": "mtk",
+      "submitted": 60,
+      "gpu_complete_status4": 60,
+      "callbacks": 60,
+      "positive_presented_time": 59,
+      "zero_time_frames": [
+        0
+      ],
+      "log": {
+        "path": ".artifacts/2026-10-17-metal-presentation-probe/normal-controls-20261017T214354Z/mtk.log",
+        "bytes": 11523,
+        "sha256": "a2bf7d32c516f3618736c2d708d261eeb849ebaef99003019af217fa389d2353"
+      },
+      "exit_code": 0
+    },
+    {
+      "mode": "layer",
+      "submitted": 60,
+      "gpu_complete_status4": 60,
+      "callbacks": 60,
+      "positive_presented_time": 59,
+      "zero_time_frames": [
+        0
+      ],
+      "log": {
+        "path": ".artifacts/2026-10-17-metal-presentation-probe/normal-controls-20261017T214354Z/layer.log",
+        "bytes": 11527,
+        "sha256": "1809921f37aba3b9f015680bdb944f49231afd5e2c1a56afcb86dcee4ea2eb09"
+      },
+      "exit_code": 0
+    },
+    {
+      "mode": "layer-transaction",
+      "submitted": 60,
+      "gpu_complete_status4": 60,
+      "callbacks": 60,
+      "positive_presented_time": 59,
+      "zero_time_frames": [
+        0
+      ],
+      "log": {
+        "path": ".artifacts/2026-10-17-metal-presentation-probe/normal-controls-20261017T214354Z/layer-transaction.log",
+        "bytes": 11527,
+        "sha256": "5910aecfc9a177e62ea89ab80ce30446b033ca427b9d4ad2a4b81ba0cf4f91db"
+      },
+      "exit_code": 0
+    }
+  ],
+  "native_95": {
+    "positive_gpu_completed_and_presented_record_count": 59,
+    "records": [
+      {
+        "frame_id": 75,
+        "submitted": 177461.34092158338,
+        "gpu_start": 177461.3413707917,
+        "gpu_end": 177461.34361112502,
+        "presented": 177461.3732075417
+      },
+      {
+        "frame_id": 76,
+        "submitted": 177461.34923770837,
+        "gpu_start": 177461.34968125002,
+        "gpu_end": 177461.35181775002,
+        "presented": 177461.38154100004
+      },
+      {
+        "frame_id": 77,
+        "submitted": 177461.35749637504,
+        "gpu_start": 177461.35793116668,
+        "gpu_end": 177461.360148125,
+        "presented": 177461.3898791667
+      },
+      {
+        "frame_id": 78,
+        "submitted": 177461.36587454172,
+        "gpu_start": 177461.36634379168,
+        "gpu_end": 177461.36821816667,
+        "presented": 177461.3982077917
+      },
+      {
+        "frame_id": 79,
+        "submitted": 177461.37424337503,
+        "gpu_start": 177461.37472175,
+        "gpu_end": 177461.37699391667,
+        "presented": 177461.40654400003
+      },
+      {
+        "frame_id": 80,
+        "submitted": 177461.38250237503,
+        "gpu_start": 177461.38297366668,
+        "gpu_end": 177461.38523854167,
+        "presented": 177461.41487583338
+      },
+      {
+        "frame_id": 81,
+        "submitted": 177461.39089808337,
+        "gpu_start": 177461.39136500002,
+        "gpu_end": 177461.393473125,
+        "presented": 177461.42320787505
+      },
+      {
+        "frame_id": 82,
+        "submitted": 177461.39919308337,
+        "gpu_start": 177461.39966404167,
+        "gpu_end": 177461.40179275002,
+        "presented": 177461.43154608336
+      },
+      {
+        "frame_id": 83,
+        "submitted": 177461.40763833336,
+        "gpu_start": 177461.40815554166,
+        "gpu_end": 177461.41084725002,
+        "presented": 177461.43987825004
+      },
+      {
+        "frame_id": 84,
+        "submitted": 177461.41605725003,
+        "gpu_start": 177461.41621541668,
+        "gpu_end": 177461.41815025,
+        "presented": 177461.44820812505
+      },
+      {
+        "frame_id": 85,
+        "submitted": 177461.42412887505,
+        "gpu_start": 177461.4246091667,
+        "gpu_end": 177461.42695941668,
+        "presented": 177461.45654545838
+      },
+      {
+        "frame_id": 86,
+        "submitted": 177461.43247287505,
+        "gpu_start": 177461.43295091667,
+        "gpu_end": 177461.435074625,
+        "presented": 177461.46487487503
+      },
+      {
+        "frame_id": 87,
+        "submitted": 177461.44100008337,
+        "gpu_start": 177461.44148950002,
+        "gpu_end": 177461.44383604167,
+        "presented": 177461.4732110417
+      },
+      {
+        "frame_id": 88,
+        "submitted": 177461.44935637503,
+        "gpu_start": 177461.44989000002,
+        "gpu_end": 177461.4517945,
+        "presented": 177461.4815416667
+      },
+      {
+        "frame_id": 89,
+        "submitted": 177461.46026550003,
+        "gpu_start": 177461.46042362502,
+        "gpu_end": 177461.46272579167,
+        "presented": 177461.4898749167
+      },
+      {
+        "frame_id": 90,
+        "submitted": 177461.46604837503,
+        "gpu_start": 177461.4662045,
+        "gpu_end": 177461.46808050002,
+        "presented": 177461.49820833336
+      },
+      {
+        "frame_id": 91,
+        "submitted": 177461.47412812503,
+        "gpu_start": 177461.47468325,
+        "gpu_end": 177461.476833875,
+        "presented": 177461.50654575005
+      },
+      {
+        "frame_id": 92,
+        "submitted": 177461.4830552917,
+        "gpu_start": 177461.483608125,
+        "gpu_end": 177461.48572675002,
+        "presented": 177461.5148750417
+      },
+      {
+        "frame_id": 93,
+        "submitted": 177461.49085545837,
+        "gpu_start": 177461.49138729167,
+        "gpu_end": 177461.4940615,
+        "presented": 177461.52321212503
+      },
+      {
+        "frame_id": 94,
+        "submitted": 177461.4992642917,
+        "gpu_start": 177461.49982016667,
+        "gpu_end": 177461.50191675,
+        "presented": 177461.53154183336
+      },
+      {
+        "frame_id": 95,
+        "submitted": 177461.50754470838,
+        "gpu_start": 177461.5080127917,
+        "gpu_end": 177461.51037475,
+        "presented": 177461.5398751667
+      },
+      {
+        "frame_id": 96,
+        "submitted": 177461.5158265417,
+        "gpu_start": 177461.51637491668,
+        "gpu_end": 177461.51848729167,
+        "presented": 177461.54820883338
+      },
+      {
+        "frame_id": 97,
+        "submitted": 177461.5280415417,
+        "gpu_start": 177461.52851950002,
+        "gpu_end": 177461.53063375002,
+        "presented": 177461.5565455417
+      },
+      {
+        "frame_id": 98,
+        "submitted": 177461.53245687505,
+        "gpu_start": 177461.53292287502,
+        "gpu_end": 177461.53552075,
+        "presented": 177461.56487750003
+      },
+      {
+        "frame_id": 99,
+        "submitted": 177461.54087191672,
+        "gpu_start": 177461.54147879168,
+        "gpu_end": 177461.54373725,
+        "presented": 177461.5732104167
+      },
+      {
+        "frame_id": 100,
+        "submitted": 177461.54964058337,
+        "gpu_start": 177461.5502325417,
+        "gpu_end": 177461.552160875,
+        "presented": 177461.58154212503
+      },
+      {
+        "frame_id": 101,
+        "submitted": 177461.55759445837,
+        "gpu_start": 177461.55824829167,
+        "gpu_end": 177461.560578375,
+        "presented": 177461.58987820838
+      },
+      {
+        "frame_id": 102,
+        "submitted": 177461.56596091672,
+        "gpu_start": 177461.56617279167,
+        "gpu_end": 177461.56835500002,
+        "presented": 177461.59820908337
+      },
+      {
+        "frame_id": 103,
+        "submitted": 177461.5749675417,
+        "gpu_start": 177461.57563916667,
+        "gpu_end": 177461.57750512502,
+        "presented": 177461.60654245838
+      },
+      {
+        "frame_id": 104,
+        "submitted": 177461.58293970837,
+        "gpu_start": 177461.583745,
+        "gpu_end": 177461.5858744167,
+        "presented": 177461.6148756667
+      },
+      {
+        "frame_id": 105,
+        "submitted": 177461.5923991667,
+        "gpu_start": 177461.59260029168,
+        "gpu_end": 177461.59504725,
+        "presented": 177461.62320912504
+      },
+      {
+        "frame_id": 106,
+        "submitted": 177461.60003275005,
+        "gpu_start": 177461.60070725,
+        "gpu_end": 177461.6028655,
+        "presented": 177461.6315424167
+      },
+      {
+        "frame_id": 107,
+        "submitted": 177461.60818175005,
+        "gpu_start": 177461.60879875,
+        "gpu_end": 177461.610935875,
+        "presented": 177461.6398757917
+      },
+      {
+        "frame_id": 108,
+        "submitted": 177461.6161237917,
+        "gpu_start": 177461.616715,
+        "gpu_end": 177461.61972012502,
+        "presented": 177461.6482120417
+      },
+      {
+        "frame_id": 109,
+        "submitted": 177461.62456545836,
+        "gpu_start": 177461.62537929168,
+        "gpu_end": 177461.62786212502,
+        "presented": 177461.65654575004
+      },
+      {
+        "frame_id": 110,
+        "submitted": 177461.63480712502,
+        "gpu_start": 177461.63527841668,
+        "gpu_end": 177461.63756537501,
+        "presented": 177461.6648761667
+      },
+      {
+        "frame_id": 111,
+        "submitted": 177461.64122087503,
+        "gpu_start": 177461.64192925,
+        "gpu_end": 177461.64398312502,
+        "presented": 177461.67320937503
+      },
+      {
+        "frame_id": 112,
+        "submitted": 177461.6494829167,
+        "gpu_start": 177461.65013575,
+        "gpu_end": 177461.65233504167,
+        "presented": 177461.68154300004
+      },
+      {
+        "frame_id": 113,
+        "submitted": 177461.65908775004,
+        "gpu_start": 177461.659282625,
+        "gpu_end": 177461.66196300002,
+        "presented": 177461.68987825004
+      },
+      {
+        "frame_id": 114,
+        "submitted": 177461.6672986667,
+        "gpu_start": 177461.6677257917,
+        "gpu_end": 177461.67005125002,
+        "presented": 177461.69821183337
+      },
+      {
+        "frame_id": 115,
+        "submitted": 177461.67425695836,
+        "gpu_start": 177461.67480691668,
+        "gpu_end": 177461.6772126667,
+        "presented": 177461.70654845837
+      },
+      {
+        "frame_id": 116,
+        "submitted": 177461.68304445836,
+        "gpu_start": 177461.68363516667,
+        "gpu_end": 177461.68584312501,
+        "presented": 177461.7148762917
+      },
+      {
+        "frame_id": 117,
+        "submitted": 177461.69097250004,
+        "gpu_start": 177461.6915605,
+        "gpu_end": 177461.69368716667,
+        "presented": 177461.72321283337
+      },
+      {
+        "frame_id": 118,
+        "submitted": 177461.69931395838,
+        "gpu_start": 177461.69977554167,
+        "gpu_end": 177461.70234641669,
+        "presented": 177461.73154412504
+      },
+      {
+        "frame_id": 119,
+        "submitted": 177461.70764195838,
+        "gpu_start": 177461.70819241667,
+        "gpu_end": 177461.7106065,
+        "presented": 177461.7398792917
+      },
+      {
+        "frame_id": 120,
+        "submitted": 177461.71589450003,
+        "gpu_start": 177461.7164774167,
+        "gpu_end": 177461.71889466667,
+        "presented": 177461.7482099167
+      },
+      {
+        "frame_id": 121,
+        "submitted": 177461.72420579172,
+        "gpu_start": 177461.72489850002,
+        "gpu_end": 177461.7269192917,
+        "presented": 177461.7565431667
+      },
+      {
+        "frame_id": 122,
+        "submitted": 177461.7330397917,
+        "gpu_start": 177461.733232625,
+        "gpu_end": 177461.73512041668,
+        "presented": 177461.76487650003
+      },
+      {
+        "frame_id": 123,
+        "submitted": 177461.74114895836,
+        "gpu_start": 177461.74172225,
+        "gpu_end": 177461.74360037502,
+        "presented": 177461.7732101667
+      },
+      {
+        "frame_id": 124,
+        "submitted": 177461.74949995836,
+        "gpu_start": 177461.750046125,
+        "gpu_end": 177461.75241225,
+        "presented": 177461.7815432917
+      },
+      {
+        "frame_id": 125,
+        "submitted": 177461.75746858338,
+        "gpu_start": 177461.75801450002,
+        "gpu_end": 177461.76042187502,
+        "presented": 177461.78988083338
+      },
+      {
+        "frame_id": 126,
+        "submitted": 177461.76575412505,
+        "gpu_start": 177461.7663987917,
+        "gpu_end": 177461.768415125,
+        "presented": 177461.7982100417
+      },
+      {
+        "frame_id": 127,
+        "submitted": 177461.77456037505,
+        "gpu_start": 177461.77513841668,
+        "gpu_end": 177461.7773182917,
+        "presented": 177461.80654420838
+      },
+      {
+        "frame_id": 128,
+        "submitted": 177461.78273558337,
+        "gpu_start": 177461.78331,
+        "gpu_end": 177461.78519225,
+        "presented": 177461.81487683338
+      },
+      {
+        "frame_id": 129,
+        "submitted": 177461.7908982917,
+        "gpu_start": 177461.79149650002,
+        "gpu_end": 177461.79387000002,
+        "presented": 177461.82321350003
+      },
+      {
+        "frame_id": 130,
+        "submitted": 177461.79925383336,
+        "gpu_start": 177461.79986016668,
+        "gpu_end": 177461.80215041668,
+        "presented": 177461.83154387504
+      },
+      {
+        "frame_id": 132,
+        "submitted": 177462.05325970837,
+        "gpu_start": 177462.05394125002,
+        "gpu_end": 177462.054807,
+        "presented": 177462.0815451667
+      },
+      {
+        "frame_id": 137,
+        "submitted": 177462.09211775003,
+        "gpu_start": 177462.0928231667,
+        "gpu_end": 177462.093866,
+        "presented": 177462.11487862503
+      },
+      {
+        "frame_id": 138,
+        "submitted": 177462.09833050004,
+        "gpu_start": 177462.098971625,
+        "gpu_end": 177462.100012125,
+        "presented": 177462.12321212504
+      }
+    ],
+    "zero_presented_callbacks_retained_in_raw_log": [
+      0,
+      1,
+      2,
+      131,
+      133,
+      134,
+      135,
+      136
+    ],
+    "viewport": "720x460 logical initially;723x460 logical after revisions;scale2",
+    "readback_pixels": [
+      1446,
+      920
+    ],
+    "model_only_idle_wake_ms": 1250,
+    "initial_window_active": false,
+    "source_of_pixels": "GPU device-pixel readback, not an OS screenshot",
+    "evidence": [
+      {
+        "path": ".artifacts/2026-10-17-native-quality-95ebb78/native-renderer.log",
+        "bytes": 41840,
+        "sha256": "a68b8e7d174ccf6aa7f2194e27324bd4c7dfeb8a8b1e4e040d9c92b2519d35da"
+      },
+      {
+        "path": ".artifacts/2026-10-17-native-quality-95ebb78/native-renderer.png",
+        "bytes": 110304,
+        "sha256": "d23fafef2b093bc30849664e7d9dde778e3643fdbf3fb561a0d1c7e60667b09d"
+      },
+      {
+        "path": ".artifacts/2026-10-17-native-quality-95ebb78/native-renderer-smoke",
+        "bytes": 59670088,
+        "sha256": "64208e1298f40bc148d6572048b97dc54d6cb675c7104ba26a8244abda44e510"
+      }
+    ]
+  },
+  "mandatory_gpu_suites": {
+    "total_passed": 59,
+    "failed": 0,
+    "ignored": 0,
+    "suites": [
+      {
+        "file": {
+          "path": ".artifacts/2026-10-17-native-quality-95ebb78/programmable/atlas-identity-lifetimes.log",
+          "bytes": 998,
+          "sha256": "e56fb5795493dd56df44b783cd60a6210bb18482948ef1e434cfc02c476f5fbc"
+        },
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "file": {
+          "path": ".artifacts/2026-10-17-native-quality-95ebb78/programmable/atlas-tile-residency.log",
+          "bytes": 888,
+          "sha256": "e7e285cb065352fbf068b244d63b760027c37d11ed7d435039ba4656c89d339a"
+        },
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "file": {
+          "path": ".artifacts/2026-10-17-native-quality-95ebb78/programmable/custom-shaders-and-compute.log",
+          "bytes": 1527,
+          "sha256": "eb63026b66e9caa0382d326a4adc57926f0831c21659c78f14b9e59a91e43976"
+        },
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "file": {
+          "path": ".artifacts/2026-10-17-native-quality-95ebb78/programmable/mixed-gpu-graph.log",
+          "bytes": 1285,
+          "sha256": "17702b5433f697914e473cc4cd3fd9aafdd04af27499b92e8e3dd223ffb724d1"
+        },
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "file": {
+          "path": ".artifacts/2026-10-17-native-quality-95ebb78/programmable/offscreen-scenes.log",
+          "bytes": 11858,
+          "sha256": "40745fd620fcab7dc756a86d991a0058196f71660c9ef52864881c991fab6a2d"
+        },
+        "passed": 26,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "file": {
+          "path": ".artifacts/2026-10-17-native-quality-95ebb78/programmable/ordered-atlas-uploads.log",
+          "bytes": 2324,
+          "sha256": "bc97842956fd2847a4ec4b1b6cce68f4eaa862e13bd5a1f31aa0d2aa854cf435"
+        },
+        "passed": 13,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "driver": {
+      "path": ".artifacts/2026-10-17-native-quality-95ebb78/programmable-driver.log",
+      "bytes": 19937,
+      "sha256": "86f4d19af19463ee14e453d01d5afec40d6d6d64c8673522b45903a1ce555592"
+    }
+  },
+  "compact_738_example": {
+    "positive_gpu_completed_and_presented_record_count": 1,
+    "records": [
+      {
+        "frame_id": 9,
+        "submitted": 177632.33062229172,
+        "gpu_start": 177632.331022,
+        "gpu_end": 177632.33290516667,
+        "presented": 177632.34922262505
+      }
+    ],
+    "zero_presented_callbacks_retained_in_raw_log": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "viewport": "720x460 logical initially;723x460 logical after revisions;scale2",
+    "readback_pixels": [
+      1446,
+      920
+    ],
+    "model_only_idle_wake_ms": 1250,
+    "initial_window_active": false,
+    "source_of_pixels": "GPU device-pixel readback, not an OS screenshot",
+    "evidence": [
+      {
+        "path": ".artifacts/2026-10-17-native-quality-compact-layout/native-renderer.log",
+        "bytes": 5423,
+        "sha256": "ef03145819651ef77efdf1ba4be08d803b3600f42dafc56cad864212dbd0114e"
+      },
+      {
+        "path": ".artifacts/2026-10-17-native-quality-compact-layout/native-renderer.png",
+        "bytes": 128438,
+        "sha256": "45c69fbf05fa7f1ef8e22eef68a86fad0c619f7abafb8821e45405918f8df979"
+      },
+      {
+        "path": ".artifacts/2026-10-17-native-quality-compact-layout/native-renderer-smoke",
+        "bytes": 59670824,
+        "sha256": "a8baf51be6a27716a921093fc3d2628cccf6eb0afe8d4eaf8df5de66001138b2"
+      }
+    ]
+  },
+  "compact_six_tile_geometry": {
+    "solid_fill_bounds_are_not_full_border_rectangles": true,
+    "source_layout": "grid_cols(3),grid_rows(2),min_h_0 and constrained right column; final723x460logical",
+    "tiles": [
+      {
+        "tile": 1,
+        "sample_xy": [
+          650,
+          620
+        ],
+        "rgba": [
+          27,
+          32,
+          70,
+          255
+        ],
+        "solid_fill_bounds_exclusive": [
+          518,
+          566,
+          792,
+          704
+        ],
+        "matching_pixel_count": 35618
+      },
+      {
+        "tile": 2,
+        "sample_xy": [
+          950,
+          620
+        ],
+        "rgba": [
+          46,
+          27,
+          70,
+          255
+        ],
+        "solid_fill_bounds_exclusive": [
+          820,
+          566,
+          1094,
+          704
+        ],
+        "matching_pixel_count": 35585
+      },
+      {
+        "tile": 3,
+        "sample_xy": [
+          1250,
+          620
+        ],
+        "rgba": [
+          70,
+          27,
+          70,
+          255
+        ],
+        "solid_fill_bounds_exclusive": [
+          1122,
+          566,
+          1396,
+          704
+        ],
+        "matching_pixel_count": 35565
+      },
+      {
+        "tile": 4,
+        "sample_xy": [
+          650,
+          790
+        ],
+        "rgba": [
+          70,
+          27,
+          45,
+          255
+        ],
+        "solid_fill_bounds_exclusive": [
+          518,
+          732,
+          792,
+          870
+        ],
+        "matching_pixel_count": 35570
+      },
+      {
+        "tile": 5,
+        "sample_xy": [
+          950,
+          790
+        ],
+        "rgba": [
+          70,
+          33,
+          27,
+          255
+        ],
+        "solid_fill_bounds_exclusive": [
+          820,
+          732,
+          1094,
+          870
+        ],
+        "matching_pixel_count": 35565
+      },
+      {
+        "tile": 6,
+        "sample_xy": [
+          1250,
+          790
+        ],
+        "rgba": [
+          70,
+          58,
+          27,
+          255
+        ],
+        "solid_fill_bounds_exclusive": [
+          1122,
+          732,
+          1396,
+          870
+        ],
+        "matching_pixel_count": 35541
+      }
+    ],
+    "visual_review": "PNG reviewed: all6tilelabels/tiles, all10chartbars and5retainedlayerlabels visible; all6tilefills fully inside1446x920 readback"
+  },
+  "historical_locked_failures_preserved": [
+    {
+      "path": ".artifacts/2026-10-17-metal-presentation-probe/result.json",
+      "bytes": 3120,
+      "sha256": "799c0502279645f05354745ca5eb6ff8aa6ac7ae669c18398d0b341befb5b207"
+    },
+    {
+      "path": ".artifacts/2026-10-17-metal-presentation-probe/wake-result.json",
+      "bytes": 4248,
+      "sha256": "782ea7b236a5c2bc506c55cfb3904d4b7349704f9ee962de9958b6195478e6a8"
+    },
+    {
+      "path": ".artifacts/2026-10-17-metal-presentation-probe/freeze.json",
+      "bytes": 2024,
+      "sha256": "c489ac3f3f7ce995acacf83d114047973b3b84139e01282a5012016b10310ba0"
+    },
+    {
+      "path": ".artifacts/2026-10-17-metal-presentation-probe/pre-wake.log",
+      "bytes": 417,
+      "sha256": "1183092b58e065d269c5b24e8a87315c61f090c49f47326023605c85fae5baf9"
+    },
+    {
+      "path": ".artifacts/2026-10-17-metal-presentation-probe/post-wake.log",
+      "bytes": 417,
+      "sha256": "1fc2d59b22d1d34c343415c4b2b45b64fcc02b0d9554bb67eac5dbb6b68f6d9d"
+    },
+    {
+      "path": ".artifacts/2026-10-17-metal-presentation-probe/awake-mtk.log",
+      "bytes": 11048,
+      "sha256": "6c8e4e2d4054d0f1482ec92c3dc37edf936eb461e67c4fba559198cc24934264"
+    },
+    {
+      "path": ".artifacts/2026-10-17-metal-presentation-probe/awake-layer.log",
+      "bytes": 11232,
+      "sha256": "cabf890578a0f48015985de9ef4b322fc824a2151d7468d1442354a48b6312a4"
+    },
+    {
+      "path": ".artifacts/2026-10-17-metal-presentation-probe/awake-layer-transaction.log",
+      "bytes": 11232,
+      "sha256": "a722f52b43f16c960d6da9d9d82fe0e8860da39b061123474bfbd8fa8dfe4164"
+    }
+  ],
+  "limitations": [
+    "Functional presentation/readback correctness only; no comparative latency,power or framework performance claim.",
+    "GPU tests and positive presentation frames are distinct counts, not118tests.",
+    "Compact run proves1positive presentation, not59 or every submitted frame. Zero callbacks remain in logs.",
+    "GPU readback and compositor callback are separate oracles; no assertion that the exact readback frame was presented.",
+    "Hosted e219 macOS gate remains failed; later local proof does not change that CI conclusion."
+  ],
+  "primary_reference": "https://developer.apple.com/documentation/metal/mtldrawable/presentedtime",
+  "assembler": {
+    "path": ".artifacts/2026-10-17-physical-presentation-final/assemble.py",
+    "bytes": 12939,
+    "sha256": "1fcfa57d4736b7fb53eee9120aed46fe75e58c31b352cc7dd1cbe6bc73ebe67c"
+  }
+}
